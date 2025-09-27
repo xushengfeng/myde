@@ -1,15 +1,14 @@
 /// <reference types="vite/client" />
 // Modules to control application life and create native browser window
 import { app, globalShortcut, BaseWindow, nativeTheme, BrowserWindow } from "electron";
-import Store from "../../lib/store/store";
 import * as path from "node:path";
 const run_path = path.join(path.resolve(__dirname, ""), "../../");
 import { t, lan, getLans, matchFitLan } from "../../lib/translate/translate";
 import url from "node:url";
 
-const store = new Store();
-
 let /** 是否开启开发模式 */ dev: boolean;
+
+dev = true;
 
 let the_icon = path.join(run_path, "assets/logo/1024x1024.png");
 if (process.platform === "win32") {
@@ -62,14 +61,14 @@ async function createWin() {
     const main_window = new BrowserWindow({
         backgroundColor: nativeTheme.shouldUseDarkColors ? "#0f0f0f" : "#ffffff",
         icon: the_icon,
-        frame: false,
         show: true,
-        width: store.get("appearance.size.normal.w") || 800,
-        height: store.get("appearance.size.normal.h") || 600,
-        maximizable: store.get("appearance.size.normal.m") || false,
+        webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false,
+        },
     });
     rendererPath(main_window.webContents, "main.html", {
-        query: { userData: app.getPath("userData") },
+        query: { userData: app.getPath("userData"), env: JSON.stringify(process.env) },
     });
     if (dev) main_window.webContents.openDevTools();
 }
@@ -81,8 +80,7 @@ if (process.argv.includes("-d") || import.meta.env.DEV) {
     dev = false;
 }
 
-// @ts-ignore
-lan(store.get("lan"));
+dev = true;
 
 app.commandLine.appendSwitch("enable-experimental-web-platform-features", "enable");
 
