@@ -9,19 +9,17 @@ export enum WaylandArgType {
     FD = "fd",
 }
 
-export interface WaylandMessageDescription {
-    name: string;
-    type: "request" | "event";
-    args: Array<{
-        name: string;
-        type: WaylandArgType;
-        interface?: string; // 对于object/new_id类型
-    }>;
-}
-
-export interface WaylandInterfaceDescription {
+export type WaylandProtocol = {
+    objectId: number;
     name: string;
     version: number;
-    requests: WaylandMessageDescription[];
-    events: WaylandMessageDescription[];
-}
+    ops: Array<{
+        name: string;
+        type: "event" | "request" | "error";
+        args: Array<{
+            name: string;
+            type: WaylandArgType;
+            interface?: string; // 对于object/new_id类型
+        }>;
+    }>;
+};
