@@ -20,11 +20,11 @@
         "dkh-ui": "^0.11.0"
     },
     "devDependencies": {
-        "@biomejs/biome": "^1.9.2",
+        "@biomejs/biome": "^2.2.4",
         "electron": "^31.4.0",
         "electron-builder": "^24.4.0",
-        "electron-vite": "^2.3.0",
-        "typescript": "^5.1.6",
-        "vite": "^5.4.10"
+        "electron-vite": "^4.0.1",
+        "typescript": "^5.9.2",
+        "vite": "^7.1.7"
     }
 }
