@@ -3,6 +3,8 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const child_process = require("node:child_process") as typeof import("node:child_process");
 
+import { WaylandDecoder } from "../wayland/wayland-decoder";
+
 import { addClass, check, type ElType, image, label, p, pack, pureStyle, spacer, trackPoint, txt, view } from "dkh-ui";
 
 class WaylandServer {
@@ -77,6 +79,10 @@ class WaylandServer {
     handleClientMessage(client: any, data: Buffer) {
         // 解析并处理客户端消息
         console.log(`Received data from client ${client.id}:`, data);
+
+        const decoder = new WaylandDecoder(data.buffer);
+        const header = decoder.readHeader();
+        console.log(`Parsed header from client ${client.id}:`, header);
     }
 }
 
