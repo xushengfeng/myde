@@ -5,6 +5,7 @@ const child_process = require("node:child_process") as typeof import("node:child
 
 import {
     WaylandArgType,
+    type WaylandOp,
     type WaylandName,
     type WaylandObjectId,
     type WaylandProtocol,
@@ -103,7 +104,7 @@ class WaylandServer {
         // 解析并处理客户端消息
         const decoder = new WaylandDecoder(data.buffer);
 
-        const opArray: { proto: WaylandProtocol; op: WaylandProtocol["ops"][0]; args: Record<string, any> }[] = [];
+        const opArray: { proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> }[] = [];
 
         console.log(`Parsed data from client ${client.id}:`);
         while (decoder.getRemainingBytes() > 0) {
@@ -234,12 +235,13 @@ function getX(
 ) {
     const proto = objectId === 1 ? WaylandProtocols.wl_display : map.get(objectId);
     if (!proto) return null;
-    const op = proto.ops.filter((i) => i.type === type)[opcode]; // todo 更新数据结构
+    if (!proto[type]) return null;
+    const op = proto[type][opcode];
     if (!op) return null;
     return { proto, op };
 }
 
-function parseArgs(decoder: WaylandDecoder, args: WaylandProtocol["ops"][0]["args"]) {
+function parseArgs(decoder: WaylandDecoder, args: WaylandOp["args"]) {
     const parsed: Record<string, any> = {};
     for (const arg of args) {
         switch (arg.type) {

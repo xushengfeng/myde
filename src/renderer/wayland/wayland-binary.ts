@@ -12,16 +12,18 @@ export enum WaylandArgType {
 export type WaylandName = number & { __brand: "WaylandName" };
 export type WaylandObjectId = number & { __brand: "WaylandObjectId" };
 
+export type WaylandOp = {
+    name: string;
+    args: Array<{
+        name: string;
+        type: WaylandArgType;
+        interface?: string;
+    }>;
+};
 export type WaylandProtocol = {
     name: string;
     version: number;
-    ops: Array<{
-        name: string;
-        type: "event" | "request" | "error";
-        args: Array<{
-            name: string;
-            type: WaylandArgType;
-            interface?: string; // 对于object/new_id类型
-        }>;
-    }>;
+    request?: Array<WaylandOp>;
+    event?: Array<WaylandOp>;
+    enum?: Array<{ name: string; enum: Record<string, number> }>; // [name, value]
 };

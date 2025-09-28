@@ -4,68 +4,69 @@ export const WaylandProtocols: Record<string, WaylandProtocol> = {
     wl_display: {
         name: "wl_display",
         version: 1,
-        ops: [
+        request: [
             {
                 name: "sync",
-                type: "request",
                 args: [{ name: "callback", type: WaylandArgType.NEW_ID, interface: "wl_callback" }],
             },
             {
                 name: "get_registry",
-                type: "request",
                 args: [{ name: "registry", type: WaylandArgType.NEW_ID, interface: "wl_registry" }],
             },
+        ],
+        event: [
             {
                 name: "error",
-                type: "event",
                 args: [
                     { name: "object_id", type: WaylandArgType.OBJECT },
                     { name: "code", type: WaylandArgType.UINT },
                     { name: "message", type: WaylandArgType.STRING },
                 ],
             },
-            { name: "delete_id", type: "event", args: [{ name: "id", type: WaylandArgType.UINT }] },
+            { name: "delete_id", args: [{ name: "id", type: WaylandArgType.UINT }] },
+        ],
+        enum: [
             {
                 name: "error",
-                type: "error",
-                args: [
-                    { name: "code", type: WaylandArgType.UINT },
-                    { name: "message", type: WaylandArgType.STRING },
-                ],
+                enum: {
+                    invalid_object: 0,
+                    invalid_method: 1,
+                    no_memory: 2,
+                    implementation: 3,
+                },
             },
         ],
     },
     wl_registry: {
         name: "wl_registry",
         version: 1,
-        ops: [
+        request: [
             {
                 name: "bind",
-                type: "request",
                 args: [
                     { name: "name", type: WaylandArgType.UINT },
                     { name: "id", type: WaylandArgType.NEW_ID, interface: "*" },
                 ],
             },
+        ],
+        event: [
             {
                 name: "global",
-                type: "event",
                 args: [
                     { name: "name", type: WaylandArgType.UINT },
                     { name: "interface", type: WaylandArgType.STRING },
                     { name: "version", type: WaylandArgType.UINT },
                 ],
             },
-            { name: "global_remove", type: "event", args: [{ name: "name", type: WaylandArgType.UINT }] },
+            { name: "global_remove", args: [{ name: "name", type: WaylandArgType.UINT }] },
         ],
     },
     wl_callback: {
         name: "wl_callback",
         version: 1,
-        ops: [
+        event: [
             {
                 name: "done",
-                type: "event",
                 args: [{ name: "time", type: WaylandArgType.UINT }],
             },
         ],
@@ -73,15 +74,13 @@ export const WaylandProtocols: Record<string, WaylandProtocol> = {
     wl_compositor: {
         name: "wl_compositor",
         version: 6,
-        ops: [
+        request: [
             {
                 name: "create_surface",
-                type: "request",
                 args: [{ name: "id", type: WaylandArgType.NEW_ID, interface: "wl_surface" }],
             },
             {
                 name: "create_region",
-                type: "request",
                 args: [{ name: "id", type: WaylandArgType.NEW_ID, interface: "wl_region" }],
             },
         ],
