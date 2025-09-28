@@ -108,7 +108,7 @@ class WaylandServer {
         console.log(`Parsed data from client ${client.id}:`);
         while (decoder.getRemainingBytes() > 0) {
             const header = decoder.readHeader();
-            const x = getX(client.objects, header.objectId, header.opcode);
+            const x = getX(client.objects, "request", header.objectId, header.opcode);
             if (!x) {
                 console.warn(`Unknown objectId/opcode: ${header.objectId}/${header.opcode}`);
                 return;
@@ -117,16 +117,31 @@ class WaylandServer {
             console.log(`Parsed args for ${x.proto.name}.${x.op.name}:`, args);
             opArray.push({ proto: x.proto, op: x.op, args });
         }
-
+        const willRun: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
+        let callbackId: WaylandObjectId | undefined;
         for (const x of opArray) {
+            if (x.proto.name === "wl_display" && x.op.name === "sync") {
+                callbackId = x.args.callback as WaylandObjectId;
+                client.objects.set(callbackId, WaylandProtocols.wl_callback);
+                willRun.push({
+                    objectId: callbackId,
+                    opcode: 0,
+                    args: {},
+                });
+                this.sendMessage(client, waylandObjectId(1), 1, { id: callbackId });
+            }
             if (x.proto.name === "wl_display" && x.op.name === "get_registry") {
                 const registryId = x.args.registry as WaylandObjectId;
                 client.objects.set(registryId, WaylandProtocols.wl_registry);
                 for (const [i, proto] of waylandProtocolsNameMap) {
-                    this.sendMessage(client, registryId, 1, {
-                        name: i,
-                        interface: proto.name,
-                        version: proto.version,
+                    willRun.push({
+                        objectId: registryId,
+                        opcode: 0,
+                        args: {
+                            name: i,
+                            interface: proto.name,
+                            version: proto.version,
+                        },
                     });
                 }
             }
@@ -142,9 +157,12 @@ class WaylandServer {
                 console.log(`Client ${client.id} bound ${proto.name} to id ${id}`);
             }
         }
+        for (const x of willRun) {
+            this.sendMessage(client, x.objectId, x.opcode, x.args);
+        }
     }
     sendMessage(client: Client, objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
-        const p = getX(client.objects, objectId, opcode);
+        const p = getX(client.objects, "event", objectId, opcode);
         if (!p) {
             console.error("Cannot find protocol for sending message", objectId, opcode);
             return;
@@ -208,10 +226,15 @@ function initWaylandProtocols() {
     }
 }
 
-function getX(map: Map<WaylandObjectId, WaylandProtocol>, objectId: WaylandObjectId, opcode: number) {
+function getX(
+    map: Map<WaylandObjectId, WaylandProtocol>,
+    type: "request" | "event",
+    objectId: WaylandObjectId,
+    opcode: number,
+) {
     const proto = objectId === 1 ? WaylandProtocols.wl_display : map.get(objectId);
     if (!proto) return null;
-    const op = proto.ops[opcode];
+    const op = proto.ops.filter((i) => i.type === type)[opcode]; // todo 更新数据结构
     if (!op) return null;
     return { proto, op };
 }
