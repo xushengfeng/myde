@@ -52,4 +52,33 @@ export const WaylandProtocols: Record<string, WaylandProtocol> = {
             { name: "global_remove", type: "event", args: [{ name: "name", type: WaylandArgType.UINT }] },
         ],
     },
+    wl_callback: {
+        objectId: 3,
+        name: "wl_callback",
+        version: 1,
+        ops: [
+            {
+                name: "done",
+                type: "event",
+                args: [{ name: "time", type: WaylandArgType.UINT }],
+            },
+        ],
+    },
+    wl_compositor: {
+        objectId: 4,
+        name: "wl_compositor",
+        version: 6,
+        ops: [
+            {
+                name: "create_surface",
+                type: "request",
+                args: [{ name: "id", type: WaylandArgType.NEW_ID, interface: "wl_surface" }],
+            },
+            {
+                name: "create_region",
+                type: "request",
+                args: [{ name: "id", type: WaylandArgType.NEW_ID, interface: "wl_region" }],
+            },
+        ],
+    },
 };
