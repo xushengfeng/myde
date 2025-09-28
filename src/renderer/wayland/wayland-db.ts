@@ -27,4 +27,29 @@ export const WaylandProtocols: Record<string, WaylandProtocol> = {
             },
         ],
     },
+    wl_registry: {
+        objectId: 2,
+        name: "wl_registry",
+        version: 1,
+        ops: [
+            {
+                name: "bind",
+                type: "request",
+                args: [
+                    { name: "name", type: WaylandArgType.UINT },
+                    { name: "id", type: WaylandArgType.NEW_ID, interface: "*" },
+                ],
+            },
+            {
+                name: "global",
+                type: "event",
+                args: [
+                    { name: "name", type: WaylandArgType.UINT },
+                    { name: "interface", type: WaylandArgType.STRING },
+                    { name: "version", type: WaylandArgType.UINT },
+                ],
+            },
+            { name: "global_remove", type: "event", args: [{ name: "name", type: WaylandArgType.UINT }] },
+        ],
+    },
 };

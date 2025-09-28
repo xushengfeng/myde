@@ -8,6 +8,14 @@ import { WaylandProtocols } from "../wayland/wayland-db";
 import { WaylandDecoder } from "../wayland/wayland-decoder";
 
 import { addClass, check, type ElType, image, label, p, pack, pureStyle, spacer, trackPoint, txt, view } from "dkh-ui";
+import { WaylandEncoder } from "../wayland/wayland-encoder";
+
+type Client = {
+    id: string;
+    socket: import("node:net").Socket;
+    objects: Map<number, any>; // 客户端拥有的对象
+    nextId: number; // 客户端本地对象ID
+};
 
 class WaylandServer {
     socketDir = "/tmp";
@@ -55,7 +63,7 @@ class WaylandServer {
         const clientId = crypto.randomUUID();
         console.log(`New client connected: ${clientId}`);
 
-        const client = {
+        const client: Client = {
             id: clientId,
             socket: socket,
             objects: new Map(), // 客户端拥有的对象
@@ -78,10 +86,8 @@ class WaylandServer {
             // this.handleClientDisconnect(client);
         });
     }
-    handleClientMessage(client: any, data: Buffer) {
+    handleClientMessage(client: Client, data: Buffer) {
         // 解析并处理客户端消息
-        console.log(`Received data from client ${client.id}:`, data);
-
         const decoder = new WaylandDecoder(data.buffer);
         const header = decoder.readHeader();
         console.log(`Parsed header from client ${client.id}:`, header);
@@ -92,6 +98,63 @@ class WaylandServer {
         }
         const args = parseArgs(decoder, x.op.args);
         console.log(`Parsed args for ${x.proto.name}.${x.op.name}:`, args);
+        if (x.proto.name === "wl_display" && x.op.name === "get_registry") {
+            for (const [i, proto] of waylandProtocolsMap) {
+                this.sendMessage(client, 2, 1, {
+                    name: i,
+                    interface: proto.name,
+                    version: proto.version,
+                });
+            }
+        }
+    }
+    sendMessage(client: Client, objectId: number, opcode: number, args: Record<string, any>) {
+        const proto = waylandProtocolsMap.get(objectId);
+        if (!proto) {
+            console.error(`Unknown objectId: ${objectId}`);
+            return;
+        }
+        const op = proto.ops[opcode];
+        if (!op) {
+            console.error(`Unknown opcode ${opcode} for objectId ${objectId}`);
+            return;
+        }
+        const encoder = new WaylandEncoder();
+        encoder.writeHeader(objectId, opcode);
+        for (const a of op.args) {
+            const argValue = args[a.name];
+            switch (a.type) {
+                case WaylandArgType.INT:
+                    encoder.writeInt(argValue);
+                    break;
+                case WaylandArgType.UINT:
+                    encoder.writeUint(argValue);
+                    break;
+                case WaylandArgType.FIXED:
+                    encoder.writeFixed(argValue);
+                    break;
+                case WaylandArgType.STRING:
+                    encoder.writeString(argValue);
+                    break;
+                case WaylandArgType.OBJECT:
+                    encoder.writeObject(argValue);
+                    break;
+                case WaylandArgType.NEW_ID:
+                    encoder.writeNewId(a.interface!, 1);
+                    break;
+                case WaylandArgType.ARRAY:
+                    encoder.writeArray(argValue);
+                    break;
+                case WaylandArgType.FD:
+                    // 这里假设FD是通过某种方式传递的，我们用一个占位符
+                    break; // 占位符，实际实现中需要处理FD传递
+                default:
+                    break;
+            }
+        }
+        const x = encoder.finalizeMessage();
+
+        client.socket.write(new Uint8Array(x.data)); // todo array 类型
     }
 }
 
