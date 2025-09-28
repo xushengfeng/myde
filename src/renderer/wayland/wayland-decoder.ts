@@ -5,6 +5,8 @@ export class WaylandDecoder {
     private offset: number;
     private fds: number[];
     private fdIndex: number;
+    private currentLength: number = 0;
+    private messageStartOffset: number = 0;
 
     constructor(buffer: ArrayBufferLike, fds: number[] = []) {
         this.view = new DataView(buffer);
@@ -14,10 +16,12 @@ export class WaylandDecoder {
     }
 
     readHeader(): { objectId: WaylandObjectId; opcode: number; length: number } {
+        this.messageStartOffset = this.offset;
         const objectId = this.view.getUint32(this.offset, true) as WaylandObjectId;
         const opcode = this.view.getUint16(this.offset + 4, true);
         const length = this.view.getUint16(this.offset + 6, true);
         this.offset += 8;
+        this.currentLength = length;
         return { objectId, opcode, length };
     }
 
@@ -83,5 +87,19 @@ export class WaylandDecoder {
 
     getRemainingBytes(): number {
         return this.view.byteLength - this.offset;
+    }
+
+    // todo 剩余的是接口名称和版本号，目前还没有用到
+    final(): Uint8Array {
+        const msgLength = this.currentLength;
+        const targetOffset = this.messageStartOffset + msgLength;
+        const remainingLength = targetOffset - this.offset;
+        const remainingBuffer = new Uint8Array(
+            this.view.buffer,
+            this.offset,
+            remainingLength > 0 ? remainingLength : 0,
+        );
+        this.offset = targetOffset;
+        return remainingBuffer;
     }
 }

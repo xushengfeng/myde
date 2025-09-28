@@ -113,10 +113,11 @@ class WaylandServer {
             const header = decoder.readHeader();
             const x = getX(client.objects, "request", header.objectId, header.opcode);
             if (!x) {
-                console.warn(`Unknown objectId/opcode: ${header.objectId}/${header.opcode}`);
+                console.warn(`Unknown objectId/opcode: ${header.objectId}/${header.opcode}`, data.buffer);
                 return;
             }
             const args = parseArgs(decoder, x.op.args);
+            decoder.final();
             console.log(`Parsed args for ${x.proto.name}.${x.op.name}:`, args);
             opArray.push({ proto: x.proto, op: x.op, args });
         }
