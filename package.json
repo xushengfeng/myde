@@ -17,10 +17,12 @@
     "homepage": "https://github.com/xushengfeng/myde/",
     "license": "GPL-3.0",
     "dependencies": {
-        "dkh-ui": "^0.11.0"
+        "dkh-ui": "^0.11.0",
+        "xml2js": "^0.6.2"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.2.4",
+        "@types/xml2js": "^0.4.14",
         "electron": "^31.4.0",
         "electron-builder": "^24.4.0",
         "electron-vite": "^4.0.1",

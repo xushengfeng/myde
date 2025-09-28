@@ -10,8 +10,10 @@ import {
     type WaylandObjectId,
     type WaylandProtocol,
 } from "../wayland/wayland-binary";
-import { WaylandProtocols } from "../wayland/wayland-db";
 import { WaylandDecoder } from "../wayland/wayland-decoder";
+import WaylandProtocolsJSON from "../wayland/protocols.json?raw";
+const WaylandProtocolsx = JSON.parse(WaylandProtocolsJSON) as Record<string, WaylandProtocol[]>;
+const WaylandProtocols = Object.fromEntries(Object.values(WaylandProtocolsx).flatMap((v) => v.map((p) => [p.name, p])));
 
 import { button, txt, view } from "dkh-ui";
 import { WaylandEncoder } from "../wayland/wayland-encoder";
@@ -315,6 +317,8 @@ function runApp(execPath: string) {
         console.log(`Subprocess exited with code ${code} and signal ${signal}`);
     });
 }
+
+console.log("Support protocols:", Object.keys(WaylandProtocols));
 
 const server = new WaylandServer();
 

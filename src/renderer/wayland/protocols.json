@@ -1,0 +1,549 @@
+{
+  "wayland": [
+    {
+      "name": "wl_display",
+      "version": 1,
+      "request": [
+        {
+          "name": "sync",
+          "args": [
+            {
+              "name": "callback",
+              "type": "new_id",
+              "interface": "wl_callback"
+            }
+          ]
+        },
+        {
+          "name": "get_registry",
+          "args": [
+            {
+              "name": "registry",
+              "type": "new_id",
+              "interface": "wl_registry"
+            }
+          ]
+        }
+      ],
+      "event": [
+        {
+          "name": "error",
+          "args": [
+            {
+              "name": "object_id",
+              "type": "object"
+            },
+            {
+              "name": "code",
+              "type": "uint"
+            },
+            {
+              "name": "message",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "delete_id",
+          "args": [
+            {
+              "name": "id",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "invalid_object": 0,
+            "invalid_method": 1,
+            "no_memory": 2,
+            "implementation": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "wl_registry",
+      "version": 1,
+      "request": [
+        {
+          "name": "bind",
+          "args": [
+            {
+              "name": "name",
+              "type": "uint"
+            },
+            {
+              "name": "id",
+              "type": "new_id"
+            }
+          ]
+        }
+      ],
+      "event": [
+        {
+          "name": "global",
+          "args": [
+            {
+              "name": "name",
+              "type": "uint"
+            },
+            {
+              "name": "interface",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "global_remove",
+          "args": [
+            {
+              "name": "name",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "enum": []
+    },
+    {
+      "name": "wl_callback",
+      "version": 1,
+      "request": [],
+      "event": [
+        {
+          "name": "done",
+          "args": [
+            {
+              "name": "callback_data",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "enum": []
+    },
+    {
+      "name": "wl_compositor",
+      "version": 6,
+      "request": [
+        {
+          "name": "create_surface",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wl_surface"
+            }
+          ]
+        },
+        {
+          "name": "create_region",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wl_region"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": []
+    },
+    {
+      "name": "wl_shm",
+      "version": 2,
+      "request": [
+        {
+          "name": "create_pool",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wl_shm_pool"
+            },
+            {
+              "name": "fd",
+              "type": "fd"
+            },
+            {
+              "name": "size",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "release",
+          "args": []
+        }
+      ],
+      "event": [
+        {
+          "name": "format",
+          "args": [
+            {
+              "name": "format",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "invalid_format": 0,
+            "invalid_stride": 1,
+            "invalid_fd": 2
+          }
+        },
+        {
+          "name": "format",
+          "enum": {
+            "argb8888": 0,
+            "xrgb8888": 1,
+            "c8": 538982467,
+            "rgb332": 943867730,
+            "bgr233": 944916290,
+            "xrgb4444": 842093144,
+            "xbgr4444": 842089048,
+            "rgbx4444": 842094674,
+            "bgrx4444": 842094658,
+            "argb4444": 842093121,
+            "abgr4444": 842089025,
+            "rgba4444": 842088786,
+            "bgra4444": 842088770,
+            "xrgb1555": 892424792,
+            "xbgr1555": 892420696,
+            "rgbx5551": 892426322,
+            "bgrx5551": 892426306,
+            "argb1555": 892424769,
+            "abgr1555": 892420673,
+            "rgba5551": 892420434,
+            "bgra5551": 892420418,
+            "rgb565": 909199186,
+            "bgr565": 909199170,
+            "rgb888": 875710290,
+            "bgr888": 875710274,
+            "xbgr8888": 875709016,
+            "rgbx8888": 875714642,
+            "bgrx8888": 875714626,
+            "abgr8888": 875708993,
+            "rgba8888": 875708754,
+            "bgra8888": 875708738,
+            "xrgb2101010": 808669784,
+            "xbgr2101010": 808665688,
+            "rgbx1010102": 808671314,
+            "bgrx1010102": 808671298,
+            "argb2101010": 808669761,
+            "abgr2101010": 808665665,
+            "rgba1010102": 808665426,
+            "bgra1010102": 808665410,
+            "yuyv": 1448695129,
+            "yvyu": 1431918169,
+            "uyvy": 1498831189,
+            "vyuy": 1498765654,
+            "ayuv": 1448433985,
+            "nv12": 842094158,
+            "nv21": 825382478,
+            "nv16": 909203022,
+            "nv61": 825644622,
+            "yuv410": 961959257,
+            "yvu410": 961893977,
+            "yuv411": 825316697,
+            "yvu411": 825316953,
+            "yuv420": 842093913,
+            "yvu420": 842094169,
+            "yuv422": 909202777,
+            "yvu422": 909203033,
+            "yuv444": 875713881,
+            "yvu444": 875714137,
+            "r8": 538982482,
+            "r16": 540422482,
+            "rg88": 943212370,
+            "gr88": 943215175,
+            "rg1616": 842221394,
+            "gr1616": 842224199,
+            "xrgb16161616f": 1211388504,
+            "xbgr16161616f": 1211384408,
+            "argb16161616f": 1211388481,
+            "abgr16161616f": 1211384385,
+            "xyuv8888": 1448434008,
+            "vuy888": 875713878,
+            "vuy101010": 808670550,
+            "y210": 808530521,
+            "y212": 842084953,
+            "y216": 909193817,
+            "y410": 808531033,
+            "y412": 842085465,
+            "y416": 909194329,
+            "xvyu2101010": 808670808,
+            "xvyu12_16161616": 909334104,
+            "xvyu16161616": 942954072,
+            "y0l0": 810299481,
+            "x0l0": 810299480,
+            "y0l2": 843853913,
+            "x0l2": 843853912,
+            "yuv420_8bit": 942691673,
+            "yuv420_10bit": 808539481,
+            "xrgb8888_a8": 943805016,
+            "xbgr8888_a8": 943800920,
+            "rgbx8888_a8": 943806546,
+            "bgrx8888_a8": 943806530,
+            "rgb888_a8": 943798354,
+            "bgr888_a8": 943798338,
+            "rgb565_a8": 943797586,
+            "bgr565_a8": 943797570,
+            "nv24": 875714126,
+            "nv42": 842290766,
+            "p210": 808530512,
+            "p010": 808530000,
+            "p012": 842084432,
+            "p016": 909193296,
+            "axbxgxrx106106106106": 808534593,
+            "nv15": 892425806,
+            "q410": 808531025,
+            "q401": 825242705,
+            "xrgb16161616": 942953048,
+            "xbgr16161616": 942948952,
+            "argb16161616": 942953025,
+            "abgr16161616": 942948929,
+            "c1": 538980675,
+            "c2": 538980931,
+            "c4": 538981443,
+            "d1": 538980676,
+            "d2": 538980932,
+            "d4": 538981444,
+            "d8": 538982468,
+            "r1": 538980690,
+            "r2": 538980946,
+            "r4": 538981458,
+            "r10": 540029266,
+            "r12": 540160338,
+            "avuy8888": 1498764865,
+            "xvuy8888": 1498764888,
+            "p030": 808661072
+          }
+        }
+      ]
+    },
+    {
+      "name": "wl_seat",
+      "version": 10,
+      "request": [
+        {
+          "name": "get_pointer",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wl_pointer"
+            }
+          ]
+        },
+        {
+          "name": "get_keyboard",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wl_keyboard"
+            }
+          ]
+        },
+        {
+          "name": "get_touch",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wl_touch"
+            }
+          ]
+        },
+        {
+          "name": "release",
+          "args": []
+        }
+      ],
+      "event": [
+        {
+          "name": "capabilities",
+          "args": [
+            {
+              "name": "capabilities",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "name",
+          "args": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "capability",
+          "enum": {
+            "pointer": 1,
+            "keyboard": 2,
+            "touch": 4
+          }
+        },
+        {
+          "name": "error",
+          "enum": {
+            "missing_capability": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "wl_output",
+      "version": 4,
+      "request": [
+        {
+          "name": "release",
+          "args": []
+        }
+      ],
+      "event": [
+        {
+          "name": "geometry",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            },
+            {
+              "name": "physical_width",
+              "type": "int"
+            },
+            {
+              "name": "physical_height",
+              "type": "int"
+            },
+            {
+              "name": "subpixel",
+              "type": "int"
+            },
+            {
+              "name": "make",
+              "type": "string"
+            },
+            {
+              "name": "model",
+              "type": "string"
+            },
+            {
+              "name": "transform",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "mode",
+          "args": [
+            {
+              "name": "flags",
+              "type": "uint"
+            },
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            },
+            {
+              "name": "refresh",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "done",
+          "args": []
+        },
+        {
+          "name": "scale",
+          "args": [
+            {
+              "name": "factor",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "name",
+          "args": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "description",
+          "args": [
+            {
+              "name": "description",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "subpixel",
+          "enum": {
+            "unknown": 0,
+            "none": 1,
+            "horizontal_rgb": 2,
+            "horizontal_bgr": 3,
+            "vertical_rgb": 4,
+            "vertical_bgr": 5
+          }
+        },
+        {
+          "name": "transform",
+          "enum": {
+            "90": 1,
+            "180": 2,
+            "270": 3,
+            "normal": 0,
+            "flipped": 4,
+            "flipped_90": 5,
+            "flipped_180": 6,
+            "flipped_270": 7
+          }
+        },
+        {
+          "name": "mode",
+          "enum": {
+            "current": 1,
+            "preferred": 2
+          }
+        }
+      ]
+    }
+  ]
+}
