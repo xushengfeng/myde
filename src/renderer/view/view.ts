@@ -329,19 +329,11 @@ const waylandProtocolsNameMap = new Map<WaylandName, WaylandProtocol>();
 
 initWaylandProtocols();
 
-txt("hello").addInto();
-
-button("run")
-    .on("click", () => {
-        const execPath = "/usr/bin/google-chrome-stable";
-        runApp(execPath);
-    })
-    .addInto();
-
-button("wayland-info")
-    .on("click", () => {
-        console.log("Wayland info button clicked");
-        const execPath = "/usr/bin/wayland-info";
-        runApp(execPath);
-    })
-    .addInto();
+["google-chrome-stable", "wayland-info", "weston-flower"].forEach((app) => {
+    button(app)
+        .on("click", () => {
+            const execPath = `/usr/bin/${app}`;
+            runApp(execPath);
+        })
+        .addInto();
+});
