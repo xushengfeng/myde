@@ -15,7 +15,16 @@ export const WaylandProtocols: Record<string, WaylandProtocol> = {
                 type: "request",
                 args: [{ name: "registry", type: WaylandArgType.NEW_ID, interface: "wl_registry" }],
             },
-            { name: "delete_id", type: "request", args: [{ name: "id", type: WaylandArgType.UINT }] },
+            {
+                name: "error",
+                type: "event",
+                args: [
+                    { name: "object_id", type: WaylandArgType.OBJECT },
+                    { name: "code", type: WaylandArgType.UINT },
+                    { name: "message", type: WaylandArgType.STRING },
+                ],
+            },
+            { name: "delete_id", type: "event", args: [{ name: "id", type: WaylandArgType.UINT }] },
             {
                 name: "error",
                 type: "error",
