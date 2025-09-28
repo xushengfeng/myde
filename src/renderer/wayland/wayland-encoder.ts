@@ -1,3 +1,5 @@
+import type { WaylandObjectId } from "./wayland-binary";
+
 export class WaylandEncoder {
     private buffer: ArrayBuffer;
     private view: DataView;
@@ -11,7 +13,7 @@ export class WaylandEncoder {
     }
 
     // 写入消息头：object_id (32位) + opcode (16位) + 消息长度 (16位)
-    writeHeader(objectId: number, opcode: number): void {
+    writeHeader(objectId: WaylandObjectId, opcode: number): void {
         this.ensureCapacity(8);
         this.view.setUint32(this.offset, objectId, true);
         this.view.setUint16(this.offset + 4, opcode, true);

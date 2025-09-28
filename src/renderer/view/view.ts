@@ -3,19 +3,31 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const child_process = require("node:child_process") as typeof import("node:child_process");
 
-import { WaylandArgType, type WaylandProtocol } from "../wayland/wayland-binary";
+import {
+    WaylandArgType,
+    type WaylandName,
+    type WaylandObjectId,
+    type WaylandProtocol,
+} from "../wayland/wayland-binary";
 import { WaylandProtocols } from "../wayland/wayland-db";
 import { WaylandDecoder } from "../wayland/wayland-decoder";
 
-import { addClass, check, type ElType, image, label, p, pack, pureStyle, spacer, trackPoint, txt, view } from "dkh-ui";
+import { txt, view } from "dkh-ui";
 import { WaylandEncoder } from "../wayland/wayland-encoder";
 
 type Client = {
     id: string;
     socket: import("node:net").Socket;
-    objects: Map<number, any>; // 客户端拥有的对象
+    objects: Map<WaylandObjectId, WaylandProtocol>; // 客户端拥有的对象
     nextId: number; // 客户端本地对象ID
 };
+
+function waylandName(name: number): WaylandName {
+    return name as WaylandName;
+}
+function waylandObjectId(id: number): WaylandObjectId {
+    return id as WaylandObjectId;
+}
 
 class WaylandServer {
     socketDir = "/tmp";
@@ -91,7 +103,7 @@ class WaylandServer {
         const decoder = new WaylandDecoder(data.buffer);
         const header = decoder.readHeader();
         console.log(`Parsed header from client ${client.id}:`, header);
-        const x = getX(header.objectId, header.opcode);
+        const x = getX(client.objects, header.objectId, header.opcode);
         if (!x) {
             console.warn(`Unknown objectId/opcode: ${header.objectId}/${header.opcode}`);
             return;
@@ -99,26 +111,39 @@ class WaylandServer {
         const args = parseArgs(decoder, x.op.args);
         console.log(`Parsed args for ${x.proto.name}.${x.op.name}:`, args);
         if (x.proto.name === "wl_display" && x.op.name === "get_registry") {
-            for (const [i, proto] of waylandProtocolsMap) {
-                this.sendMessage(client, 2, 1, {
+            const registryId = args.registry as WaylandObjectId;
+            client.objects.set(registryId, WaylandProtocols.wl_registry);
+            for (const [i, proto] of waylandProtocolsNameMap) {
+                this.sendMessage(client, registryId, 1, {
                     name: i,
                     interface: proto.name,
                     version: proto.version,
                 });
             }
         }
+        if (x.proto.name === "wl_registry" && x.op.name === "bind") {
+            const name = args.name as WaylandName;
+            const id = args.id as WaylandObjectId;
+            const proto = waylandProtocolsNameMap.get(name);
+            if (!proto) {
+                console.warn(`Unknown global name: ${name}`);
+                return;
+            }
+            client.objects.set(id, proto);
+            console.log(`Client ${client.id} bound ${proto.name} to id ${id}`);
+        }
     }
-    sendMessage(client: Client, objectId: number, opcode: number, args: Record<string, any>) {
-        const proto = waylandProtocolsMap.get(objectId);
-        if (!proto) {
-            console.error(`Unknown objectId: ${objectId}`);
+    sendMessage(client: Client, objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
+        const p = getX(client.objects, objectId, opcode);
+        if (!p) {
+            console.error("Cannot find protocol for sending message", objectId, opcode);
             return;
         }
-        const op = proto.ops[opcode];
-        if (!op) {
-            console.error(`Unknown opcode ${opcode} for objectId ${objectId}`);
-            return;
-        }
+        console.log(`Sending message to client ${client.id}:`, {
+            p: `${p.proto.name}.${p.op.name}`,
+            args,
+        });
+        const { op } = p;
         const encoder = new WaylandEncoder();
         encoder.writeHeader(objectId, opcode);
         for (const a of op.args) {
@@ -153,19 +178,24 @@ class WaylandServer {
             }
         }
         const x = encoder.finalizeMessage();
-
-        client.socket.write(new Uint8Array(x.data)); // todo array 类型
+        client.socket.write(new Uint8Array(x.data), (err) => {
+            if (err) {
+                console.error("Failed to send message to client:", err);
+            }
+        }); // todo array 类型
     }
 }
 
 function initWaylandProtocols() {
+    let name = 1;
     for (const [_, proto] of Object.entries(WaylandProtocols)) {
-        waylandProtocolsMap.set(proto.objectId, proto);
+        waylandProtocolsNameMap.set(waylandName(name), proto);
+        name++;
     }
 }
 
-function getX(objectId: number, opcode: number) {
-    const proto = waylandProtocolsMap.get(objectId);
+function getX(map: Map<WaylandObjectId, WaylandProtocol>, objectId: WaylandObjectId, opcode: number) {
+    const proto = objectId === 1 ? WaylandProtocols.wl_display : map.get(objectId);
     if (!proto) return null;
     const op = proto.ops[opcode];
     if (!op) return null;
@@ -246,7 +276,7 @@ const server = new WaylandServer();
 
 const deEnv = JSON.parse(new URLSearchParams(location.search).get("env") ?? "{}");
 
-const waylandProtocolsMap = new Map<number, WaylandProtocol>();
+const waylandProtocolsNameMap = new Map<WaylandName, WaylandProtocol>();
 
 initWaylandProtocols();
 

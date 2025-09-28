@@ -9,8 +9,10 @@ export enum WaylandArgType {
     FD = "fd",
 }
 
+export type WaylandName = number & { __brand: "WaylandName" };
+export type WaylandObjectId = number & { __brand: "WaylandObjectId" };
+
 export type WaylandProtocol = {
-    objectId: number;
     name: string;
     version: number;
     ops: Array<{

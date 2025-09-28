@@ -2,7 +2,6 @@ import { type WaylandProtocol, WaylandArgType } from "./wayland-binary";
 
 export const WaylandProtocols: Record<string, WaylandProtocol> = {
     wl_display: {
-        objectId: 1,
         name: "wl_display",
         version: 1,
         ops: [
@@ -28,7 +27,6 @@ export const WaylandProtocols: Record<string, WaylandProtocol> = {
         ],
     },
     wl_registry: {
-        objectId: 2,
         name: "wl_registry",
         version: 1,
         ops: [
@@ -53,7 +51,6 @@ export const WaylandProtocols: Record<string, WaylandProtocol> = {
         ],
     },
     wl_callback: {
-        objectId: 3,
         name: "wl_callback",
         version: 1,
         ops: [
@@ -65,7 +62,6 @@ export const WaylandProtocols: Record<string, WaylandProtocol> = {
         ],
     },
     wl_compositor: {
-        objectId: 4,
         name: "wl_compositor",
         version: 6,
         ops: [

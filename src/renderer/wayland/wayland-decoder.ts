@@ -1,3 +1,5 @@
+import type { WaylandObjectId } from "./wayland-binary";
+
 export class WaylandDecoder {
     private view: DataView;
     private offset: number;
@@ -11,8 +13,8 @@ export class WaylandDecoder {
         this.fdIndex = 0;
     }
 
-    readHeader(): { objectId: number; opcode: number; length: number } {
-        const objectId = this.view.getUint32(this.offset, true);
+    readHeader(): { objectId: WaylandObjectId; opcode: number; length: number } {
+        const objectId = this.view.getUint32(this.offset, true) as WaylandObjectId;
         const opcode = this.view.getUint16(this.offset + 4, true);
         const length = this.view.getUint16(this.offset + 6, true);
         this.offset += 8;
