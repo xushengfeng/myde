@@ -90,6 +90,7 @@ class WaylandServer {
         });
 
         socket.on("close", () => {
+            console.log(`Client ${client.id} disconnected`);
             // this.handleClientDisconnect(client);
         });
 
@@ -254,13 +255,21 @@ function runApp(execPath: string) {
     });
 
     const subprocess = child_process.spawn(execPath, {
-        stdio: "inherit",
+        stdio: "pipe",
         env: {
             HOME: deEnv.HOME,
             XDG_SESSION_TYPE: "wayland",
             XDG_RUNTIME_DIR: server.socketDir, // 设置XDG_RUNTIME_DIR
             WAYLAND_DISPLAY: server.socketName, // 设置环境变量以指向我们的Wayland服务器
         },
+    });
+
+    subprocess.stdout.on("data", (data) => {
+        console.log(`Subprocess stdout: ${data}`);
+    });
+
+    subprocess.stderr.on("data", (data) => {
+        console.error(`Subprocess stderr: ${data}`);
     });
 
     subprocess.on("error", (err) => {
