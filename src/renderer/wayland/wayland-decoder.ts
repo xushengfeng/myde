@@ -94,11 +94,13 @@ export class WaylandDecoder {
         const msgLength = this.currentLength;
         const targetOffset = this.messageStartOffset + msgLength;
         const remainingLength = targetOffset - this.offset;
-        const remainingBuffer = new Uint8Array(
-            this.view.buffer,
-            this.offset,
-            remainingLength > 0 ? remainingLength : 0,
-        );
+        let remainingBuffer: Uint8Array;
+        if (remainingLength > 0) {
+            remainingBuffer = new Uint8Array(this.view.buffer, this.offset, remainingLength);
+        } else {
+            // 已解析完全，返回空buffer
+            remainingBuffer = new Uint8Array(0);
+        }
         this.offset = targetOffset;
         return remainingBuffer;
     }

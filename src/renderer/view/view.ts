@@ -108,7 +108,7 @@ class WaylandServer {
 
         const opArray: { proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> }[] = [];
 
-        console.log(`Parsed data from client ${client.id}:`);
+        console.log(`Parsed data from client ${client.id}:`, data.buffer);
         while (decoder.getRemainingBytes() > 0) {
             const header = decoder.readHeader();
             const x = getX(client.objects, "request", header.objectId, header.opcode);
@@ -117,8 +117,9 @@ class WaylandServer {
                 return;
             }
             const args = parseArgs(decoder, x.op.args);
-            decoder.final();
+            const rest = decoder.final();
             console.log(`Parsed args for ${x.proto.name}.${x.op.name}:`, args);
+            if (rest.length) console.log("rest", rest);
             opArray.push({ proto: x.proto, op: x.op, args });
         }
         const willRun: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
@@ -264,6 +265,10 @@ function parseArgs(decoder: WaylandDecoder, args: WaylandOp["args"]) {
                 parsed[arg.name] = decoder.readObject();
                 break;
             case WaylandArgType.NEW_ID:
+                if (arg.interface === undefined) {
+                    decoder.readString();
+                    decoder.readUint();
+                }
                 parsed[arg.name] = decoder.readNewId();
                 break;
             case WaylandArgType.ARRAY:
