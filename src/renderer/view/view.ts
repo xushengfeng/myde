@@ -12,7 +12,7 @@ import {
 import { WaylandProtocols } from "../wayland/wayland-db";
 import { WaylandDecoder } from "../wayland/wayland-decoder";
 
-import { txt, view } from "dkh-ui";
+import { button, txt, view } from "dkh-ui";
 import { WaylandEncoder } from "../wayland/wayland-encoder";
 
 type Client = {
@@ -102,36 +102,45 @@ class WaylandServer {
     handleClientMessage(client: Client, data: Buffer) {
         // 解析并处理客户端消息
         const decoder = new WaylandDecoder(data.buffer);
-        const header = decoder.readHeader();
-        console.log(`Parsed header from client ${client.id}:`, header);
-        const x = getX(client.objects, header.objectId, header.opcode);
-        if (!x) {
-            console.warn(`Unknown objectId/opcode: ${header.objectId}/${header.opcode}`);
-            return;
-        }
-        const args = parseArgs(decoder, x.op.args);
-        console.log(`Parsed args for ${x.proto.name}.${x.op.name}:`, args);
-        if (x.proto.name === "wl_display" && x.op.name === "get_registry") {
-            const registryId = args.registry as WaylandObjectId;
-            client.objects.set(registryId, WaylandProtocols.wl_registry);
-            for (const [i, proto] of waylandProtocolsNameMap) {
-                this.sendMessage(client, registryId, 1, {
-                    name: i,
-                    interface: proto.name,
-                    version: proto.version,
-                });
-            }
-        }
-        if (x.proto.name === "wl_registry" && x.op.name === "bind") {
-            const name = args.name as WaylandName;
-            const id = args.id as WaylandObjectId;
-            const proto = waylandProtocolsNameMap.get(name);
-            if (!proto) {
-                console.warn(`Unknown global name: ${name}`);
+
+        const opArray: { proto: WaylandProtocol; op: WaylandProtocol["ops"][0]; args: Record<string, any> }[] = [];
+
+        console.log(`Parsed data from client ${client.id}:`);
+        while (decoder.getRemainingBytes() > 0) {
+            const header = decoder.readHeader();
+            const x = getX(client.objects, header.objectId, header.opcode);
+            if (!x) {
+                console.warn(`Unknown objectId/opcode: ${header.objectId}/${header.opcode}`);
                 return;
             }
-            client.objects.set(id, proto);
-            console.log(`Client ${client.id} bound ${proto.name} to id ${id}`);
+            const args = parseArgs(decoder, x.op.args);
+            console.log(`Parsed args for ${x.proto.name}.${x.op.name}:`, args);
+            opArray.push({ proto: x.proto, op: x.op, args });
+        }
+
+        for (const x of opArray) {
+            if (x.proto.name === "wl_display" && x.op.name === "get_registry") {
+                const registryId = x.args.registry as WaylandObjectId;
+                client.objects.set(registryId, WaylandProtocols.wl_registry);
+                for (const [i, proto] of waylandProtocolsNameMap) {
+                    this.sendMessage(client, registryId, 1, {
+                        name: i,
+                        interface: proto.name,
+                        version: proto.version,
+                    });
+                }
+            }
+            if (x.proto.name === "wl_registry" && x.op.name === "bind") {
+                const name = x.args.name as WaylandName;
+                const id = x.args.id as WaylandObjectId;
+                const proto = waylandProtocolsNameMap.get(name);
+                if (!proto) {
+                    console.warn(`Unknown global name: ${name}`);
+                    return;
+                }
+                client.objects.set(id, proto);
+                console.log(`Client ${client.id} bound ${proto.name} to id ${id}`);
+            }
         }
     }
     sendMessage(client: Client, objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
@@ -190,6 +199,10 @@ class WaylandServer {
 function initWaylandProtocols() {
     let name = 1;
     for (const [_, proto] of Object.entries(WaylandProtocols)) {
+        if (proto.name === "wl_display" || proto.name === "wl_registry" || proto.name === "wl_callback") {
+            continue;
+        }
+        if (proto.version === 0) continue;
         waylandProtocolsNameMap.set(waylandName(name), proto);
         name++;
     }
@@ -248,28 +261,25 @@ function parseArgs(decoder: WaylandDecoder, args: WaylandProtocol["ops"][0]["arg
 }
 
 function runApp(execPath: string) {
-    console.log(`Running application: ${execPath}`, {
-        ...deEnv,
-        XDG_RUNTIME_DIR: server.socketDir, // 设置XDG_RUNTIME_DIR
-        WAYLAND_DISPLAY: server.socketName, // 设置环境变量以指向我们的Wayland服务器
-    });
+    console.log(`Running application: ${execPath}`);
 
     const subprocess = child_process.spawn(execPath, {
-        stdio: "pipe",
+        stdio: ["ignore", "pipe", "pipe"],
         env: {
             HOME: deEnv.HOME,
+            WAYLAND_DEBUG: "1",
             XDG_SESSION_TYPE: "wayland",
-            XDG_RUNTIME_DIR: server.socketDir, // 设置XDG_RUNTIME_DIR
-            WAYLAND_DISPLAY: server.socketName, // 设置环境变量以指向我们的Wayland服务器
+            XDG_RUNTIME_DIR: server.socketDir,
+            WAYLAND_DISPLAY: server.socketName,
         },
     });
 
     subprocess.stdout.on("data", (data) => {
-        console.log(`Subprocess stdout: ${data}`);
+        console.log(`Subprocess stdout: ${data.toString("utf8")}`);
     });
 
     subprocess.stderr.on("data", (data) => {
-        console.error(`Subprocess stderr: ${data}`);
+        console.error(`Subprocess stderr: ${data.toString("utf8")}`);
     });
 
     subprocess.on("error", (err) => {
@@ -291,10 +301,17 @@ initWaylandProtocols();
 
 txt("hello").addInto();
 
-view()
-    .add("run")
+button("run")
     .on("click", () => {
-        const execPath = "/usr/bin/google-chrome-stable"; // 替换为你想运行的Wayland应用程序路径
+        const execPath = "/usr/bin/google-chrome-stable";
+        runApp(execPath);
+    })
+    .addInto();
+
+button("wayland-info")
+    .on("click", () => {
+        console.log("Wayland info button clicked");
+        const execPath = "/usr/bin/wayland-info";
         runApp(execPath);
     })
     .addInto();
