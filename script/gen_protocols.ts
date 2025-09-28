@@ -66,8 +66,8 @@ supportedProtocols.forEach((proto) => {
                 const old = oldList.find((item) => item.name === name);
                 if (old) {
                     protocols.push(old);
-                    return;
                 }
+                return;
             }
             const request = (iface.request || []).map((req: any) => ({
                 name: req.$.name,
@@ -88,7 +88,8 @@ supportedProtocols.forEach((proto) => {
             const enums = (iface.enum || []).map((enm: any) => ({
                 name: enm.$.name,
                 enum: Object.fromEntries(
-                    (enm.entry || []).map((entry: any) => [entry.$.name, parseInt(entry.$.value, 10)]),
+                    // biome-ignore lint/correctness/useParseIntRadix: 像0x开头的字符串需要parseInt自动识别为16进制
+                    (enm.entry || []).map((entry: any) => [entry.$.name, parseInt(entry.$.value)]),
                 ),
             }));
             protocols.push({ name, version, request, event, enum: enums });
@@ -101,8 +102,7 @@ supportedProtocols.forEach((proto) => {
         if (overVersion.length > 0) {
             console.warn(`协议 ${proto.name} 存在版本过高的接口:\n\n`, overVersion.join("\n"), "\n");
         }
-
-        fs.writeFileSync(outputPath, JSON.stringify(allResults, null, 2), "utf-8");
-        console.log(`协议 ${proto.name} 已生成到 protocols.json`);
     });
 });
+fs.writeFileSync(outputPath, JSON.stringify(allResults, null, 2), "utf-8");
+console.log(`已生成协议文件: ${outputPath}`);
