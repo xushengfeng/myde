@@ -15,9 +15,20 @@ const supportedProtocols: Array<{ name: string; interfaces: Array<{ name: string
             { name: "wl_registry", version: 1 },
             { name: "wl_callback", version: 1 },
             { name: "wl_compositor", version: 6 },
+            { name: "wl_shm_pool", version: 2 },
             { name: "wl_shm", version: 2 },
             { name: "wl_seat", version: 10 },
             { name: "wl_output", version: 4 },
+        ],
+    },
+    {
+        name: "xdg-shell",
+        interfaces: [
+            { name: "xdg_wm_base", version: 7 },
+            { name: "xdg_surface", version: 7 },
+            { name: "xdg_toplevel", version: 7 },
+            { name: "xdg_popup", version: 7 },
+            { name: "xdg_positioner", version: 7 },
         ],
     },
 ];

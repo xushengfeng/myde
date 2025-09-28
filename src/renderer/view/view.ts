@@ -307,7 +307,15 @@ function runApp(execPath: string) {
     });
 
     subprocess.stderr.on("data", (data) => {
-        console.error(`Subprocess stderr: ${data.toString("utf8")}`);
+        const dataStr = data.toString("utf8");
+        const m = dataStr.match(/\{Default Queue\}(.+?)#/)?.[1];
+        if (m) {
+            const p = (m as string).replace("->", "").trim();
+            if (!WaylandProtocols[p]) {
+                console.error(`Unknown protocol in debug output: ${p}`);
+            }
+        }
+        console.log(`Subprocess stderr: ${data.toString("utf8")}`);
     });
 
     subprocess.on("error", (err) => {

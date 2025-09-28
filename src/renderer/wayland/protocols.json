@@ -159,6 +159,57 @@
       "enum": []
     },
     {
+      "name": "wl_shm_pool",
+      "version": 2,
+      "request": [
+        {
+          "name": "create_buffer",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wl_buffer"
+            },
+            {
+              "name": "offset",
+              "type": "int"
+            },
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            },
+            {
+              "name": "stride",
+              "type": "int"
+            },
+            {
+              "name": "format",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "resize",
+          "args": [
+            {
+              "name": "size",
+              "type": "int"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": []
+    },
+    {
       "name": "wl_shm",
       "version": 2,
       "request": [
@@ -541,6 +592,652 @@
           "enum": {
             "current": 1,
             "preferred": 2
+          }
+        }
+      ]
+    }
+  ],
+  "xdg-shell": [
+    {
+      "name": "xdg_wm_base",
+      "version": 7,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "create_positioner",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "xdg_positioner"
+            }
+          ]
+        },
+        {
+          "name": "get_xdg_surface",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "xdg_surface"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            }
+          ]
+        },
+        {
+          "name": "pong",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "event": [
+        {
+          "name": "ping",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "role": 0,
+            "defunct_surfaces": 1,
+            "not_the_topmost_popup": 2,
+            "invalid_popup_parent": 3,
+            "invalid_surface_state": 4,
+            "invalid_positioner": 5,
+            "unresponsive": 6
+          }
+        }
+      ]
+    },
+    {
+      "name": "xdg_positioner",
+      "version": 7,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "set_size",
+          "args": [
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "set_anchor_rect",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            },
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "set_anchor",
+          "args": [
+            {
+              "name": "anchor",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "set_gravity",
+          "args": [
+            {
+              "name": "gravity",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "set_constraint_adjustment",
+          "args": [
+            {
+              "name": "constraint_adjustment",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "set_offset",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "set_reactive",
+          "args": []
+        },
+        {
+          "name": "set_parent_size",
+          "args": [
+            {
+              "name": "parent_width",
+              "type": "int"
+            },
+            {
+              "name": "parent_height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "set_parent_configure",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "invalid_input": 0
+          }
+        },
+        {
+          "name": "anchor",
+          "enum": {
+            "none": 0,
+            "top": 1,
+            "bottom": 2,
+            "left": 3,
+            "right": 4,
+            "top_left": 5,
+            "bottom_left": 6,
+            "top_right": 7,
+            "bottom_right": 8
+          }
+        },
+        {
+          "name": "gravity",
+          "enum": {
+            "none": 0,
+            "top": 1,
+            "bottom": 2,
+            "left": 3,
+            "right": 4,
+            "top_left": 5,
+            "bottom_left": 6,
+            "top_right": 7,
+            "bottom_right": 8
+          }
+        },
+        {
+          "name": "constraint_adjustment",
+          "enum": {
+            "none": 0,
+            "slide_x": 1,
+            "slide_y": 2,
+            "flip_x": 4,
+            "flip_y": 8,
+            "resize_x": 16,
+            "resize_y": 32
+          }
+        }
+      ]
+    },
+    {
+      "name": "xdg_surface",
+      "version": 7,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "get_toplevel",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "xdg_toplevel"
+            }
+          ]
+        },
+        {
+          "name": "get_popup",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "xdg_popup"
+            },
+            {
+              "name": "parent",
+              "type": "object",
+              "interface": "xdg_surface"
+            },
+            {
+              "name": "positioner",
+              "type": "object",
+              "interface": "xdg_positioner"
+            }
+          ]
+        },
+        {
+          "name": "set_window_geometry",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            },
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "ack_configure",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "event": [
+        {
+          "name": "configure",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "not_constructed": 1,
+            "already_constructed": 2,
+            "unconfigured_buffer": 3,
+            "invalid_serial": 4,
+            "invalid_size": 5,
+            "defunct_role_object": 6
+          }
+        }
+      ]
+    },
+    {
+      "name": "xdg_toplevel",
+      "version": 7,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "set_parent",
+          "args": [
+            {
+              "name": "parent",
+              "type": "object",
+              "interface": "xdg_toplevel"
+            }
+          ]
+        },
+        {
+          "name": "set_title",
+          "args": [
+            {
+              "name": "title",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "set_app_id",
+          "args": [
+            {
+              "name": "app_id",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "show_window_menu",
+          "args": [
+            {
+              "name": "seat",
+              "type": "object",
+              "interface": "wl_seat"
+            },
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "move",
+          "args": [
+            {
+              "name": "seat",
+              "type": "object",
+              "interface": "wl_seat"
+            },
+            {
+              "name": "serial",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "resize",
+          "args": [
+            {
+              "name": "seat",
+              "type": "object",
+              "interface": "wl_seat"
+            },
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "edges",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "set_max_size",
+          "args": [
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "set_min_size",
+          "args": [
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "set_maximized",
+          "args": []
+        },
+        {
+          "name": "unset_maximized",
+          "args": []
+        },
+        {
+          "name": "set_fullscreen",
+          "args": [
+            {
+              "name": "output",
+              "type": "object",
+              "interface": "wl_output"
+            }
+          ]
+        },
+        {
+          "name": "unset_fullscreen",
+          "args": []
+        },
+        {
+          "name": "set_minimized",
+          "args": []
+        }
+      ],
+      "event": [
+        {
+          "name": "configure",
+          "args": [
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            },
+            {
+              "name": "states",
+              "type": "array"
+            }
+          ]
+        },
+        {
+          "name": "close",
+          "args": []
+        },
+        {
+          "name": "configure_bounds",
+          "args": [
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "wm_capabilities",
+          "args": [
+            {
+              "name": "capabilities",
+              "type": "array"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "invalid_resize_edge": 0,
+            "invalid_parent": 1,
+            "invalid_size": 2
+          }
+        },
+        {
+          "name": "resize_edge",
+          "enum": {
+            "none": 0,
+            "top": 1,
+            "bottom": 2,
+            "left": 4,
+            "top_left": 5,
+            "bottom_left": 6,
+            "right": 8,
+            "top_right": 9,
+            "bottom_right": 10
+          }
+        },
+        {
+          "name": "state",
+          "enum": {
+            "maximized": 1,
+            "fullscreen": 2,
+            "resizing": 3,
+            "activated": 4,
+            "tiled_left": 5,
+            "tiled_right": 6,
+            "tiled_top": 7,
+            "tiled_bottom": 8,
+            "suspended": 9,
+            "constrained_left": 10,
+            "constrained_right": 11,
+            "constrained_top": 12,
+            "constrained_bottom": 13
+          }
+        },
+        {
+          "name": "wm_capabilities",
+          "enum": {
+            "window_menu": 1,
+            "maximize": 2,
+            "fullscreen": 3,
+            "minimize": 4
+          }
+        }
+      ]
+    },
+    {
+      "name": "xdg_popup",
+      "version": 7,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "grab",
+          "args": [
+            {
+              "name": "seat",
+              "type": "object",
+              "interface": "wl_seat"
+            },
+            {
+              "name": "serial",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "reposition",
+          "args": [
+            {
+              "name": "positioner",
+              "type": "object",
+              "interface": "xdg_positioner"
+            },
+            {
+              "name": "token",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "event": [
+        {
+          "name": "configure",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            },
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "popup_done",
+          "args": []
+        },
+        {
+          "name": "repositioned",
+          "args": [
+            {
+              "name": "token",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "invalid_grab": 0
           }
         }
       ]
