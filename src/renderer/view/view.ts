@@ -121,13 +121,29 @@ class WaylandServer {
             console.log(`Parsed args for ${x.proto.name}.${x.op.name}:`, args);
             if (rest.length) console.log("rest", rest);
             opArray.push({ proto: x.proto, op: x.op, args });
+            for (const v of Object.values(x.op.args)) {
+                if (v.type === WaylandArgType.NEW_ID) {
+                    const id = args[v.name] as WaylandObjectId;
+                    if (v.interface === undefined) continue;
+                    const _interface = WaylandProtocols[v.interface];
+                    if (!id) {
+                        console.error("NEW_ID argument is missing or invalid:", args);
+                        continue;
+                    }
+                    if (!_interface) {
+                        console.error("NEW_ID argument has unknown interface:", v.interface);
+                        continue;
+                    }
+                    client.objects.set(id, _interface);
+                    console.log(`Client ${client.id} created ${v.interface} with id ${id}`);
+                }
+            }
         }
         const willRun: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
         let callbackId: WaylandObjectId | undefined;
         for (const x of opArray) {
             if (x.proto.name === "wl_display" && x.op.name === "sync") {
                 callbackId = x.args.callback as WaylandObjectId;
-                client.objects.set(callbackId, WaylandProtocols.wl_callback);
                 willRun.push({
                     objectId: callbackId,
                     opcode: 0,
@@ -137,7 +153,6 @@ class WaylandServer {
             }
             if (x.proto.name === "wl_display" && x.op.name === "get_registry") {
                 const registryId = x.args.registry as WaylandObjectId;
-                client.objects.set(registryId, WaylandProtocols.wl_registry);
                 for (const [i, proto] of waylandProtocolsNameMap) {
                     willRun.push({
                         objectId: registryId,
@@ -160,6 +175,10 @@ class WaylandServer {
                 }
                 client.objects.set(id, proto);
                 console.log(`Client ${client.id} bound ${proto.name} to id ${id}`);
+            }
+            if (x.proto.name === "wl_shm" && x.op.name === "create_pool") {
+                // todo
+                console.log("Received placeholder fd, cannot read data directly:");
             }
         }
         for (const x of willRun) {
