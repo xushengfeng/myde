@@ -387,6 +387,193 @@
       ]
     },
     {
+      "name": "wl_surface",
+      "version": 6,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "attach",
+          "args": [
+            {
+              "name": "buffer",
+              "type": "object",
+              "interface": "wl_buffer"
+            },
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "damage",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            },
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "frame",
+          "args": [
+            {
+              "name": "callback",
+              "type": "new_id",
+              "interface": "wl_callback"
+            }
+          ]
+        },
+        {
+          "name": "set_opaque_region",
+          "args": [
+            {
+              "name": "region",
+              "type": "object",
+              "interface": "wl_region"
+            }
+          ]
+        },
+        {
+          "name": "set_input_region",
+          "args": [
+            {
+              "name": "region",
+              "type": "object",
+              "interface": "wl_region"
+            }
+          ]
+        },
+        {
+          "name": "commit",
+          "args": []
+        },
+        {
+          "name": "set_buffer_transform",
+          "args": [
+            {
+              "name": "transform",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "set_buffer_scale",
+          "args": [
+            {
+              "name": "scale",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "damage_buffer",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            },
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "offset",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            }
+          ]
+        }
+      ],
+      "event": [
+        {
+          "name": "enter",
+          "args": [
+            {
+              "name": "output",
+              "type": "object",
+              "interface": "wl_output"
+            }
+          ]
+        },
+        {
+          "name": "leave",
+          "args": [
+            {
+              "name": "output",
+              "type": "object",
+              "interface": "wl_output"
+            }
+          ]
+        },
+        {
+          "name": "preferred_buffer_scale",
+          "args": [
+            {
+              "name": "factor",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "preferred_buffer_transform",
+          "args": [
+            {
+              "name": "transform",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "invalid_scale": 0,
+            "invalid_transform": 1,
+            "invalid_size": 2,
+            "invalid_offset": 3,
+            "defunct_role_object": 4
+          }
+        }
+      ]
+    },
+    {
       "name": "wl_seat",
       "version": 10,
       "request": [
