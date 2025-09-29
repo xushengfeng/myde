@@ -14,9 +14,11 @@ import { WaylandDecoder } from "../wayland/wayland-decoder";
 import WaylandProtocolsJSON from "../wayland/protocols.json?raw";
 const WaylandProtocolsx = JSON.parse(WaylandProtocolsJSON) as Record<string, WaylandProtocol[]>;
 const WaylandProtocols = Object.fromEntries(Object.values(WaylandProtocolsx).flatMap((v) => v.map((p) => [p.name, p])));
-
-import { button, txt, view } from "dkh-ui";
 import { WaylandEncoder } from "../wayland/wayland-encoder";
+
+import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
+
+import { button, image, txt, view } from "dkh-ui";
 
 type Client = {
     id: string;
@@ -312,10 +314,10 @@ function parseArgs(decoder: WaylandDecoder, args: WaylandOp["args"]) {
     return parsed;
 }
 
-function runApp(execPath: string) {
+function runApp(execPath: string, args: string[] = []) {
     console.log(`Running application: ${execPath}`);
 
-    const subprocess = child_process.spawn(execPath, {
+    const subprocess = child_process.spawn(execPath, args, {
         stdio: ["ignore", "pipe", "pipe"],
         env: {
             HOME: deEnv.HOME,
@@ -369,3 +371,32 @@ initWaylandProtocols();
         })
         .addInto();
 });
+
+const allApps = getDesktopEntries(["zh_CN", "zh", "zh-Hans"]);
+console.log("Found desktop entries:", allApps);
+const apps: typeof allApps = [];
+const appNameSet = new Set<string>();
+
+for (const app of allApps) {
+    if (!appNameSet.has(app.name)) {
+        appNameSet.add(app.name);
+        apps.push(app);
+    }
+}
+
+view("y")
+    .add(
+        apps.map((app) => {
+            const iconPath = getDesktopIcon(app.icon) || "";
+            return view("x")
+                .add([
+                    iconPath ? image(`file://${iconPath}`, app.name).style({ width: "24px" }) : "",
+                    txt(app.nameLocal),
+                ])
+                .on("click", () => {
+                    const exec = app.exec.split(" ")[0]; // 简单处理参数
+                    runApp(exec, app.exec.split(" ").slice(1));
+                });
+        }),
+    )
+    .addInto();
