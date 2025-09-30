@@ -1,7 +1,10 @@
-const net = require("node:net") as typeof import("node:net");
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const child_process = require("node:child_process") as typeof import("node:child_process");
+
+const usocket = require("@xushengfeng/usocket") as typeof import("@xushengfeng/usocket");
+
+import type { UServer, USocket } from "@xushengfeng/usocket";
 
 import {
     WaylandArgType,
@@ -22,7 +25,7 @@ import { button, image, txt, view } from "dkh-ui";
 
 type Client = {
     id: string;
-    socket: import("node:net").Socket;
+    socket: USocket;
     objects: Map<WaylandObjectId, WaylandProtocol>; // 客户端拥有的对象
     nextId: number; // 客户端本地对象ID
 };
@@ -38,7 +41,7 @@ class WaylandServer {
     socketDir = "/tmp";
     socketName = "my-wayland-server-0";
     socketPath: string;
-    server: import("node:net").Server | null = null;
+    server: UServer | null = null;
     clients: Map<string, any>;
     globalObjects: Map<string, any>;
     nextObjectId: number;
@@ -58,7 +61,8 @@ class WaylandServer {
         }
 
         // 创建服务器
-        this.server = net.createServer((socket) => {
+        this.server = new usocket.UServer();
+        this.server.on("connection", (socket) => {
             this.handleNewConnection(socket);
         });
 
@@ -76,7 +80,7 @@ class WaylandServer {
         });
     }
 
-    handleNewConnection(socket: import("node:net").Socket) {
+    handleNewConnection(socket: USocket) {
         const clientId = crypto.randomUUID();
         console.log(`New client connected: ${clientId}`);
 
@@ -90,8 +94,11 @@ class WaylandServer {
         this.clients.set(clientId, client);
 
         // 设置消息处理
-        socket.on("data", (data) => {
-            this.handleClientMessage(client, data);
+        socket.on("readable", () => {
+            console.log("connected");
+            const x = socket.read(undefined, null);
+            console.log("xxx", x);
+            if (x?.data) this.handleClientMessage(client, x.data, x.fds);
         });
 
         socket.on("close", () => {
@@ -104,9 +111,9 @@ class WaylandServer {
             // this.handleClientDisconnect(client);
         });
     }
-    handleClientMessage(client: Client, data: Buffer) {
+    handleClientMessage(client: Client, data: Buffer, fds: number[] = []) {
         // 解析并处理客户端消息
-        const decoder = new WaylandDecoder(data.buffer);
+        const decoder = new WaylandDecoder(data.buffer, fds);
 
         const opArray: { proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> }[] = [];
 
@@ -180,7 +187,10 @@ class WaylandServer {
             }
             if (x.proto.name === "wl_shm" && x.op.name === "create_pool") {
                 // todo
-                console.log("Received placeholder fd, cannot read data directly:");
+                // console.log("Received placeholder fd, cannot read data directly:");
+                const fd = x.args.fd as number;
+                const data = fs.readFileSync(fd);
+                console.log("Received placeholder fd, cannot read data directly:", data);
             }
         }
         for (const x of willRun) {
@@ -232,7 +242,7 @@ class WaylandServer {
             }
         }
         const x = encoder.finalizeMessage();
-        client.socket.write(new Uint8Array(x.data), (err) => {
+        client.socket.write(Buffer.from(x.data), (err) => {
             if (err) {
                 console.error("Failed to send message to client:", err);
             }
@@ -304,8 +314,7 @@ function parseArgs(decoder: WaylandDecoder, args: WaylandOp["args"]) {
                 }
                 break;
             case WaylandArgType.FD:
-                // 这里假设FD是通过某种方式传递的，我们用一个占位符
-                parsed[arg.name] = -1; // 占位符，实际实现中需要处理FD传递
+                parsed[arg.name] = decoder.readFileDescriptor();
                 break;
             default:
                 throw new Error(`Unknown argument type: ${arg.type}`);

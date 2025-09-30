@@ -8,7 +8,8 @@
         "dist": "npm run build && electron-builder -p never -c electron-builder.config.js",
         "start": "electron-vite --ignoreConfigWarning preview",
         "dev": "electron-vite --ignoreConfigWarning dev",
-        "build": "electron-vite --ignoreConfigWarning build"
+        "build": "electron-vite --ignoreConfigWarning build",
+        "pkgRebuild": "electron-rebuild"
     },
     "author": {
         "name": "xsf",
@@ -17,12 +18,14 @@
     "homepage": "https://github.com/xushengfeng/myde/",
     "license": "GPL-3.0",
     "dependencies": {
+        "@xushengfeng/usocket": "^1.1.1",
         "dkh-ui": "^0.11.0",
         "ini": "^5.0.0",
         "xml2js": "^0.6.2"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.2.4",
+        "@electron/rebuild": "^4.0.1",
         "@types/ini": "^4.1.1",
         "@types/xml2js": "^0.4.14",
         "electron": "^31.4.0",
