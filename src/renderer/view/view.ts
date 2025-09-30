@@ -174,6 +174,11 @@ class WaylandServer {
                     console.log("xxxx");
                     // todo Connect Time  outputs, compositor, input devices
                     // wl_shm wl_seat wl_output
+                    for (const [id, p] of client.objects) {
+                        if (p.name === "wl_shm") {
+                            this.sendMessage(client, id, 0, { format: p.enum![0].enum.argb8888 }); // wl_shm.format
+                        }
+                    }
                 }
 
                 this.sendMessage(client, callbackId, 0, {}); // done
