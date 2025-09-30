@@ -23,11 +23,14 @@ import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
 
 import { button, image, txt, view } from "dkh-ui";
 
+type ParsedMessage = { proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
+
 type Client = {
     id: string;
     socket: USocket;
     objects: Map<WaylandObjectId, WaylandProtocol>; // 客户端拥有的对象
     nextId: number; // 客户端本地对象ID
+    lastRecive: ParsedMessage | null;
 };
 
 function waylandName(name: number): WaylandName {
@@ -81,7 +84,7 @@ class WaylandServer {
     }
 
     handleNewConnection(socket: USocket) {
-        const clientId = crypto.randomUUID();
+        const clientId = crypto.randomUUID().slice(0, 8);
         console.log(`New client connected: ${clientId}`);
 
         const client: Client = {
@@ -89,6 +92,7 @@ class WaylandServer {
             socket: socket,
             objects: new Map(), // 客户端拥有的对象
             nextId: 1, // 客户端本地对象ID
+            lastRecive: null,
         };
 
         this.clients.set(clientId, client);
@@ -97,7 +101,6 @@ class WaylandServer {
         socket.on("readable", () => {
             console.log("connected");
             const x = socket.read(undefined, null);
-            console.log("xxx", x);
             if (x?.data) this.handleClientMessage(client, x.data, x.fds);
         });
 
@@ -115,9 +118,9 @@ class WaylandServer {
         // 解析并处理客户端消息
         const decoder = new WaylandDecoder(data.buffer, fds);
 
-        const opArray: { proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> }[] = [];
+        const opArray: ParsedMessage[] = [];
 
-        console.log(`Parsed data from client ${client.id}:`, data.buffer);
+        console.log(`Parsed data from client ${client.id}:`, data.buffer, fds);
         while (decoder.getRemainingBytes() > 0) {
             const header = decoder.readHeader();
             const x = getX(client.objects, "request", header.objectId, header.opcode);
@@ -148,31 +151,35 @@ class WaylandServer {
                 }
             }
         }
-        const willRun: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
-        let callbackId: WaylandObjectId | undefined;
         for (const x of opArray) {
             if (x.proto.name === "wl_display" && x.op.name === "sync") {
-                callbackId = x.args.callback as WaylandObjectId;
-                willRun.push({
-                    objectId: callbackId,
-                    opcode: 0,
-                    args: {},
-                });
-                this.sendMessage(client, waylandObjectId(1), 1, { id: callbackId });
+                const callbackId = x.args.callback as WaylandObjectId;
+                this.sendMessage(client, waylandObjectId(1), 1, { id: callbackId }); // delete id
+
+                if (client.lastRecive) {
+                    console.log(`client.lastRecive`, client.lastRecive);
+                    if (client.lastRecive.proto.name === "wl_display" && client.lastRecive.op.name === "get_registry") {
+                        const registryId = client.lastRecive.args.registry as WaylandObjectId;
+                        for (const [i, proto] of waylandProtocolsNameMap) {
+                            this.sendMessage(client, registryId, 0, {
+                                name: i,
+                                interface: proto.name,
+                                version: proto.version,
+                            });
+                        }
+                    }
+
+                    client.lastRecive = null;
+                } else {
+                    console.log("xxxx");
+                    // todo Connect Time  outputs, compositor, input devices
+                    // wl_shm wl_seat wl_output
+                }
+
+                this.sendMessage(client, callbackId, 0, {}); // done
             }
             if (x.proto.name === "wl_display" && x.op.name === "get_registry") {
-                const registryId = x.args.registry as WaylandObjectId;
-                for (const [i, proto] of waylandProtocolsNameMap) {
-                    willRun.push({
-                        objectId: registryId,
-                        opcode: 0,
-                        args: {
-                            name: i,
-                            interface: proto.name,
-                            version: proto.version,
-                        },
-                    });
-                }
+                client.lastRecive = x;
             }
             if (x.proto.name === "wl_registry" && x.op.name === "bind") {
                 const name = x.args.name as WaylandName;
@@ -192,9 +199,6 @@ class WaylandServer {
                 const data = fs.readFileSync(fd);
                 console.log("Received placeholder fd, cannot read data directly:", data);
             }
-        }
-        for (const x of willRun) {
-            this.sendMessage(client, x.objectId, x.opcode, x.args);
         }
     }
     sendMessage(client: Client, objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
