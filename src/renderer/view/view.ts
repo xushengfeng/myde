@@ -175,8 +175,16 @@ class WaylandServer {
                 }
             }
         }
+
+        let useOp = false;
+        function isOp(x: ParsedMessage, name: string, op: string) {
+            const v = x.proto.name === name && x.op.name === op;
+            if (v) useOp = true;
+            return v;
+        }
+
         for (const x of opArray) {
-            if (x.proto.name === "wl_display" && x.op.name === "sync") {
+            if (isOp(x, "wl_display", "sync")) {
                 const callbackId = x.args.callback as WaylandObjectId;
                 this.sendMessage(client, waylandObjectId(1), 1, { id: callbackId }); // delete id
 
@@ -208,10 +216,10 @@ class WaylandServer {
 
                 this.sendMessage(client, callbackId, 0, {}); // done
             }
-            if (x.proto.name === "wl_display" && x.op.name === "get_registry") {
+            if (isOp(x, "wl_display", "get_registry")) {
                 client.lastRecive = x;
             }
-            if (x.proto.name === "wl_registry" && x.op.name === "bind") {
+            if (isOp(x, "wl_registry", "bind")) {
                 const name = x.args.name as WaylandName;
                 const id = x.args.id as WaylandObjectId;
                 const proto = waylandProtocolsNameMap.get(name);
@@ -222,24 +230,24 @@ class WaylandServer {
                 client.objects.set(id, { protocol: proto, data: undefined });
                 console.log(`Client ${client.id} bound ${proto.name} to id ${id}`);
             }
-            if (x.proto.name === "wl_shm" && x.op.name === "create_pool") {
+            if (isOp(x, "wl_shm", "create_pool")) {
                 const fd = x.args.fd as number;
                 this.getObject<"wl_shm_pool">(client, x.args.id).data = { fd };
             }
-            if (x.proto.name === "wl_compositor" && x.op.name === "create_surface") {
+            if (isOp(x, "wl_compositor", "create_surface")) {
                 const surfaceId = x.args.id as WaylandObjectId;
                 const surface = this.getObject<"wl_surface">(client, surfaceId);
                 const canvasEl = ele("canvas").addInto();
                 const canvas = canvasEl.el;
                 surface.data = { canvas };
             }
-            if (x.proto.name === "xdg_wm_base" && x.op.name === "get_xdg_surface") {
+            if (isOp(x, "xdg_wm_base", "get_xdg_surface")) {
                 const xdgSurfaceId = x.args.id as WaylandObjectId;
                 const xdgSurface = this.getObject<"xdg_surface">(client, xdgSurfaceId);
                 const surfaceId = x.args.surface as WaylandObjectId;
                 xdgSurface.data = { surface: surfaceId };
             }
-            if (x.proto.name === "wl_shm_pool" && x.op.name === "create_buffer") {
+            if (isOp(x, "wl_shm_pool", "create_buffer")) {
                 const bufferId = x.args.id as WaylandObjectId;
                 const buffer = this.getObject<"wl_buffer">(client, bufferId);
                 const imageData = new ImageData(x.args.width as number, x.args.height as number);
@@ -251,14 +259,14 @@ class WaylandServer {
                 imageData.data.set(new Uint8ClampedArray(xdata));
                 buffer.data = { imageData };
             }
-            if (x.proto.name === "wl_surface" && x.op.name === "attach") {
+            if (isOp(x, "wl_surface", "attach")) {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(client, surfaceId);
                 const bufferId = x.args.buffer as WaylandObjectId;
                 const buffer = this.getObject<"wl_buffer">(client, bufferId);
                 surface.data.buffer = buffer.data.imageData;
             }
-            if (x.proto.name === "wl_surface" && x.op.name === "damage") {
+            if (isOp(x, "wl_surface", "damage")) {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(client, surfaceId);
                 const damageList = surface.data.damageList || [];
@@ -270,7 +278,7 @@ class WaylandServer {
                 });
                 surface.data.damageList = damageList;
             }
-            if (x.proto.name === "wl_surface" && x.op.name === "commit") {
+            if (isOp(x, "wl_surface", "commit")) {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(client, surfaceId);
                 const canvas: HTMLCanvasElement = surface.data.canvas;
@@ -288,7 +296,7 @@ class WaylandServer {
                     ctx.putImageData(imagedata, 0, 0);
                 }
             }
-            if (x.proto.name === "xdg_surface" && x.op.name === "get_toplevel") {
+            if (isOp(x, "xdg_surface", "get_toplevel")) {
                 const toplevelId = x.args.id as WaylandObjectId;
                 this.sendMessage(client, toplevelId, 2, { width: 1920, height: 1080 });
                 this.sendMessage(client, toplevelId, 0, { width: 0, height: 0, states: new Uint8Array([]) });
@@ -298,7 +306,7 @@ class WaylandServer {
                     }
                 }
             }
-            if (x.proto.name === "xdg_surface" && x.op.name === "set_window_geometry") {
+            if (isOp(x, "xdg_surface", "set_window_geometry")) {
                 const surfaceId = this.getObject<"xdg_surface">(client, x.id).data.surface;
                 const surface = this.getObject<"wl_surface">(client, surfaceId);
                 const canvas = surface.data.canvas;
@@ -306,6 +314,10 @@ class WaylandServer {
                 canvas.height = x.args.height as number;
                 // todo xy
             }
+            if (!useOp) {
+                console.warn("No matching operation found", `${x.proto.name}.${x.op.name}`, x);
+            }
+            useOp = false;
         }
     }
     sendMessage(client: Client, objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
