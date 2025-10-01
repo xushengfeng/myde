@@ -25,14 +25,6 @@ import { button, ele, image, txt, view } from "dkh-ui";
 
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
 
-type Client = {
-    id: string;
-    socket: USocket;
-    objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
-    nextId: number; // 客户端本地对象ID
-    lastRecive: ParsedMessage | null;
-};
-
 type WaylandData = {
     wl_shm_pool: { fd: number };
     wl_surface: {
@@ -58,7 +50,7 @@ class WaylandServer {
     socketName = "my-wayland-server-0";
     socketPath: string;
     server: UServer | null = null;
-    clients: Map<string, any>;
+    clients: Map<string, WaylandClient>;
     globalObjects: Map<string, any>;
     nextObjectId: number;
     constructor() {
@@ -100,50 +92,57 @@ class WaylandServer {
         const clientId = crypto.randomUUID().slice(0, 8);
         console.log(`New client connected: ${clientId}`);
 
-        const client: Client = {
-            id: clientId,
-            socket: socket,
-            objects: new Map(), // 客户端拥有的对象
-            nextId: 1, // 客户端本地对象ID
-            lastRecive: null,
-        };
+        const client = new WaylandClient({ id: clientId, socket });
 
         this.clients.set(clientId, client);
+    }
+}
 
-        // 设置消息处理
+class WaylandClient {
+    id: string;
+    socket: USocket;
+    objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
+    nextId: number; // 客户端本地对象ID
+    lastRecive: ParsedMessage | null;
+    constructor({ id, socket }: { id: string; socket: USocket }) {
+        this.id = id;
+        this.socket = socket;
+        this.objects = new Map();
+        this.nextId = 1;
+        this.lastRecive = null;
         socket.on("readable", () => {
             console.log("connected");
             const x = socket.read(undefined, null);
-            if (x?.data) this.handleClientMessage(client, x.data, x.fds);
+            if (x?.data) this.handleClientMessage(x.data, x.fds);
         });
 
         socket.on("close", () => {
-            console.log(`Client ${client.id} disconnected`);
+            console.log(`Client ${this.id} disconnected`);
             // this.handleClientDisconnect(client);
         });
 
         socket.on("error", (err) => {
-            console.error(`Client ${clientId} error:`, err);
+            console.error(`Client ${this.id} error:`, err);
             // this.handleClientDisconnect(client);
         });
     }
 
-    getObject<T extends keyof WaylandData>(client: Client, id: WaylandObjectId): WaylandObjectX<T> {
-        const obj = client.objects.get(id);
+    getObject<T extends keyof WaylandData>(id: WaylandObjectId): WaylandObjectX<T> {
+        const obj = this.objects.get(id);
         if (!obj) throw new Error(`Wayland object not found: ${id}`);
         return obj as WaylandObjectX<T>;
     }
 
-    handleClientMessage(client: Client, data: Buffer, fds: number[] = []) {
+    handleClientMessage(data: Buffer, fds: number[] = []) {
         // 解析并处理客户端消息
         const decoder = new WaylandDecoder(data.buffer, fds);
 
         const opArray: ParsedMessage[] = [];
 
-        console.log(`Parsed data from client ${client.id}:`, data.buffer, fds);
+        console.log(`Parsed data from client ${this.id}:`, data.buffer, fds);
         while (decoder.getRemainingBytes() > 0) {
             const header = decoder.readHeader();
-            const x = getX(client.objects, "request", header.objectId, header.opcode);
+            const x = getX(this.objects, "request", header.objectId, header.opcode);
             if (!x) {
                 console.warn(`Unknown objectId/opcode: ${header.objectId}/${header.opcode}`, data.buffer);
                 return;
@@ -170,8 +169,8 @@ class WaylandServer {
                         console.error("NEW_ID argument has unknown interface:", v.interface);
                         continue;
                     }
-                    client.objects.set(id, { protocol: _interface, data: undefined });
-                    console.log(`Client ${client.id} created ${v.interface} with id ${id}`);
+                    this.objects.set(id, { protocol: _interface, data: undefined });
+                    console.log(`Client ${this.id} created ${v.interface} with id ${id}`);
                 }
             }
         }
@@ -186,14 +185,14 @@ class WaylandServer {
         for (const x of opArray) {
             if (isOp(x, "wl_display", "sync")) {
                 const callbackId = x.args.callback as WaylandObjectId;
-                this.sendMessage(client, waylandObjectId(1), 1, { id: callbackId }); // delete id
+                this.sendMessage(waylandObjectId(1), 1, { id: callbackId }); // delete id
 
-                if (client.lastRecive) {
-                    console.log(`client.lastRecive`, client.lastRecive);
-                    if (client.lastRecive.proto.name === "wl_display" && client.lastRecive.op.name === "get_registry") {
-                        const registryId = client.lastRecive.args.registry as WaylandObjectId;
+                if (this.lastRecive) {
+                    console.log(`client.lastRecive`, this.lastRecive);
+                    if (this.lastRecive.proto.name === "wl_display" && this.lastRecive.op.name === "get_registry") {
+                        const registryId = this.lastRecive.args.registry as WaylandObjectId;
                         for (const [i, proto] of waylandProtocolsNameMap) {
-                            this.sendMessage(client, registryId, 0, {
+                            this.sendMessage(registryId, 0, {
                                 name: i,
                                 interface: proto.name,
                                 version: proto.version,
@@ -201,23 +200,23 @@ class WaylandServer {
                         }
                     }
 
-                    client.lastRecive = null;
+                    this.lastRecive = null;
                 } else {
                     console.log("xxxx");
                     // todo Connect Time  outputs, compositor, input devices
                     // wl_shm wl_seat wl_output
-                    for (const [id, p] of client.objects) {
+                    for (const [id, p] of this.objects) {
                         if (p.protocol.name === "wl_shm") {
-                            this.sendMessage(client, id, 0, { format: p.protocol.enum![1].enum.argb8888 }); // wl_shm.format
-                            this.sendMessage(client, id, 0, { format: p.protocol.enum![1].enum.xrgb8888 }); // wl_shm.format
+                            this.sendMessage(id, 0, { format: p.protocol.enum![1].enum.argb8888 }); // wl_shm.format
+                            this.sendMessage(id, 0, { format: p.protocol.enum![1].enum.xrgb8888 }); // wl_shm.format
                         }
                     }
                 }
 
-                this.sendMessage(client, callbackId, 0, {}); // done
+                this.sendMessage(callbackId, 0, {}); // done
             }
             if (isOp(x, "wl_display", "get_registry")) {
-                client.lastRecive = x;
+                this.lastRecive = x;
             }
             if (isOp(x, "wl_registry", "bind")) {
                 const name = x.args.name as WaylandName;
@@ -227,31 +226,31 @@ class WaylandServer {
                     console.warn(`Unknown global name: ${name}`);
                     return;
                 }
-                client.objects.set(id, { protocol: proto, data: undefined });
-                console.log(`Client ${client.id} bound ${proto.name} to id ${id}`);
+                this.objects.set(id, { protocol: proto, data: undefined });
+                console.log(`Client ${this.id} bound ${proto.name} to id ${id}`);
             }
             if (isOp(x, "wl_shm", "create_pool")) {
                 const fd = x.args.fd as number;
-                this.getObject<"wl_shm_pool">(client, x.args.id).data = { fd };
+                this.getObject<"wl_shm_pool">(x.args.id).data = { fd };
             }
             if (isOp(x, "wl_compositor", "create_surface")) {
                 const surfaceId = x.args.id as WaylandObjectId;
-                const surface = this.getObject<"wl_surface">(client, surfaceId);
+                const surface = this.getObject<"wl_surface">(surfaceId);
                 const canvasEl = ele("canvas").addInto();
                 const canvas = canvasEl.el;
                 surface.data = { canvas };
             }
             if (isOp(x, "xdg_wm_base", "get_xdg_surface")) {
                 const xdgSurfaceId = x.args.id as WaylandObjectId;
-                const xdgSurface = this.getObject<"xdg_surface">(client, xdgSurfaceId);
+                const xdgSurface = this.getObject<"xdg_surface">(xdgSurfaceId);
                 const surfaceId = x.args.surface as WaylandObjectId;
                 xdgSurface.data = { surface: surfaceId };
             }
             if (isOp(x, "wl_shm_pool", "create_buffer")) {
                 const bufferId = x.args.id as WaylandObjectId;
-                const buffer = this.getObject<"wl_buffer">(client, bufferId);
+                const buffer = this.getObject<"wl_buffer">(bufferId);
                 const imageData = new ImageData(x.args.width as number, x.args.height as number);
-                const data = fs.readFileSync(this.getObject<"wl_shm_pool">(client, x.id).data.fd);
+                const data = fs.readFileSync(this.getObject<"wl_shm_pool">(x.id).data.fd);
                 const xdata = data.buffer.slice(
                     x.args.offset as number,
                     (x.args.offset as number) + (x.args.stride as number) * (x.args.height as number),
@@ -261,14 +260,14 @@ class WaylandServer {
             }
             if (isOp(x, "wl_surface", "attach")) {
                 const surfaceId = x.id;
-                const surface = this.getObject<"wl_surface">(client, surfaceId);
+                const surface = this.getObject<"wl_surface">(surfaceId);
                 const bufferId = x.args.buffer as WaylandObjectId;
-                const buffer = this.getObject<"wl_buffer">(client, bufferId);
+                const buffer = this.getObject<"wl_buffer">(bufferId);
                 surface.data.buffer = buffer.data.imageData;
             }
             if (isOp(x, "wl_surface", "damage")) {
                 const surfaceId = x.id;
-                const surface = this.getObject<"wl_surface">(client, surfaceId);
+                const surface = this.getObject<"wl_surface">(surfaceId);
                 const damageList = surface.data.damageList || [];
                 damageList.push({
                     x: x.args.x as number,
@@ -280,7 +279,7 @@ class WaylandServer {
             }
             if (isOp(x, "wl_surface", "commit")) {
                 const surfaceId = x.id;
-                const surface = this.getObject<"wl_surface">(client, surfaceId);
+                const surface = this.getObject<"wl_surface">(surfaceId);
                 const canvas: HTMLCanvasElement = surface.data.canvas;
                 const ctx = canvas.getContext("2d")!;
                 const imagedata = surface.data.buffer;
@@ -298,17 +297,17 @@ class WaylandServer {
             }
             if (isOp(x, "xdg_surface", "get_toplevel")) {
                 const toplevelId = x.args.id as WaylandObjectId;
-                this.sendMessage(client, toplevelId, 2, { width: 1920, height: 1080 });
-                this.sendMessage(client, toplevelId, 0, { width: 0, height: 0, states: new Uint8Array([]) });
-                for (const [id, p] of client.objects) {
+                this.sendMessage(toplevelId, 2, { width: 1920, height: 1080 });
+                this.sendMessage(toplevelId, 0, { width: 0, height: 0, states: new Uint8Array([]) });
+                for (const [id, p] of this.objects) {
                     if (p.protocol.name === "xdg_surface") {
-                        this.sendMessage(client, id, 0, { serial: 1 }); // todo
+                        this.sendMessage(id, 0, { serial: 1 }); // todo
                     }
                 }
             }
             if (isOp(x, "xdg_surface", "set_window_geometry")) {
-                const surfaceId = this.getObject<"xdg_surface">(client, x.id).data.surface;
-                const surface = this.getObject<"wl_surface">(client, surfaceId);
+                const surfaceId = this.getObject<"xdg_surface">(x.id).data.surface;
+                const surface = this.getObject<"wl_surface">(surfaceId);
                 const canvas = surface.data.canvas;
                 canvas.width = x.args.width as number;
                 canvas.height = x.args.height as number;
@@ -320,13 +319,13 @@ class WaylandServer {
             useOp = false;
         }
     }
-    sendMessage(client: Client, objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
-        const p = getX(client.objects, "event", objectId, opcode);
+    sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
+        const p = getX(this.objects, "event", objectId, opcode);
         if (!p) {
             console.error("Cannot find protocol for sending message", objectId, opcode);
             return;
         }
-        console.log(`Sending message to client ${client.id}:`, {
+        console.log(`Sending message to client ${this.id}:`, {
             p: `${p.proto.name}.${p.op.name}`,
             args,
         });
@@ -365,7 +364,7 @@ class WaylandServer {
             }
         }
         const x = encoder.finalizeMessage();
-        client.socket.write(Buffer.from(x.data), (err) => {
+        this.socket.write(Buffer.from(x.data), (err) => {
             if (err) {
                 console.error("Failed to send message to client:", err);
             }
@@ -385,7 +384,7 @@ function initWaylandProtocols() {
     }
 }
 
-function getX(map: Client["objects"], type: "request" | "event", objectId: WaylandObjectId, opcode: number) {
+function getX(map: WaylandClient["objects"], type: "request" | "event", objectId: WaylandObjectId, opcode: number) {
     const proto = objectId === 1 ? WaylandProtocols.wl_display : map.get(objectId)?.protocol;
     if (!proto) return null;
     if (!proto[type]) return null;
