@@ -217,6 +217,16 @@ class WaylandServer {
                 const canvas = canvasEl.el;
                 surface.data = { canvas };
             }
+            if (x.proto.name === "xdg_wm_base" && x.op.name === "get_xdg_surface") {
+                const xdgSurfaceId = x.args.id as WaylandObjectId;
+                const xdgSurface = client.objects.get(xdgSurfaceId);
+                if (!xdgSurface) {
+                    console.error("xdg_surface not found", xdgSurfaceId);
+                    return;
+                }
+                const surfaceId = x.args.surface as WaylandObjectId;
+                xdgSurface.data = { surface: surfaceId };
+            }
             if (x.proto.name === "wl_shm_pool" && x.op.name === "create_buffer") {
                 const bufferId = x.args.id as WaylandObjectId;
                 const buffer = client.objects.get(bufferId);
@@ -300,6 +310,18 @@ class WaylandServer {
                         this.sendMessage(client, id, 0, { serial: 1 }); // todo
                     }
                 }
+            }
+            if (x.proto.name === "xdg_surface" && x.op.name === "set_window_geometry") {
+                const surfaceId = client.objects.get(x.id)!.data.surface as WaylandObjectId;
+                const surface = client.objects.get(surfaceId);
+                if (!surface) {
+                    console.error("surface not found", surfaceId);
+                    return;
+                }
+                const canvas: HTMLCanvasElement = surface.data.canvas;
+                canvas.width = x.args.width as number;
+                canvas.height = x.args.height as number;
+                // todo xy
             }
         }
     }
