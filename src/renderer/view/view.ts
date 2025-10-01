@@ -127,6 +127,13 @@ class WaylandServer {
             // this.handleClientDisconnect(client);
         });
     }
+
+    getObject<T extends keyof WaylandData>(client: Client, id: WaylandObjectId): WaylandObjectX<T> {
+        const obj = client.objects.get(id);
+        if (!obj) throw new Error(`Wayland object not found: ${id}`);
+        return obj as WaylandObjectX<T>;
+    }
+
     handleClientMessage(client: Client, data: Buffer, fds: number[] = []) {
         // 解析并处理客户端消息
         const decoder = new WaylandDecoder(data.buffer, fds);
@@ -217,38 +224,26 @@ class WaylandServer {
             }
             if (x.proto.name === "wl_shm" && x.op.name === "create_pool") {
                 const fd = x.args.fd as number;
-                (client.objects.get(x.args.id) as WaylandObjectX<"wl_shm_pool">)!.data = { fd };
+                this.getObject<"wl_shm_pool">(client, x.args.id).data = { fd };
             }
             if (x.proto.name === "wl_compositor" && x.op.name === "create_surface") {
                 const surfaceId = x.args.id as WaylandObjectId;
-                const surface = client.objects.get(surfaceId) as WaylandObjectX<"wl_surface">;
-                if (!surface) {
-                    console.error("wl_surface not found", surfaceId);
-                    return;
-                }
+                const surface = this.getObject<"wl_surface">(client, surfaceId);
                 const canvasEl = ele("canvas").addInto();
                 const canvas = canvasEl.el;
                 surface.data = { canvas };
             }
             if (x.proto.name === "xdg_wm_base" && x.op.name === "get_xdg_surface") {
                 const xdgSurfaceId = x.args.id as WaylandObjectId;
-                const xdgSurface = client.objects.get(xdgSurfaceId) as WaylandObjectX<"xdg_surface">;
-                if (!xdgSurface) {
-                    console.error("xdg_surface not found", xdgSurfaceId);
-                    return;
-                }
+                const xdgSurface = this.getObject<"xdg_surface">(client, xdgSurfaceId);
                 const surfaceId = x.args.surface as WaylandObjectId;
                 xdgSurface.data = { surface: surfaceId };
             }
             if (x.proto.name === "wl_shm_pool" && x.op.name === "create_buffer") {
                 const bufferId = x.args.id as WaylandObjectId;
-                const buffer = client.objects.get(bufferId) as WaylandObjectX<"wl_buffer">;
-                if (!buffer) {
-                    console.error("wl_shm_pool not found", bufferId);
-                    return;
-                }
+                const buffer = this.getObject<"wl_buffer">(client, bufferId);
                 const imageData = new ImageData(x.args.width as number, x.args.height as number);
-                const data = fs.readFileSync(client.objects.get(x.id)!.data.fd);
+                const data = fs.readFileSync(this.getObject<"wl_shm_pool">(client, x.id).data.fd);
                 const xdata = data.buffer.slice(
                     x.args.offset as number,
                     (x.args.offset as number) + (x.args.stride as number) * (x.args.height as number),
@@ -258,26 +253,14 @@ class WaylandServer {
             }
             if (x.proto.name === "wl_surface" && x.op.name === "attach") {
                 const surfaceId = x.id;
-                const surface = client.objects.get(surfaceId) as WaylandObjectX<"wl_surface">;
-                if (!surface) {
-                    console.error("wl_surface not found", surfaceId);
-                    return;
-                }
+                const surface = this.getObject<"wl_surface">(client, surfaceId);
                 const bufferId = x.args.buffer as WaylandObjectId;
-                const buffer = client.objects.get(bufferId) as WaylandObjectX<"wl_buffer">;
-                if (!buffer) {
-                    console.error("wl_buffer not found", bufferId);
-                    return;
-                }
+                const buffer = this.getObject<"wl_buffer">(client, bufferId);
                 surface.data.buffer = buffer.data.imageData;
             }
             if (x.proto.name === "wl_surface" && x.op.name === "damage") {
                 const surfaceId = x.id;
-                const surface = client.objects.get(surfaceId) as WaylandObjectX<"wl_surface">;
-                if (!surface) {
-                    console.error("wl_surface not found", surfaceId);
-                    return;
-                }
+                const surface = this.getObject<"wl_surface">(client, surfaceId);
                 const damageList = surface.data.damageList || [];
                 damageList.push({
                     x: x.args.x as number,
@@ -289,19 +272,15 @@ class WaylandServer {
             }
             if (x.proto.name === "wl_surface" && x.op.name === "commit") {
                 const surfaceId = x.id;
-                const surface = client.objects.get(surfaceId) as WaylandObjectX<"wl_surface">;
-                if (!surface) {
-                    console.error("wl_surface not found", surfaceId);
-                    return;
-                }
+                const surface = this.getObject<"wl_surface">(client, surfaceId);
                 const canvas: HTMLCanvasElement = surface.data.canvas;
                 const ctx = canvas.getContext("2d")!;
-                const imagedata = surface.data.buffer as ImageData;
+                const imagedata = surface.data.buffer;
                 if (!imagedata) {
                     console.warn("wl_surface buffer not found", surfaceId);
                     return;
                 }
-                if (surface.data.damageList && surface.data.damageList.length) {
+                if (surface.data.damageList?.length) {
                     for (const damage of surface.data.damageList) {
                         ctx.putImageData(imagedata, damage.x, damage.y, 0, 0, damage.width, damage.height);
                     }
@@ -311,11 +290,6 @@ class WaylandServer {
             }
             if (x.proto.name === "xdg_surface" && x.op.name === "get_toplevel") {
                 const toplevelId = x.args.id as WaylandObjectId;
-                const toplevel = client.objects.get(toplevelId);
-                if (!toplevel) {
-                    console.warn(`Unknown toplevel id: ${toplevelId}`);
-                    return;
-                }
                 this.sendMessage(client, toplevelId, 2, { width: 1920, height: 1080 });
                 this.sendMessage(client, toplevelId, 0, { width: 0, height: 0, states: new Uint8Array([]) });
                 for (const [id, p] of client.objects) {
@@ -325,14 +299,9 @@ class WaylandServer {
                 }
             }
             if (x.proto.name === "xdg_surface" && x.op.name === "set_window_geometry") {
-                const surfaceId = (client.objects.get(x.id) as WaylandObjectX<"xdg_surface">)!.data
-                    .surface as WaylandObjectId;
-                const surface = client.objects.get(surfaceId) as WaylandObjectX<"wl_surface">;
-                if (!surface) {
-                    console.error("surface not found", surfaceId);
-                    return;
-                }
-                const canvas: HTMLCanvasElement = surface.data.canvas;
+                const surfaceId = this.getObject<"xdg_surface">(client, x.id).data.surface;
+                const surface = this.getObject<"wl_surface">(client, surfaceId);
+                const canvas = surface.data.canvas;
                 canvas.width = x.args.width as number;
                 canvas.height = x.args.height as number;
                 // todo xy
