@@ -51,3 +51,5 @@ app 链接到 socket 时，socket 的 connection 事件就会返回一个 client
 开发时，总是先实现再优化，不管怎么说，先点亮再说。在没有了解 xdg 等协议的情况下，根据 kde 的日志，复刻的消息序列，硬编码了一些数据，最后成功显示了花朵`weston-flower`。意味着这条路走得通。当然，有项目[greenfield](https://greenfield.app/)也实现了 web 技术处理 Wayland 并显示，他需要本地处理器和 web 浏览器来实现，但现在，我们用 Electron 直接实现了，socket 传输的 fd 是可以读取的，可以显示的！
 
 鉴于快速开发，项目就先不实现太多与系统直接交互的东西，比如输入输出、内存共享，而是先像 Weston 一样显示窗口，借助窗口的输入输出来继续开发。之前尝试过让 Electron 通过 drm 输出，可惜没成功，暂停了开发。现在我先不管这么多，先把 demo 写好，先搞好空中楼阁。当然，输入实现需要提前包装，不直接在元素上使用`on('pointerdown')`之类的。
+
+对于绘制，可以这样类比 `wl_shm_pool`->`Uint8ClampedArray`， `wl_buffer`->`imageData`， `wl_surface`->`canvas`。`wl_surface.attach`稍微绑定了 canvas 和 imageData，后面可以有若干个`wl_surface.damage`，最后是`wl_surface.commit`，也就是`ctx.putImageData(imagedata, damage.x, damage.y, 0, 0, damage.width, damage.height);`
