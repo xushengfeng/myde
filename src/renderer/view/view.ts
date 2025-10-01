@@ -21,14 +21,14 @@ import { WaylandEncoder } from "../wayland/wayland-encoder";
 
 import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
 
-import { button, image, txt, view } from "dkh-ui";
+import { button, ele, image, txt, view } from "dkh-ui";
 
-type ParsedMessage = { proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
+type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
 
 type Client = {
     id: string;
     socket: USocket;
-    objects: Map<WaylandObjectId, WaylandProtocol>; // 客户端拥有的对象
+    objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
     nextId: number; // 客户端本地对象ID
     lastRecive: ParsedMessage | null;
 };
@@ -130,9 +130,13 @@ class WaylandServer {
             }
             const args = parseArgs(decoder, x.op.args);
             const rest = decoder.final();
-            console.log(`Parsed args for ${x.proto.name}.${x.op.name}:`, args);
+            console.log(
+                `Parsed args for ${x.proto.name}.${x.op.name}:`,
+                args,
+                Object.fromEntries(x.op.args.filter((a) => a.interface).map((i) => [i.name, i.interface])),
+            );
             if (rest.length) console.log("rest", rest);
-            opArray.push({ proto: x.proto, op: x.op, args });
+            opArray.push({ proto: x.proto, op: x.op, args, id: header.objectId });
             for (const v of Object.values(x.op.args)) {
                 if (v.type === WaylandArgType.NEW_ID) {
                     const id = args[v.name] as WaylandObjectId;
@@ -146,7 +150,7 @@ class WaylandServer {
                         console.error("NEW_ID argument has unknown interface:", v.interface);
                         continue;
                     }
-                    client.objects.set(id, _interface);
+                    client.objects.set(id, { protocol: _interface, data: undefined });
                     console.log(`Client ${client.id} created ${v.interface} with id ${id}`);
                 }
             }
@@ -175,8 +179,8 @@ class WaylandServer {
                     // todo Connect Time  outputs, compositor, input devices
                     // wl_shm wl_seat wl_output
                     for (const [id, p] of client.objects) {
-                        if (p.name === "wl_shm") {
-                            this.sendMessage(client, id, 0, { format: p.enum![0].enum.argb8888 }); // wl_shm.format
+                        if (p.protocol.name === "wl_shm") {
+                            this.sendMessage(client, id, 0, { format: p.protocol.enum![0].enum.argb8888 }); // wl_shm.format
                         }
                     }
                 }
@@ -194,7 +198,7 @@ class WaylandServer {
                     console.warn(`Unknown global name: ${name}`);
                     return;
                 }
-                client.objects.set(id, proto);
+                client.objects.set(id, { protocol: proto, data: undefined });
                 console.log(`Client ${client.id} bound ${proto.name} to id ${id}`);
             }
             if (x.proto.name === "wl_shm" && x.op.name === "create_pool") {
@@ -203,6 +207,34 @@ class WaylandServer {
                 const fd = x.args.fd as number;
                 const data = fs.readFileSync(fd);
                 console.log("Received placeholder fd, cannot read data directly:", data);
+                client.objects.get(x.id)!.data = { fd };
+                // todo
+                if (data.length === 160000) {
+                    const imageData = new ImageData(200, 200);
+                    imageData.data.set(new Uint8ClampedArray(data));
+                    const canvasEl = ele("canvas");
+                    const canvas = canvasEl.el;
+                    const ctx = canvas.getContext("2d")!;
+                    canvas.width = 200;
+                    canvas.height = 200;
+                    ctx.putImageData(imageData, 0, 0);
+                    canvasEl.addInto();
+                }
+            }
+            if (x.proto.name === "xdg_surface" && x.op.name === "get_toplevel") {
+                const toplevelId = x.args.id as WaylandObjectId;
+                const toplevel = client.objects.get(toplevelId);
+                if (!toplevel) {
+                    console.warn(`Unknown toplevel id: ${toplevelId}`);
+                    return;
+                }
+                this.sendMessage(client, toplevelId, 2, { width: 1920, height: 1080 });
+                this.sendMessage(client, toplevelId, 0, { width: 0, height: 0, states: new Uint8Array([]) });
+                for (const [id, p] of client.objects) {
+                    if (p.protocol.name === "xdg_surface") {
+                        this.sendMessage(client, id, 0, { serial: 1 }); // todo
+                    }
+                }
             }
         }
     }
@@ -271,13 +303,8 @@ function initWaylandProtocols() {
     }
 }
 
-function getX(
-    map: Map<WaylandObjectId, WaylandProtocol>,
-    type: "request" | "event",
-    objectId: WaylandObjectId,
-    opcode: number,
-) {
-    const proto = objectId === 1 ? WaylandProtocols.wl_display : map.get(objectId);
+function getX(map: Client["objects"], type: "request" | "event", objectId: WaylandObjectId, opcode: number) {
+    const proto = objectId === 1 ? WaylandProtocols.wl_display : map.get(objectId)?.protocol;
     if (!proto) return null;
     if (!proto[type]) return null;
     const op = proto[type][opcode];
@@ -398,7 +425,7 @@ const appNameSet = new Set<string>();
 for (const app of allApps) {
     if (!appNameSet.has(app.name)) {
         appNameSet.add(app.name);
-        apps.push(app);
+        // apps.push(app);
     }
 }
 

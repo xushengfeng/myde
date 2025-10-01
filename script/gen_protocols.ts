@@ -17,9 +17,11 @@ const supportedProtocols: Array<{ name: string; interfaces: Array<{ name: string
             { name: "wl_compositor", version: 6 },
             { name: "wl_shm_pool", version: 2 },
             { name: "wl_shm", version: 2 },
+            { name: "wl_buffer", version: 1 },
             { name: "wl_surface", version: 6 },
             { name: "wl_seat", version: 10 },
             { name: "wl_output", version: 4 },
+            { name: "wl_region", version: 1 },
         ],
     },
     {

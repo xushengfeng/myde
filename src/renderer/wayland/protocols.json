@@ -387,6 +387,23 @@
       ]
     },
     {
+      "name": "wl_buffer",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        }
+      ],
+      "event": [
+        {
+          "name": "release",
+          "args": []
+        }
+      ],
+      "enum": []
+    },
+    {
       "name": "wl_surface",
       "version": 6,
       "request": [
@@ -782,6 +799,60 @@
           }
         }
       ]
+    },
+    {
+      "name": "wl_region",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "add",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            },
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "subtract",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            },
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": []
     }
   ],
   "xdg-shell": [
