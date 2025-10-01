@@ -33,6 +33,19 @@ type Client = {
     lastRecive: ParsedMessage | null;
 };
 
+type WaylandData = {
+    wl_shm_pool: { fd: number };
+    wl_surface: {
+        canvas: HTMLCanvasElement;
+        buffer?: ImageData;
+        damageList?: { x: number; y: number; width: number; height: number }[];
+    };
+    xdg_surface: { surface: WaylandObjectId };
+    wl_buffer: { imageData: ImageData };
+};
+
+type WaylandObjectX<T extends keyof WaylandData> = { protocol: WaylandProtocol; data: WaylandData[T] };
+
 function waylandName(name: number): WaylandName {
     return name as WaylandName;
 }
@@ -204,11 +217,11 @@ class WaylandServer {
             }
             if (x.proto.name === "wl_shm" && x.op.name === "create_pool") {
                 const fd = x.args.fd as number;
-                client.objects.get(x.args.id)!.data = { fd };
+                (client.objects.get(x.args.id) as WaylandObjectX<"wl_shm_pool">)!.data = { fd };
             }
             if (x.proto.name === "wl_compositor" && x.op.name === "create_surface") {
                 const surfaceId = x.args.id as WaylandObjectId;
-                const surface = client.objects.get(surfaceId);
+                const surface = client.objects.get(surfaceId) as WaylandObjectX<"wl_surface">;
                 if (!surface) {
                     console.error("wl_surface not found", surfaceId);
                     return;
@@ -219,7 +232,7 @@ class WaylandServer {
             }
             if (x.proto.name === "xdg_wm_base" && x.op.name === "get_xdg_surface") {
                 const xdgSurfaceId = x.args.id as WaylandObjectId;
-                const xdgSurface = client.objects.get(xdgSurfaceId);
+                const xdgSurface = client.objects.get(xdgSurfaceId) as WaylandObjectX<"xdg_surface">;
                 if (!xdgSurface) {
                     console.error("xdg_surface not found", xdgSurfaceId);
                     return;
@@ -229,7 +242,7 @@ class WaylandServer {
             }
             if (x.proto.name === "wl_shm_pool" && x.op.name === "create_buffer") {
                 const bufferId = x.args.id as WaylandObjectId;
-                const buffer = client.objects.get(bufferId);
+                const buffer = client.objects.get(bufferId) as WaylandObjectX<"wl_buffer">;
                 if (!buffer) {
                     console.error("wl_shm_pool not found", bufferId);
                     return;
@@ -245,13 +258,13 @@ class WaylandServer {
             }
             if (x.proto.name === "wl_surface" && x.op.name === "attach") {
                 const surfaceId = x.id;
-                const surface = client.objects.get(surfaceId);
+                const surface = client.objects.get(surfaceId) as WaylandObjectX<"wl_surface">;
                 if (!surface) {
                     console.error("wl_surface not found", surfaceId);
                     return;
                 }
                 const bufferId = x.args.buffer as WaylandObjectId;
-                const buffer = client.objects.get(bufferId);
+                const buffer = client.objects.get(bufferId) as WaylandObjectX<"wl_buffer">;
                 if (!buffer) {
                     console.error("wl_buffer not found", bufferId);
                     return;
@@ -260,7 +273,7 @@ class WaylandServer {
             }
             if (x.proto.name === "wl_surface" && x.op.name === "damage") {
                 const surfaceId = x.id;
-                const surface = client.objects.get(surfaceId);
+                const surface = client.objects.get(surfaceId) as WaylandObjectX<"wl_surface">;
                 if (!surface) {
                     console.error("wl_surface not found", surfaceId);
                     return;
@@ -276,7 +289,7 @@ class WaylandServer {
             }
             if (x.proto.name === "wl_surface" && x.op.name === "commit") {
                 const surfaceId = x.id;
-                const surface = client.objects.get(surfaceId);
+                const surface = client.objects.get(surfaceId) as WaylandObjectX<"wl_surface">;
                 if (!surface) {
                     console.error("wl_surface not found", surfaceId);
                     return;
@@ -312,8 +325,9 @@ class WaylandServer {
                 }
             }
             if (x.proto.name === "xdg_surface" && x.op.name === "set_window_geometry") {
-                const surfaceId = client.objects.get(x.id)!.data.surface as WaylandObjectId;
-                const surface = client.objects.get(surfaceId);
+                const surfaceId = (client.objects.get(x.id) as WaylandObjectX<"xdg_surface">)!.data
+                    .surface as WaylandObjectId;
+                const surface = client.objects.get(surfaceId) as WaylandObjectX<"wl_surface">;
                 if (!surface) {
                     console.error("surface not found", surfaceId);
                     return;
