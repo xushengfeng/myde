@@ -202,23 +202,87 @@ class WaylandServer {
                 console.log(`Client ${client.id} bound ${proto.name} to id ${id}`);
             }
             if (x.proto.name === "wl_shm" && x.op.name === "create_pool") {
-                // todo
-                // console.log("Received placeholder fd, cannot read data directly:");
                 const fd = x.args.fd as number;
-                const data = fs.readFileSync(fd);
-                console.log("Received placeholder fd, cannot read data directly:", data);
-                client.objects.get(x.id)!.data = { fd };
-                // todo
-                if (data.length === 160000) {
-                    const imageData = new ImageData(200, 200);
-                    imageData.data.set(new Uint8ClampedArray(data));
-                    const canvasEl = ele("canvas");
-                    const canvas = canvasEl.el;
-                    const ctx = canvas.getContext("2d")!;
-                    canvas.width = 200;
-                    canvas.height = 200;
-                    ctx.putImageData(imageData, 0, 0);
-                    canvasEl.addInto();
+                client.objects.get(x.args.id)!.data = { fd };
+            }
+            if (x.proto.name === "wl_compositor" && x.op.name === "create_surface") {
+                const surfaceId = x.args.id as WaylandObjectId;
+                const surface = client.objects.get(surfaceId);
+                if (!surface) {
+                    console.error("wl_surface not found", surfaceId);
+                    return;
+                }
+                const canvasEl = ele("canvas").addInto();
+                const canvas = canvasEl.el;
+                surface.data = { canvas };
+            }
+            if (x.proto.name === "wl_shm_pool" && x.op.name === "create_buffer") {
+                const bufferId = x.args.id as WaylandObjectId;
+                const buffer = client.objects.get(bufferId);
+                if (!buffer) {
+                    console.error("wl_shm_pool not found", bufferId);
+                    return;
+                }
+                const imageData = new ImageData(x.args.width as number, x.args.height as number);
+                const data = fs.readFileSync(client.objects.get(x.id)!.data.fd);
+                const xdata = data.buffer.slice(
+                    x.args.offset as number,
+                    (x.args.offset as number) + (x.args.stride as number) * (x.args.height as number),
+                );
+                imageData.data.set(new Uint8ClampedArray(xdata));
+                buffer.data = { imageData };
+            }
+            if (x.proto.name === "wl_surface" && x.op.name === "attach") {
+                const surfaceId = x.id;
+                const surface = client.objects.get(surfaceId);
+                if (!surface) {
+                    console.error("wl_surface not found", surfaceId);
+                    return;
+                }
+                const bufferId = x.args.buffer as WaylandObjectId;
+                const buffer = client.objects.get(bufferId);
+                if (!buffer) {
+                    console.error("wl_buffer not found", bufferId);
+                    return;
+                }
+                surface.data.buffer = buffer.data.imageData;
+            }
+            if (x.proto.name === "wl_surface" && x.op.name === "damage") {
+                const surfaceId = x.id;
+                const surface = client.objects.get(surfaceId);
+                if (!surface) {
+                    console.error("wl_surface not found", surfaceId);
+                    return;
+                }
+                const damageList = surface.data.damageList || [];
+                damageList.push({
+                    x: x.args.x as number,
+                    y: x.args.y as number,
+                    width: x.args.width as number,
+                    height: x.args.height as number,
+                });
+                surface.data.damageList = damageList;
+            }
+            if (x.proto.name === "wl_surface" && x.op.name === "commit") {
+                const surfaceId = x.id;
+                const surface = client.objects.get(surfaceId);
+                if (!surface) {
+                    console.error("wl_surface not found", surfaceId);
+                    return;
+                }
+                const canvas: HTMLCanvasElement = surface.data.canvas;
+                const ctx = canvas.getContext("2d")!;
+                const imagedata = surface.data.buffer as ImageData;
+                if (!imagedata) {
+                    console.warn("wl_surface buffer not found", surfaceId);
+                    return;
+                }
+                if (surface.data.damageList && surface.data.damageList.length) {
+                    for (const damage of surface.data.damageList) {
+                        ctx.putImageData(imagedata, damage.x, damage.y, 0, 0, damage.width, damage.height);
+                    }
+                } else {
+                    ctx.putImageData(imagedata, 0, 0);
                 }
             }
             if (x.proto.name === "xdg_surface" && x.op.name === "get_toplevel") {
