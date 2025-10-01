@@ -180,7 +180,8 @@ class WaylandServer {
                     // wl_shm wl_seat wl_output
                     for (const [id, p] of client.objects) {
                         if (p.protocol.name === "wl_shm") {
-                            this.sendMessage(client, id, 0, { format: p.protocol.enum![0].enum.argb8888 }); // wl_shm.format
+                            this.sendMessage(client, id, 0, { format: p.protocol.enum![1].enum.argb8888 }); // wl_shm.format
+                            this.sendMessage(client, id, 0, { format: p.protocol.enum![1].enum.xrgb8888 }); // wl_shm.format
                         }
                     }
                 }
@@ -472,7 +473,7 @@ const waylandProtocolsNameMap = new Map<WaylandName, WaylandProtocol>();
 
 initWaylandProtocols();
 
-["google-chrome-stable", "wayland-info", "weston-flower"].forEach((app) => {
+["google-chrome-stable", "wayland-info", "weston-flower", "weston-simple-damage"].forEach((app) => {
     button(app)
         .on("click", () => {
             const execPath = `/usr/bin/${app}`;
