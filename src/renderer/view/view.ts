@@ -21,7 +21,7 @@ import { WaylandEncoder } from "../wayland/wayland-encoder";
 
 import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
 
-import { button, ele, image, txt, view } from "dkh-ui";
+import { button, ele, image, pack, txt, view } from "dkh-ui";
 
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
 
@@ -29,11 +29,14 @@ type WaylandData = {
     wl_shm_pool: { fd: number };
     wl_surface: {
         canvas: HTMLCanvasElement;
-        buffer?: ImageData;
+        buffer?: { id: WaylandObjectId; data: ImageData };
+        buffer2?: { id: WaylandObjectId; data: ImageData };
+        // 双缓冲，不过没有实际作用，只是为了日志对齐，方便调试
+        bufferPointer: 0 | 1;
         damageList?: { x: number; y: number; width: number; height: number }[];
     };
     xdg_surface: { surface: WaylandObjectId };
-    wl_buffer: { imageData: ImageData };
+    wl_buffer: { fd: number; start: number; end: number; imageData: ImageData };
 };
 
 type WaylandObjectX<T extends keyof WaylandData> = { protocol: WaylandProtocol; data: WaylandData[T] };
@@ -104,12 +107,14 @@ class WaylandClient {
     objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
     nextId: number; // 客户端本地对象ID
     lastRecive: ParsedMessage | null;
+    lastCallback: WaylandObjectId | null;
     constructor({ id, socket }: { id: string; socket: USocket }) {
         this.id = id;
         this.socket = socket;
         this.objects = new Map();
         this.nextId = 1;
         this.lastRecive = null;
+        this.lastCallback = null;
         socket.on("readable", () => {
             console.log("connected");
             const x = socket.read(undefined, null);
@@ -150,7 +155,7 @@ class WaylandClient {
             const args = parseArgs(decoder, x.op.args);
             const rest = decoder.final();
             console.log(
-                `Parsed args for ${x.proto.name}.${x.op.name}:`,
+                `Parsed args for ${x.proto.name}#${header.objectId}.${x.op.name}:`,
                 args,
                 Object.fromEntries(x.op.args.filter((a) => a.interface).map((i) => [i.name, i.interface])),
             );
@@ -238,7 +243,7 @@ class WaylandClient {
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 const canvasEl = ele("canvas").addInto();
                 const canvas = canvasEl.el;
-                surface.data = { canvas };
+                surface.data = { canvas, bufferPointer: 0 };
             }
             if (isOp(x, "xdg_wm_base", "get_xdg_surface")) {
                 const xdgSurfaceId = x.args.id as WaylandObjectId;
@@ -247,23 +252,33 @@ class WaylandClient {
                 xdgSurface.data = { surface: surfaceId };
             }
             if (isOp(x, "wl_shm_pool", "create_buffer")) {
+                const thisObj = this.getObject<"wl_shm_pool">(x.id);
                 const bufferId = x.args.id as WaylandObjectId;
                 const buffer = this.getObject<"wl_buffer">(bufferId);
                 const imageData = new ImageData(x.args.width as number, x.args.height as number);
-                const data = fs.readFileSync(this.getObject<"wl_shm_pool">(x.id).data.fd);
-                const xdata = data.buffer.slice(
-                    x.args.offset as number,
-                    (x.args.offset as number) + (x.args.stride as number) * (x.args.height as number),
-                );
-                imageData.data.set(new Uint8ClampedArray(xdata));
-                buffer.data = { imageData };
+                buffer.data = {
+                    fd: thisObj.data.fd,
+                    start: x.args.offset as number,
+                    end: (x.args.offset as number) + (x.args.stride as number) * (x.args.height as number),
+                    imageData: imageData,
+                };
+            }
+            if (isOp(x, "wl_shm_pool", "destroy")) {
+                this.objects.delete(x.id);
+                this.sendMessage(waylandObjectId(1), 1, { id: x.id });
+            }
+            if (isOp(x, "wl_region", "destroy")) {
+                this.objects.delete(x.id);
+                this.sendMessage(waylandObjectId(1), 1, { id: x.id });
             }
             if (isOp(x, "wl_surface", "attach")) {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 const bufferId = x.args.buffer as WaylandObjectId;
                 const buffer = this.getObject<"wl_buffer">(bufferId);
-                surface.data.buffer = buffer.data.imageData;
+                const imageData = buffer.data.imageData;
+                if (surface.data.bufferPointer === 0) surface.data.buffer = { id: bufferId, data: imageData };
+                else surface.data.buffer2 = { id: bufferId, data: imageData };
             }
             if (isOp(x, "wl_surface", "damage")) {
                 const surfaceId = x.id;
@@ -277,27 +292,83 @@ class WaylandClient {
                 });
                 surface.data.damageList = damageList;
             }
+            if (isOp(x, "wl_surface", "frame")) {
+                const callbackId = x.args.callback as WaylandObjectId;
+                this.lastCallback = callbackId;
+            }
             if (isOp(x, "wl_surface", "commit")) {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
-                const canvas: HTMLCanvasElement = surface.data.canvas;
+                const canvas = surface.data.canvas;
                 const ctx = canvas.getContext("2d")!;
-                const imagedata = surface.data.buffer;
+                const buffer = surface.data.bufferPointer === 0 ? surface.data.buffer : surface.data.buffer2;
+                const imagedata = buffer?.data;
                 if (!imagedata) {
                     console.warn("wl_surface buffer not found", surfaceId);
-                    return;
+                    continue;
                 }
+                if (imagedata.width !== canvas.width || imagedata.height !== canvas.height) {
+                    canvas.width = imagedata.width;
+                    canvas.height = imagedata.height;
+                    for (const [id, p] of this.objects) {
+                        if (p.protocol.name === "xdg_toplevel") {
+                            this.sendMessage(id, 0, {
+                                width: canvas.width,
+                                height: canvas.height,
+                                states: new Uint8Array([
+                                    WaylandProtocols.xdg_toplevel.enum![2].enum.resizing,
+                                    WaylandProtocols.xdg_toplevel.enum![2].enum.activated,
+                                ]),
+                            });
+                        }
+                    }
+                    for (const [id, p] of this.objects) {
+                        if (p.protocol.name === "xdg_surface") {
+                            this.sendMessage(id, 0, { serial: 1 });
+                        }
+                    }
+                }
+
+                const bufferX = this.getObject<"wl_buffer">(buffer.id);
+                const buffern = new Uint8ClampedArray(bufferX.data.end - bufferX.data.start);
+                fs.readSync(bufferX.data.fd, buffern, bufferX.data.start, buffern.length, 0);
+                imagedata.data.set(buffern);
+
                 if (surface.data.damageList?.length) {
                     for (const damage of surface.data.damageList) {
-                        ctx.putImageData(imagedata, damage.x, damage.y, 0, 0, damage.width, damage.height);
+                        ctx.putImageData(
+                            imagedata,
+                            0,
+                            0,
+                            damage.x,
+                            damage.y,
+                            Math.min(canvas.width, damage.width),
+                            Math.min(canvas.height, damage.height),
+                        );
                     }
                 } else {
                     ctx.putImageData(imagedata, 0, 0);
                 }
+                surface.data.damageList = [];
+                if (this.lastCallback) {
+                    const x = this.lastCallback;
+
+                    requestAnimationFrame(() => {
+                        const bufferId =
+                            surface.data.bufferPointer === 0 ? surface.data.buffer2?.id : surface.data.buffer?.id;
+                        if (bufferId) {
+                            this.sendMessage(bufferId, 0, {}); // wl_buffer.release
+                        }
+                        surface.data.bufferPointer = surface.data.bufferPointer === 0 ? 1 : 0;
+                        this.sendMessage(waylandObjectId(1), 1, { id: this.lastCallback }); // delete id
+                        this.sendMessage(x, 0, { callback_data: Date.now() });
+                        this.lastCallback = null;
+                    });
+                }
             }
             if (isOp(x, "xdg_surface", "get_toplevel")) {
                 const toplevelId = x.args.id as WaylandObjectId;
-                this.sendMessage(toplevelId, 2, { width: 1920, height: 1080 });
+                // this.sendMessage(toplevelId, 2, { width: 1920, height: 1080 });
                 this.sendMessage(toplevelId, 0, { width: 0, height: 0, states: new Uint8Array([]) });
                 for (const [id, p] of this.objects) {
                     if (p.protocol.name === "xdg_surface") {
@@ -488,6 +559,10 @@ const deEnv = JSON.parse(new URLSearchParams(location.search).get("env") ?? "{}"
 const waylandProtocolsNameMap = new Map<WaylandName, WaylandProtocol>();
 
 initWaylandProtocols();
+
+pack(document.body).style({
+    background: "#000",
+});
 
 ["google-chrome-stable", "wayland-info", "weston-flower", "weston-simple-damage"].forEach((app) => {
     button(app)

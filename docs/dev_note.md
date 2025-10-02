@@ -52,4 +52,18 @@ app 链接到 socket 时，socket 的 connection 事件就会返回一个 client
 
 鉴于快速开发，项目就先不实现太多与系统直接交互的东西，比如输入输出、内存共享，而是先像 Weston 一样显示窗口，借助窗口的输入输出来继续开发。之前尝试过让 Electron 通过 drm 输出，可惜没成功，暂停了开发。现在我先不管这么多，先把 demo 写好，先搞好空中楼阁。当然，输入实现需要提前包装，不直接在元素上使用`on('pointerdown')`之类的。
 
-对于绘制，可以这样类比 `wl_shm_pool`->`Uint8ClampedArray`， `wl_buffer`->`imageData`， `wl_surface`->`canvas`。`wl_surface.attach`稍微绑定了 canvas 和 imageData，后面可以有若干个`wl_surface.damage`，最后是`wl_surface.commit`，也就是`ctx.putImageData(imagedata, damage.x, damage.y, 0, 0, damage.width, damage.height);`
+对于绘制，可以这样类比 `wl_shm_pool`->`Uint8ClampedArray`， `wl_buffer`->`imageData`， `wl_surface`->`canvas`。`wl_surface.attach`稍微绑定了 canvas 和 imageData，后面可以有若干个`wl_surface.damage`，最后是`wl_surface.commit`，也就是`ctx.putImageData(imagedata, 0, 0, damage.x, damage.y, damage.width, damage.height);`
+
+---
+
+25.10.02
+
+nodejs 不支持 mmap 内存数据，所以在获取共享内存数据时，我用 fd 来充当内存指针，需要时读取。
+
+```ts
+const buffern = new Uint8ClampedArray(bufferX.data.end - bufferX.data.start);
+fs.readSync(bufferX.data.fd, buffern, bufferX.data.start, buffern.length, 0);
+imagedata.data.set(buffern);
+```
+
+不能直接用`fs.readFileSync`读取，会导致全是 0 的问题，用`fs.readSync`并显式标明开始位置。这里的`bufferX.data.start`其实是 offset。
