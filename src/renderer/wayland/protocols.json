@@ -1500,5 +1500,97 @@
         }
       ]
     }
+  ],
+  "viewporter": [
+    {
+      "name": "wp_viewporter",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "get_viewport",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wp_viewport"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "viewport_exists": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "wp_viewport",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "set_source",
+          "args": [
+            {
+              "name": "x",
+              "type": "fixed"
+            },
+            {
+              "name": "y",
+              "type": "fixed"
+            },
+            {
+              "name": "width",
+              "type": "fixed"
+            },
+            {
+              "name": "height",
+              "type": "fixed"
+            }
+          ]
+        },
+        {
+          "name": "set_destination",
+          "args": [
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "bad_value": 0,
+            "bad_size": 1,
+            "out_of_buffer": 2,
+            "no_surface": 3
+          }
+        }
+      ]
+    }
   ]
 }

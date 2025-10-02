@@ -34,6 +34,13 @@ const supportedProtocols: Array<{ name: string; interfaces: Array<{ name: string
             { name: "xdg_positioner", version: 7 },
         ],
     },
+    {
+        name: "viewporter",
+        interfaces: [
+            { name: "wp_viewporter", version: 1 },
+            { name: "wp_viewport", version: 1 },
+        ],
+    },
 ];
 
 // 支持遍历 supportedProtocols，按 name 读取对应 xml 文件并处理
