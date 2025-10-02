@@ -564,7 +564,14 @@ pack(document.body).style({
     background: "#000",
 });
 
-["google-chrome-stable", "wayland-info", "weston-flower", "weston-simple-damage"].forEach((app) => {
+[
+    "google-chrome-stable",
+    "wayland-info",
+    "weston-flower",
+    "weston-simple-damage",
+    "weston-simple-shm",
+    "weston-simple-egl",
+].forEach((app) => {
     button(app)
         .on("click", () => {
             const execPath = `/usr/bin/${app}`;
