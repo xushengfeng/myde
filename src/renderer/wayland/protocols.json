@@ -667,6 +667,371 @@
       ]
     },
     {
+      "name": "wl_pointer",
+      "version": 10,
+      "request": [
+        {
+          "name": "set_cursor",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            },
+            {
+              "name": "hotspot_x",
+              "type": "int"
+            },
+            {
+              "name": "hotspot_y",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "release",
+          "args": []
+        }
+      ],
+      "event": [
+        {
+          "name": "enter",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            },
+            {
+              "name": "surface_x",
+              "type": "fixed"
+            },
+            {
+              "name": "surface_y",
+              "type": "fixed"
+            }
+          ]
+        },
+        {
+          "name": "leave",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            }
+          ]
+        },
+        {
+          "name": "motion",
+          "args": [
+            {
+              "name": "time",
+              "type": "uint"
+            },
+            {
+              "name": "surface_x",
+              "type": "fixed"
+            },
+            {
+              "name": "surface_y",
+              "type": "fixed"
+            }
+          ]
+        },
+        {
+          "name": "button",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "time",
+              "type": "uint"
+            },
+            {
+              "name": "button",
+              "type": "uint"
+            },
+            {
+              "name": "state",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "axis",
+          "args": [
+            {
+              "name": "time",
+              "type": "uint"
+            },
+            {
+              "name": "axis",
+              "type": "uint"
+            },
+            {
+              "name": "value",
+              "type": "fixed"
+            }
+          ]
+        },
+        {
+          "name": "frame",
+          "args": []
+        },
+        {
+          "name": "axis_source",
+          "args": [
+            {
+              "name": "axis_source",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "axis_stop",
+          "args": [
+            {
+              "name": "time",
+              "type": "uint"
+            },
+            {
+              "name": "axis",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "axis_discrete",
+          "args": [
+            {
+              "name": "axis",
+              "type": "uint"
+            },
+            {
+              "name": "discrete",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "axis_value120",
+          "args": [
+            {
+              "name": "axis",
+              "type": "uint"
+            },
+            {
+              "name": "value120",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "axis_relative_direction",
+          "args": [
+            {
+              "name": "axis",
+              "type": "uint"
+            },
+            {
+              "name": "direction",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "role": 0
+          }
+        },
+        {
+          "name": "button_state",
+          "enum": {
+            "released": 0,
+            "pressed": 1
+          }
+        },
+        {
+          "name": "axis",
+          "enum": {
+            "vertical_scroll": 0,
+            "horizontal_scroll": 1
+          }
+        },
+        {
+          "name": "axis_source",
+          "enum": {
+            "wheel": 0,
+            "finger": 1,
+            "continuous": 2,
+            "wheel_tilt": 3
+          }
+        },
+        {
+          "name": "axis_relative_direction",
+          "enum": {
+            "identical": 0,
+            "inverted": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "wl_keyboard",
+      "version": 10,
+      "request": [
+        {
+          "name": "release",
+          "args": []
+        }
+      ],
+      "event": [
+        {
+          "name": "keymap",
+          "args": [
+            {
+              "name": "format",
+              "type": "uint"
+            },
+            {
+              "name": "fd",
+              "type": "fd"
+            },
+            {
+              "name": "size",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "enter",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            },
+            {
+              "name": "keys",
+              "type": "array"
+            }
+          ]
+        },
+        {
+          "name": "leave",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            }
+          ]
+        },
+        {
+          "name": "key",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "time",
+              "type": "uint"
+            },
+            {
+              "name": "key",
+              "type": "uint"
+            },
+            {
+              "name": "state",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "modifiers",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "mods_depressed",
+              "type": "uint"
+            },
+            {
+              "name": "mods_latched",
+              "type": "uint"
+            },
+            {
+              "name": "mods_locked",
+              "type": "uint"
+            },
+            {
+              "name": "group",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "repeat_info",
+          "args": [
+            {
+              "name": "rate",
+              "type": "int"
+            },
+            {
+              "name": "delay",
+              "type": "int"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "keymap_format",
+          "enum": {
+            "no_keymap": 0,
+            "xkb_v1": 1
+          }
+        },
+        {
+          "name": "key_state",
+          "enum": {
+            "released": 0,
+            "pressed": 1,
+            "repeated": 2
+          }
+        }
+      ]
+    },
+    {
       "name": "wl_output",
       "version": 4,
       "request": [

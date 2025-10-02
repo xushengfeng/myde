@@ -35,8 +35,7 @@ export class WaylandEncoder {
     }
 
     writeFixed(value: number): void {
-        // fixed类型是32位定点数，小数点后16位
-        const fixedValue = Math.round(value * 65536);
+        const fixedValue = Math.round(value * 256);
         this.writeInt(fixedValue);
     }
 

@@ -108,6 +108,12 @@ class WaylandClient {
     nextId: number; // 客户端本地对象ID
     lastRecive: ParsedMessage | null;
     lastCallback: WaylandObjectId | null;
+    obj2: Partial<{
+        pointer: WaylandObjectId;
+        keyboard: WaylandObjectId;
+    }> & {
+        surfaces: { id: WaylandObjectId; el: HTMLCanvasElement }[];
+    } & Record<string, any>;
     constructor({ id, socket }: { id: string; socket: USocket }) {
         this.id = id;
         this.socket = socket;
@@ -115,6 +121,7 @@ class WaylandClient {
         this.nextId = 1;
         this.lastRecive = null;
         this.lastCallback = null;
+        this.obj2 = { surfaces: [] };
         socket.on("readable", () => {
             console.log("connected");
             const x = socket.read(undefined, null);
@@ -132,13 +139,13 @@ class WaylandClient {
         });
     }
 
-    getObject<T extends keyof WaylandData>(id: WaylandObjectId): WaylandObjectX<T> {
+    private getObject<T extends keyof WaylandData>(id: WaylandObjectId): WaylandObjectX<T> {
         const obj = this.objects.get(id);
         if (!obj) throw new Error(`Wayland object not found: ${id}`);
         return obj as WaylandObjectX<T>;
     }
 
-    handleClientMessage(data: Buffer, fds: number[] = []) {
+    private handleClientMessage(data: Buffer, fds: number[] = []) {
         // 解析并处理客户端消息
         const decoder = new WaylandDecoder(data.buffer, fds);
 
@@ -215,6 +222,11 @@ class WaylandClient {
                             this.sendMessage(id, 0, { format: p.protocol.enum![1].enum.argb8888 }); // wl_shm.format
                             this.sendMessage(id, 0, { format: p.protocol.enum![1].enum.xrgb8888 }); // wl_shm.format
                         }
+                        if (p.protocol.name === "wl_seat") {
+                            const capabilities = [p.protocol.enum![0].enum.pointer, p.protocol.enum![0].enum.keyboard];
+                            const capabilitiesBitmask = capabilities.reduce((a, b) => a | b, 0);
+                            this.sendMessage(id, 0, { capabilities: capabilitiesBitmask }); // wl_seat.capabilities
+                        }
                     }
                 }
 
@@ -243,6 +255,7 @@ class WaylandClient {
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 const canvasEl = ele("canvas").addInto();
                 const canvas = canvasEl.el;
+                this.obj2.surfaces.push({ id: surfaceId, el: canvas });
                 surface.data = { canvas, bufferPointer: 0 };
             }
             if (isOp(x, "xdg_wm_base", "get_xdg_surface")) {
@@ -312,14 +325,15 @@ class WaylandClient {
                     canvas.height = imagedata.height;
                     for (const [id, p] of this.objects) {
                         if (p.protocol.name === "xdg_toplevel") {
-                            this.sendMessage(id, 0, {
-                                width: canvas.width,
-                                height: canvas.height,
-                                states: new Uint8Array([
-                                    WaylandProtocols.xdg_toplevel.enum![2].enum.resizing,
-                                    WaylandProtocols.xdg_toplevel.enum![2].enum.activated,
-                                ]),
-                            });
+                            // this.sendMessage(id, 0, {
+                            //     width: canvas.width,
+                            //     height: canvas.height,
+                            //     states: new Uint8Array([
+                            //         WaylandProtocols.xdg_toplevel.enum![2].enum.resizing,
+                            //         WaylandProtocols.xdg_toplevel.enum![2].enum.activated,
+                            //     ]),
+                            // });
+                            // todo 考虑实际窗口的几何，否则有外边框的会变大
                         }
                     }
                     for (const [id, p] of this.objects) {
@@ -384,13 +398,21 @@ class WaylandClient {
                 canvas.height = x.args.height as number;
                 // todo xy
             }
+            if (isOp(x, "wl_seat", "get_pointer")) {
+                const pointerId = x.args.id as WaylandObjectId;
+                this.obj2.pointer = pointerId;
+            }
+            if (isOp(x, "wl_seat", "get_keyboard")) {
+                const keyboardId = x.args.id as WaylandObjectId;
+                this.obj2.keyboard = keyboardId;
+            }
             if (!useOp) {
                 console.warn("No matching operation found", `${x.proto.name}.${x.op.name}`, x);
             }
             useOp = false;
         }
     }
-    sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
+    private sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
         const p = getX(this.objects, "event", objectId, opcode);
         if (!p) {
             console.error("Cannot find protocol for sending message", objectId, opcode);
@@ -405,6 +427,9 @@ class WaylandClient {
         encoder.writeHeader(objectId, opcode);
         for (const a of op.args) {
             const argValue = args[a.name];
+            if (argValue === undefined) {
+                console.warn(`${a.name} value is undefined`);
+            }
             switch (a.type) {
                 case WaylandArgType.INT:
                     encoder.writeInt(argValue);
@@ -440,6 +465,17 @@ class WaylandClient {
                 console.error("Failed to send message to client:", err);
             }
         }); // todo array 类型
+    }
+    sendPointerEvent(type: "move" | "down" | "up" | "in", p: PointerEvent, surface: WaylandObjectId) {
+        const { x, y } = p;
+        if (!this.obj2.pointer) return;
+        if (type === "move") {
+            this.sendMessage(this.obj2.pointer, 2, { time: Date.now(), surface_x: x, surface_y: y });
+            this.sendMessage(this.obj2.pointer, 5, {}); // wl_pointer.frame
+        }
+        if (type === "in") {
+            this.sendMessage(this.obj2.pointer, 0, { serial: 0, surface: surface, surface_x: x, surface_y: y });
+        }
     }
 }
 
@@ -511,6 +547,29 @@ function parseArgs(decoder: WaylandDecoder, args: WaylandOp["args"]) {
     return parsed;
 }
 
+function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
+    for (const client of server.clients.values()) {
+        for (const surface of client.obj2.surfaces) {
+            const rect = surface.el.getBoundingClientRect();
+            if (p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom) {
+                if (!client.obj2.in) {
+                    client.obj2.in = true;
+                    client.sendPointerEvent(
+                        "in",
+                        new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
+                        surface.id,
+                    );
+                }
+                client.sendPointerEvent(
+                    type,
+                    new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
+                    surface.id,
+                );
+            }
+        }
+    }
+}
+
 function runApp(execPath: string, args: string[] = []) {
     console.log(`Running application: ${execPath}`);
 
@@ -560,7 +619,13 @@ const waylandProtocolsNameMap = new Map<WaylandName, WaylandProtocol>();
 
 initWaylandProtocols();
 
-pack(document.body).style({
+const body = pack(document.body);
+
+body.on("pointermove", (e) => {
+    sendPointerEvent("move", e);
+});
+
+body.style({
     background: "#000",
 });
 
@@ -571,6 +636,8 @@ pack(document.body).style({
     "weston-simple-damage",
     "weston-simple-shm",
     "weston-simple-egl",
+    "weston-editor",
+    "weston-clickdot",
 ].forEach((app) => {
     button(app)
         .on("click", () => {
