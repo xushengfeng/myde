@@ -13,6 +13,7 @@ import {
     type WaylandObjectId,
     type WaylandProtocol,
 } from "../wayland/wayland-binary";
+import { WaylandEventObj, WaylandEventOpcode } from "../wayland/wayland-types";
 import { WaylandDecoder } from "../wayland/wayland-decoder";
 import WaylandProtocolsJSON from "../wayland/protocols.json?raw";
 const WaylandProtocolsx = JSON.parse(WaylandProtocolsJSON) as Record<string, WaylandProtocol[]>;
@@ -197,14 +198,14 @@ class WaylandClient {
         for (const x of opArray) {
             if (isOp(x, "wl_display", "sync")) {
                 const callbackId = x.args.callback as WaylandObjectId;
-                this.sendMessage(waylandObjectId(1), 1, { id: callbackId }); // delete id
+                this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: callbackId });
 
                 if (this.lastRecive) {
                     console.log(`client.lastRecive`, this.lastRecive);
                     if (this.lastRecive.proto.name === "wl_display" && this.lastRecive.op.name === "get_registry") {
                         const registryId = this.lastRecive.args.registry as WaylandObjectId;
                         for (const [i, proto] of waylandProtocolsNameMap) {
-                            this.sendMessage(registryId, 0, {
+                            this.sendMessageX(registryId, "wl_registry.global", {
                                 name: i,
                                 interface: proto.name,
                                 version: proto.version,
@@ -219,18 +220,24 @@ class WaylandClient {
                     // wl_shm wl_seat wl_output
                     for (const [id, p] of this.objects) {
                         if (p.protocol.name === "wl_shm") {
-                            this.sendMessage(id, 0, { format: p.protocol.enum![1].enum.argb8888 }); // wl_shm.format
-                            this.sendMessage(id, 0, { format: p.protocol.enum![1].enum.xrgb8888 }); // wl_shm.format
+                            this.sendMessageX(id, "wl_shm.format", {
+                                format: p.protocol.enum![1].enum.argb8888,
+                            });
+                            this.sendMessageX(id, "wl_shm.format", {
+                                format: p.protocol.enum![1].enum.xrgb8888,
+                            });
                         }
                         if (p.protocol.name === "wl_seat") {
                             const capabilities = [p.protocol.enum![0].enum.pointer, p.protocol.enum![0].enum.keyboard];
                             const capabilitiesBitmask = capabilities.reduce((a, b) => a | b, 0);
-                            this.sendMessage(id, 0, { capabilities: capabilitiesBitmask }); // wl_seat.capabilities
+                            this.sendMessageX(id, "wl_seat.capabilities", {
+                                capabilities: capabilitiesBitmask,
+                            });
                         }
                     }
                 }
 
-                this.sendMessage(callbackId, 0, {}); // done
+                this.sendMessageX(callbackId, "wl_callback.done", { callback_data: 0 });
             }
             if (isOp(x, "wl_display", "get_registry")) {
                 this.lastRecive = x;
@@ -278,11 +285,11 @@ class WaylandClient {
             }
             if (isOp(x, "wl_shm_pool", "destroy")) {
                 this.objects.delete(x.id);
-                this.sendMessage(waylandObjectId(1), 1, { id: x.id });
+                this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: x.id });
             }
             if (isOp(x, "wl_region", "destroy")) {
                 this.objects.delete(x.id);
-                this.sendMessage(waylandObjectId(1), 1, { id: x.id });
+                this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: x.id });
             }
             if (isOp(x, "wl_surface", "attach")) {
                 const surfaceId = x.id;
@@ -338,7 +345,7 @@ class WaylandClient {
                     }
                     for (const [id, p] of this.objects) {
                         if (p.protocol.name === "xdg_surface") {
-                            this.sendMessage(id, 0, { serial: 1 });
+                            this.sendMessageX(id, "xdg_surface.configure", { serial: 1 });
                         }
                     }
                 }
@@ -371,11 +378,13 @@ class WaylandClient {
                         const bufferId =
                             surface.data.bufferPointer === 0 ? surface.data.buffer2?.id : surface.data.buffer?.id;
                         if (bufferId) {
-                            this.sendMessage(bufferId, 0, {}); // wl_buffer.release
+                            this.sendMessageX(bufferId, "wl_buffer.release", {});
                         }
                         surface.data.bufferPointer = surface.data.bufferPointer === 0 ? 1 : 0;
-                        this.sendMessage(waylandObjectId(1), 1, { id: this.lastCallback }); // delete id
-                        this.sendMessage(x, 0, { callback_data: Date.now() });
+                        this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", {
+                            id: x,
+                        });
+                        this.sendMessageX(x, "wl_callback.done", { callback_data: Date.now() });
                         this.lastCallback = null;
                     });
                 }
@@ -383,10 +392,14 @@ class WaylandClient {
             if (isOp(x, "xdg_surface", "get_toplevel")) {
                 const toplevelId = x.args.id as WaylandObjectId;
                 // this.sendMessage(toplevelId, 2, { width: 1920, height: 1080 });
-                this.sendMessage(toplevelId, 0, { width: 0, height: 0, states: new Uint8Array([]) });
+                this.sendMessageX(toplevelId, "xdg_toplevel.configure", {
+                    width: 0,
+                    height: 0,
+                    states: [],
+                });
                 for (const [id, p] of this.objects) {
                     if (p.protocol.name === "xdg_surface") {
-                        this.sendMessage(id, 0, { serial: 1 }); // todo
+                        this.sendMessageX(id, "xdg_surface.configure", { serial: 1 }); // todo
                     }
                 }
             }
@@ -411,6 +424,9 @@ class WaylandClient {
             }
             useOp = false;
         }
+    }
+    private sendMessageX<T extends keyof WaylandEventObj>(objectId: WaylandObjectId, op: T, args: WaylandEventObj[T]) {
+        this.sendMessage(objectId, WaylandEventOpcode[op.replace(".", "__")], args);
     }
     private sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
         const p = getX(this.objects, "event", objectId, opcode);
@@ -450,7 +466,7 @@ class WaylandClient {
                     encoder.writeNewId(a.interface!, 1);
                     break;
                 case WaylandArgType.ARRAY:
-                    encoder.writeArray(argValue);
+                    encoder.writeArray(new ArrayBuffer(argValue));
                     break;
                 case WaylandArgType.FD:
                     // 这里假设FD是通过某种方式传递的，我们用一个占位符
@@ -470,11 +486,16 @@ class WaylandClient {
         const { x, y } = p;
         if (!this.obj2.pointer) return;
         if (type === "move") {
-            this.sendMessage(this.obj2.pointer, 2, { time: Date.now(), surface_x: x, surface_y: y });
-            this.sendMessage(this.obj2.pointer, 5, {}); // wl_pointer.frame
+            this.sendMessageX(this.obj2.pointer, "wl_pointer.motion", { time: Date.now(), surface_x: x, surface_y: y });
+            this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
         }
         if (type === "in") {
-            this.sendMessage(this.obj2.pointer, 0, { serial: 0, surface: surface, surface_x: x, surface_y: y });
+            this.sendMessageX(this.obj2.pointer, "wl_pointer.enter", {
+                serial: 0,
+                surface: surface,
+                surface_x: x,
+                surface_y: y,
+            });
         }
     }
 }

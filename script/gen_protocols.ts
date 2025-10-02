@@ -48,6 +48,7 @@ const supportedProtocols: Array<{ name: string; interfaces: Array<{ name: string
 // 支持遍历 supportedProtocols，按 name 读取对应 xml 文件并处理
 const xmlDir = path.resolve(__dirname, "xml");
 const outputPath = path.resolve(__dirname, "../src/renderer/wayland/protocols.json");
+const outputTypesPath = path.resolve(__dirname, "../src/renderer/wayland/wayland-types.ts");
 
 // 先读取已有 JSON 内容
 let allResults: Record<string, WaylandProtocol[]> = {};
@@ -127,5 +128,55 @@ supportedProtocols.forEach((proto) => {
         }
     });
 });
+
 fs.writeFileSync(outputPath, JSON.stringify(allResults, null, 2), "utf-8");
 console.log(`已生成协议文件: ${outputPath}`);
+
+// 自动生成事件类型枚举
+const waylandTypeLines: string[] = [];
+waylandTypeLines.push("// 自动生成，勿手动编辑");
+waylandTypeLines.push('import type { WaylandObjectId } from "./wayland-binary";');
+waylandTypeLines.push("");
+waylandTypeLines.push("export enum WaylandEventOpcode {");
+for (const protos of Object.values(allResults)) {
+    for (const proto of protos) {
+        if (!proto.event) continue;
+        for (const [i, evt] of proto.event.entries()) {
+            waylandTypeLines.push(`    ${proto.name}__${evt.name} = ${i},`);
+        }
+    }
+}
+waylandTypeLines.push("}");
+
+// 自动生成事件参数类型
+
+waylandTypeLines.push("");
+waylandTypeLines.push("export type WaylandEventObj = {");
+for (const protos of Object.values(allResults)) {
+    for (const proto of protos) {
+        if (!proto.event) continue;
+        for (const evt of proto.event) {
+            const key = `"${proto.name}.${evt.name}"`;
+            if (!evt.args || evt.args.length === 0) {
+                waylandTypeLines.push(`    ${key}: {};`);
+                continue;
+            }
+            const map: Record<WaylandArgType, string> = {
+                int: "number",
+                uint: "number",
+                string: "string",
+                array: "number[]",
+                fixed: "number",
+                fd: "number",
+                object: "number",
+                new_id: "WaylandObjectId",
+            };
+            const fields = evt.args.map((arg) => `        ${arg.name}: ${map[arg.type] || "any"};`).join("\n");
+            waylandTypeLines.push(`    ${key}: {\n${fields}\n    };`);
+        }
+    }
+}
+waylandTypeLines.push("};");
+
+fs.writeFileSync(outputTypesPath, waylandTypeLines.join("\n") + "\n", "utf-8");
+console.log(`已自动生成事件类型枚举和参数类型: ${outputTypesPath}`);
