@@ -511,6 +511,25 @@ class WaylandClient {
                 surface_x: x,
                 surface_y: y,
             });
+            this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
+        }
+        if (type === "down") {
+            this.sendMessageX(this.obj2.pointer, "wl_pointer.button", {
+                serial: 0,
+                time: Date.now(),
+                button: 272, // BTN_LEFT
+                state: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.button_state", "pressed"),
+            });
+            this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
+        }
+        if (type === "up") {
+            this.sendMessageX(this.obj2.pointer, "wl_pointer.button", {
+                serial: 0,
+                time: Date.now(),
+                button: 272, // BTN_LEFT
+                state: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.button_state", "released"),
+            });
+            this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
         }
     }
 }
@@ -673,6 +692,12 @@ const body = pack(document.body);
 
 body.on("pointermove", (e) => {
     sendPointerEvent("move", e);
+});
+body.on("pointerdown", (e) => {
+    sendPointerEvent("down", e);
+});
+body.on("pointerup", (e) => {
+    sendPointerEvent("up", e);
 });
 
 body.style({
