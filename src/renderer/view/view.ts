@@ -28,6 +28,7 @@ import { WaylandEncoder } from "../wayland/wayland-encoder";
 import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
 
 import { button, ele, image, pack, txt, view } from "dkh-ui";
+import { InputEventCodes } from "../input_codes/types";
 
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
 
@@ -517,7 +518,14 @@ class WaylandClient {
             this.sendMessageX(this.obj2.pointer, "wl_pointer.button", {
                 serial: 0,
                 time: Date.now(),
-                button: 272, // BTN_LEFT
+                button:
+                    p.button === 0
+                        ? InputEventCodes.BTN_LEFT
+                        : p.button === 1
+                          ? InputEventCodes.BTN_MIDDLE
+                          : p.button === 2
+                            ? InputEventCodes.BTN_RIGHT
+                            : InputEventCodes.BTN_LEFT,
                 state: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.button_state", "pressed"),
             });
             this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
@@ -526,7 +534,14 @@ class WaylandClient {
             this.sendMessageX(this.obj2.pointer, "wl_pointer.button", {
                 serial: 0,
                 time: Date.now(),
-                button: 272, // BTN_LEFT
+                button:
+                    p.button === 0
+                        ? InputEventCodes.BTN_LEFT
+                        : p.button === 1
+                          ? InputEventCodes.BTN_MIDDLE
+                          : p.button === 2
+                            ? InputEventCodes.BTN_RIGHT
+                            : InputEventCodes.BTN_LEFT,
                 state: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.button_state", "released"),
             });
             this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});

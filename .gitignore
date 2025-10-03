@@ -1,3 +1,4 @@
 node_modules
 out
 script/wayland/xml
+script/linux_input_codes/input-event-codes.h
