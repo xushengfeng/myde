@@ -47,6 +47,21 @@ export enum WaylandEventOpcode {
     xdg_popup__configure = 0,
     xdg_popup__popup_done = 1,
     xdg_popup__repositioned = 2,
+    wp_presentation__clock_id = 0,
+    wp_presentation_feedback__sync_output = 0,
+    wp_presentation_feedback__presented = 1,
+    wp_presentation_feedback__discarded = 2,
+    zwp_linux_dmabuf_v1__format = 0,
+    zwp_linux_dmabuf_v1__modifier = 1,
+    zwp_linux_buffer_params_v1__created = 0,
+    zwp_linux_buffer_params_v1__failed = 1,
+    zwp_linux_dmabuf_feedback_v1__done = 0,
+    zwp_linux_dmabuf_feedback_v1__format_table = 1,
+    zwp_linux_dmabuf_feedback_v1__main_device = 2,
+    zwp_linux_dmabuf_feedback_v1__tranche_done = 3,
+    zwp_linux_dmabuf_feedback_v1__tranche_target_device = 4,
+    zwp_linux_dmabuf_feedback_v1__tranche_formats = 5,
+    zwp_linux_dmabuf_feedback_v1__tranche_flags = 6,
 }
 
 export type WaylandEventObj = {
@@ -222,6 +237,52 @@ export type WaylandEventObj = {
     "xdg_popup.popup_done": {};
     "xdg_popup.repositioned": {
         token: number;
+    };
+    "wp_presentation.clock_id": {
+        clk_id: number;
+    };
+    "wp_presentation_feedback.sync_output": {
+        output: number;
+    };
+    "wp_presentation_feedback.presented": {
+        tv_sec_hi: number;
+        tv_sec_lo: number;
+        tv_nsec: number;
+        refresh: number;
+        seq_hi: number;
+        seq_lo: number;
+        flags: number;
+    };
+    "wp_presentation_feedback.discarded": {};
+    "zwp_linux_dmabuf_v1.format": {
+        format: number;
+    };
+    "zwp_linux_dmabuf_v1.modifier": {
+        format: number;
+        modifier_hi: number;
+        modifier_lo: number;
+    };
+    "zwp_linux_buffer_params_v1.created": {
+        buffer: WaylandObjectId;
+    };
+    "zwp_linux_buffer_params_v1.failed": {};
+    "zwp_linux_dmabuf_feedback_v1.done": {};
+    "zwp_linux_dmabuf_feedback_v1.format_table": {
+        fd: number;
+        size: number;
+    };
+    "zwp_linux_dmabuf_feedback_v1.main_device": {
+        device: number[];
+    };
+    "zwp_linux_dmabuf_feedback_v1.tranche_done": {};
+    "zwp_linux_dmabuf_feedback_v1.tranche_target_device": {
+        device: number[];
+    };
+    "zwp_linux_dmabuf_feedback_v1.tranche_formats": {
+        indices: number[];
+    };
+    "zwp_linux_dmabuf_feedback_v1.tranche_flags": {
+        flags: number;
     };
 };
 
@@ -457,6 +518,45 @@ export type WaylandRequestObj = {
         width: number;
         height: number;
     };
+    "wp_presentation.destroy": {};
+    "wp_presentation.feedback": {
+        surface: number;
+        callback: WaylandObjectId;
+    };
+    "zwp_linux_dmabuf_v1.destroy": {};
+    "zwp_linux_dmabuf_v1.create_params": {
+        params_id: WaylandObjectId;
+    };
+    "zwp_linux_dmabuf_v1.get_default_feedback": {
+        id: WaylandObjectId;
+    };
+    "zwp_linux_dmabuf_v1.get_surface_feedback": {
+        id: WaylandObjectId;
+        surface: number;
+    };
+    "zwp_linux_buffer_params_v1.destroy": {};
+    "zwp_linux_buffer_params_v1.add": {
+        fd: number;
+        plane_idx: number;
+        offset: number;
+        stride: number;
+        modifier_hi: number;
+        modifier_lo: number;
+    };
+    "zwp_linux_buffer_params_v1.create": {
+        width: number;
+        height: number;
+        format: number;
+        flags: number;
+    };
+    "zwp_linux_buffer_params_v1.create_immed": {
+        buffer_id: WaylandObjectId;
+        width: number;
+        height: number;
+        format: number;
+        flags: number;
+    };
+    "zwp_linux_dmabuf_feedback_v1.destroy": {};
 };
 
 export type WaylandEnumObj = {
@@ -489,4 +589,9 @@ export type WaylandEnumObj = {
     "xdg_popup.error": "invalid_grab";
     "wp_viewporter.error": "viewport_exists";
     "wp_viewport.error": "bad_value" | "bad_size" | "out_of_buffer" | "no_surface";
+    "wp_presentation.error": "invalid_timestamp" | "invalid_flag";
+    "wp_presentation_feedback.kind": "vsync" | "hw_clock" | "hw_completion" | "zero_copy";
+    "zwp_linux_buffer_params_v1.error": "already_used" | "plane_idx" | "plane_set" | "incomplete" | "invalid_format" | "invalid_dimensions" | "out_of_bounds" | "invalid_wl_buffer";
+    "zwp_linux_buffer_params_v1.flags": "y_invert" | "interlaced" | "bottom_first";
+    "zwp_linux_dmabuf_feedback_v1.tranche_flags": "scanout";
 };

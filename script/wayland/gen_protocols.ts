@@ -43,6 +43,21 @@ const supportedProtocols: Array<{ name: string; interfaces: Array<{ name: string
             { name: "wp_viewport", version: 1 },
         ],
     },
+    {
+        name: "presentation-time",
+        interfaces: [
+            { name: "wp_presentation", version: 2 },
+            { name: "wp_presentation_feedback", version: 2 },
+        ],
+    },
+    {
+        name: "linux-dmabuf-v1",
+        interfaces: [
+            { name: "zwp_linux_dmabuf_v1", version: 5 },
+            { name: "zwp_linux_buffer_params_v1", version: 5 },
+            { name: "zwp_linux_dmabuf_feedback_v1", version: 5 },
+        ],
+    },
 ];
 
 // 支持遍历 supportedProtocols，按 name 读取对应 xml 文件并处理
