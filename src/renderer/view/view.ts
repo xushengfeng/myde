@@ -29,6 +29,7 @@ import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
 
 import { button, ele, image, pack, txt, view } from "dkh-ui";
 import { InputEventCodes } from "../input_codes/types";
+import { createFormatTableBuffer } from "../wayland/dma-buf";
 
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
 
@@ -432,16 +433,46 @@ class WaylandClient {
                 const keyboardId = x.args.id;
                 this.obj2.keyboard = keyboardId;
             });
+
+            isOp(x, "zwp_linux_dmabuf_v1.get_surface_feedback", (x) => {
+                const feedbackId = x.args.id;
+                this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
+            });
+            isOp(x, "zwp_linux_dmabuf_v1.get_default_feedback", (x) => {
+                const feedbackId = x.args.id;
+
+                const formatTable = createFormatTableBuffer([{ format: 0x34325258, modifier: 0n }]);
+                const tmpPath = `/dev/shm/dmabuf-format-table-${crypto.randomUUID()}`;
+                const fd = fs.openSync(tmpPath, "w+");
+                fs.writeSync(fd, new Uint8Array(formatTable.buffer));
+                this.sendMessageX(
+                    feedbackId,
+                    "zwp_linux_dmabuf_feedback_v1.format_table",
+                    {
+                        fd: 0,
+                        size: formatTable.byteLength,
+                    },
+                    [fd],
+                );
+
+                this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
+            });
+
             if (!useOp) {
                 console.warn("No matching operation found", `${x.proto.name}.${x.op.name}`, x);
             }
             useOp = false;
         }
     }
-    private sendMessageX<T extends keyof WaylandEventObj>(objectId: WaylandObjectId, op: T, args: WaylandEventObj[T]) {
-        this.sendMessage(objectId, WaylandEventOpcode[op.replace(".", "__")], args);
+    private sendMessageX<T extends keyof WaylandEventObj>(
+        objectId: WaylandObjectId,
+        op: T,
+        args: WaylandEventObj[T],
+        fds?: number[],
+    ) {
+        this.sendMessage(objectId, WaylandEventOpcode[op.replace(".", "__")], args, fds);
     }
-    private sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
+    private sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>, fds?: number[]) {
         const p = getX(this.objects, "event", objectId, opcode);
         if (!p) {
             console.error("Cannot find protocol for sending message", objectId, opcode);
@@ -489,10 +520,9 @@ class WaylandClient {
             }
         }
         const x = encoder.finalizeMessage();
-        this.socket.write(Buffer.from(x.data), (err) => {
-            if (err) {
-                console.error("Failed to send message to client:", err);
-            }
+        this.socket.write({
+            data: Buffer.from(x.data),
+            fds: fds || [],
         }); // todo array 类型
     }
     sendPointerEvent(type: "move" | "down" | "up" | "in", p: PointerEvent, surface: WaylandObjectId) {
