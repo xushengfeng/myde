@@ -203,6 +203,7 @@ class WaylandClient {
             const [proto, name] = op.split(".");
             if (x.proto.name === proto && x.op.name === name) {
                 f(x as ParsedMessage & { args: WaylandRequestObj[T] });
+                useOp = true;
                 return true;
             }
             return false;
