@@ -115,6 +115,8 @@ class WaylandClient {
     objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
     nextId: number; // 客户端本地对象ID
     lastRecive: ParsedMessage | null;
+    toSend: Array<() => { objectId: WaylandObjectId; opcode: number; args: Record<string, any>; fds?: number[] }[]> =
+        [];
     lastCallback: WaylandObjectId | null;
     obj2: Partial<{
         pointer: WaylandObjectId;
@@ -211,30 +213,34 @@ class WaylandClient {
                 const callbackId = x.args.callback;
                 this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: callbackId });
 
-                if (this.lastRecive) {
-                    console.log(`client.lastRecive`, this.lastRecive);
-                    if (this.lastRecive.proto.name === "wl_display" && this.lastRecive.op.name === "get_registry") {
-                        const registryId = this.lastRecive.args.registry as WaylandObjectId;
-                        for (const [i, proto] of waylandProtocolsNameMap) {
-                            this.sendMessageX(registryId, "wl_registry.global", {
-                                name: i,
-                                interface: proto.name,
-                                version: proto.version,
-                            });
-                        }
-                    }
+                const msgs = this.toSend.shift();
 
-                    this.lastRecive = null;
-                } else {
-                    console.log("xxxx");
-                    // todo Connect Time  outputs, compositor, input devices
-                    // wl_shm wl_seat wl_output
+                for (const msg of msgs?.() || []) {
+                    this.sendMessage(msg.objectId, msg.opcode, msg.args, msg.fds);
+                }
+
+                this.sendMessageX(callbackId, "wl_callback.done", { callback_data: 0 });
+            });
+            isOp(x, "wl_display.get_registry", (x) => {
+                const registryId = x.args.registry;
+                this.sendMessageLater((send) => {
+                    for (const [i, proto] of waylandProtocolsNameMap) {
+                        send(registryId, "wl_registry.global", {
+                            name: i,
+                            interface: proto.name,
+                            version: proto.version,
+                        });
+                    }
+                });
+
+                // wl_shm wl_seat wl_output
+                this.sendMessageLater((send) => {
                     for (const [id, p] of this.objects) {
                         if (p.protocol.name === "wl_shm") {
-                            this.sendMessageX(id, "wl_shm.format", {
+                            send(id, "wl_shm.format", {
                                 format: getEnumValue(p.protocol, "wl_shm.format", "argb8888"),
                             });
-                            this.sendMessageX(id, "wl_shm.format", {
+                            send(id, "wl_shm.format", {
                                 format: getEnumValue(p.protocol, "wl_shm.format", "xrgb8888"),
                             });
                         }
@@ -244,17 +250,12 @@ class WaylandClient {
                                 getEnumValue(p.protocol, "wl_seat.capability", "keyboard"),
                             ];
                             const capabilitiesBitmask = capabilities.reduce((a, b) => a | b, 0);
-                            this.sendMessageX(id, "wl_seat.capabilities", {
+                            send(id, "wl_seat.capabilities", {
                                 capabilities: capabilitiesBitmask,
                             });
                         }
                     }
-                }
-
-                this.sendMessageX(callbackId, "wl_callback.done", { callback_data: 0 });
-            });
-            isOp(x, "wl_display.get_registry", (x) => {
-                this.lastRecive = x;
+                });
             });
             isOp(x, "wl_registry.bind", (x) => {
                 const name = x.args.name as WaylandName;
@@ -432,6 +433,12 @@ class WaylandClient {
             isOp(x, "wl_seat.get_keyboard", (x) => {
                 const keyboardId = x.args.id;
                 this.obj2.keyboard = keyboardId;
+                this.sendMessageLater((send) => {
+                    send(keyboardId, "wl_keyboard.repeat_info", {
+                        rate: 25,
+                        delay: 600,
+                    });
+                });
             });
 
             isOp(x, "zwp_linux_dmabuf_v1.get_surface_feedback", (x) => {
@@ -471,6 +478,25 @@ class WaylandClient {
         fds?: number[],
     ) {
         this.sendMessage(objectId, WaylandEventOpcode[op.replace(".", "__")], args, fds);
+    }
+    private sendMessageLater(
+        f: (
+            send: <T extends keyof WaylandEventObj>(
+                objectId: WaylandObjectId,
+                op: T,
+                args: WaylandEventObj[T],
+                fds?: number[],
+            ) => void,
+        ) => void,
+    ) {
+        const m: ReturnType<(typeof this.toSend)[number]> = [];
+        // 这里用函数是因为等待对象注册，等到sync时再调用就有值了
+        this.toSend.push(() => {
+            f((objectId, op, args, fds) => {
+                m.push({ objectId, opcode: WaylandEventOpcode[op.replace(".", "__")], args, fds });
+            });
+            return m;
+        });
     }
     private sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>, fds?: number[]) {
         const p = getX(this.objects, "event", objectId, opcode);
@@ -523,7 +549,7 @@ class WaylandClient {
         this.socket.write({
             data: Buffer.from(x.data),
             fds: fds || [],
-        }); // todo array 类型
+        });
     }
     sendPointerEvent(type: "move" | "down" | "up" | "in", p: PointerEvent, surface: WaylandObjectId) {
         const { x, y } = p;
