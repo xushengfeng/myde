@@ -458,3 +458,35 @@ export type WaylandRequestObj = {
         height: number;
     };
 };
+
+export type WaylandEnumObj = {
+    "wl_display.error": "invalid_object" | "invalid_method" | "no_memory" | "implementation";
+    "wl_shm.error": "invalid_format" | "invalid_stride" | "invalid_fd";
+    "wl_shm.format": "argb8888" | "xrgb8888" | "c8" | "rgb332" | "bgr233" | "xrgb4444" | "xbgr4444" | "rgbx4444" | "bgrx4444" | "argb4444" | "abgr4444" | "rgba4444" | "bgra4444" | "xrgb1555" | "xbgr1555" | "rgbx5551" | "bgrx5551" | "argb1555" | "abgr1555" | "rgba5551" | "bgra5551" | "rgb565" | "bgr565" | "rgb888" | "bgr888" | "xbgr8888" | "rgbx8888" | "bgrx8888" | "abgr8888" | "rgba8888" | "bgra8888" | "xrgb2101010" | "xbgr2101010" | "rgbx1010102" | "bgrx1010102" | "argb2101010" | "abgr2101010" | "rgba1010102" | "bgra1010102" | "yuyv" | "yvyu" | "uyvy" | "vyuy" | "ayuv" | "nv12" | "nv21" | "nv16" | "nv61" | "yuv410" | "yvu410" | "yuv411" | "yvu411" | "yuv420" | "yvu420" | "yuv422" | "yvu422" | "yuv444" | "yvu444" | "r8" | "r16" | "rg88" | "gr88" | "rg1616" | "gr1616" | "xrgb16161616f" | "xbgr16161616f" | "argb16161616f" | "abgr16161616f" | "xyuv8888" | "vuy888" | "vuy101010" | "y210" | "y212" | "y216" | "y410" | "y412" | "y416" | "xvyu2101010" | "xvyu12_16161616" | "xvyu16161616" | "y0l0" | "x0l0" | "y0l2" | "x0l2" | "yuv420_8bit" | "yuv420_10bit" | "xrgb8888_a8" | "xbgr8888_a8" | "rgbx8888_a8" | "bgrx8888_a8" | "rgb888_a8" | "bgr888_a8" | "rgb565_a8" | "bgr565_a8" | "nv24" | "nv42" | "p210" | "p010" | "p012" | "p016" | "axbxgxrx106106106106" | "nv15" | "q410" | "q401" | "xrgb16161616" | "xbgr16161616" | "argb16161616" | "abgr16161616" | "c1" | "c2" | "c4" | "d1" | "d2" | "d4" | "d8" | "r1" | "r2" | "r4" | "r10" | "r12" | "avuy8888" | "xvuy8888" | "p030";
+    "wl_surface.error": "invalid_scale" | "invalid_transform" | "invalid_size" | "invalid_offset" | "defunct_role_object";
+    "wl_seat.capability": "pointer" | "keyboard" | "touch";
+    "wl_seat.error": "missing_capability";
+    "wl_pointer.error": "role";
+    "wl_pointer.button_state": "released" | "pressed";
+    "wl_pointer.axis": "vertical_scroll" | "horizontal_scroll";
+    "wl_pointer.axis_source": "wheel" | "finger" | "continuous" | "wheel_tilt";
+    "wl_pointer.axis_relative_direction": "identical" | "inverted";
+    "wl_keyboard.keymap_format": "no_keymap" | "xkb_v1";
+    "wl_keyboard.key_state": "released" | "pressed" | "repeated";
+    "wl_output.subpixel": "unknown" | "none" | "horizontal_rgb" | "horizontal_bgr" | "vertical_rgb" | "vertical_bgr";
+    "wl_output.transform": "90" | "180" | "270" | "normal" | "flipped" | "flipped_90" | "flipped_180" | "flipped_270";
+    "wl_output.mode": "current" | "preferred";
+    "xdg_wm_base.error": "role" | "defunct_surfaces" | "not_the_topmost_popup" | "invalid_popup_parent" | "invalid_surface_state" | "invalid_positioner" | "unresponsive";
+    "xdg_positioner.error": "invalid_input";
+    "xdg_positioner.anchor": "none" | "top" | "bottom" | "left" | "right" | "top_left" | "bottom_left" | "top_right" | "bottom_right";
+    "xdg_positioner.gravity": "none" | "top" | "bottom" | "left" | "right" | "top_left" | "bottom_left" | "top_right" | "bottom_right";
+    "xdg_positioner.constraint_adjustment": "none" | "slide_x" | "slide_y" | "flip_x" | "flip_y" | "resize_x" | "resize_y";
+    "xdg_surface.error": "not_constructed" | "already_constructed" | "unconfigured_buffer" | "invalid_serial" | "invalid_size" | "defunct_role_object";
+    "xdg_toplevel.error": "invalid_resize_edge" | "invalid_parent" | "invalid_size";
+    "xdg_toplevel.resize_edge": "none" | "top" | "bottom" | "left" | "top_left" | "bottom_left" | "right" | "top_right" | "bottom_right";
+    "xdg_toplevel.state": "maximized" | "fullscreen" | "resizing" | "activated" | "tiled_left" | "tiled_right" | "tiled_top" | "tiled_bottom" | "suspended" | "constrained_left" | "constrained_right" | "constrained_top" | "constrained_bottom";
+    "xdg_toplevel.wm_capabilities": "window_menu" | "maximize" | "fullscreen" | "minimize";
+    "xdg_popup.error": "invalid_grab";
+    "wp_viewporter.error": "viewport_exists";
+    "wp_viewport.error": "bad_value" | "bad_size" | "out_of_buffer" | "no_surface";
+};

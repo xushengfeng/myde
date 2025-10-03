@@ -181,9 +181,9 @@ waylandTypeLines.push("export type WaylandRequestObj = {");
 for (const protos of Object.values(allResults)) {
     for (const proto of protos) {
         if (!proto.request) continue;
-        for (const evt of proto.request) {
-            const key = `"${proto.name}.${evt.name}"`;
-            if (!evt.args || evt.args.length === 0) {
+        for (const req of proto.request) {
+            const key = `"${proto.name}.${req.name}"`;
+            if (!req.args || req.args.length === 0) {
                 waylandTypeLines.push(`    ${key}: {};`);
                 continue;
             }
@@ -197,8 +197,25 @@ for (const protos of Object.values(allResults)) {
                 object: "number",
                 new_id: "WaylandObjectId",
             };
-            const fields = evt.args.map((arg) => `        ${arg.name}: ${map[arg.type] || "any"};`).join("\n");
+            const fields = req.args.map((arg) => `        ${arg.name}: ${map[arg.type] || "any"};`).join("\n");
             waylandTypeLines.push(`    ${key}: {\n${fields}\n    };`);
+        }
+    }
+}
+waylandTypeLines.push("};");
+
+waylandTypeLines.push("");
+waylandTypeLines.push("export type WaylandEnumObj = {");
+for (const protos of Object.values(allResults)) {
+    for (const proto of protos) {
+        if (!proto.enum) continue;
+        for (const enu of proto.enum) {
+            const key = `"${proto.name}.${enu.name}"`;
+            waylandTypeLines.push(
+                `    ${key}: ${Object.keys(enu.enum)
+                    .map((i) => `"${i}"`)
+                    .join(" | ")};`,
+            );
         }
     }
 }

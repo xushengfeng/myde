@@ -13,7 +13,12 @@ import {
     type WaylandObjectId,
     type WaylandProtocol,
 } from "../wayland/wayland-binary";
-import { type WaylandEventObj, WaylandEventOpcode, type WaylandRequestObj } from "../wayland/wayland-types";
+import {
+    type WaylandEnumObj,
+    type WaylandEventObj,
+    WaylandEventOpcode,
+    type WaylandRequestObj,
+} from "../wayland/wayland-types";
 import { WaylandDecoder } from "../wayland/wayland-decoder";
 import WaylandProtocolsJSON from "../wayland/protocols.json?raw";
 const WaylandProtocolsx = JSON.parse(WaylandProtocolsJSON) as Record<string, WaylandProtocol[]>;
@@ -228,14 +233,17 @@ class WaylandClient {
                     for (const [id, p] of this.objects) {
                         if (p.protocol.name === "wl_shm") {
                             this.sendMessageX(id, "wl_shm.format", {
-                                format: p.protocol.enum![1].enum.argb8888,
+                                format: getEnumValue(p.protocol, "wl_shm.format", "argb8888"),
                             });
                             this.sendMessageX(id, "wl_shm.format", {
-                                format: p.protocol.enum![1].enum.xrgb8888,
+                                format: getEnumValue(p.protocol, "wl_shm.format", "xrgb8888"),
                             });
                         }
                         if (p.protocol.name === "wl_seat") {
-                            const capabilities = [p.protocol.enum![0].enum.pointer, p.protocol.enum![0].enum.keyboard];
+                            const capabilities = [
+                                getEnumValue(p.protocol, "wl_seat.capability", "pointer"),
+                                getEnumValue(p.protocol, "wl_seat.capability", "keyboard"),
+                            ];
                             const capabilitiesBitmask = capabilities.reduce((a, b) => a | b, 0);
                             this.sendMessageX(id, "wl_seat.capabilities", {
                                 capabilities: capabilitiesBitmask,
@@ -573,6 +581,17 @@ function parseArgs(decoder: WaylandDecoder, args: WaylandOp["args"]) {
         }
     }
     return parsed;
+}
+
+function getEnumValue<T extends keyof WaylandEnumObj>(proto: WaylandProtocol, enumName: T, value: WaylandEnumObj[T]) {
+    if (!proto.enum) throw new Error(`Protocol ${proto.name} has no enums`);
+    const [pName, enumN] = enumName.split(".");
+    if (pName !== proto.name) throw new Error(`Enum ${enumName} does not belong to protocol ${proto.name}`);
+    const e = proto.enum.find((e) => e.name === enumN);
+    if (!e) throw new Error(`Enum ${enumN} not found in protocol ${proto.name}`);
+    const entry = e.enum[value];
+    if (entry === undefined) throw new Error(`Value ${value} not found in enum ${enumName}`);
+    return entry;
 }
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
