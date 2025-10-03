@@ -104,7 +104,7 @@ class WaylandServer {
 
         const client = new WaylandClient({ id: clientId, socket });
 
-        this.clients.set(clientId, client);
+        this.clients.set(clientId, client); // todo onclose
     }
 }
 
@@ -137,12 +137,12 @@ class WaylandClient {
 
         socket.on("close", () => {
             console.log(`Client ${this.id} disconnected`);
-            // this.handleClientDisconnect(client);
+            this.close();
         });
 
         socket.on("error", (err) => {
             console.error(`Client ${this.id} error:`, err);
-            // this.handleClientDisconnect(client);
+            this.close();
         });
     }
 
@@ -543,6 +543,18 @@ class WaylandClient {
             });
             this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
         }
+    }
+    close() {
+        for (const obj of this.objects.values()) {
+            if (obj.protocol.name === "wl_shm_pool") {
+                fs.closeSync(obj.data.fd);
+            }
+        }
+        for (const s of this.obj2.surfaces) {
+            s.el.remove();
+        }
+        this.socket.end();
+        this.socket.destroy();
     }
 }
 
