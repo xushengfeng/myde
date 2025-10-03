@@ -224,3 +224,237 @@ export type WaylandEventObj = {
         token: number;
     };
 };
+
+export type WaylandRequestObj = {
+    "wl_display.sync": {
+        callback: WaylandObjectId;
+    };
+    "wl_display.get_registry": {
+        registry: WaylandObjectId;
+    };
+    "wl_registry.bind": {
+        name: number;
+        id: WaylandObjectId;
+    };
+    "wl_compositor.create_surface": {
+        id: WaylandObjectId;
+    };
+    "wl_compositor.create_region": {
+        id: WaylandObjectId;
+    };
+    "wl_shm_pool.create_buffer": {
+        id: WaylandObjectId;
+        offset: number;
+        width: number;
+        height: number;
+        stride: number;
+        format: number;
+    };
+    "wl_shm_pool.destroy": {};
+    "wl_shm_pool.resize": {
+        size: number;
+    };
+    "wl_shm.create_pool": {
+        id: WaylandObjectId;
+        fd: number;
+        size: number;
+    };
+    "wl_shm.release": {};
+    "wl_buffer.destroy": {};
+    "wl_surface.destroy": {};
+    "wl_surface.attach": {
+        buffer: number;
+        x: number;
+        y: number;
+    };
+    "wl_surface.damage": {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    "wl_surface.frame": {
+        callback: WaylandObjectId;
+    };
+    "wl_surface.set_opaque_region": {
+        region: number;
+    };
+    "wl_surface.set_input_region": {
+        region: number;
+    };
+    "wl_surface.commit": {};
+    "wl_surface.set_buffer_transform": {
+        transform: number;
+    };
+    "wl_surface.set_buffer_scale": {
+        scale: number;
+    };
+    "wl_surface.damage_buffer": {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    "wl_surface.offset": {
+        x: number;
+        y: number;
+    };
+    "wl_seat.get_pointer": {
+        id: WaylandObjectId;
+    };
+    "wl_seat.get_keyboard": {
+        id: WaylandObjectId;
+    };
+    "wl_seat.get_touch": {
+        id: WaylandObjectId;
+    };
+    "wl_seat.release": {};
+    "wl_pointer.set_cursor": {
+        serial: number;
+        surface: number;
+        hotspot_x: number;
+        hotspot_y: number;
+    };
+    "wl_pointer.release": {};
+    "wl_keyboard.release": {};
+    "wl_output.release": {};
+    "wl_region.destroy": {};
+    "wl_region.add": {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    "wl_region.subtract": {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    "xdg_wm_base.destroy": {};
+    "xdg_wm_base.create_positioner": {
+        id: WaylandObjectId;
+    };
+    "xdg_wm_base.get_xdg_surface": {
+        id: WaylandObjectId;
+        surface: number;
+    };
+    "xdg_wm_base.pong": {
+        serial: number;
+    };
+    "xdg_positioner.destroy": {};
+    "xdg_positioner.set_size": {
+        width: number;
+        height: number;
+    };
+    "xdg_positioner.set_anchor_rect": {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    "xdg_positioner.set_anchor": {
+        anchor: number;
+    };
+    "xdg_positioner.set_gravity": {
+        gravity: number;
+    };
+    "xdg_positioner.set_constraint_adjustment": {
+        constraint_adjustment: number;
+    };
+    "xdg_positioner.set_offset": {
+        x: number;
+        y: number;
+    };
+    "xdg_positioner.set_reactive": {};
+    "xdg_positioner.set_parent_size": {
+        parent_width: number;
+        parent_height: number;
+    };
+    "xdg_positioner.set_parent_configure": {
+        serial: number;
+    };
+    "xdg_surface.destroy": {};
+    "xdg_surface.get_toplevel": {
+        id: WaylandObjectId;
+    };
+    "xdg_surface.get_popup": {
+        id: WaylandObjectId;
+        parent: number;
+        positioner: number;
+    };
+    "xdg_surface.set_window_geometry": {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    "xdg_surface.ack_configure": {
+        serial: number;
+    };
+    "xdg_toplevel.destroy": {};
+    "xdg_toplevel.set_parent": {
+        parent: number;
+    };
+    "xdg_toplevel.set_title": {
+        title: string;
+    };
+    "xdg_toplevel.set_app_id": {
+        app_id: string;
+    };
+    "xdg_toplevel.show_window_menu": {
+        seat: number;
+        serial: number;
+        x: number;
+        y: number;
+    };
+    "xdg_toplevel.move": {
+        seat: number;
+        serial: number;
+    };
+    "xdg_toplevel.resize": {
+        seat: number;
+        serial: number;
+        edges: number;
+    };
+    "xdg_toplevel.set_max_size": {
+        width: number;
+        height: number;
+    };
+    "xdg_toplevel.set_min_size": {
+        width: number;
+        height: number;
+    };
+    "xdg_toplevel.set_maximized": {};
+    "xdg_toplevel.unset_maximized": {};
+    "xdg_toplevel.set_fullscreen": {
+        output: number;
+    };
+    "xdg_toplevel.unset_fullscreen": {};
+    "xdg_toplevel.set_minimized": {};
+    "xdg_popup.destroy": {};
+    "xdg_popup.grab": {
+        seat: number;
+        serial: number;
+    };
+    "xdg_popup.reposition": {
+        positioner: number;
+        token: number;
+    };
+    "wp_viewporter.destroy": {};
+    "wp_viewporter.get_viewport": {
+        id: WaylandObjectId;
+        surface: number;
+    };
+    "wp_viewport.destroy": {};
+    "wp_viewport.set_source": {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    "wp_viewport.set_destination": {
+        width: number;
+        height: number;
+    };
+};

@@ -148,14 +148,40 @@ for (const protos of Object.values(allResults)) {
 }
 waylandTypeLines.push("}");
 
-// 自动生成事件参数类型
-
 waylandTypeLines.push("");
 waylandTypeLines.push("export type WaylandEventObj = {");
 for (const protos of Object.values(allResults)) {
     for (const proto of protos) {
         if (!proto.event) continue;
         for (const evt of proto.event) {
+            const key = `"${proto.name}.${evt.name}"`;
+            if (!evt.args || evt.args.length === 0) {
+                waylandTypeLines.push(`    ${key}: {};`);
+                continue;
+            }
+            const map: Record<WaylandArgType, string> = {
+                int: "number",
+                uint: "number",
+                string: "string",
+                array: "number[]",
+                fixed: "number",
+                fd: "number",
+                object: "number",
+                new_id: "WaylandObjectId",
+            };
+            const fields = evt.args.map((arg) => `        ${arg.name}: ${map[arg.type] || "any"};`).join("\n");
+            waylandTypeLines.push(`    ${key}: {\n${fields}\n    };`);
+        }
+    }
+}
+waylandTypeLines.push("};");
+
+waylandTypeLines.push("");
+waylandTypeLines.push("export type WaylandRequestObj = {");
+for (const protos of Object.values(allResults)) {
+    for (const proto of protos) {
+        if (!proto.request) continue;
+        for (const evt of proto.request) {
             const key = `"${proto.name}.${evt.name}"`;
             if (!evt.args || evt.args.length === 0) {
                 waylandTypeLines.push(`    ${key}: {};`);

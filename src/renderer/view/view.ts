@@ -13,7 +13,7 @@ import {
     type WaylandObjectId,
     type WaylandProtocol,
 } from "../wayland/wayland-binary";
-import { WaylandEventObj, WaylandEventOpcode } from "../wayland/wayland-types";
+import { type WaylandEventObj, WaylandEventOpcode, type WaylandRequestObj } from "../wayland/wayland-types";
 import { WaylandDecoder } from "../wayland/wayland-decoder";
 import WaylandProtocolsJSON from "../wayland/protocols.json?raw";
 const WaylandProtocolsx = JSON.parse(WaylandProtocolsJSON) as Record<string, WaylandProtocol[]>;
@@ -189,15 +189,22 @@ class WaylandClient {
         }
 
         let useOp = false;
-        function isOp(x: ParsedMessage, name: string, op: string) {
-            const v = x.proto.name === name && x.op.name === op;
-            if (v) useOp = true;
-            return v;
+        function isOp<T extends keyof WaylandRequestObj>(
+            x: ParsedMessage,
+            op: T,
+            f: (x: ParsedMessage & { args: WaylandRequestObj[T] }) => void,
+        ) {
+            const [proto, name] = op.split(".");
+            if (x.proto.name === proto && x.op.name === name) {
+                f(x as ParsedMessage & { args: WaylandRequestObj[T] });
+                return true;
+            }
+            return false;
         }
 
         for (const x of opArray) {
-            if (isOp(x, "wl_display", "sync")) {
-                const callbackId = x.args.callback as WaylandObjectId;
+            isOp(x, "wl_display.sync", (x) => {
+                const callbackId = x.args.callback;
                 this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: callbackId });
 
                 if (this.lastRecive) {
@@ -238,13 +245,13 @@ class WaylandClient {
                 }
 
                 this.sendMessageX(callbackId, "wl_callback.done", { callback_data: 0 });
-            }
-            if (isOp(x, "wl_display", "get_registry")) {
+            });
+            isOp(x, "wl_display.get_registry", (x) => {
                 this.lastRecive = x;
-            }
-            if (isOp(x, "wl_registry", "bind")) {
+            });
+            isOp(x, "wl_registry.bind", (x) => {
                 const name = x.args.name as WaylandName;
-                const id = x.args.id as WaylandObjectId;
+                const id = x.args.id;
                 const proto = waylandProtocolsNameMap.get(name);
                 if (!proto) {
                     console.warn(`Unknown global name: ${name}`);
@@ -252,46 +259,46 @@ class WaylandClient {
                 }
                 this.objects.set(id, { protocol: proto, data: undefined });
                 console.log(`Client ${this.id} bound ${proto.name} to id ${id}`);
-            }
-            if (isOp(x, "wl_shm", "create_pool")) {
-                const fd = x.args.fd as number;
+            });
+            isOp(x, "wl_shm.create_pool", (x) => {
+                const fd = x.args.fd;
                 this.getObject<"wl_shm_pool">(x.args.id).data = { fd };
-            }
-            if (isOp(x, "wl_compositor", "create_surface")) {
-                const surfaceId = x.args.id as WaylandObjectId;
+            });
+            isOp(x, "wl_compositor.create_surface", (x) => {
+                const surfaceId = x.args.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 const canvasEl = ele("canvas").addInto();
                 const canvas = canvasEl.el;
                 this.obj2.surfaces.push({ id: surfaceId, el: canvas });
                 surface.data = { canvas, bufferPointer: 0 };
-            }
-            if (isOp(x, "xdg_wm_base", "get_xdg_surface")) {
-                const xdgSurfaceId = x.args.id as WaylandObjectId;
+            });
+            isOp(x, "xdg_wm_base.get_xdg_surface", (x) => {
+                const xdgSurfaceId = x.args.id;
                 const xdgSurface = this.getObject<"xdg_surface">(xdgSurfaceId);
                 const surfaceId = x.args.surface as WaylandObjectId;
                 xdgSurface.data = { surface: surfaceId };
-            }
-            if (isOp(x, "wl_shm_pool", "create_buffer")) {
+            });
+            isOp(x, "wl_shm_pool.create_buffer", (x) => {
                 const thisObj = this.getObject<"wl_shm_pool">(x.id);
-                const bufferId = x.args.id as WaylandObjectId;
+                const bufferId = x.args.id;
                 const buffer = this.getObject<"wl_buffer">(bufferId);
-                const imageData = new ImageData(x.args.width as number, x.args.height as number);
+                const imageData = new ImageData(x.args.width, x.args.height);
                 buffer.data = {
                     fd: thisObj.data.fd,
-                    start: x.args.offset as number,
-                    end: (x.args.offset as number) + (x.args.stride as number) * (x.args.height as number),
+                    start: x.args.offset,
+                    end: x.args.offset + x.args.stride * x.args.height,
                     imageData: imageData,
                 };
-            }
-            if (isOp(x, "wl_shm_pool", "destroy")) {
+            });
+            isOp(x, "wl_shm_pool.destroy", (x) => {
                 this.objects.delete(x.id);
                 this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: x.id });
-            }
-            if (isOp(x, "wl_region", "destroy")) {
+            });
+            isOp(x, "wl_region.destroy", (x) => {
                 this.objects.delete(x.id);
                 this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: x.id });
-            }
-            if (isOp(x, "wl_surface", "attach")) {
+            });
+            isOp(x, "wl_surface.attach", (x) => {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 const bufferId = x.args.buffer as WaylandObjectId;
@@ -299,24 +306,24 @@ class WaylandClient {
                 const imageData = buffer.data.imageData;
                 if (surface.data.bufferPointer === 0) surface.data.buffer = { id: bufferId, data: imageData };
                 else surface.data.buffer2 = { id: bufferId, data: imageData };
-            }
-            if (isOp(x, "wl_surface", "damage")) {
+            });
+            isOp(x, "wl_surface.damage", (x) => {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 const damageList = surface.data.damageList || [];
                 damageList.push({
-                    x: x.args.x as number,
-                    y: x.args.y as number,
-                    width: x.args.width as number,
-                    height: x.args.height as number,
+                    x: x.args.x,
+                    y: x.args.y,
+                    width: x.args.width,
+                    height: x.args.height,
                 });
                 surface.data.damageList = damageList;
-            }
-            if (isOp(x, "wl_surface", "frame")) {
-                const callbackId = x.args.callback as WaylandObjectId;
+            });
+            isOp(x, "wl_surface.frame", (x) => {
+                const callbackId = x.args.callback;
                 this.lastCallback = callbackId;
-            }
-            if (isOp(x, "wl_surface", "commit")) {
+            });
+            isOp(x, "wl_surface.commit", (x) => {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 const canvas = surface.data.canvas;
@@ -325,7 +332,7 @@ class WaylandClient {
                 const imagedata = buffer?.data;
                 if (!imagedata) {
                     console.warn("wl_surface buffer not found", surfaceId);
-                    continue;
+                    return;
                 }
                 if (imagedata.width !== canvas.width || imagedata.height !== canvas.height) {
                     canvas.width = imagedata.width;
@@ -388,9 +395,9 @@ class WaylandClient {
                         this.lastCallback = null;
                     });
                 }
-            }
-            if (isOp(x, "xdg_surface", "get_toplevel")) {
-                const toplevelId = x.args.id as WaylandObjectId;
+            });
+            isOp(x, "xdg_surface.get_toplevel", (x) => {
+                const toplevelId = x.args.id;
                 // this.sendMessage(toplevelId, 2, { width: 1920, height: 1080 });
                 this.sendMessageX(toplevelId, "xdg_toplevel.configure", {
                     width: 0,
@@ -402,23 +409,23 @@ class WaylandClient {
                         this.sendMessageX(id, "xdg_surface.configure", { serial: 1 }); // todo
                     }
                 }
-            }
-            if (isOp(x, "xdg_surface", "set_window_geometry")) {
+            });
+            isOp(x, "xdg_surface.set_window_geometry", (x) => {
                 const surfaceId = this.getObject<"xdg_surface">(x.id).data.surface;
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 const canvas = surface.data.canvas;
-                canvas.width = x.args.width as number;
-                canvas.height = x.args.height as number;
+                canvas.width = x.args.width;
+                canvas.height = x.args.height;
                 // todo xy
-            }
-            if (isOp(x, "wl_seat", "get_pointer")) {
-                const pointerId = x.args.id as WaylandObjectId;
+            });
+            isOp(x, "wl_seat.get_pointer", (x) => {
+                const pointerId = x.args.id;
                 this.obj2.pointer = pointerId;
-            }
-            if (isOp(x, "wl_seat", "get_keyboard")) {
-                const keyboardId = x.args.id as WaylandObjectId;
+            });
+            isOp(x, "wl_seat.get_keyboard", (x) => {
+                const keyboardId = x.args.id;
                 this.obj2.keyboard = keyboardId;
-            }
+            });
             if (!useOp) {
                 console.warn("No matching operation found", `${x.proto.name}.${x.op.name}`, x);
             }
@@ -602,7 +609,7 @@ function runApp(execPath: string, args: string[] = []) {
             XDG_SESSION_TYPE: "wayland",
             XDG_RUNTIME_DIR: server.socketDir,
             WAYLAND_DISPLAY: server.socketName,
-            ...(isNaN(xServerNum) ? {} : { DISPLAY: `:${xServerNum}` }),
+            ...(Number.isNaN(xServerNum) ? {} : { DISPLAY: `:${xServerNum}` }),
         },
     });
 
