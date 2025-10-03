@@ -602,11 +602,12 @@ function runApp(execPath: string, args: string[] = []) {
             XDG_SESSION_TYPE: "wayland",
             XDG_RUNTIME_DIR: server.socketDir,
             WAYLAND_DISPLAY: server.socketName,
+            ...(isNaN(xServerNum) ? {} : { DISPLAY: `:${xServerNum}` }),
         },
     });
 
     subprocess.stdout.on("data", (data) => {
-        console.log(`Subprocess stdout: ${data.toString("utf8")}`);
+        console.log(`Subprocess ${execPath} stdout:\n${data.toString("utf8")}`);
     });
 
     subprocess.stderr.on("data", (data) => {
@@ -618,7 +619,7 @@ function runApp(execPath: string, args: string[] = []) {
                 console.error(`Unknown protocol in debug output: ${p}`);
             }
         }
-        console.log(`Subprocess stderr: ${data.toString("utf8")}`);
+        console.log(`Subprocess ${execPath} stderr:\n${data.toString("utf8")}`);
     });
 
     subprocess.on("error", (err) => {
@@ -626,7 +627,7 @@ function runApp(execPath: string, args: string[] = []) {
     });
 
     subprocess.on("exit", (code, signal) => {
-        console.log(`Subprocess exited with code ${code} and signal ${signal}`);
+        console.log(`Subprocess ${execPath} exited with code ${code} and signal ${signal}`);
     });
 }
 
@@ -640,6 +641,8 @@ const waylandProtocolsNameMap = new Map<WaylandName, WaylandProtocol>();
 
 initWaylandProtocols();
 
+let xServerNum = NaN;
+
 const body = pack(document.body);
 
 body.on("pointermove", (e) => {
@@ -650,6 +653,12 @@ body.style({
     background: "#000",
 });
 
+button("self")
+    .on("click", () => {
+        runApp(process.argv[0], process.argv.slice(1));
+    })
+    .addInto();
+
 [
     "google-chrome-stable",
     "wayland-info",
@@ -659,6 +668,7 @@ body.style({
     "weston-simple-egl",
     "weston-editor",
     "weston-clickdot",
+    "glxgears",
 ].forEach((app) => {
     button(app)
         .on("click", () => {
@@ -667,6 +677,21 @@ body.style({
         })
         .addInto();
 });
+
+view()
+    .add(
+        button("xwayland").on("click", () => {
+            for (let i = 0; i < 100; i++) {
+                const socketPath = `/tmp/.X11-unix/X${i}`;
+                if (!fs.existsSync(socketPath)) {
+                    xServerNum = i;
+                    runApp("/usr/bin/xwayland-satellite", [`:${xServerNum}`]);
+                    break;
+                }
+            }
+        }),
+    )
+    .addInto();
 
 const allApps = getDesktopEntries(["zh_CN", "zh", "zh-Hans"]);
 console.log("Found desktop entries:", allApps);
