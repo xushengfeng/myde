@@ -156,26 +156,38 @@ class WaylandClient {
         // 解析并处理客户端消息
         const decoder = new WaylandDecoder(data.buffer, fds);
 
-        const opArray: ParsedMessage[] = [];
+        let useOp = false;
+        function isOp<T extends keyof WaylandRequestObj>(
+            x: ParsedMessage,
+            op: T,
+            f: (x: ParsedMessage & { args: WaylandRequestObj[T] }) => void,
+        ) {
+            const [proto, name] = op.split(".");
+            if (x.proto.name === proto && x.op.name === name) {
+                f(x as ParsedMessage & { args: WaylandRequestObj[T] });
+                useOp = true;
+                return true;
+            }
+            return false;
+        }
 
         console.log(`Parsed data from client ${this.id}:`, data.buffer, fds);
         while (decoder.getRemainingBytes() > 0) {
             const header = decoder.readHeader();
-            const x = getX(this.objects, "request", header.objectId, header.opcode);
-            if (!x) {
+            const _x = getX(this.objects, "request", header.objectId, header.opcode);
+            if (!_x) {
                 console.warn(`Unknown objectId/opcode: ${header.objectId}/${header.opcode}`, data.buffer);
                 return;
             }
-            const args = parseArgs(decoder, x.op.args);
+            const args = parseArgs(decoder, _x.op.args);
             const rest = decoder.final();
             console.log(
-                `Parsed args for ${x.proto.name}#${header.objectId}.${x.op.name}:`,
+                `Parsed args for ${_x.proto.name}#${header.objectId}.${_x.op.name}:`,
                 args,
-                Object.fromEntries(x.op.args.filter((a) => a.interface).map((i) => [i.name, i.interface])),
+                Object.fromEntries(_x.op.args.filter((a) => a.interface).map((i) => [i.name, i.interface])),
             );
             if (rest.length) console.log("rest", rest);
-            opArray.push({ proto: x.proto, op: x.op, args, id: header.objectId });
-            for (const v of Object.values(x.op.args)) {
+            for (const v of Object.values(_x.op.args)) {
                 if (v.type === WaylandArgType.NEW_ID) {
                     const id = args[v.name] as WaylandObjectId;
                     if (v.interface === undefined) continue;
@@ -192,24 +204,8 @@ class WaylandClient {
                     console.log(`Client ${this.id} created ${v.interface} with id ${id}`);
                 }
             }
-        }
 
-        let useOp = false;
-        function isOp<T extends keyof WaylandRequestObj>(
-            x: ParsedMessage,
-            op: T,
-            f: (x: ParsedMessage & { args: WaylandRequestObj[T] }) => void,
-        ) {
-            const [proto, name] = op.split(".");
-            if (x.proto.name === proto && x.op.name === name) {
-                f(x as ParsedMessage & { args: WaylandRequestObj[T] });
-                useOp = true;
-                return true;
-            }
-            return false;
-        }
-
-        for (const x of opArray) {
+            const x = { proto: _x.proto, op: _x.op, args, id: header.objectId };
             isOp(x, "wl_display.sync", (x) => {
                 const callbackId = x.args.callback;
                 this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: callbackId });
