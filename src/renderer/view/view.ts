@@ -385,7 +385,11 @@ class WaylandClient {
 
                 const bufferX = this.getObject<"wl_buffer">(buffer.id);
                 const buffern = new Uint8ClampedArray(bufferX.data.end - bufferX.data.start);
-                fs.readSync(bufferX.data.fd, buffern, bufferX.data.start, buffern.length, 0);
+                try {
+                    fs.readSync(bufferX.data.fd, buffern, bufferX.data.start, buffern.length, 0);
+                } catch (error) {
+                    console.error("Error reading shm buffer:", error);
+                }
                 imagedata.data.set(buffern);
 
                 if (surface.data.damageList?.length) {
