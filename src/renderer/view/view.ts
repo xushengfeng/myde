@@ -245,6 +245,7 @@ class WaylandClient {
                             });
                         }
                         if (p.protocol.name === "wl_seat") {
+                            send(id, "wl_seat.name", { name: "seat0" });
                             const capabilities = [
                                 getEnumValue(p.protocol, "wl_seat.capability", "pointer"),
                                 getEnumValue(p.protocol, "wl_seat.capability", "keyboard"),
