@@ -115,6 +115,7 @@ supportedProtocols.forEach((proto) => {
                     type: arg.$.type as WaylandArgType,
                     interface: arg.$.interface,
                 })),
+                ...(req.$.since && { since: parseInt(req.$.since, 10) }),
             }));
             const event = (iface.event || []).map((evt: any) => ({
                 name: evt.$.name,
@@ -123,6 +124,7 @@ supportedProtocols.forEach((proto) => {
                     type: arg.$.type as WaylandArgType,
                     interface: arg.$.interface,
                 })),
+                ...(evt.$.since && { since: parseInt(evt.$.since, 10) }),
             }));
             const enums = (iface.enum || []).map((enm: any) => ({
                 name: enm.$.name,

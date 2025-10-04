@@ -113,6 +113,7 @@ class WaylandClient {
     id: string;
     socket: USocket;
     objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
+    protoVersions: Map<string, number> = new Map();
     nextId: number; // 客户端本地对象ID
     lastRecive: ParsedMessage | null;
     toSend: Array<() => { objectId: WaylandObjectId; opcode: number; args: Record<string, any>; fds?: number[] }> = [];
@@ -242,6 +243,7 @@ class WaylandClient {
                     return;
                 }
                 this.objects.set(id, { protocol: proto, data: undefined });
+                this.protoVersions.set(proto.name, x.args._version);
                 console.log(`Client ${this.id} bound ${proto.name} to id ${id}`);
 
                 // wl_shm wl_seat wl_output
@@ -255,7 +257,7 @@ class WaylandClient {
                     });
                 }
                 if (proto.name === "wl_seat") {
-                    // this.sendMessageLater(id, "wl_seat.name", { name: "seat0" }); // todo 版本since <!-- Version 2 additions -->
+                    this.sendMessageLater(id, "wl_seat.name", { name: "seat0" });
                     this.sendMessageLater(id, "wl_seat.capabilities", {
                         capabilities: getEnumValue(proto, "wl_seat.capability", ["pointer", "keyboard"]),
                     });
@@ -498,6 +500,17 @@ class WaylandClient {
             args,
         });
         const { op } = p;
+
+        const protoVersion = this.protoVersions.get(p.proto.name);
+        if (protoVersion) {
+            if (p.op.since && protoVersion < p.op.since) {
+                console.warn(
+                    `Protocol version mismatch for ${p.proto.name}.${p.op.name}: ${protoVersion} < ${p.op.since}`,
+                );
+                return;
+            }
+        }
+
         const encoder = new WaylandEncoder();
         encoder.writeHeader(objectId, opcode);
         for (const a of op.args) {
@@ -645,8 +658,8 @@ function parseArgs(decoder: WaylandDecoder, args: WaylandOp["args"]) {
                 break;
             case WaylandArgType.NEW_ID:
                 if (arg.interface === undefined) {
-                    decoder.readString();
-                    decoder.readUint();
+                    parsed._name = decoder.readString();
+                    parsed._version = decoder.readUint();
                 }
                 parsed[arg.name] = decoder.readNewId();
                 break;

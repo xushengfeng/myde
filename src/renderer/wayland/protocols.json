@@ -233,7 +233,8 @@
         },
         {
           "name": "release",
-          "args": []
+          "args": [],
+          "since": 2
         }
       ],
       "event": [
@@ -491,7 +492,8 @@
               "name": "transform",
               "type": "int"
             }
-          ]
+          ],
+          "since": 2
         },
         {
           "name": "set_buffer_scale",
@@ -500,7 +502,8 @@
               "name": "scale",
               "type": "int"
             }
-          ]
+          ],
+          "since": 3
         },
         {
           "name": "damage_buffer",
@@ -521,7 +524,8 @@
               "name": "height",
               "type": "int"
             }
-          ]
+          ],
+          "since": 4
         },
         {
           "name": "offset",
@@ -534,7 +538,8 @@
               "name": "y",
               "type": "int"
             }
-          ]
+          ],
+          "since": 5
         }
       ],
       "event": [
@@ -565,7 +570,8 @@
               "name": "factor",
               "type": "int"
             }
-          ]
+          ],
+          "since": 6
         },
         {
           "name": "preferred_buffer_transform",
@@ -574,7 +580,8 @@
               "name": "transform",
               "type": "uint"
             }
-          ]
+          ],
+          "since": 6
         }
       ],
       "enum": [
@@ -626,7 +633,8 @@
         },
         {
           "name": "release",
-          "args": []
+          "args": [],
+          "since": 5
         }
       ],
       "event": [
@@ -646,7 +654,8 @@
               "name": "name",
               "type": "string"
             }
-          ]
+          ],
+          "since": 2
         }
       ],
       "enum": [
@@ -695,7 +704,8 @@
         },
         {
           "name": "release",
-          "args": []
+          "args": [],
+          "since": 3
         }
       ],
       "event": [
@@ -792,7 +802,8 @@
         },
         {
           "name": "frame",
-          "args": []
+          "args": [],
+          "since": 5
         },
         {
           "name": "axis_source",
@@ -801,7 +812,8 @@
               "name": "axis_source",
               "type": "uint"
             }
-          ]
+          ],
+          "since": 5
         },
         {
           "name": "axis_stop",
@@ -814,7 +826,8 @@
               "name": "axis",
               "type": "uint"
             }
-          ]
+          ],
+          "since": 5
         },
         {
           "name": "axis_discrete",
@@ -827,7 +840,8 @@
               "name": "discrete",
               "type": "int"
             }
-          ]
+          ],
+          "since": 5
         },
         {
           "name": "axis_value120",
@@ -840,7 +854,8 @@
               "name": "value120",
               "type": "int"
             }
-          ]
+          ],
+          "since": 8
         },
         {
           "name": "axis_relative_direction",
@@ -853,7 +868,8 @@
               "name": "direction",
               "type": "uint"
             }
-          ]
+          ],
+          "since": 9
         }
       ],
       "enum": [
@@ -901,7 +917,8 @@
       "request": [
         {
           "name": "release",
-          "args": []
+          "args": [],
+          "since": 3
         }
       ],
       "event": [
@@ -1011,7 +1028,8 @@
               "name": "delay",
               "type": "int"
             }
-          ]
+          ],
+          "since": 4
         }
       ],
       "enum": [
@@ -1038,7 +1056,8 @@
       "request": [
         {
           "name": "release",
-          "args": []
+          "args": [],
+          "since": 3
         }
       ],
       "event": [
@@ -1102,7 +1121,8 @@
         },
         {
           "name": "done",
-          "args": []
+          "args": [],
+          "since": 2
         },
         {
           "name": "scale",
@@ -1111,7 +1131,8 @@
               "name": "factor",
               "type": "int"
             }
-          ]
+          ],
+          "since": 2
         },
         {
           "name": "name",
@@ -1120,7 +1141,8 @@
               "name": "name",
               "type": "string"
             }
-          ]
+          ],
+          "since": 4
         },
         {
           "name": "description",
@@ -1129,7 +1151,8 @@
               "name": "description",
               "type": "string"
             }
-          ]
+          ],
+          "since": 4
         }
       ],
       "enum": [
@@ -1376,7 +1399,8 @@
         },
         {
           "name": "set_reactive",
-          "args": []
+          "args": [],
+          "since": 3
         },
         {
           "name": "set_parent_size",
@@ -1389,7 +1413,8 @@
               "name": "parent_height",
               "type": "int"
             }
-          ]
+          ],
+          "since": 3
         },
         {
           "name": "set_parent_configure",
@@ -1398,7 +1423,8 @@
               "name": "serial",
               "type": "uint"
             }
-          ]
+          ],
+          "since": 3
         }
       ],
       "event": [],
@@ -1722,7 +1748,8 @@
               "name": "height",
               "type": "int"
             }
-          ]
+          ],
+          "since": 4
         },
         {
           "name": "wm_capabilities",
@@ -1731,7 +1758,8 @@
               "name": "capabilities",
               "type": "array"
             }
-          ]
+          ],
+          "since": 5
         }
       ],
       "enum": [
@@ -1820,7 +1848,8 @@
               "name": "token",
               "type": "uint"
             }
-          ]
+          ],
+          "since": 3
         }
       ],
       "event": [
@@ -1856,7 +1885,8 @@
               "name": "token",
               "type": "uint"
             }
-          ]
+          ],
+          "since": 3
         }
       ],
       "enum": [
@@ -2101,7 +2131,8 @@
               "type": "new_id",
               "interface": "zwp_linux_dmabuf_feedback_v1"
             }
-          ]
+          ],
+          "since": 4
         },
         {
           "name": "get_surface_feedback",
@@ -2116,7 +2147,8 @@
               "type": "object",
               "interface": "wl_surface"
             }
-          ]
+          ],
+          "since": 4
         }
       ],
       "event": [
@@ -2144,7 +2176,8 @@
               "name": "modifier_lo",
               "type": "uint"
             }
-          ]
+          ],
+          "since": 3
         }
       ],
       "enum": []
@@ -2231,7 +2264,8 @@
               "name": "flags",
               "type": "uint"
             }
-          ]
+          ],
+          "since": 2
         }
       ],
       "event": [
