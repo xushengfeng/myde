@@ -77,3 +77,13 @@ imagedata.data.set(buffern);
 25.10.03
 
 输入设备可以读取`/dev/input/event0`、`/dev/input/event1`等等，可以用`evtest`来调试。目前还没有写解析，只是用浏览器输入事件转发而已。
+
+---
+
+25.10.04
+
+我大概理解了 sync 的运行方式，当`wl_display.get_registry`，就要回复`wl_registry.global`，当`bind` `wl_shm`时就发送格式等，但`bind` `wl_seat`时，就发送支持设备……因为`bind`有多个，所以需要一个数组暂存发送的数据等待，解析到`sync`时一起发送，最后用`done`结束。
+
+前面提到的`wl_seat`枚举值，Wayland 协议 xml 有个`bitfield`参数，也就是说，我们在获取枚举时，可以让函数自动检测这个参数，允许输入枚举数组，并对他们实施或运算合并。
+
+有些事件是新增的，不兼容旧版本，发送给旧的客户端会报错，xml 协议有个`since`参数记录了这个协议在哪个版本开始新增的，这样我们就可以检测并选择不发送新版本事件。前面提到过`wl_registry.bind`会返回版本。
