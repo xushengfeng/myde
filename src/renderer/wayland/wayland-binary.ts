@@ -14,6 +14,7 @@ export type WaylandObjectId = number & { __brand: "WaylandObjectId" };
 
 export type WaylandOp = {
     name: string;
+    since?: number;
     args: Array<{
         name: string;
         type: WaylandArgType;
@@ -25,5 +26,5 @@ export type WaylandProtocol = {
     version: number;
     request?: Array<WaylandOp>;
     event?: Array<WaylandOp>;
-    enum?: Array<{ name: string; enum: Record<string, number> }>; // [name, value]
+    enum?: Array<{ name: string; enum: Record<string, number>; bitfield?: boolean }>;
 };

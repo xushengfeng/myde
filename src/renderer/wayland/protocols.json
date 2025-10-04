@@ -656,7 +656,8 @@
             "pointer": 1,
             "keyboard": 2,
             "touch": 4
-          }
+          },
+          "bitfield": true
         },
         {
           "name": "error",
@@ -1161,7 +1162,8 @@
           "enum": {
             "current": 1,
             "preferred": 2
-          }
+          },
+          "bitfield": true
         }
       ]
     },
@@ -1445,7 +1447,8 @@
             "flip_y": 8,
             "resize_x": 16,
             "resize_y": 32
-          }
+          },
+          "bitfield": true
         }
       ]
     },
@@ -2065,7 +2068,8 @@
             "hw_clock": 2,
             "hw_completion": 4,
             "zero_copy": 8
-          }
+          },
+          "bitfield": true
         }
       ]
     }
@@ -2266,7 +2270,8 @@
             "y_invert": 1,
             "interlaced": 2,
             "bottom_first": 4
-          }
+          },
+          "bitfield": true
         }
       ]
     },
@@ -2343,7 +2348,8 @@
           "name": "tranche_flags",
           "enum": {
             "scanout": 1
-          }
+          },
+          "bitfield": true
         }
       ]
     }

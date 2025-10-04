@@ -130,6 +130,7 @@ supportedProtocols.forEach((proto) => {
                     // biome-ignore lint/correctness/useParseIntRadix: 像0x开头的字符串需要parseInt自动识别为16进制
                     (enm.entry || []).map((entry: any) => [entry.$.name, parseInt(entry.$.value)]),
                 ),
+                ...(enm.$.bitfield && { bitfield: true }),
             }));
             protocols.push({ name, version, request, event, enum: enums });
         });

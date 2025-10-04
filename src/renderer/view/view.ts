@@ -256,13 +256,8 @@ class WaylandClient {
                 }
                 if (proto.name === "wl_seat") {
                     // this.sendMessageLater(id, "wl_seat.name", { name: "seat0" }); // todo 版本since <!-- Version 2 additions -->
-                    const capabilities = [
-                        getEnumValue(proto, "wl_seat.capability", "pointer"),
-                        getEnumValue(proto, "wl_seat.capability", "keyboard"),
-                    ];
-                    const capabilitiesBitmask = capabilities.reduce((a, b) => a | b, 0);
                     this.sendMessageLater(id, "wl_seat.capabilities", {
-                        capabilities: capabilitiesBitmask,
+                        capabilities: getEnumValue(proto, "wl_seat.capability", ["pointer", "keyboard"]),
                     });
                 }
             });
@@ -676,15 +671,28 @@ function parseArgs(decoder: WaylandDecoder, args: WaylandOp["args"]) {
     return parsed;
 }
 
-function getEnumValue<T extends keyof WaylandEnumObj>(proto: WaylandProtocol, enumName: T, value: WaylandEnumObj[T]) {
+function getEnumValue<T extends keyof WaylandEnumObj>(
+    proto: WaylandProtocol,
+    enumName: T,
+    value: WaylandEnumObj[T] | WaylandEnumObj[T][],
+) {
     if (!proto.enum) throw new Error(`Protocol ${proto.name} has no enums`);
     const [pName, enumN] = enumName.split(".");
     if (pName !== proto.name) throw new Error(`Enum ${enumName} does not belong to protocol ${proto.name}`);
     const e = proto.enum.find((e) => e.name === enumN);
     if (!e) throw new Error(`Enum ${enumN} not found in protocol ${proto.name}`);
-    const entry = e.enum[value];
-    if (entry === undefined) throw new Error(`Value ${value} not found in enum ${enumName}`);
-    return entry;
+    if (Array.isArray(value)) {
+        if (e.bitfield) {
+            const b = value.map((i) => e.enum[i]).reduce((acc, curr) => acc | curr, 0);
+            return b;
+        } else {
+            throw new Error(`Enum ${enumName} is not a bitfield`);
+        }
+    } else {
+        const entry = e.enum[value];
+        if (entry === undefined) throw new Error(`Value ${value} not found in enum ${enumName}`);
+        return entry;
+    }
 }
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
