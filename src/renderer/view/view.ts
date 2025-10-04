@@ -478,6 +478,15 @@ class WaylandClient {
                     [fd],
                 );
 
+                const r = fs.statSync("/dev/dri/card1"); // todo
+                const buffer = Buffer.alloc(8);
+                buffer.writeBigUInt64LE(BigInt(r.rdev));
+                const a = Array.from(new Uint8Array(buffer.buffer));
+                this.sendMessageLater(feedbackId, "zwp_linux_dmabuf_feedback_v1.main_device", { device: a });
+                this.sendMessageLater(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_target_device", {
+                    device: a,
+                });
+
                 this.sendMessageLater(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
             });
 

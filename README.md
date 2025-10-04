@@ -16,4 +16,4 @@
 
 当经过多层抽象后，就可以用 web 技术来控制窗口。无论是堆叠还是平铺，桌面还是手机 ui，都可以简单地通过 web api 自定义。
 
-目前可以显示的窗口：`weston-flower`、`weston-simple-damage`、`weston-simple-shm`
+目前可以显示的窗口：`weston-flower`、`weston-simple-damage`、`weston-simple-shm`、`weston-simple-egl`、`weston-clickdot`
