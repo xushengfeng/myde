@@ -115,8 +115,7 @@ class WaylandClient {
     objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
     nextId: number; // 客户端本地对象ID
     lastRecive: ParsedMessage | null;
-    toSend: Array<() => { objectId: WaylandObjectId; opcode: number; args: Record<string, any>; fds?: number[] }[]> =
-        [];
+    toSend: Array<() => { objectId: WaylandObjectId; opcode: number; args: Record<string, any>; fds?: number[] }> = [];
     lastCallback: WaylandObjectId | null;
     obj2: Partial<{
         pointer: WaylandObjectId;
@@ -213,50 +212,26 @@ class WaylandClient {
                 const callbackId = x.args.callback;
                 this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: callbackId });
 
-                const msgs = this.toSend.shift();
+                const msgs = this.toSend;
 
-                for (const msg of msgs?.() || []) {
+                for (const msgf of msgs || []) {
+                    const msg = msgf();
                     this.sendMessage(msg.objectId, msg.opcode, msg.args, msg.fds);
                 }
+
+                this.toSend = [];
 
                 this.sendMessageX(callbackId, "wl_callback.done", { callback_data: 0 });
             });
             isOp(x, "wl_display.get_registry", (x) => {
                 const registryId = x.args.registry;
-                this.sendMessageLater((send) => {
-                    for (const [i, proto] of waylandProtocolsNameMap) {
-                        send(registryId, "wl_registry.global", {
-                            name: i,
-                            interface: proto.name,
-                            version: proto.version,
-                        });
-                    }
-                });
-
-                // wl_shm wl_seat wl_output
-                this.sendMessageLater((send) => {
-                    for (const [id, p] of this.objects) {
-                        if (p.protocol.name === "wl_shm") {
-                            send(id, "wl_shm.format", {
-                                format: getEnumValue(p.protocol, "wl_shm.format", "argb8888"),
-                            });
-                            send(id, "wl_shm.format", {
-                                format: getEnumValue(p.protocol, "wl_shm.format", "xrgb8888"),
-                            });
-                        }
-                        if (p.protocol.name === "wl_seat") {
-                            send(id, "wl_seat.name", { name: "seat0" });
-                            const capabilities = [
-                                getEnumValue(p.protocol, "wl_seat.capability", "pointer"),
-                                getEnumValue(p.protocol, "wl_seat.capability", "keyboard"),
-                            ];
-                            const capabilitiesBitmask = capabilities.reduce((a, b) => a | b, 0);
-                            send(id, "wl_seat.capabilities", {
-                                capabilities: capabilitiesBitmask,
-                            });
-                        }
-                    }
-                });
+                for (const [i, proto] of waylandProtocolsNameMap) {
+                    this.sendMessageLater(registryId, "wl_registry.global", {
+                        name: i,
+                        interface: proto.name,
+                        version: proto.version,
+                    });
+                }
             });
             isOp(x, "wl_registry.bind", (x) => {
                 const name = x.args.name as WaylandName;
@@ -268,6 +243,28 @@ class WaylandClient {
                 }
                 this.objects.set(id, { protocol: proto, data: undefined });
                 console.log(`Client ${this.id} bound ${proto.name} to id ${id}`);
+
+                // wl_shm wl_seat wl_output
+
+                if (proto.name === "wl_shm") {
+                    this.sendMessageLater(id, "wl_shm.format", {
+                        format: getEnumValue(proto, "wl_shm.format", "argb8888"),
+                    });
+                    this.sendMessageLater(id, "wl_shm.format", {
+                        format: getEnumValue(proto, "wl_shm.format", "xrgb8888"),
+                    });
+                }
+                if (proto.name === "wl_seat") {
+                    // this.sendMessageLater(id, "wl_seat.name", { name: "seat0" }); // todo 版本since <!-- Version 2 additions -->
+                    const capabilities = [
+                        getEnumValue(proto, "wl_seat.capability", "pointer"),
+                        getEnumValue(proto, "wl_seat.capability", "keyboard"),
+                    ];
+                    const capabilitiesBitmask = capabilities.reduce((a, b) => a | b, 0);
+                    this.sendMessageLater(id, "wl_seat.capabilities", {
+                        capabilities: capabilitiesBitmask,
+                    });
+                }
             });
             isOp(x, "wl_shm.create_pool", (x) => {
                 const fd = x.args.fd;
@@ -434,11 +431,9 @@ class WaylandClient {
             isOp(x, "wl_seat.get_keyboard", (x) => {
                 const keyboardId = x.args.id;
                 this.obj2.keyboard = keyboardId;
-                this.sendMessageLater((send) => {
-                    send(keyboardId, "wl_keyboard.repeat_info", {
-                        rate: 25,
-                        delay: 600,
-                    });
+                this.sendMessageLater(keyboardId, "wl_keyboard.repeat_info", {
+                    rate: 25,
+                    delay: 600,
                 });
             });
 
@@ -453,7 +448,7 @@ class WaylandClient {
                 const tmpPath = `/dev/shm/dmabuf-format-table-${crypto.randomUUID()}`;
                 const fd = fs.openSync(tmpPath, "w+");
                 fs.writeSync(fd, new Uint8Array(formatTable.buffer));
-                this.sendMessageX(
+                this.sendMessageLater(
                     feedbackId,
                     "zwp_linux_dmabuf_feedback_v1.format_table",
                     {
@@ -463,7 +458,7 @@ class WaylandClient {
                     [fd],
                 );
 
-                this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
+                this.sendMessageLater(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
             });
 
             if (!useOp) {
@@ -480,23 +475,21 @@ class WaylandClient {
     ) {
         this.sendMessage(objectId, WaylandEventOpcode[op.replace(".", "__")], args, fds);
     }
-    private sendMessageLater(
-        f: (
-            send: <T extends keyof WaylandEventObj>(
-                objectId: WaylandObjectId,
-                op: T,
-                args: WaylandEventObj[T],
-                fds?: number[],
-            ) => void,
-        ) => void,
+    private sendMessageLater<T extends keyof WaylandEventObj>(
+        objectId: WaylandObjectId,
+        op: T,
+        args: WaylandEventObj[T],
+        fds?: number[],
     ) {
-        const m: ReturnType<(typeof this.toSend)[number]> = [];
+        // const m: ReturnType<(typeof this.toSend)[number]> = [];
         // 这里用函数是因为等待对象注册，等到sync时再调用就有值了
         this.toSend.push(() => {
-            f((objectId, op, args, fds) => {
-                m.push({ objectId, opcode: WaylandEventOpcode[op.replace(".", "__")], args, fds });
-            });
-            return m;
+            return {
+                objectId,
+                opcode: WaylandEventOpcode[op.replace(".", "__")],
+                args,
+                fds,
+            };
         });
     }
     private sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>, fds?: number[]) {
