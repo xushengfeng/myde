@@ -536,8 +536,11 @@ class WaylandClient {
                     encoder.writeArray(new ArrayBuffer(argValue));
                     break;
                 case WaylandArgType.FD:
-                    // 这里假设FD是通过某种方式传递的，我们用一个占位符
-                    break; // 占位符，实际实现中需要处理FD传递
+                    if (!fds || !fds.length) {
+                        console.error("No FD provided for sending message with FD argument");
+                        break;
+                    }
+                    break;
                 default:
                     break;
             }
