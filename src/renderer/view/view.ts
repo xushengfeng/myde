@@ -29,7 +29,7 @@ import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
 
 import { button, ele, image, pack, txt, view } from "dkh-ui";
 import { InputEventCodes } from "../input_codes/types";
-import { createFormatTableBuffer } from "../wayland/dma-buf";
+import { createFormatTableBuffer, DRM_FORMAT } from "../wayland/dma-buf";
 
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
 
@@ -464,7 +464,10 @@ class WaylandClient {
             isOp(x, "zwp_linux_dmabuf_v1.get_default_feedback", (x) => {
                 const feedbackId = x.args.id;
 
-                const formatTable = createFormatTableBuffer([{ format: 0x34325258, modifier: 0n }]);
+                const formatTable = createFormatTableBuffer([
+                    { format: DRM_FORMAT.DRM_FORMAT_ARGB8888, modifier: 0n },
+                    { format: DRM_FORMAT.DRM_FORMAT_XRGB8888, modifier: 0n },
+                ]);
                 const tmpPath = `/dev/shm/dmabuf-format-table-${crypto.randomUUID()}`;
                 const fd = fs.openSync(tmpPath, "w+");
                 fs.writeSync(fd, new Uint8Array(formatTable.buffer));
@@ -848,11 +851,14 @@ button("self")
 
 [
     "google-chrome-stable",
+    "firefox-nightly",
     "wayland-info",
     "weston-flower",
     "weston-simple-damage",
     "weston-simple-shm",
     "weston-simple-egl",
+    "weston-simple-dmabuf-egl",
+    "weston-simple-dmabuf-feedback",
     "weston-editor",
     "weston-clickdot",
     "glxgears",
@@ -872,7 +878,7 @@ view()
                 const socketPath = `/tmp/.X11-unix/X${i}`;
                 if (!fs.existsSync(socketPath)) {
                     xServerNum = i;
-                    runApp("/usr/bin/xwayland-satellite", [`:${xServerNum}`]);
+                    runApp("/usr/bin/Xwayland", [`:${xServerNum}`]);
                     break;
                 }
             }
