@@ -114,10 +114,12 @@ class WaylandClient {
     socket: USocket;
     objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
     protoVersions: Map<string, number> = new Map();
-    nextId: number; // 客户端本地对象ID
-    lastRecive: ParsedMessage | null;
-    toSend: Array<{ objectId: WaylandObjectId; opcode: number; args: Record<string, any>; fds?: number[] }> = [];
-    lastCallback: WaylandObjectId | null;
+    queueMap = new Map<WaylandObjectId, number>();
+    toSend: Record<
+        number,
+        Array<{ objectId: WaylandObjectId; opcode: number; args: Record<string, any>; fds?: number[] }>
+    > = {};
+    lastCallback: WaylandObjectId | null; // todo 移除
     obj2: Partial<{
         pointer: WaylandObjectId;
         keyboard: WaylandObjectId;
@@ -128,8 +130,6 @@ class WaylandClient {
         this.id = id;
         this.socket = socket;
         this.objects = new Map();
-        this.nextId = 1;
-        this.lastRecive = null;
         this.lastCallback = null;
         this.obj2 = { surfaces: [] };
         socket.on("readable", () => {
@@ -174,6 +174,8 @@ class WaylandClient {
             return false;
         }
 
+        let thisMessageQueueId: number | undefined; // 目前任务一串消息的队列是相同的
+
         console.log(`Parsed data from client ${this.id}:`, data.buffer, fds);
         while (decoder.getRemainingBytes() > 0) {
             const header = decoder.readHeader();
@@ -190,6 +192,14 @@ class WaylandClient {
                 Object.fromEntries(_x.op.args.filter((a) => a.interface).map((i) => [i.name, i.interface])),
             );
             if (rest.length) console.log("rest", rest);
+
+            if (thisMessageQueueId === undefined && header.objectId !== 1) {
+                thisMessageQueueId = this.queueMap.get(header.objectId);
+                if (thisMessageQueueId !== undefined) {
+                    console.log("Found thisMessageQueueId", thisMessageQueueId);
+                }
+            }
+
             for (const v of Object.values(_x.op.args)) {
                 if (v.type === WaylandArgType.NEW_ID) {
                     const id = args[v.name] as WaylandObjectId;
@@ -203,6 +213,11 @@ class WaylandClient {
                         console.error("NEW_ID argument has unknown interface:", v.interface);
                         continue;
                     }
+                    const queueId = this.queueMap.get(header.objectId);
+                    if (queueId) {
+                        this.queueMap.set(id, queueId);
+                        console.log("Set queueId for new object", id, queueId);
+                    }
                     this.objects.set(id, { protocol: _interface, data: undefined });
                     console.log(`Client ${this.id} created ${v.interface} with id ${id}`);
                 }
@@ -213,7 +228,11 @@ class WaylandClient {
                 const callbackId = x.args.callback;
                 this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: callbackId });
 
-                const msgs = this.toSend;
+                if (thisMessageQueueId === undefined) {
+                    console.log(this.toSend, this.queueMap);
+                    throw new Error("thisMessageQueueId is undefined");
+                }
+                const msgs = this.toSend[thisMessageQueueId] || [];
 
                 for (const msg of msgs || []) {
                     this.sendMessage(msg.objectId, msg.opcode, msg.args, msg.fds);
@@ -225,6 +244,9 @@ class WaylandClient {
             });
             isOp(x, "wl_display.get_registry", (x) => {
                 const registryId = x.args.registry;
+                this.queueMap.set(registryId, registryId);
+                thisMessageQueueId = registryId;
+                console.log("Set queueId", registryId);
                 for (const [i, proto] of waylandProtocolsNameMap) {
                     this.sendMessageLater(registryId, "wl_registry.global", {
                         name: i,
@@ -242,6 +264,8 @@ class WaylandClient {
                     return;
                 }
                 this.objects.set(id, { protocol: proto, data: undefined });
+                this.queueMap.set(id, x.id);
+                console.log("Set queueId for new object", id, x.id);
                 this.protoVersions.set(proto.name, x.args._version);
                 console.log(`Client ${this.id} bound ${proto.name} to id ${id}`);
 
@@ -477,7 +501,13 @@ class WaylandClient {
         args: WaylandEventObj[T],
         fds?: number[],
     ) {
-        this.toSend.push({
+        const queueId = this.queueMap.get(objectId);
+        if (queueId === undefined) {
+            console.error("Cannot find queue for objectId", objectId);
+            return;
+        }
+        if (!this.toSend[queueId]) this.toSend[queueId] = [];
+        this.toSend[queueId].push({
             objectId,
             opcode: WaylandEventOpcode[op.replace(".", "__")],
             args,
@@ -490,8 +520,8 @@ class WaylandClient {
             console.error("Cannot find protocol for sending message", objectId, opcode);
             return;
         }
-        console.log(`Sending message to client ${this.id}:`, {
-            p: `${p.proto.name}.${p.op.name}`,
+        console.log(`q${this.queueMap.get(objectId) ?? 0}-> ${this.id}:`, {
+            p: `${p.proto.name}#${objectId}.${p.op.name}`,
             args,
         });
         const { op } = p;
