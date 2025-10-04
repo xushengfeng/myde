@@ -27,7 +27,7 @@ import { WaylandEncoder } from "../wayland/wayland-encoder";
 
 import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
 
-import { button, ele, image, pack, txt, view, initDKH, input } from "dkh-ui";
+import { button, ele, image, pack, txt, view, initDKH, input, addStyle } from "dkh-ui";
 import { InputEventCodes } from "../input_codes/types";
 import { createFormatTableBuffer, DRM_FORMAT } from "../wayland/dma-buf";
 
@@ -831,12 +831,31 @@ initWaylandProtocols();
 
 let xServerNum = NaN;
 
+const mouseEL = view().addInto().style({
+    position: "fixed",
+    width: "10px",
+    height: "10px",
+    background: "rgba(0,0,0,0.5)",
+    outline: "1px solid #fff",
+    borderRadius: "50%",
+    pointerEvents: "none",
+    top: "0px",
+    left: "0px",
+    transform: "translate(-50%, -50%)",
+    zIndex: 9999,
+});
+
+function mouseMove(x: number, y: number) {
+    mouseEL.style({ top: `${y}px`, left: `${x}px` });
+    sendPointerEvent("move", new PointerEvent("pointermove", { clientX: x, clientY: y }));
+}
+
 initDKH({ pureStyle: true });
 
 const body = pack(document.body);
 
 body.on("pointermove", (e) => {
-    sendPointerEvent("move", e);
+    mouseMove(e.x, e.y);
 });
 body.on("pointerdown", (e) => {
     sendPointerEvent("down", e);
@@ -848,6 +867,13 @@ body.on("pointerup", (e) => {
 body.style({
     background: 'url("file:///usr/share/wallpapers/ScarletTree/contents/images/5120x2880.png") center/cover no-repeat',
     height: "100vh",
+    cursor: "none",
+});
+
+addStyle({
+    "*": {
+        cursor: "none !important",
+    },
 });
 
 button("self")
