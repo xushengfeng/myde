@@ -27,7 +27,7 @@ import { WaylandEncoder } from "../wayland/wayland-encoder";
 
 import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
 
-import { button, ele, image, pack, txt, view } from "dkh-ui";
+import { button, ele, image, pack, txt, view, initDKH, input } from "dkh-ui";
 import { InputEventCodes } from "../input_codes/types";
 import { createFormatTableBuffer, DRM_FORMAT } from "../wayland/dma-buf";
 
@@ -827,6 +827,8 @@ initWaylandProtocols();
 
 let xServerNum = NaN;
 
+initDKH({ pureStyle: true });
+
 const body = pack(document.body);
 
 body.on("pointermove", (e) => {
@@ -840,7 +842,8 @@ body.on("pointerup", (e) => {
 });
 
 body.style({
-    background: "#000",
+    background: 'url("file:///usr/share/wallpapers/ScarletTree/contents/images/5120x2880.png") center/cover no-repeat',
+    height: "100vh",
 });
 
 button("self")
@@ -849,27 +852,40 @@ button("self")
     })
     .addInto();
 
-[
-    "google-chrome-stable",
-    "firefox-nightly",
-    "wayland-info",
-    "weston-flower",
-    "weston-simple-damage",
-    "weston-simple-shm",
-    "weston-simple-egl",
-    "weston-simple-dmabuf-egl",
-    "weston-simple-dmabuf-feedback",
-    "weston-editor",
-    "weston-clickdot",
-    "glxgears",
-].forEach((app) => {
-    button(app)
-        .on("click", () => {
-            const execPath = `/usr/bin/${app}`;
-            runApp(execPath);
-        })
-        .addInto();
-});
+view()
+    .add(
+        [
+            "google-chrome-stable",
+            "firefox-nightly",
+            "wayland-info",
+            "weston-flower",
+            "weston-simple-damage",
+            "weston-simple-shm",
+            "weston-simple-egl",
+            "weston-simple-dmabuf-egl",
+            "weston-simple-dmabuf-feedback",
+            "weston-editor",
+            "weston-clickdot",
+            "glxgears",
+        ].map((app) =>
+            button(app)
+                .style({ padding: "4px 8px", background: "#fff" })
+                .on("click", () => {
+                    const execPath = `/usr/bin/${app}`;
+                    runApp(execPath);
+                }),
+        ),
+    )
+    .addInto();
+
+view()
+    .add(
+        input().on("change", (e, el) => {
+            const command = el.gv;
+            runApp(`/usr/bin/${command}`);
+        }),
+    )
+    .addInto();
 
 view()
     .add(

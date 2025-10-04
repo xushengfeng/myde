@@ -19,7 +19,7 @@
     "license": "GPL-3.0",
     "dependencies": {
         "@xushengfeng/usocket": "^1.1.1",
-        "dkh-ui": "^0.11.0",
+        "dkh-ui": "^0.14.2",
         "ini": "^5.0.0",
         "xml2js": "^0.6.2"
     },
