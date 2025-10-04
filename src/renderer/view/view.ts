@@ -116,7 +116,7 @@ class WaylandClient {
     protoVersions: Map<string, number> = new Map();
     nextId: number; // 客户端本地对象ID
     lastRecive: ParsedMessage | null;
-    toSend: Array<() => { objectId: WaylandObjectId; opcode: number; args: Record<string, any>; fds?: number[] }> = [];
+    toSend: Array<{ objectId: WaylandObjectId; opcode: number; args: Record<string, any>; fds?: number[] }> = [];
     lastCallback: WaylandObjectId | null;
     obj2: Partial<{
         pointer: WaylandObjectId;
@@ -215,8 +215,7 @@ class WaylandClient {
 
                 const msgs = this.toSend;
 
-                for (const msgf of msgs || []) {
-                    const msg = msgf();
+                for (const msg of msgs || []) {
                     this.sendMessage(msg.objectId, msg.opcode, msg.args, msg.fds);
                 }
 
@@ -478,15 +477,11 @@ class WaylandClient {
         args: WaylandEventObj[T],
         fds?: number[],
     ) {
-        // const m: ReturnType<(typeof this.toSend)[number]> = [];
-        // 这里用函数是因为等待对象注册，等到sync时再调用就有值了
-        this.toSend.push(() => {
-            return {
-                objectId,
-                opcode: WaylandEventOpcode[op.replace(".", "__")],
-                args,
-                fds,
-            };
+        this.toSend.push({
+            objectId,
+            opcode: WaylandEventOpcode[op.replace(".", "__")],
+            args,
+            fds,
         });
     }
     private sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>, fds?: number[]) {
