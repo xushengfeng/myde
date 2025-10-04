@@ -64,10 +64,10 @@ export class WaylandEncoder {
         this.writeUint(0); // 占位，实际由接收方填充
     }
 
-    writeArray(data: ArrayBuffer): void {
+    writeArray(data: Uint8Array): void {
         this.writeUint(data.byteLength);
         this.ensureCapacity(data.byteLength);
-        new Uint8Array(this.buffer, this.offset).set(new Uint8Array(data));
+        new Uint8Array(this.buffer, this.offset).set(data);
         this.offset += data.byteLength;
 
         // 数组后需要填充到4字节对齐

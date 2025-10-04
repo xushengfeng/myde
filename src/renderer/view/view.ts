@@ -174,7 +174,7 @@ class WaylandClient {
             return false;
         }
 
-        let thisMessageQueueId: number | undefined; // 目前任务一串消息的队列是相同的
+        let theMessageQueueId: number | undefined; // 目前任务一串消息的队列是相同的
 
         console.log(`Parsed data from client ${this.id}:`, data.buffer, fds);
         while (decoder.getRemainingBytes() > 0) {
@@ -193,10 +193,10 @@ class WaylandClient {
             );
             if (rest.length) console.log("rest", rest);
 
-            if (thisMessageQueueId === undefined && header.objectId !== 1) {
-                thisMessageQueueId = this.queueMap.get(header.objectId);
-                if (thisMessageQueueId !== undefined) {
-                    console.log("Found thisMessageQueueId", thisMessageQueueId);
+            if (theMessageQueueId === undefined && header.objectId !== 1) {
+                theMessageQueueId = this.queueMap.get(header.objectId);
+                if (theMessageQueueId !== undefined) {
+                    console.log("Found thisMessageQueueId", theMessageQueueId);
                 }
             }
 
@@ -228,11 +228,11 @@ class WaylandClient {
                 const callbackId = x.args.callback;
                 this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: callbackId });
 
-                if (thisMessageQueueId === undefined) {
+                if (theMessageQueueId === undefined) {
                     console.log(this.toSend, this.queueMap);
                     throw new Error("thisMessageQueueId is undefined");
                 }
-                const msgs = this.toSend[thisMessageQueueId] || [];
+                const msgs = this.toSend[theMessageQueueId] || [];
 
                 for (const msg of msgs || []) {
                     this.sendMessage(msg.objectId, msg.opcode, msg.args, msg.fds);
@@ -245,7 +245,7 @@ class WaylandClient {
             isOp(x, "wl_display.get_registry", (x) => {
                 const registryId = x.args.registry;
                 this.queueMap.set(registryId, registryId);
-                thisMessageQueueId = registryId;
+                theMessageQueueId = registryId;
                 console.log("Set queueId", registryId);
                 for (const [i, proto] of waylandProtocolsNameMap) {
                     this.sendMessageLater(registryId, "wl_registry.global", {
@@ -520,10 +520,6 @@ class WaylandClient {
             console.error("Cannot find protocol for sending message", objectId, opcode);
             return;
         }
-        console.log(`q${this.queueMap.get(objectId) ?? 0}-> ${this.id}:`, {
-            p: `${p.proto.name}#${objectId}.${p.op.name}`,
-            args,
-        });
         const { op } = p;
 
         const protoVersion = this.protoVersions.get(p.proto.name);
@@ -563,7 +559,7 @@ class WaylandClient {
                     encoder.writeNewId(a.interface!, 1);
                     break;
                 case WaylandArgType.ARRAY:
-                    encoder.writeArray(new ArrayBuffer(argValue));
+                    encoder.writeArray(new Uint8Array(argValue));
                     break;
                 case WaylandArgType.FD:
                     if (!fds || !fds.length) {
@@ -576,6 +572,14 @@ class WaylandClient {
             }
         }
         const x = encoder.finalizeMessage();
+
+        console.log(`q${this.queueMap.get(objectId) ?? 0}-> ${this.id}:`, {
+            p: `${p.proto.name}#${objectId}.${p.op.name}`,
+            args,
+            fds,
+            data: x.data,
+        });
+
         this.socket.write({
             data: Buffer.from(x.data),
             fds: fds || [],
