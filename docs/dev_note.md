@@ -87,3 +87,13 @@ imagedata.data.set(buffern);
 前面提到的`wl_seat`枚举值，Wayland 协议 xml 有个`bitfield`参数，也就是说，我们在获取枚举时，可以让函数自动检测这个参数，允许输入枚举数组，并对他们实施或运算合并。
 
 有些事件是新增的，不兼容旧版本，发送给旧的客户端会报错，xml 协议有个`since`参数记录了这个协议在哪个版本开始新增的，这样我们就可以检测并选择不发送新版本事件。前面提到过`wl_registry.bind`会返回版本。
+
+---
+
+25.10.05
+
+关于文本输入，普通按键输入使用`wl_keyboard.key`，要输入中文等使用 text_input。如果是输入法与合成器交互，需要用 input_method。
+
+text_input 现在有`text-input-unstable-v1`和`text-input-unstable-v3`。
+
+input_method 有 v1 和 v2。

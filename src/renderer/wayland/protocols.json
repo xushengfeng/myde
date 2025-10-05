@@ -2387,5 +2387,603 @@
         }
       ]
     }
+  ],
+  "text-input-unstable-v3": [
+    {
+      "name": "zwp_text_input_v3",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "enable",
+          "args": []
+        },
+        {
+          "name": "disable",
+          "args": []
+        },
+        {
+          "name": "set_surrounding_text",
+          "args": [
+            {
+              "name": "text",
+              "type": "string"
+            },
+            {
+              "name": "cursor",
+              "type": "int"
+            },
+            {
+              "name": "anchor",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "set_text_change_cause",
+          "args": [
+            {
+              "name": "cause",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "set_content_type",
+          "args": [
+            {
+              "name": "hint",
+              "type": "uint"
+            },
+            {
+              "name": "purpose",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "set_cursor_rectangle",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            },
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "commit",
+          "args": []
+        }
+      ],
+      "event": [
+        {
+          "name": "enter",
+          "args": [
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            }
+          ]
+        },
+        {
+          "name": "leave",
+          "args": [
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            }
+          ]
+        },
+        {
+          "name": "preedit_string",
+          "args": [
+            {
+              "name": "text",
+              "type": "string"
+            },
+            {
+              "name": "cursor_begin",
+              "type": "int"
+            },
+            {
+              "name": "cursor_end",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "commit_string",
+          "args": [
+            {
+              "name": "text",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "delete_surrounding_text",
+          "args": [
+            {
+              "name": "before_length",
+              "type": "uint"
+            },
+            {
+              "name": "after_length",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "done",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "change_cause",
+          "enum": {
+            "input_method": 0,
+            "other": 1
+          }
+        },
+        {
+          "name": "content_hint",
+          "enum": {
+            "none": 0,
+            "completion": 1,
+            "spellcheck": 2,
+            "auto_capitalization": 4,
+            "lowercase": 8,
+            "uppercase": 16,
+            "titlecase": 32,
+            "hidden_text": 64,
+            "sensitive_data": 128,
+            "latin": 256,
+            "multiline": 512
+          },
+          "bitfield": true
+        },
+        {
+          "name": "content_purpose",
+          "enum": {
+            "normal": 0,
+            "alpha": 1,
+            "digits": 2,
+            "number": 3,
+            "phone": 4,
+            "url": 5,
+            "email": 6,
+            "name": 7,
+            "password": 8,
+            "pin": 9,
+            "date": 10,
+            "time": 11,
+            "datetime": 12,
+            "terminal": 13
+          }
+        }
+      ]
+    },
+    {
+      "name": "zwp_text_input_manager_v3",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "get_text_input",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "zwp_text_input_v3"
+            },
+            {
+              "name": "seat",
+              "type": "object",
+              "interface": "wl_seat"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": []
+    }
+  ],
+  "text-input-unstable-v1": [
+    {
+      "name": "zwp_text_input_v1",
+      "version": 1,
+      "request": [
+        {
+          "name": "activate",
+          "args": [
+            {
+              "name": "seat",
+              "type": "object",
+              "interface": "wl_seat"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            }
+          ]
+        },
+        {
+          "name": "deactivate",
+          "args": [
+            {
+              "name": "seat",
+              "type": "object",
+              "interface": "wl_seat"
+            }
+          ]
+        },
+        {
+          "name": "show_input_panel",
+          "args": []
+        },
+        {
+          "name": "hide_input_panel",
+          "args": []
+        },
+        {
+          "name": "reset",
+          "args": []
+        },
+        {
+          "name": "set_surrounding_text",
+          "args": [
+            {
+              "name": "text",
+              "type": "string"
+            },
+            {
+              "name": "cursor",
+              "type": "uint"
+            },
+            {
+              "name": "anchor",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "set_content_type",
+          "args": [
+            {
+              "name": "hint",
+              "type": "uint"
+            },
+            {
+              "name": "purpose",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "set_cursor_rectangle",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            },
+            {
+              "name": "width",
+              "type": "int"
+            },
+            {
+              "name": "height",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "set_preferred_language",
+          "args": [
+            {
+              "name": "language",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "commit_state",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "invoke_action",
+          "args": [
+            {
+              "name": "button",
+              "type": "uint"
+            },
+            {
+              "name": "index",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "event": [
+        {
+          "name": "enter",
+          "args": [
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            }
+          ]
+        },
+        {
+          "name": "leave",
+          "args": []
+        },
+        {
+          "name": "modifiers_map",
+          "args": [
+            {
+              "name": "map",
+              "type": "array"
+            }
+          ]
+        },
+        {
+          "name": "input_panel_state",
+          "args": [
+            {
+              "name": "state",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "preedit_string",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "text",
+              "type": "string"
+            },
+            {
+              "name": "commit",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "preedit_styling",
+          "args": [
+            {
+              "name": "index",
+              "type": "uint"
+            },
+            {
+              "name": "length",
+              "type": "uint"
+            },
+            {
+              "name": "style",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "preedit_cursor",
+          "args": [
+            {
+              "name": "index",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "commit_string",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "text",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "cursor_position",
+          "args": [
+            {
+              "name": "index",
+              "type": "int"
+            },
+            {
+              "name": "anchor",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "delete_surrounding_text",
+          "args": [
+            {
+              "name": "index",
+              "type": "int"
+            },
+            {
+              "name": "length",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "keysym",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "time",
+              "type": "uint"
+            },
+            {
+              "name": "sym",
+              "type": "uint"
+            },
+            {
+              "name": "state",
+              "type": "uint"
+            },
+            {
+              "name": "modifiers",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "language",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "language",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "text_direction",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "direction",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "content_hint",
+          "enum": {
+            "none": 0,
+            "default": 7,
+            "password": 192,
+            "auto_completion": 1,
+            "auto_correction": 2,
+            "auto_capitalization": 4,
+            "lowercase": 8,
+            "uppercase": 16,
+            "titlecase": 32,
+            "hidden_text": 64,
+            "sensitive_data": 128,
+            "latin": 256,
+            "multiline": 512
+          },
+          "bitfield": true
+        },
+        {
+          "name": "content_purpose",
+          "enum": {
+            "normal": 0,
+            "alpha": 1,
+            "digits": 2,
+            "number": 3,
+            "phone": 4,
+            "url": 5,
+            "email": 6,
+            "name": 7,
+            "password": 8,
+            "date": 9,
+            "time": 10,
+            "datetime": 11,
+            "terminal": 12
+          }
+        },
+        {
+          "name": "preedit_style",
+          "enum": {
+            "default": 0,
+            "none": 1,
+            "active": 2,
+            "inactive": 3,
+            "highlight": 4,
+            "underline": 5,
+            "selection": 6,
+            "incorrect": 7
+          }
+        },
+        {
+          "name": "text_direction",
+          "enum": {
+            "auto": 0,
+            "ltr": 1,
+            "rtl": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "zwp_text_input_manager_v1",
+      "version": 1,
+      "request": [
+        {
+          "name": "create_text_input",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "zwp_text_input_v1"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": []
+    }
   ]
 }

@@ -58,6 +58,20 @@ const supportedProtocols: Array<{ name: string; interfaces: Array<{ name: string
             { name: "zwp_linux_dmabuf_feedback_v1", version: 5 },
         ],
     },
+    {
+        name: "text-input-unstable-v3",
+        interfaces: [
+            { name: "zwp_text_input_v3", version: 1 },
+            { name: "zwp_text_input_manager_v3", version: 1 },
+        ],
+    },
+    {
+        name: "text-input-unstable-v1",
+        interfaces: [
+            { name: "zwp_text_input_v1", version: 1 },
+            { name: "zwp_text_input_manager_v1", version: 1 },
+        ],
+    },
 ];
 
 // 支持遍历 supportedProtocols，按 name 读取对应 xml 文件并处理
