@@ -118,6 +118,8 @@ class WaylandClient {
     obj2: Partial<{
         pointer: WaylandObjectId;
         keyboard: WaylandObjectId;
+        textInput: { focus: WaylandObjectId | null; m: Map<WaylandObjectId, { focus: boolean }> };
+        serial: number;
     }> & {
         surfaces: { id: WaylandObjectId; el: HTMLCanvasElement }[];
     } & Record<string, any>;
@@ -424,6 +426,27 @@ class WaylandClient {
                 //     rate: 25,
                 //     delay: 600,
                 // });
+
+                const keymapStr = fs.readFileSync(path.join(__dirname, "../../", "script/xcb", "x.xkb"), "utf-8");
+                const tmpPath = `/dev/shm/keymap-${crypto.randomUUID()}`;
+                const fd = fs.openSync(tmpPath, "w+");
+                const data = new Uint8Array(Buffer.from(keymapStr));
+                fs.writeFileSync(fd, data);
+
+                this.sendMessageX(
+                    keyboardId,
+                    "wl_keyboard.keymap",
+                    {
+                        format: getEnumValue(
+                            this.getObject(keyboardId).protocol,
+                            "wl_keyboard.keymap_format",
+                            "xkb_v1",
+                        ),
+                        fd: 0,
+                        size: data.length,
+                    },
+                    [fd],
+                );
             });
 
             isOp(x, "zwp_linux_dmabuf_v1.get_surface_feedback", (x) => {
@@ -460,6 +483,28 @@ class WaylandClient {
                 });
 
                 this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
+            });
+
+            isOp(x, "zwp_text_input_manager_v1.create_text_input", (x) => {
+                const textInputId = x.args.id;
+                if (!this.obj2.textInput) this.obj2.textInput = { focus: null, m: new Map() };
+                this.obj2.textInput.m.set(textInputId, { focus: false });
+            });
+            isOp(x, "zwp_text_input_v1.activate", (x) => {
+                this.sendMessageX(x.id, "zwp_text_input_v1.enter", { surface: x.args.surface });
+                if (!this.obj2.textInput) return;
+                this.obj2.textInput.m.get(x.id)!.focus = true;
+                for (const [k, v] of this.obj2.textInput!.m) {
+                    if (k !== x.id && v.focus) {
+                        this.sendMessageX(k, "zwp_text_input_v1.leave", {});
+                        v.focus = false;
+                    }
+                }
+            });
+            isOp(x, "zwp_text_input_v1.deactivate", (x) => {
+                this.sendMessageX(x.id, "zwp_text_input_v1.leave", {});
+                if (!this.obj2.textInput) return;
+                this.obj2.textInput.m.get(x.id)!.focus = false;
             });
 
             if (!useOp) {
@@ -596,6 +641,35 @@ class WaylandClient {
             this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
         }
     }
+    keyboard = {
+        // todo Surface管理
+        focusSurface: (id: WaylandObjectId) => {
+            if (!this.obj2.keyboard) return;
+            this.sendMessageX(this.obj2.keyboard, "wl_keyboard.enter", { serial: 0, surface: id, keys: [] });
+            this.sendMessageX(this.obj2.keyboard, "wl_keyboard.modifiers", {
+                serial: 0,
+                mods_depressed: 0,
+                mods_latched: 0,
+                mods_locked: 0,
+                group: 0,
+            });
+        },
+        blurSurface: (id: WaylandObjectId) => {
+            if (!this.obj2.keyboard) return;
+            this.sendMessageX(this.obj2.keyboard, "wl_keyboard.leave", { serial: 0, surface: id });
+        },
+        sendKey: (key: number, state: "pressed" | "released") => {
+            if (!this.obj2.keyboard) return;
+            const s = this.obj2.serial ?? 1;
+            this.obj2.serial = s + 2;
+            this.sendMessageX(this.obj2.keyboard, "wl_keyboard.key", {
+                serial: s,
+                time: Date.now(),
+                key: key,
+                state: getEnumValue(WaylandProtocols.wl_keyboard, "wl_keyboard.key_state", state), // todo repeat
+            });
+        },
+    };
     close() {
         for (const obj of this.objects.values()) {
             if (obj.protocol.name === "wl_shm_pool") {
@@ -714,6 +788,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
                         new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
                         surface.id,
                     );
+                    client.keyboard.focusSurface(surface.id);
                 }
                 client.sendPointerEvent(
                     type,
@@ -809,6 +884,26 @@ body.on("pointerdown", (e) => {
 body.on("pointerup", (e) => {
     sendPointerEvent("up", e);
 });
+
+body.on("keydown", (e) => {
+    if (e.repeat) return;
+    for (const client of server.clients.values()) {
+        client.keyboard.sendKey(mapKeyCode(e.key), "pressed");
+    }
+});
+body.on("keyup", (e) => {
+    if (e.repeat) return;
+    for (const client of server.clients.values()) {
+        client.keyboard.sendKey(mapKeyCode(e.key), "released");
+    }
+});
+
+function mapKeyCode(key: string): number {
+    if (key.length === 1) {
+        return InputEventCodes[`KEY_${key.toUpperCase()}`] || 0;
+    }
+    return 0;
+}
 
 body.style({
     background: 'url("file:///usr/share/wallpapers/ScarletTree/contents/images/5120x2880.png") center/cover no-repeat',
