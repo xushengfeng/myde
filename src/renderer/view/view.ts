@@ -49,6 +49,10 @@ type WaylandData = {
 
 type WaylandObjectX<T extends keyof WaylandData> = { protocol: WaylandProtocol; data: WaylandData[T] };
 
+interface WaylandServerEventMap {
+    newClient: (client: WaylandClient, clientId: string) => void;
+    clientClose: (client: WaylandClient, clientId: string) => void;
+}
 interface WaylandClientEventMap {
     close: () => void;
     surfacecreate: (surfaceId: WaylandObjectId, canvas: HTMLCanvasElement) => void;
@@ -66,6 +70,25 @@ function waylandObjectId<T extends number | undefined>(id: T): T extends number 
 }
 
 class WaylandServer {
+    private events: { [K in keyof WaylandServerEventMap]?: WaylandServerEventMap[K][] } = {};
+
+    public on<K extends keyof WaylandServerEventMap>(event: K, handler: WaylandServerEventMap[K]): void {
+        if (!this.events[event]) this.events[event] = [];
+        this.events[event]!.push(handler);
+    }
+
+    protected emit<K extends keyof WaylandServerEventMap>(
+        event: K,
+        ...args: Parameters<WaylandServerEventMap[K]>
+    ): void {
+        const handlers = this.events[event];
+        if (handlers) {
+            for (const fn of handlers) {
+                // @ts-expect-error
+                fn(...args);
+            }
+        }
+    }
     socketDir = "/tmp";
     socketName = "my-wayland-server-0";
     socketPath: string;
@@ -113,21 +136,24 @@ class WaylandServer {
         console.log(`New client connected: ${clientId}`);
 
         const client = new WaylandClient({ id: clientId, socket });
-
         this.clients.set(clientId, client);
+
+        this.emit("newClient", client, clientId);
+
         client.on("close", () => {
             this.clients.delete(clientId);
+            this.emit("clientClose", client, clientId);
         });
     }
 }
 
 class WaylandClient {
-    id: string;
-    socket: USocket;
-    objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
-    protoVersions: Map<string, number> = new Map();
-    lastCallback: WaylandObjectId | null; // todo 移除
-    obj2: Partial<{
+    private id: string;
+    private socket: USocket;
+    private objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
+    private protoVersions: Map<string, number> = new Map();
+    private lastCallback: WaylandObjectId | null; // todo 移除
+    private obj2: Partial<{
         pointer: WaylandObjectId;
         keyboard: WaylandObjectId;
         textInput: { focus: WaylandObjectId | null; m: Map<WaylandObjectId, { focus: boolean }> };
@@ -630,6 +656,9 @@ class WaylandClient {
             fds: fds || [],
         });
     }
+    getAllSurfaces() {
+        return this.obj2.surfaces;
+    }
     sendPointerEvent(type: "move" | "down" | "up" | "in", p: PointerEvent, surface: WaylandObjectId) {
         const { x, y } = p;
         if (!this.obj2.pointer) return;
@@ -830,12 +859,16 @@ function newFd(data: string | Uint8Array): { fd: number; size: number } {
 }
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
-    for (const client of server.clients.values()) {
-        for (const surface of client.obj2.surfaces) {
+    for (const [id, client] of server.clients) {
+        const data = clientData.get(id);
+        if (!data) {
+            return;
+        }
+        for (const surface of client.getAllSurfaces()) {
             const rect = surface.el.getBoundingClientRect();
             if (p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom) {
-                if (!client.obj2.in) {
-                    client.obj2.in = true;
+                if (!data.in) {
+                    data.in = true;
                     client.sendPointerEvent(
                         "in",
                         new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
@@ -897,11 +930,20 @@ console.log("Support protocols:", Object.keys(WaylandProtocols));
 
 const server = new WaylandServer();
 
+server.on("newClient", (client, clientId) => {
+    clientData.set(clientId, { client, in: false });
+});
+server.on("clientClose", (_, clientId) => {
+    clientData.delete(clientId);
+});
+
 const deEnv = JSON.parse(new URLSearchParams(location.search).get("env") ?? "{}");
 
 const waylandProtocolsNameMap = new Map<WaylandName, WaylandProtocol>();
 
 initWaylandProtocols();
+
+const clientData = new Map<string, { client: WaylandClient; in: boolean }>();
 
 let xServerNum = NaN;
 
