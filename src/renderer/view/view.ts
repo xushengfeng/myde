@@ -428,10 +428,7 @@ class WaylandClient {
                 // });
 
                 const keymapStr = fs.readFileSync(path.join(__dirname, "../../", "script/xcb", "x.xkb"), "utf-8");
-                const tmpPath = `/dev/shm/keymap-${crypto.randomUUID()}`;
-                const fd = fs.openSync(tmpPath, "w+");
-                const data = new Uint8Array(Buffer.from(keymapStr));
-                fs.writeFileSync(fd, data);
+                const { fd, size } = newFd(keymapStr);
 
                 this.sendMessageX(
                     keyboardId,
@@ -443,7 +440,7 @@ class WaylandClient {
                             "xkb_v1",
                         ),
                         fd: 0,
-                        size: data.length,
+                        size: size,
                     },
                     [fd],
                 );
@@ -460,9 +457,7 @@ class WaylandClient {
                     { format: DRM_FORMAT.DRM_FORMAT_ARGB8888, modifier: 0n },
                     { format: DRM_FORMAT.DRM_FORMAT_XRGB8888, modifier: 0n },
                 ]);
-                const tmpPath = `/dev/shm/dmabuf-format-table-${crypto.randomUUID()}`;
-                const fd = fs.openSync(tmpPath, "w+");
-                fs.writeSync(fd, new Uint8Array(formatTable.buffer));
+                const { fd } = newFd(new Uint8Array(formatTable.buffer));
                 this.sendMessageX(
                     feedbackId,
                     "zwp_linux_dmabuf_feedback_v1.format_table",
@@ -774,6 +769,21 @@ function getEnumValue<T extends keyof WaylandEnumObj>(
         if (entry === undefined) throw new Error(`Value ${value} not found in enum ${enumName}`);
         return entry;
     }
+}
+
+function newFd(data: string | Uint8Array): { fd: number; size: number } {
+    const tmpPath = `/dev/shm/wl-fd-${crypto.randomUUID()}`;
+    const fd = fs.openSync(tmpPath, "w+");
+    if (typeof data === "string") {
+        fs.writeFileSync(fd, data);
+    } else {
+        fs.writeFileSync(fd, data);
+    }
+    fs.unlinkSync(tmpPath); // unlink but keep fd open
+    return {
+        fd,
+        size: typeof data === "string" ? Buffer.byteLength(data) : data.length,
+    };
 }
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
