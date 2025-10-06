@@ -1,6 +1,5 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
-const child_process = require("node:child_process") as typeof import("node:child_process");
 
 const usocket = require("@xushengfeng/usocket") as typeof import("@xushengfeng/usocket");
 
@@ -25,11 +24,11 @@ const WaylandProtocolsx = JSON.parse(WaylandProtocolsJSON) as Record<string, Way
 const WaylandProtocols = Object.fromEntries(Object.values(WaylandProtocolsx).flatMap((v) => v.map((p) => [p.name, p])));
 import { WaylandEncoder } from "../wayland/wayland-encoder";
 
-import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
-
-import { button, ele, image, pack, txt, view, initDKH, input, addStyle } from "dkh-ui";
+import { ele } from "dkh-ui";
 import { InputEventCodes } from "../input_codes/types";
 import { createFormatTableBuffer, DRM_FORMAT } from "../wayland/dma-buf";
+
+export { WaylandClient, WaylandServer };
 
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
 
@@ -69,6 +68,8 @@ function waylandObjectId<T extends number | undefined>(id: T): T extends number 
     return id as any;
 }
 
+const waylandProtocolsNameMap = new Map<WaylandName, WaylandProtocol>();
+
 class WaylandServer {
     private events: { [K in keyof WaylandServerEventMap]?: WaylandServerEventMap[K][] } = {};
 
@@ -102,6 +103,10 @@ class WaylandServer {
         this.globalObjects = new Map(); // 全局对象注册表
         this.nextObjectId = 1; // Wayland 对象ID计数器
 
+        initWaylandProtocols();
+
+        console.log("Support protocols:", Object.keys(WaylandProtocols));
+
         this.setupSocket();
     }
 
@@ -131,7 +136,7 @@ class WaylandServer {
         });
     }
 
-    handleNewConnection(socket: USocket) {
+    private handleNewConnection(socket: USocket) {
         const clientId = crypto.randomUUID().slice(0, 8);
         console.log(`New client connected: ${clientId}`);
 
@@ -144,6 +149,10 @@ class WaylandServer {
             this.clients.delete(clientId);
             this.emit("clientClose", client, clientId);
         });
+    }
+
+    isProtocolSupported(protocol: string): boolean {
+        return protocol in WaylandProtocols;
     }
 }
 
@@ -326,7 +335,7 @@ class WaylandClient {
             isOp(x, "wl_compositor.create_surface", (x) => {
                 const surfaceId = x.args.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
-                const canvasEl = ele("canvas").addInto();
+                const canvasEl = ele("canvas");
                 const canvas = canvasEl.el;
                 this.obj2.surfaces.push({ id: surfaceId, el: canvas });
                 surface.data = { canvas, bufferPointer: 0 };
@@ -857,243 +866,3 @@ function newFd(data: string | Uint8Array): { fd: number; size: number } {
         size: typeof data === "string" ? Buffer.byteLength(data) : data.length,
     };
 }
-
-function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
-    for (const [id, client] of server.clients) {
-        const data = clientData.get(id);
-        if (!data) {
-            return;
-        }
-        for (const surface of client.getAllSurfaces()) {
-            const rect = surface.el.getBoundingClientRect();
-            if (p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom) {
-                if (!data.in) {
-                    data.in = true;
-                    client.sendPointerEvent(
-                        "in",
-                        new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
-                        surface.id,
-                    );
-                    client.keyboard.focusSurface(surface.id);
-                }
-                client.sendPointerEvent(
-                    type,
-                    new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
-                    surface.id,
-                );
-            }
-        }
-    }
-}
-
-function runApp(execPath: string, args: string[] = []) {
-    console.log(`Running application: ${execPath}`);
-
-    const subprocess = child_process.spawn(execPath, args, {
-        stdio: ["ignore", "pipe", "pipe"],
-        env: {
-            HOME: deEnv.HOME,
-            WAYLAND_DEBUG: "1",
-            XDG_SESSION_TYPE: "wayland",
-            XDG_RUNTIME_DIR: server.socketDir,
-            WAYLAND_DISPLAY: server.socketName,
-            ...(Number.isNaN(xServerNum) ? {} : { DISPLAY: `:${xServerNum}` }),
-        },
-    });
-
-    subprocess.stdout.on("data", (data) => {
-        console.log(`Subprocess ${execPath} stdout:\n${data.toString("utf8")}`);
-    });
-
-    subprocess.stderr.on("data", (data) => {
-        const dataStr = data.toString("utf8");
-        const m = dataStr.match(/\{Default Queue\}(.+?)#/)?.[1];
-        if (m) {
-            const p = (m as string).replace("->", "").trim();
-            if (!WaylandProtocols[p]) {
-                console.error(`Unknown protocol in debug output: ${p}`);
-            }
-        }
-        console.log(`Subprocess ${execPath} stderr:\n${data.toString("utf8")}`);
-    });
-
-    subprocess.on("error", (err) => {
-        console.error("Failed to start subprocess:", err);
-    });
-
-    subprocess.on("exit", (code, signal) => {
-        console.log(`Subprocess ${execPath} exited with code ${code} and signal ${signal}`);
-    });
-}
-
-console.log("Support protocols:", Object.keys(WaylandProtocols));
-
-const server = new WaylandServer();
-
-server.on("newClient", (client, clientId) => {
-    clientData.set(clientId, { client, in: false });
-});
-server.on("clientClose", (_, clientId) => {
-    clientData.delete(clientId);
-});
-
-const deEnv = JSON.parse(new URLSearchParams(location.search).get("env") ?? "{}");
-
-const waylandProtocolsNameMap = new Map<WaylandName, WaylandProtocol>();
-
-initWaylandProtocols();
-
-const clientData = new Map<string, { client: WaylandClient; in: boolean }>();
-
-let xServerNum = NaN;
-
-const mouseEL = view().addInto().style({
-    position: "fixed",
-    width: "10px",
-    height: "10px",
-    background: "rgba(0,0,0,0.5)",
-    outline: "1px solid #fff",
-    borderRadius: "50%",
-    pointerEvents: "none",
-    top: "0px",
-    left: "0px",
-    transform: "translate(-50%, -50%)",
-    zIndex: 9999,
-});
-
-function mouseMove(x: number, y: number) {
-    mouseEL.style({ top: `${y}px`, left: `${x}px` });
-    sendPointerEvent("move", new PointerEvent("pointermove", { clientX: x, clientY: y }));
-}
-
-initDKH({ pureStyle: true });
-
-const body = pack(document.body);
-
-body.on("pointermove", (e) => {
-    mouseMove(e.x, e.y);
-});
-body.on("pointerdown", (e) => {
-    sendPointerEvent("down", e);
-});
-body.on("pointerup", (e) => {
-    sendPointerEvent("up", e);
-});
-
-body.on("keydown", (e) => {
-    if (e.repeat) return;
-    for (const client of server.clients.values()) {
-        client.keyboard.sendKey(mapKeyCode(e.key), "pressed");
-    }
-});
-body.on("keyup", (e) => {
-    if (e.repeat) return;
-    for (const client of server.clients.values()) {
-        client.keyboard.sendKey(mapKeyCode(e.key), "released");
-    }
-});
-
-function mapKeyCode(key: string): number {
-    if (key.length === 1) {
-        return InputEventCodes[`KEY_${key.toUpperCase()}`] || 0;
-    }
-    return 0;
-}
-
-body.style({
-    background: 'url("file:///usr/share/wallpapers/ScarletTree/contents/images/5120x2880.png") center/cover no-repeat',
-    height: "100vh",
-    cursor: "none",
-});
-
-addStyle({
-    "*": {
-        cursor: "none !important",
-    },
-});
-
-button("self")
-    .on("click", () => {
-        runApp(process.argv[0], process.argv.slice(1));
-    })
-    .addInto();
-
-view()
-    .add(
-        [
-            "google-chrome-stable",
-            "firefox-nightly",
-            "wayland-info",
-            "weston-flower",
-            "weston-simple-damage",
-            "weston-simple-shm",
-            "weston-simple-egl",
-            "weston-simple-dmabuf-egl",
-            "weston-simple-dmabuf-feedback",
-            "weston-editor",
-            "weston-clickdot",
-            "glxgears",
-            "kwrite",
-        ].map((app) =>
-            button(app)
-                .style({ padding: "4px 8px", background: "#fff" })
-                .on("click", () => {
-                    const execPath = `/usr/bin/${app}`;
-                    runApp(execPath);
-                }),
-        ),
-    )
-    .addInto();
-
-view()
-    .add(
-        input().on("change", (e, el) => {
-            const command = el.gv;
-            runApp(`/usr/bin/${command}`);
-        }),
-    )
-    .addInto();
-
-view()
-    .add(
-        button("xwayland").on("click", () => {
-            for (let i = 0; i < 100; i++) {
-                const socketPath = `/tmp/.X11-unix/X${i}`;
-                if (!fs.existsSync(socketPath)) {
-                    xServerNum = i;
-                    runApp("/usr/bin/Xwayland", [`:${xServerNum}`]);
-                    break;
-                }
-            }
-        }),
-    )
-    .addInto();
-
-const allApps = getDesktopEntries(["zh_CN", "zh", "zh-Hans"]);
-console.log("Found desktop entries:", allApps);
-const apps: typeof allApps = [];
-const appNameSet = new Set<string>();
-
-for (const app of allApps) {
-    if (!appNameSet.has(app.name)) {
-        appNameSet.add(app.name);
-        // apps.push(app);
-    }
-}
-
-view("y")
-    .add(
-        apps.map((app) => {
-            const iconPath = getDesktopIcon(app.icon) || "";
-            return view("x")
-                .add([
-                    iconPath ? image(`file://${iconPath}`, app.name).style({ width: "24px" }) : "",
-                    txt(app.nameLocal),
-                ])
-                .on("click", () => {
-                    const exec = app.exec.split(" ")[0]; // 简单处理参数
-                    runApp(exec, app.exec.split(" ").slice(1));
-                });
-        }),
-    )
-    .addInto();
