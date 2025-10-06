@@ -130,6 +130,7 @@ supportedProtocols.forEach((proto) => {
                     name: arg.$.name,
                     type: arg.$.type as WaylandArgType,
                     interface: arg.$.interface,
+                    ...(arg.$["allow-null"] === "true" && { allowNull: true }),
                 })),
                 ...(req.$.since && { since: parseInt(req.$.since, 10) }),
             }));
@@ -139,6 +140,7 @@ supportedProtocols.forEach((proto) => {
                     name: arg.$.name,
                     type: arg.$.type as WaylandArgType,
                     interface: arg.$.interface,
+                    ...(arg.$["allow-null"] === "true" && { allowNull: true }),
                 })),
                 ...(evt.$.since && { since: parseInt(evt.$.since, 10) }),
             }));
@@ -203,7 +205,9 @@ for (const protos of Object.values(allResults)) {
                 object: "number",
                 new_id: "WaylandObjectId",
             };
-            const fields = evt.args.map((arg) => `        ${arg.name}: ${map[arg.type] || "any"};`).join("\n");
+            const fields = evt.args
+                .map((arg) => `        ${arg.name}${arg.allowNull ? "?" : ""}: ${map[arg.type] || "any"};`)
+                .join("\n");
             waylandTypeLines.push(`    ${key}: {\n${fields}\n    };`);
         }
     }
@@ -231,7 +235,9 @@ for (const protos of Object.values(allResults)) {
                 object: "number",
                 new_id: "WaylandObjectId",
             };
-            const fields = req.args.map((arg) => `        ${arg.name}: ${map[arg.type] || "any"};`).join("\n");
+            const fields = req.args
+                .map((arg) => `        ${arg.name}${arg.allowNull ? "?" : ""}: ${map[arg.type] || "any"};`)
+                .join("\n");
             waylandTypeLines.push(`    ${key}: {\n${fields}\n    };`);
         }
     }

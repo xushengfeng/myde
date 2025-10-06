@@ -121,7 +121,7 @@ export type WaylandEventObj = {
         surface: number;
         x: number;
         y: number;
-        id: number;
+        id?: number;
     };
     "wl_data_device.leave": {};
     "wl_data_device.motion": {
@@ -131,7 +131,7 @@ export type WaylandEventObj = {
     };
     "wl_data_device.drop": {};
     "wl_data_device.selection": {
-        id: number;
+        id?: number;
     };
     "wl_surface.enter": {
         output: number;
@@ -336,12 +336,12 @@ export type WaylandEventObj = {
         surface: number;
     };
     "zwp_text_input_v3.preedit_string": {
-        text: string;
+        text?: string;
         cursor_begin: number;
         cursor_end: number;
     };
     "zwp_text_input_v3.commit_string": {
-        text: string;
+        text?: string;
     };
     "zwp_text_input_v3.delete_surrounding_text": {
         before_length: number;
@@ -439,13 +439,13 @@ export type WaylandRequestObj = {
     "wl_shm.release": {};
     "wl_buffer.destroy": {};
     "wl_data_device.start_drag": {
-        source: number;
+        source?: number;
         origin: number;
-        icon: number;
+        icon?: number;
         serial: number;
     };
     "wl_data_device.set_selection": {
-        source: number;
+        source?: number;
         serial: number;
     };
     "wl_data_device.release": {};
@@ -458,7 +458,7 @@ export type WaylandRequestObj = {
     };
     "wl_surface.destroy": {};
     "wl_surface.attach": {
-        buffer: number;
+        buffer?: number;
         x: number;
         y: number;
     };
@@ -472,10 +472,10 @@ export type WaylandRequestObj = {
         callback: WaylandObjectId;
     };
     "wl_surface.set_opaque_region": {
-        region: number;
+        region?: number;
     };
     "wl_surface.set_input_region": {
-        region: number;
+        region?: number;
     };
     "wl_surface.commit": {};
     "wl_surface.set_buffer_transform": {
@@ -506,7 +506,7 @@ export type WaylandRequestObj = {
     "wl_seat.release": {};
     "wl_pointer.set_cursor": {
         serial: number;
-        surface: number;
+        surface?: number;
         hotspot_x: number;
         hotspot_y: number;
     };
@@ -575,7 +575,7 @@ export type WaylandRequestObj = {
     };
     "xdg_surface.get_popup": {
         id: WaylandObjectId;
-        parent: number;
+        parent?: number;
         positioner: number;
     };
     "xdg_surface.set_window_geometry": {
@@ -589,7 +589,7 @@ export type WaylandRequestObj = {
     };
     "xdg_toplevel.destroy": {};
     "xdg_toplevel.set_parent": {
-        parent: number;
+        parent?: number;
     };
     "xdg_toplevel.set_title": {
         title: string;
@@ -623,7 +623,7 @@ export type WaylandRequestObj = {
     "xdg_toplevel.set_maximized": {};
     "xdg_toplevel.unset_maximized": {};
     "xdg_toplevel.set_fullscreen": {
-        output: number;
+        output?: number;
     };
     "xdg_toplevel.unset_fullscreen": {};
     "xdg_toplevel.set_minimized": {};

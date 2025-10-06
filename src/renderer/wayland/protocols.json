@@ -414,7 +414,8 @@
             {
               "name": "source",
               "type": "object",
-              "interface": "wl_data_source"
+              "interface": "wl_data_source",
+              "allowNull": true
             },
             {
               "name": "origin",
@@ -424,7 +425,8 @@
             {
               "name": "icon",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "allowNull": true
             },
             {
               "name": "serial",
@@ -438,7 +440,8 @@
             {
               "name": "source",
               "type": "object",
-              "interface": "wl_data_source"
+              "interface": "wl_data_source",
+              "allowNull": true
             },
             {
               "name": "serial",
@@ -486,7 +489,8 @@
             {
               "name": "id",
               "type": "object",
-              "interface": "wl_data_offer"
+              "interface": "wl_data_offer",
+              "allowNull": true
             }
           ]
         },
@@ -521,7 +525,8 @@
             {
               "name": "id",
               "type": "object",
-              "interface": "wl_data_offer"
+              "interface": "wl_data_offer",
+              "allowNull": true
             }
           ]
         }
@@ -594,7 +599,8 @@
             {
               "name": "buffer",
               "type": "object",
-              "interface": "wl_buffer"
+              "interface": "wl_buffer",
+              "allowNull": true
             },
             {
               "name": "x",
@@ -643,7 +649,8 @@
             {
               "name": "region",
               "type": "object",
-              "interface": "wl_region"
+              "interface": "wl_region",
+              "allowNull": true
             }
           ]
         },
@@ -653,7 +660,8 @@
             {
               "name": "region",
               "type": "object",
-              "interface": "wl_region"
+              "interface": "wl_region",
+              "allowNull": true
             }
           ]
         },
@@ -866,7 +874,8 @@
             {
               "name": "surface",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "allowNull": true
             },
             {
               "name": "hotspot_x",
@@ -1683,7 +1692,8 @@
             {
               "name": "parent",
               "type": "object",
-              "interface": "xdg_surface"
+              "interface": "xdg_surface",
+              "allowNull": true
             },
             {
               "name": "positioner",
@@ -1762,7 +1772,8 @@
             {
               "name": "parent",
               "type": "object",
-              "interface": "xdg_toplevel"
+              "interface": "xdg_toplevel",
+              "allowNull": true
             }
           ]
         },
@@ -1878,7 +1889,8 @@
             {
               "name": "output",
               "type": "object",
-              "interface": "wl_output"
+              "interface": "wl_output",
+              "allowNull": true
             }
           ]
         },
@@ -2672,7 +2684,8 @@
           "args": [
             {
               "name": "text",
-              "type": "string"
+              "type": "string",
+              "allowNull": true
             },
             {
               "name": "cursor_begin",
@@ -2689,7 +2702,8 @@
           "args": [
             {
               "name": "text",
-              "type": "string"
+              "type": "string",
+              "allowNull": true
             }
           ]
         },

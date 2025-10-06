@@ -52,8 +52,12 @@ type WaylandObjectX<T extends keyof WaylandData> = { protocol: WaylandProtocol; 
 function waylandName(name: number): WaylandName {
     return name as WaylandName;
 }
-function waylandObjectId(id: number): WaylandObjectId {
-    return id as WaylandObjectId;
+
+function waylandObjectId<T extends number | undefined>(id: T): T extends number ? WaylandObjectId : undefined {
+    if (id === undefined) {
+        return undefined as any;
+    }
+    return id as any;
 }
 
 class WaylandServer {
@@ -293,7 +297,8 @@ class WaylandClient {
             isOp(x, "wl_surface.attach", (x) => {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
-                const bufferId = x.args.buffer as WaylandObjectId;
+                const bufferId = waylandObjectId(x.args.buffer);
+                if (!bufferId) return;
                 const buffer = this.getObject<"wl_buffer">(bufferId);
                 const imageData = buffer.data.imageData;
                 if (surface.data.bufferPointer === 0) surface.data.buffer = { id: bufferId, data: imageData };
@@ -948,6 +953,7 @@ view()
             "weston-editor",
             "weston-clickdot",
             "glxgears",
+            "kwrite",
         ].map((app) =>
             button(app)
                 .style({ padding: "4px 8px", background: "#fff" })

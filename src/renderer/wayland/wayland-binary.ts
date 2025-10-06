@@ -19,6 +19,7 @@ export type WaylandOp = {
         name: string;
         type: WaylandArgType;
         interface?: string;
+        allowNull?: boolean;
     }>;
 };
 export type WaylandProtocol = {
