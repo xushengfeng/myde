@@ -114,11 +114,6 @@ class WaylandClient {
     socket: USocket;
     objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
     protoVersions: Map<string, number> = new Map();
-    queueMap = new Map<WaylandObjectId, number>();
-    toSend: Record<
-        number,
-        Array<{ objectId: WaylandObjectId; opcode: number; args: Record<string, any>; fds?: number[] }>
-    > = {};
     lastCallback: WaylandObjectId | null; // todo 移除
     obj2: Partial<{
         pointer: WaylandObjectId;
@@ -174,8 +169,6 @@ class WaylandClient {
             return false;
         }
 
-        let theMessageQueueId: number | undefined; // 目前任务一串消息的队列是相同的
-
         console.log(`Parsed data from client ${this.id}:`, data.buffer, fds);
         while (decoder.getRemainingBytes() > 0) {
             const header = decoder.readHeader();
@@ -193,13 +186,6 @@ class WaylandClient {
             );
             if (rest.length) console.log("rest", rest);
 
-            if (theMessageQueueId === undefined && header.objectId !== 1) {
-                theMessageQueueId = this.queueMap.get(header.objectId);
-                if (theMessageQueueId !== undefined) {
-                    console.log("Found thisMessageQueueId", theMessageQueueId);
-                }
-            }
-
             for (const v of Object.values(_x.op.args)) {
                 if (v.type === WaylandArgType.NEW_ID) {
                     const id = args[v.name] as WaylandObjectId;
@@ -213,11 +199,6 @@ class WaylandClient {
                         console.error("NEW_ID argument has unknown interface:", v.interface);
                         continue;
                     }
-                    const queueId = this.queueMap.get(header.objectId);
-                    if (queueId) {
-                        this.queueMap.set(id, queueId);
-                        console.log("Set queueId for new object", id, queueId);
-                    }
                     this.objects.set(id, { protocol: _interface, data: undefined });
                     console.log(`Client ${this.id} created ${v.interface} with id ${id}`);
                 }
@@ -228,27 +209,12 @@ class WaylandClient {
                 const callbackId = x.args.callback;
                 this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: callbackId });
 
-                if (theMessageQueueId === undefined) {
-                    console.log(this.toSend, this.queueMap);
-                    throw new Error("thisMessageQueueId is undefined");
-                }
-                const msgs = this.toSend[theMessageQueueId] || [];
-
-                for (const msg of msgs || []) {
-                    this.sendMessage(msg.objectId, msg.opcode, msg.args, msg.fds);
-                }
-
-                this.toSend = [];
-
                 this.sendMessageX(callbackId, "wl_callback.done", { callback_data: 0 });
             });
             isOp(x, "wl_display.get_registry", (x) => {
                 const registryId = x.args.registry;
-                this.queueMap.set(registryId, registryId);
-                theMessageQueueId = registryId;
-                console.log("Set queueId", registryId);
                 for (const [i, proto] of waylandProtocolsNameMap) {
-                    this.sendMessageLater(registryId, "wl_registry.global", {
+                    this.sendMessageX(registryId, "wl_registry.global", {
                         name: i,
                         interface: proto.name,
                         version: proto.version,
@@ -264,24 +230,22 @@ class WaylandClient {
                     return;
                 }
                 this.objects.set(id, { protocol: proto, data: undefined });
-                this.queueMap.set(id, x.id);
-                console.log("Set queueId for new object", id, x.id);
                 this.protoVersions.set(proto.name, x.args._version);
                 console.log(`Client ${this.id} bound ${proto.name} to id ${id}`);
 
                 // wl_shm wl_seat wl_output
 
                 if (proto.name === "wl_shm") {
-                    this.sendMessageLater(id, "wl_shm.format", {
+                    this.sendMessageX(id, "wl_shm.format", {
                         format: getEnumValue(proto, "wl_shm.format", "argb8888"),
                     });
-                    this.sendMessageLater(id, "wl_shm.format", {
+                    this.sendMessageX(id, "wl_shm.format", {
                         format: getEnumValue(proto, "wl_shm.format", "xrgb8888"),
                     });
                 }
                 if (proto.name === "wl_seat") {
-                    this.sendMessageLater(id, "wl_seat.name", { name: "seat0" });
-                    this.sendMessageLater(id, "wl_seat.capabilities", {
+                    this.sendMessageX(id, "wl_seat.name", { name: "seat0" });
+                    this.sendMessageX(id, "wl_seat.capabilities", {
                         capabilities: getEnumValue(proto, "wl_seat.capability", ["pointer", "keyboard"]),
                     });
                 }
@@ -455,10 +419,11 @@ class WaylandClient {
             isOp(x, "wl_seat.get_keyboard", (x) => {
                 const keyboardId = x.args.id;
                 this.obj2.keyboard = keyboardId;
-                this.sendMessageLater(keyboardId, "wl_keyboard.repeat_info", {
-                    rate: 25,
-                    delay: 600,
-                });
+                // todo 版本问题
+                // this.sendMessageX(keyboardId, "wl_keyboard.repeat_info", {
+                //     rate: 25,
+                //     delay: 600,
+                // });
             });
 
             isOp(x, "zwp_linux_dmabuf_v1.get_surface_feedback", (x) => {
@@ -475,7 +440,7 @@ class WaylandClient {
                 const tmpPath = `/dev/shm/dmabuf-format-table-${crypto.randomUUID()}`;
                 const fd = fs.openSync(tmpPath, "w+");
                 fs.writeSync(fd, new Uint8Array(formatTable.buffer));
-                this.sendMessageLater(
+                this.sendMessageX(
                     feedbackId,
                     "zwp_linux_dmabuf_feedback_v1.format_table",
                     {
@@ -489,12 +454,12 @@ class WaylandClient {
                 const buffer = Buffer.alloc(8);
                 buffer.writeBigUInt64LE(BigInt(r.rdev));
                 const a = Array.from(new Uint8Array(buffer.buffer));
-                this.sendMessageLater(feedbackId, "zwp_linux_dmabuf_feedback_v1.main_device", { device: a });
-                this.sendMessageLater(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_target_device", {
+                this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.main_device", { device: a });
+                this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_target_device", {
                     device: a,
                 });
 
-                this.sendMessageLater(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
+                this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
             });
 
             if (!useOp) {
@@ -510,25 +475,6 @@ class WaylandClient {
         fds?: number[],
     ) {
         this.sendMessage(objectId, WaylandEventOpcode[op.replace(".", "__")], args, fds);
-    }
-    private sendMessageLater<T extends keyof WaylandEventObj>(
-        objectId: WaylandObjectId,
-        op: T,
-        args: WaylandEventObj[T],
-        fds?: number[],
-    ) {
-        const queueId = this.queueMap.get(objectId);
-        if (queueId === undefined) {
-            console.error("Cannot find queue for objectId", objectId);
-            return;
-        }
-        if (!this.toSend[queueId]) this.toSend[queueId] = [];
-        this.toSend[queueId].push({
-            objectId,
-            opcode: WaylandEventOpcode[op.replace(".", "__")],
-            args,
-            fds,
-        });
     }
     private sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>, fds?: number[]) {
         const p = getX(this.objects, "event", objectId, opcode);
@@ -589,7 +535,7 @@ class WaylandClient {
         }
         const x = encoder.finalizeMessage();
 
-        console.log(`q${this.queueMap.get(objectId) ?? 0}-> ${this.id}:`, {
+        console.log(`-> ${this.id}:`, {
             p: `${p.proto.name}#${objectId}.${p.op.name}`,
             args,
             fds,

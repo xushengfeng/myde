@@ -40,7 +40,7 @@ app 链接到 socket 时，socket 的 connection 事件就会返回一个 client
 
 这次的优化，把接收`wl_display::sync`和发送`wl_callback::done`放在一起，并添加了`wl_display::sync`的上一个接收记录。`wl_display::get_registry`后面会跟一个`wl_display::sync`。等`global`发送完后，还会有一个 sync，可以把渲染格式、输入输出等告诉客户端。所以把这两个 sync 放在一起实现。
 
-还有很多实现细节我不知道。这里面的很多序列处理让人困惑，要把他进行良好的封装，方便在 js 中用回调操控。由于我们要实现的是合成器服务端，接收是被动的，输入事件是可以随时主动发送的，关键是接收后发送，比如收到 sync，是需要上文信息的（不过是在一个 socket 消息中组合发送的，不知道有没有特例）。
+~~还有很多实现细节我不知道。这里面的很多序列处理让人困惑，要把他进行良好的封装，方便在 js 中用回调操控。由于我们要实现的是合成器服务端，接收是被动的，输入事件是可以随时主动发送的，关键是接收后发送，比如收到 sync，是需要上文信息的（不过是在一个 socket 消息中组合发送的，不知道有没有特例）。~~
 
 ---
 
@@ -97,3 +97,9 @@ imagedata.data.set(buffern);
 text_input 现在有`text-input-unstable-v1`和`text-input-unstable-v3`。
 
 input_method 有 v1 和 v2。
+
+---
+
+25.10.6
+
+sync 是如此简单，根本不需要缓存，照着客户端发来的消息做出回应就可以了。比如`get_registry`回复`global`，`bind`keyboard 回复`keymap`等，以及最后的`sync`回复`done`。按照顺序发送就可以了。
