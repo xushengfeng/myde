@@ -403,7 +403,7 @@ class WaylandClient {
                 this.sendMessageX(toplevelId, "xdg_toplevel.configure", {
                     width: 0,
                     height: 0,
-                    states: [],
+                    states: [getEnumValue(this.getObject(toplevelId).protocol, "xdg_toplevel.state", "activated")],
                 });
                 for (const [id, p] of this.objects) {
                     if (p.protocol.name === "xdg_surface") {
