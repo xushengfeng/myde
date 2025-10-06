@@ -24,6 +24,8 @@ const supportedProtocols: Array<{ name: string; interfaces: Array<{ name: string
             { name: "wl_keyboard", version: 10 },
             { name: "wl_output", version: 4 },
             { name: "wl_region", version: 1 },
+            { name: "wl_data_device", version: 3 },
+            { name: "wl_data_device_manager", version: 3 },
         ],
     },
     {

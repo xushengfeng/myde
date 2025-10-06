@@ -9,6 +9,12 @@ export enum WaylandEventOpcode {
     wl_callback__done = 0,
     wl_shm__format = 0,
     wl_buffer__release = 0,
+    wl_data_device__data_offer = 0,
+    wl_data_device__enter = 1,
+    wl_data_device__leave = 2,
+    wl_data_device__motion = 3,
+    wl_data_device__drop = 4,
+    wl_data_device__selection = 5,
     wl_surface__enter = 0,
     wl_surface__leave = 1,
     wl_surface__preferred_buffer_scale = 2,
@@ -107,6 +113,26 @@ export type WaylandEventObj = {
         format: number;
     };
     "wl_buffer.release": {};
+    "wl_data_device.data_offer": {
+        id: WaylandObjectId;
+    };
+    "wl_data_device.enter": {
+        serial: number;
+        surface: number;
+        x: number;
+        y: number;
+        id: number;
+    };
+    "wl_data_device.leave": {};
+    "wl_data_device.motion": {
+        time: number;
+        x: number;
+        y: number;
+    };
+    "wl_data_device.drop": {};
+    "wl_data_device.selection": {
+        id: number;
+    };
     "wl_surface.enter": {
         output: number;
     };
@@ -412,6 +438,24 @@ export type WaylandRequestObj = {
     };
     "wl_shm.release": {};
     "wl_buffer.destroy": {};
+    "wl_data_device.start_drag": {
+        source: number;
+        origin: number;
+        icon: number;
+        serial: number;
+    };
+    "wl_data_device.set_selection": {
+        source: number;
+        serial: number;
+    };
+    "wl_data_device.release": {};
+    "wl_data_device_manager.create_data_source": {
+        id: WaylandObjectId;
+    };
+    "wl_data_device_manager.get_data_device": {
+        id: WaylandObjectId;
+        seat: number;
+    };
     "wl_surface.destroy": {};
     "wl_surface.attach": {
         buffer: number;
@@ -718,6 +762,8 @@ export type WaylandEnumObj = {
     "wl_display.error": "invalid_object" | "invalid_method" | "no_memory" | "implementation";
     "wl_shm.error": "invalid_format" | "invalid_stride" | "invalid_fd";
     "wl_shm.format": "argb8888" | "xrgb8888" | "c8" | "rgb332" | "bgr233" | "xrgb4444" | "xbgr4444" | "rgbx4444" | "bgrx4444" | "argb4444" | "abgr4444" | "rgba4444" | "bgra4444" | "xrgb1555" | "xbgr1555" | "rgbx5551" | "bgrx5551" | "argb1555" | "abgr1555" | "rgba5551" | "bgra5551" | "rgb565" | "bgr565" | "rgb888" | "bgr888" | "xbgr8888" | "rgbx8888" | "bgrx8888" | "abgr8888" | "rgba8888" | "bgra8888" | "xrgb2101010" | "xbgr2101010" | "rgbx1010102" | "bgrx1010102" | "argb2101010" | "abgr2101010" | "rgba1010102" | "bgra1010102" | "yuyv" | "yvyu" | "uyvy" | "vyuy" | "ayuv" | "nv12" | "nv21" | "nv16" | "nv61" | "yuv410" | "yvu410" | "yuv411" | "yvu411" | "yuv420" | "yvu420" | "yuv422" | "yvu422" | "yuv444" | "yvu444" | "r8" | "r16" | "rg88" | "gr88" | "rg1616" | "gr1616" | "xrgb16161616f" | "xbgr16161616f" | "argb16161616f" | "abgr16161616f" | "xyuv8888" | "vuy888" | "vuy101010" | "y210" | "y212" | "y216" | "y410" | "y412" | "y416" | "xvyu2101010" | "xvyu12_16161616" | "xvyu16161616" | "y0l0" | "x0l0" | "y0l2" | "x0l2" | "yuv420_8bit" | "yuv420_10bit" | "xrgb8888_a8" | "xbgr8888_a8" | "rgbx8888_a8" | "bgrx8888_a8" | "rgb888_a8" | "bgr888_a8" | "rgb565_a8" | "bgr565_a8" | "nv24" | "nv42" | "p210" | "p010" | "p012" | "p016" | "axbxgxrx106106106106" | "nv15" | "q410" | "q401" | "xrgb16161616" | "xbgr16161616" | "argb16161616" | "abgr16161616" | "c1" | "c2" | "c4" | "d1" | "d2" | "d4" | "d8" | "r1" | "r2" | "r4" | "r10" | "r12" | "avuy8888" | "xvuy8888" | "p030";
+    "wl_data_device.error": "role" | "used_source";
+    "wl_data_device_manager.dnd_action": "none" | "copy" | "move" | "ask";
     "wl_surface.error": "invalid_scale" | "invalid_transform" | "invalid_size" | "invalid_offset" | "defunct_role_object";
     "wl_seat.capability": "pointer" | "keyboard" | "touch";
     "wl_seat.error": "missing_capability";

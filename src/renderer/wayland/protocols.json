@@ -405,6 +405,182 @@
       "enum": []
     },
     {
+      "name": "wl_data_device",
+      "version": 3,
+      "request": [
+        {
+          "name": "start_drag",
+          "args": [
+            {
+              "name": "source",
+              "type": "object",
+              "interface": "wl_data_source"
+            },
+            {
+              "name": "origin",
+              "type": "object",
+              "interface": "wl_surface"
+            },
+            {
+              "name": "icon",
+              "type": "object",
+              "interface": "wl_surface"
+            },
+            {
+              "name": "serial",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "set_selection",
+          "args": [
+            {
+              "name": "source",
+              "type": "object",
+              "interface": "wl_data_source"
+            },
+            {
+              "name": "serial",
+              "type": "uint"
+            }
+          ]
+        },
+        {
+          "name": "release",
+          "args": [],
+          "since": 2
+        }
+      ],
+      "event": [
+        {
+          "name": "data_offer",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wl_data_offer"
+            }
+          ]
+        },
+        {
+          "name": "enter",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            },
+            {
+              "name": "x",
+              "type": "fixed"
+            },
+            {
+              "name": "y",
+              "type": "fixed"
+            },
+            {
+              "name": "id",
+              "type": "object",
+              "interface": "wl_data_offer"
+            }
+          ]
+        },
+        {
+          "name": "leave",
+          "args": []
+        },
+        {
+          "name": "motion",
+          "args": [
+            {
+              "name": "time",
+              "type": "uint"
+            },
+            {
+              "name": "x",
+              "type": "fixed"
+            },
+            {
+              "name": "y",
+              "type": "fixed"
+            }
+          ]
+        },
+        {
+          "name": "drop",
+          "args": []
+        },
+        {
+          "name": "selection",
+          "args": [
+            {
+              "name": "id",
+              "type": "object",
+              "interface": "wl_data_offer"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "role": 0,
+            "used_source": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "wl_data_device_manager",
+      "version": 3,
+      "request": [
+        {
+          "name": "create_data_source",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wl_data_source"
+            }
+          ]
+        },
+        {
+          "name": "get_data_device",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wl_data_device"
+            },
+            {
+              "name": "seat",
+              "type": "object",
+              "interface": "wl_seat"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": [
+        {
+          "name": "dnd_action",
+          "enum": {
+            "none": 0,
+            "copy": 1,
+            "move": 2,
+            "ask": 4
+          },
+          "bitfield": true
+        }
+      ]
+    },
+    {
       "name": "wl_surface",
       "version": 6,
       "request": [
