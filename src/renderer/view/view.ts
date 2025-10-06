@@ -49,6 +49,11 @@ type WaylandData = {
 
 type WaylandObjectX<T extends keyof WaylandData> = { protocol: WaylandProtocol; data: WaylandData[T] };
 
+interface WaylandClientEventMap {
+    close: () => void;
+    surfacecreate: (surfaceId: WaylandObjectId, canvas: HTMLCanvasElement) => void;
+}
+
 function waylandName(name: number): WaylandName {
     return name as WaylandName;
 }
@@ -109,7 +114,10 @@ class WaylandServer {
 
         const client = new WaylandClient({ id: clientId, socket });
 
-        this.clients.set(clientId, client); // todo onclose
+        this.clients.set(clientId, client);
+        client.on("close", () => {
+            this.clients.delete(clientId);
+        });
     }
 }
 
@@ -127,6 +135,9 @@ class WaylandClient {
     }> & {
         surfaces: { id: WaylandObjectId; el: HTMLCanvasElement }[];
     } & Record<string, any>;
+    // 事件存储
+    private events: { [K in keyof WaylandClientEventMap]?: WaylandClientEventMap[K][] } = {};
+
     constructor({ id, socket }: { id: string; socket: USocket }) {
         this.id = id;
         this.socket = socket;
@@ -141,13 +152,39 @@ class WaylandClient {
 
         socket.on("close", () => {
             console.log(`Client ${this.id} disconnected`);
+            this.emit("close");
             this.close();
         });
 
         socket.on("error", (err) => {
             console.error(`Client ${this.id} error:`, err);
+            this.emit("close");
             this.close();
         });
+    }
+
+    // 注册事件
+    public on<K extends keyof WaylandClientEventMap>(event: K, handler: WaylandClientEventMap[K]): void {
+        if (!this.events[event]) this.events[event] = [];
+        this.events[event]!.push(handler);
+    }
+
+    // 触发事件
+    protected emit<K extends keyof WaylandClientEventMap>(
+        event: K,
+        ...args: Parameters<WaylandClientEventMap[K]>
+    ): void {
+        const handlers = this.events[event];
+        if (handlers) {
+            for (const fn of handlers) {
+                // @ts-expect-error
+                fn(...args);
+            }
+            // 特殊处理：close事件触发后移除所有close监听器
+            if (event === "close") {
+                this.events.close = [];
+            }
+        }
     }
 
     private getObject<T extends keyof WaylandData>(id: WaylandObjectId): WaylandObjectX<T> {
@@ -267,6 +304,7 @@ class WaylandClient {
                 const canvas = canvasEl.el;
                 this.obj2.surfaces.push({ id: surfaceId, el: canvas });
                 surface.data = { canvas, bufferPointer: 0 };
+                this.emit("surfacecreate", surfaceId, canvas);
             });
             isOp(x, "xdg_wm_base.get_xdg_surface", (x) => {
                 const xdgSurfaceId = x.args.id;
