@@ -73,6 +73,29 @@ const waylandProtocolsNameMap = new Map<WaylandName, WaylandProtocol>();
 class WaylandServer {
     private events: { [K in keyof WaylandServerEventMap]?: WaylandServerEventMap[K][] } = {};
 
+    socketDir = "/tmp";
+    socketName = "my-wayland-server-0";
+    private socketPath: string;
+    private server: UServer | null = null;
+    clients: Map<string, WaylandClient>;
+    constructor(op?: {
+        socketDir?: string;
+        socketName?: string;
+    }) {
+        if (op) {
+            this.socketDir = op.socketDir || this.socketDir;
+            this.socketName = op.socketName || this.socketName;
+        }
+
+        this.socketPath = path.join(this.socketDir, this.socketName);
+        this.clients = new Map(); // 存储连接的客户端
+
+        initWaylandProtocols();
+
+        console.log("Support protocols:", Object.keys(WaylandProtocols));
+
+        this.setupSocket();
+    }
     public on<K extends keyof WaylandServerEventMap>(event: K, handler: WaylandServerEventMap[K]): void {
         if (!this.events[event]) this.events[event] = [];
         this.events[event]!.push(handler);
@@ -89,25 +112,6 @@ class WaylandServer {
                 fn(...args);
             }
         }
-    }
-    socketDir = "/tmp";
-    socketName = "my-wayland-server-0";
-    socketPath: string;
-    server: UServer | null = null;
-    clients: Map<string, WaylandClient>;
-    globalObjects: Map<string, any>;
-    nextObjectId: number;
-    constructor() {
-        this.socketPath = path.join(this.socketDir, this.socketName);
-        this.clients = new Map(); // 存储连接的客户端
-        this.globalObjects = new Map(); // 全局对象注册表
-        this.nextObjectId = 1; // Wayland 对象ID计数器
-
-        initWaylandProtocols();
-
-        console.log("Support protocols:", Object.keys(WaylandProtocols));
-
-        this.setupSocket();
     }
 
     setupSocket() {
