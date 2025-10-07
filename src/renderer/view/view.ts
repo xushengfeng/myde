@@ -292,6 +292,7 @@ class WaylandClient {
                 this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: callbackId });
 
                 this.sendMessageX(callbackId, "wl_callback.done", { callback_data: 0 });
+                this.deleteId(callbackId);
             });
             isOp(x, "wl_display.get_registry", (x) => {
                 const registryId = x.args.registry;
@@ -385,12 +386,10 @@ class WaylandClient {
                 };
             });
             isOp(x, "wl_shm_pool.destroy", (x) => {
-                this.objects.delete(x.id);
-                this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: x.id });
+                this.deleteId(x.id);
             });
             isOp(x, "wl_region.destroy", (x) => {
-                this.objects.delete(x.id);
-                this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: x.id });
+                this.deleteId(x.id);
             });
             isOp(x, "wl_surface.attach", (x) => {
                 const surfaceId = x.id;
@@ -491,6 +490,7 @@ class WaylandClient {
                             id: x,
                         });
                         this.sendMessageX(x, "wl_callback.done", { callback_data: Date.now() });
+                        this.objects.delete(x);
                         this.lastCallback = null;
                     });
                 }
@@ -579,6 +579,7 @@ class WaylandClient {
                 this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_target_device", {
                     device: a,
                 });
+                this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_done", {});
 
                 this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
             });
@@ -690,6 +691,11 @@ class WaylandClient {
             fds: fds || [],
         });
     }
+    private deleteId(id: WaylandObjectId) {
+        this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id });
+        this.objects.delete(id);
+    }
+
     getAllSurfaces() {
         return this.obj2.surfaces;
     }
