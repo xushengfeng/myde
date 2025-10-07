@@ -315,7 +315,7 @@ class WaylandClient {
                 this.protoVersions.set(proto.name, x.args._version);
                 console.log(`Client ${this.id} bound ${proto.name} to id ${id}`);
 
-                // wl_shm wl_seat wl_output
+                // todo 添加自定义
 
                 if (proto.name === "wl_shm") {
                     this.sendMessageX(id, "wl_shm.format", {
@@ -330,6 +330,27 @@ class WaylandClient {
                     this.sendMessageX(id, "wl_seat.capabilities", {
                         capabilities: getEnumValue(proto, "wl_seat.capability", ["pointer", "keyboard"]),
                     });
+                }
+                if (proto.name === "wl_output") {
+                    this.sendMessageX(id, "wl_output.name", { name: "output0" });
+                    this.sendMessageX(id, "wl_output.description", { description: "Output 0" });
+                    this.sendMessageX(id, "wl_output.mode", {
+                        width: 1920,
+                        height: 1080,
+                        refresh: 60000,
+                        flags: getEnumValue(proto, "wl_output.mode", "current"),
+                    });
+                    this.sendMessageX(id, "wl_output.geometry", {
+                        x: 0,
+                        y: 0,
+                        physical_width: 344,
+                        physical_height: 194,
+                        make: "",
+                        model: "",
+                        subpixel: getEnumValue(proto, "wl_output.subpixel", "unknown"),
+                        transform: getEnumValue(proto, "wl_output.transform", "normal"),
+                    });
+                    this.sendMessageX(id, "wl_output.done", {});
                 }
             });
             isOp(x, "wl_shm.create_pool", (x) => {
