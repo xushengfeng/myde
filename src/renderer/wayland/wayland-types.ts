@@ -526,6 +526,25 @@ export type WaylandRequestObj = {
         width: number;
         height: number;
     };
+    "wl_subcompositor.destroy": {};
+    "wl_subcompositor.get_subsurface": {
+        id: WaylandObjectId;
+        surface: number;
+        parent: number;
+    };
+    "wl_subsurface.destroy": {};
+    "wl_subsurface.set_position": {
+        x: number;
+        y: number;
+    };
+    "wl_subsurface.place_above": {
+        sibling: number;
+    };
+    "wl_subsurface.place_below": {
+        sibling: number;
+    };
+    "wl_subsurface.set_sync": {};
+    "wl_subsurface.set_desync": {};
     "xdg_wm_base.destroy": {};
     "xdg_wm_base.create_positioner": {
         id: WaylandObjectId;
@@ -777,6 +796,8 @@ export type WaylandEnumObj = {
     "wl_output.subpixel": "unknown" | "none" | "horizontal_rgb" | "horizontal_bgr" | "vertical_rgb" | "vertical_bgr";
     "wl_output.transform": "90" | "180" | "270" | "normal" | "flipped" | "flipped_90" | "flipped_180" | "flipped_270";
     "wl_output.mode": "current" | "preferred";
+    "wl_subcompositor.error": "bad_surface" | "bad_parent";
+    "wl_subsurface.error": "bad_surface";
     "xdg_wm_base.error": "role" | "defunct_surfaces" | "not_the_topmost_popup" | "invalid_popup_parent" | "invalid_surface_state" | "invalid_positioner" | "unresponsive";
     "xdg_positioner.error": "invalid_input";
     "xdg_positioner.anchor": "none" | "top" | "bottom" | "left" | "right" | "top_left" | "bottom_left" | "top_right" | "bottom_right";

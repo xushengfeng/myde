@@ -95,6 +95,10 @@ server.on("newClient", (client, clientId) => {
         console.log(`Client ${clientId} created surface ${surfaceId}`);
         body.add(canvas);
     });
+    client.on("surfacedestroy", (surfaceId, canvas) => {
+        console.log(`Client ${clientId} deleted surface ${surfaceId}`);
+        canvas.remove();
+    });
 });
 server.on("clientClose", (_, clientId) => {
     clientData.delete(clientId);
@@ -191,6 +195,7 @@ view()
             "weston-simple-dmabuf-feedback",
             "weston-editor",
             "weston-clickdot",
+            "weston-subsurfaces",
             "glxgears",
             "kwrite",
         ].map((app) =>

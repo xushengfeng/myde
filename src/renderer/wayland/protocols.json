@@ -1428,6 +1428,106 @@
       ],
       "event": [],
       "enum": []
+    },
+    {
+      "name": "wl_subcompositor",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "get_subsurface",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wl_subsurface"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface"
+            },
+            {
+              "name": "parent",
+              "type": "object",
+              "interface": "wl_surface"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "bad_surface": 0,
+            "bad_parent": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "wl_subsurface",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "set_position",
+          "args": [
+            {
+              "name": "x",
+              "type": "int"
+            },
+            {
+              "name": "y",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "place_above",
+          "args": [
+            {
+              "name": "sibling",
+              "type": "object",
+              "interface": "wl_surface"
+            }
+          ]
+        },
+        {
+          "name": "place_below",
+          "args": [
+            {
+              "name": "sibling",
+              "type": "object",
+              "interface": "wl_surface"
+            }
+          ]
+        },
+        {
+          "name": "set_sync",
+          "args": []
+        },
+        {
+          "name": "set_desync",
+          "args": []
+        }
+      ],
+      "event": [],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "bad_surface": 0
+          }
+        }
+      ]
     }
   ],
   "xdg-shell": [
