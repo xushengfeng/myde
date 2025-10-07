@@ -50,8 +50,11 @@ function runApp(execPath: string, args: string[] = []) {
         },
     });
 
+    const logData: string[] = [];
+
     subprocess.stdout.on("data", (data) => {
         console.log(`Subprocess ${execPath} stdout:\n${data.toString("utf8")}`);
+        logData.push(data.toString("utf8"));
     });
 
     subprocess.stderr.on("data", (data) => {
@@ -64,6 +67,7 @@ function runApp(execPath: string, args: string[] = []) {
             }
         }
         console.log(`Subprocess ${execPath} stderr:\n${data.toString("utf8")}`);
+        logData.push(data.toString("utf8"));
     });
 
     subprocess.on("error", (err) => {
@@ -73,6 +77,14 @@ function runApp(execPath: string, args: string[] = []) {
     subprocess.on("exit", (code, signal) => {
         console.log(`Subprocess ${execPath} exited with code ${code} and signal ${signal}`);
     });
+
+    view()
+        .add(
+            button(`log ${execPath}`).on("click", () => {
+                console.log(logData.map((line) => line.trim()).join("\n"));
+            }),
+        )
+        .addInto();
 }
 
 const server = new WaylandServer();
