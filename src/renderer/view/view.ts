@@ -55,6 +55,7 @@ interface WaylandServerEventMap {
 interface WaylandClientEventMap {
     close: () => void;
     surfacecreate: (surfaceId: WaylandObjectId, canvas: HTMLCanvasElement) => void;
+    surfacedestroy: (surfaceId: WaylandObjectId, canvas: HTMLCanvasElement) => void;
 }
 
 function waylandName(name: number): WaylandName {
@@ -494,6 +495,15 @@ class WaylandClient {
                         this.lastCallback = null;
                     });
                 }
+            });
+            isOp(x, "wl_surface.destroy", (x) => {
+                const surfaceId = x.id;
+                const surface = this.getObject<"wl_surface">(surfaceId);
+                surface.data.canvas.remove();
+                this.obj2.surfaces = this.obj2.surfaces.filter((s) => s.id !== surfaceId);
+                const canvas = surface.data.canvas;
+                this.emit("surfacedestroy", surfaceId, canvas);
+                this.deleteId(surfaceId);
             });
             isOp(x, "xdg_surface.get_toplevel", (x) => {
                 const toplevelId = x.args.id;
