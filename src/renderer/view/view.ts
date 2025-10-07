@@ -41,6 +41,7 @@ type WaylandData = {
         // 双缓冲，不过没有实际作用，只是为了日志对齐，方便调试
         bufferPointer: 0 | 1;
         damageList?: { x: number; y: number; width: number; height: number }[];
+        callback?: WaylandObjectId;
     };
     xdg_surface: { surface: WaylandObjectId };
     wl_buffer: { fd: number; start: number; end: number; imageData: ImageData };
@@ -166,7 +167,6 @@ class WaylandClient {
     private socket: USocket;
     private objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
     private protoVersions: Map<string, number> = new Map();
-    private lastCallback: WaylandObjectId | null; // todo 移除
     private obj2: Partial<{
         pointer: WaylandObjectId;
         keyboard: WaylandObjectId;
@@ -182,7 +182,6 @@ class WaylandClient {
         this.id = id;
         this.socket = socket;
         this.objects = new Map();
-        this.lastCallback = null;
         this.obj2 = { surfaces: [] };
         socket.on("readable", () => {
             console.log("connected");
@@ -416,7 +415,8 @@ class WaylandClient {
             });
             isOp(x, "wl_surface.frame", (x) => {
                 const callbackId = x.args.callback;
-                this.lastCallback = callbackId;
+                const surface = this.getObject<"wl_surface">(x.id);
+                surface.data.callback = callbackId;
             });
             isOp(x, "wl_surface.commit", (x) => {
                 const surfaceId = x.id;
@@ -477,24 +477,23 @@ class WaylandClient {
                     ctx.putImageData(imagedata, 0, 0);
                 }
                 surface.data.damageList = [];
-                if (this.lastCallback) {
-                    const x = this.lastCallback;
-
-                    requestAnimationFrame(() => {
-                        const bufferId =
-                            surface.data.bufferPointer === 0 ? surface.data.buffer2?.id : surface.data.buffer?.id;
-                        if (bufferId) {
-                            this.sendMessageX(bufferId, "wl_buffer.release", {});
-                        }
-                        surface.data.bufferPointer = surface.data.bufferPointer === 0 ? 1 : 0;
+                requestAnimationFrame(() => {
+                    const bufferId =
+                        surface.data.bufferPointer === 0 ? surface.data.buffer2?.id : surface.data.buffer?.id;
+                    if (bufferId) {
+                        this.sendMessageX(bufferId, "wl_buffer.release", {});
+                    }
+                    surface.data.bufferPointer = surface.data.bufferPointer === 0 ? 1 : 0;
+                    const x = surface.data.callback;
+                    if (x) {
                         this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", {
                             id: x,
                         });
                         this.sendMessageX(x, "wl_callback.done", { callback_data: Date.now() });
                         this.objects.delete(x);
-                        this.lastCallback = null;
-                    });
-                }
+                        surface.data.callback = undefined;
+                    }
+                });
             });
             isOp(x, "wl_surface.destroy", (x) => {
                 const surfaceId = x.id;
