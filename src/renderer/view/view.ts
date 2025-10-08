@@ -765,6 +765,26 @@ class WaylandClient {
             this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
         }
     }
+    sendScrollEvent(op: { p: WheelEvent }) {
+        const { p } = op;
+        if (!this.obj2.pointer) return;
+        const { deltaX, deltaY } = p;
+        if (deltaX !== 0) {
+            this.sendMessageX(this.obj2.pointer, "wl_pointer.axis", {
+                time: Date.now(),
+                axis: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.axis", "horizontal_scroll"),
+                value: deltaX,
+            });
+        }
+        if (deltaY !== 0) {
+            this.sendMessageX(this.obj2.pointer, "wl_pointer.axis", {
+                time: Date.now(),
+                axis: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.axis", "vertical_scroll"),
+                value: deltaY,
+            });
+        }
+        this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
+    }
     keyboard = {
         // todo Surface管理
         focusSurface: (id: WaylandObjectId) => {

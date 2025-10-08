@@ -35,6 +35,17 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
     }
 }
 
+function sendScrollEvent(p: WheelEvent) {
+    for (const [_, client] of server.clients) {
+        for (const surface of client.getAllSurfaces()) {
+            const rect = surface.el.getBoundingClientRect();
+            if (p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom) {
+                client.sendScrollEvent({ p: p });
+            }
+        }
+    }
+}
+
 function runApp(execPath: string, args: string[] = []) {
     console.log(`Running application: ${execPath}`);
 
@@ -154,6 +165,10 @@ body.on("keyup", (e) => {
     for (const client of server.clients.values()) {
         client.keyboard.sendKey(mapKeyCode(e.key), "released");
     }
+});
+
+body.on("wheel", (e) => {
+    sendScrollEvent(e);
 });
 
 function mapKeyCode(key: string): number {
