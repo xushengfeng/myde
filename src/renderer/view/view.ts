@@ -459,7 +459,15 @@ class WaylandClient {
                 } catch (error) {
                     console.error("Error reading shm buffer:", error);
                 }
-                imagedata.data.set(buffern);
+                // todo 搞清楚为什么给定rgb格式，读取出来是bgr格式
+                const rgba = new Uint8ClampedArray(buffern.length);
+                for (let i = 0; i < buffern.length; i += 4) {
+                    rgba[i] = buffern[i + 2];
+                    rgba[i + 1] = buffern[i + 1];
+                    rgba[i + 2] = buffern[i];
+                    rgba[i + 3] = buffern[i + 3];
+                }
+                imagedata.data.set(rgba);
 
                 if (surface.data.damageList?.length) {
                     for (const damage of surface.data.damageList) {
