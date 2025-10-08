@@ -363,6 +363,8 @@ class WaylandClient {
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 const canvasEl = ele("canvas");
                 const canvas = canvasEl.el;
+                canvas.width = 1;
+                canvas.height = 1;
                 this.obj2.surfaces.push({ id: surfaceId, el: canvas });
                 surface.data = { canvas, bufferPointer: 0 };
                 this.emit("surfacecreate", surfaceId, canvas);
@@ -427,63 +429,64 @@ class WaylandClient {
                 const imagedata = buffer?.data;
                 if (!imagedata) {
                     console.warn("wl_surface buffer not found", surfaceId);
-                    return;
-                }
-                if (imagedata.width !== canvas.width || imagedata.height !== canvas.height) {
-                    canvas.width = imagedata.width;
-                    canvas.height = imagedata.height;
-                    for (const [id, p] of this.objects) {
-                        if (p.protocol.name === "xdg_toplevel") {
-                            // this.sendMessage(id, 0, {
-                            //     width: canvas.width,
-                            //     height: canvas.height,
-                            //     states: new Uint8Array([
-                            //         WaylandProtocols.xdg_toplevel.enum![2].enum.resizing,
-                            //         WaylandProtocols.xdg_toplevel.enum![2].enum.activated,
-                            //     ]),
-                            // });
-                            // todo 考虑实际窗口的几何，否则有外边框的会变大
-                        }
-                    }
-                    for (const [id, p] of this.objects) {
-                        if (p.protocol.name === "xdg_surface") {
-                            this.sendMessageX(id, "xdg_surface.configure", { serial: 1 });
-                        }
-                    }
-                }
-
-                const bufferX = this.getObject<"wl_buffer">(buffer.id);
-                const buffern = new Uint8ClampedArray(bufferX.data.end - bufferX.data.start);
-                try {
-                    fs.readSync(bufferX.data.fd, buffern, bufferX.data.start, buffern.length, 0);
-                } catch (error) {
-                    console.error("Error reading shm buffer:", error);
-                }
-                // todo 搞清楚为什么给定rgb格式，读取出来是bgr格式
-                const rgba = new Uint8ClampedArray(buffern.length);
-                for (let i = 0; i < buffern.length; i += 4) {
-                    rgba[i] = buffern[i + 2];
-                    rgba[i + 1] = buffern[i + 1];
-                    rgba[i + 2] = buffern[i];
-                    rgba[i + 3] = buffern[i + 3];
-                }
-                imagedata.data.set(rgba);
-
-                if (surface.data.damageList?.length) {
-                    for (const damage of surface.data.damageList) {
-                        ctx.putImageData(
-                            imagedata,
-                            0,
-                            0,
-                            damage.x,
-                            damage.y,
-                            Math.min(canvas.width, damage.width),
-                            Math.min(canvas.height, damage.height),
-                        );
-                    }
                 } else {
-                    ctx.putImageData(imagedata, 0, 0);
+                    if (imagedata.width !== canvas.width || imagedata.height !== canvas.height) {
+                        canvas.width = imagedata.width;
+                        canvas.height = imagedata.height;
+                        for (const [id, p] of this.objects) {
+                            if (p.protocol.name === "xdg_toplevel") {
+                                // this.sendMessage(id, 0, {
+                                //     width: canvas.width,
+                                //     height: canvas.height,
+                                //     states: new Uint8Array([
+                                //         WaylandProtocols.xdg_toplevel.enum![2].enum.resizing,
+                                //         WaylandProtocols.xdg_toplevel.enum![2].enum.activated,
+                                //     ]),
+                                // });
+                                // todo 考虑实际窗口的几何，否则有外边框的会变大
+                            }
+                        }
+                        for (const [id, p] of this.objects) {
+                            if (p.protocol.name === "xdg_surface") {
+                                this.sendMessageX(id, "xdg_surface.configure", { serial: 1 });
+                            }
+                        }
+                    }
+
+                    const bufferX = this.getObject<"wl_buffer">(buffer.id);
+                    const buffern = new Uint8ClampedArray(bufferX.data.end - bufferX.data.start);
+                    try {
+                        fs.readSync(bufferX.data.fd, buffern, bufferX.data.start, buffern.length, 0);
+                    } catch (error) {
+                        console.error("Error reading shm buffer:", error);
+                    }
+                    // todo 搞清楚为什么给定rgb格式，读取出来是bgr格式
+                    const rgba = new Uint8ClampedArray(buffern.length);
+                    for (let i = 0; i < buffern.length; i += 4) {
+                        rgba[i] = buffern[i + 2];
+                        rgba[i + 1] = buffern[i + 1];
+                        rgba[i + 2] = buffern[i];
+                        rgba[i + 3] = buffern[i + 3];
+                    }
+                    imagedata.data.set(rgba);
+
+                    if (surface.data.damageList?.length) {
+                        for (const damage of surface.data.damageList) {
+                            ctx.putImageData(
+                                imagedata,
+                                0,
+                                0,
+                                damage.x,
+                                damage.y,
+                                Math.min(canvas.width, damage.width),
+                                Math.min(canvas.height, damage.height),
+                            );
+                        }
+                    } else {
+                        ctx.putImageData(imagedata, 0, 0);
+                    }
                 }
+
                 surface.data.damageList = [];
                 requestAnimationFrame(() => {
                     const bufferId =
