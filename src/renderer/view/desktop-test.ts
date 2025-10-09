@@ -102,13 +102,13 @@ const server = new WaylandServer();
 
 server.on("newClient", (client, clientId) => {
     clientData.set(clientId, { client, in: false });
-    client.on("surfacecreate", (surfaceId, canvas) => {
-        console.log(`Client ${clientId} created surface ${surfaceId}`);
-        body.add(canvas);
+    client.on("windowCreated", (windowId, el) => {
+        console.log(`Client ${clientId} created window ${windowId}`);
+        body.add(el);
     });
-    client.on("surfacedestroy", (surfaceId, canvas) => {
-        console.log(`Client ${clientId} deleted surface ${surfaceId}`);
-        canvas.remove();
+    client.on("windowClosed", (windowId, el) => {
+        console.log(`Client ${clientId} deleted window ${windowId}`);
+        el.remove();
     });
 });
 server.on("clientClose", (_, clientId) => {

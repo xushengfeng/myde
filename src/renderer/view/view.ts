@@ -24,7 +24,7 @@ const WaylandProtocolsx = JSON.parse(WaylandProtocolsJSON) as Record<string, Way
 const WaylandProtocols = Object.fromEntries(Object.values(WaylandProtocolsx).flatMap((v) => v.map((p) => [p.name, p])));
 import { WaylandEncoder } from "../wayland/wayland-encoder";
 
-import { ele } from "dkh-ui";
+import { ele, view } from "dkh-ui";
 import { InputEventCodes } from "../input_codes/types";
 import { createFormatTableBuffer, DRM_FORMAT } from "../wayland/dma-buf";
 
@@ -55,8 +55,8 @@ interface WaylandServerEventMap {
 }
 interface WaylandClientEventMap {
     close: () => void;
-    surfacecreate: (surfaceId: WaylandObjectId, canvas: HTMLCanvasElement) => void;
-    surfacedestroy: (surfaceId: WaylandObjectId, canvas: HTMLCanvasElement) => void;
+    windowCreated: (xdgToplevelId: WaylandObjectId, el: HTMLElement) => void;
+    windowClosed: (xdgToplevelId: WaylandObjectId, el: HTMLElement) => void;
 }
 
 function waylandName(name: number): WaylandName {
@@ -367,7 +367,6 @@ class WaylandClient {
                 canvas.height = 1;
                 this.obj2.surfaces.push({ id: surfaceId, el: canvas });
                 surface.data = { canvas, bufferPointer: 0 };
-                this.emit("surfacecreate", surfaceId, canvas);
             });
             isOp(x, "xdg_wm_base.get_xdg_surface", (x) => {
                 const xdgSurfaceId = x.args.id;
@@ -511,8 +510,6 @@ class WaylandClient {
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 surface.data.canvas.remove();
                 this.obj2.surfaces = this.obj2.surfaces.filter((s) => s.id !== surfaceId);
-                const canvas = surface.data.canvas;
-                this.emit("surfacedestroy", surfaceId, canvas);
                 this.deleteId(surfaceId);
             });
             isOp(x, "xdg_surface.get_toplevel", (x) => {
@@ -528,6 +525,11 @@ class WaylandClient {
                         this.sendMessageX(id, "xdg_surface.configure", { serial: 1 }); // todo
                     }
                 }
+                const el = view().style({ position: "relative" });
+                const surfaceId = this.getObject<"xdg_surface">(x.id).data.surface;
+                const surface = this.getObject<"wl_surface">(surfaceId);
+                el.add(surface.data.canvas);
+                this.emit("windowCreated", toplevelId, el.el);
             });
             isOp(x, "xdg_surface.set_window_geometry", (x) => {
                 const surfaceId = this.getObject<"xdg_surface">(x.id).data.surface;
