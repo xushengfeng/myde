@@ -564,10 +564,8 @@ class WaylandClient {
                 }
                 child.posi = { x: x.args.x, y: x.args.y };
                 const thisChild = this.getObject<"wl_surface">(thisData.data.child);
-                thisChild.data.canvas.style.left = `${x.args.x}px`;
-                thisChild.data.canvas.style.top = `${x.args.y}px`;
-                // @ts-expect-error
-                thisChild.data.canvas.style.positionAnchor = `--${thisData.data.parent}`;
+                thisChild.data.canvas.style.left = `calc(anchor(--${thisData.data.parent} left) + ${x.args.x}px)`;
+                thisChild.data.canvas.style.top = `calc(anchor(--${thisData.data.parent} top) + ${x.args.y}px)`;
             });
             isOp(x, "xdg_surface.get_toplevel", (x) => {
                 const toplevelId = x.args.id;
