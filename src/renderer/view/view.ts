@@ -42,6 +42,18 @@ type WaylandData = {
         bufferPointer: 0 | 1;
         damageList?: { x: number; y: number; width: number; height: number }[];
         callback?: WaylandObjectId;
+        children?: {
+            id: WaylandObjectId;
+            posi: {
+                x: number;
+                y: number;
+            };
+        }[]; // 索引大的在上面
+        childrenEl?: HTMLElement;
+    };
+    wl_subsurface: {
+        parent: WaylandObjectId;
+        child: WaylandObjectId;
     };
     xdg_surface: { surface: WaylandObjectId };
     wl_buffer: { fd: number; start: number; end: number; imageData: ImageData };
@@ -172,6 +184,14 @@ class WaylandClient {
         keyboard: WaylandObjectId;
         textInput: { focus: WaylandObjectId | null; m: Map<WaylandObjectId, { focus: boolean }> };
         serial: number;
+        window: Record<
+            WaylandObjectId,
+            {
+                root: WaylandObjectId;
+                top: { id: WaylandObjectId; x: number; y: number }[];
+                down: { id: WaylandObjectId; x: number; y: number }[];
+            }
+        >;
     }> & {
         surfaces: { id: WaylandObjectId; el: HTMLCanvasElement }[];
     } & Record<string, any>;
@@ -511,6 +531,43 @@ class WaylandClient {
                 surface.data.canvas.remove();
                 this.obj2.surfaces = this.obj2.surfaces.filter((s) => s.id !== surfaceId);
                 this.deleteId(surfaceId);
+            });
+            isOp(x, "wl_subcompositor.get_subsurface", (x) => {
+                const surfaceRelation = this.getObject<"wl_subsurface">(x.args.id);
+                surfaceRelation.data = {
+                    parent: waylandObjectId(x.args.parent),
+                    child: waylandObjectId(x.args.surface),
+                };
+
+                const parent = this.getObject<"wl_surface">(waylandObjectId(x.args.parent));
+                const cs = parent.data.children || [];
+                cs.push({ id: waylandObjectId(x.args.surface), posi: { x: 0, y: 0 } });
+                parent.data.children = cs;
+                const thisChild = this.getObject<"wl_surface">(waylandObjectId(x.args.surface));
+                parent.data.canvas.parentElement!.appendChild(thisChild.data.canvas);
+                thisChild.data.canvas.style.position = "absolute";
+                // @ts-expect-error
+                parent.data.canvas.style.anchorName = `--${x.args.parent}`;
+            });
+            isOp(x, "wl_subsurface.set_position", (x) => {
+                const thisData = this.getObject<"wl_subsurface">(x.id);
+                const parent = this.getObject<"wl_surface">(thisData.data.parent);
+                const cs = parent.data.children;
+                if (!cs) {
+                    console.error("No children found");
+                    return;
+                }
+                const child = cs.find((c) => c.id === thisData.data.child);
+                if (!child) {
+                    console.error("No child found");
+                    return;
+                }
+                child.posi = { x: x.args.x, y: x.args.y };
+                const thisChild = this.getObject<"wl_surface">(thisData.data.child);
+                thisChild.data.canvas.style.left = `${x.args.x}px`;
+                thisChild.data.canvas.style.top = `${x.args.y}px`;
+                // @ts-expect-error
+                thisChild.data.canvas.style.positionAnchor = `--${thisData.data.parent}`;
             });
             isOp(x, "xdg_surface.get_toplevel", (x) => {
                 const toplevelId = x.args.id;
