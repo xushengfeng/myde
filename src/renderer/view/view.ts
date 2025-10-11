@@ -220,6 +220,7 @@ class WaylandClient {
             this.emit("close");
             this.close();
         });
+        window["send"] = this.sendMessageX.bind(this);
     }
 
     // 注册事件
@@ -504,6 +505,11 @@ class WaylandClient {
                     } else {
                         ctx.putImageData(imagedata, 0, 0);
                     }
+
+                    const ncanvas = ele("canvas").addInto().el;
+                    ncanvas.width = canvas.width;
+                    ncanvas.height = canvas.height;
+                    ncanvas.getContext("2d")!.putImageData(imagedata, 0, 0);
                 }
 
                 surface.data.damageList = [];
@@ -678,6 +684,9 @@ class WaylandClient {
                 }
             });
             isOp(x, "zwp_text_input_v1.deactivate", (x) => {
+                if (this.obj2.textInput?.m.get(x.id)?.focus !== true) {
+                    return;
+                }
                 this.sendMessageX(x.id, "zwp_text_input_v1.leave", {});
                 if (!this.obj2.textInput) return;
                 this.obj2.textInput.m.get(x.id)!.focus = false;
