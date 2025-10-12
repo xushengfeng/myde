@@ -98,7 +98,11 @@ function runApp(execPath: string, args: string[] = []) {
         .addInto();
 }
 
-const server = new WaylandServer();
+const deEnv = JSON.parse(new URLSearchParams(location.search).get("env") ?? "{}");
+
+const xdgDir = deEnv.XDG_RUNTIME_DIR;
+
+const server = new WaylandServer({ socketDir: xdgDir || "/tmp" });
 
 server.on("newClient", (client, clientId) => {
     clientData.set(clientId, { client, in: false });
@@ -114,8 +118,6 @@ server.on("newClient", (client, clientId) => {
 server.on("clientClose", (_, clientId) => {
     clientData.delete(clientId);
 });
-
-const deEnv = JSON.parse(new URLSearchParams(location.search).get("env") ?? "{}");
 
 const clientData = new Map<string, { client: WaylandClient; in: boolean }>();
 
