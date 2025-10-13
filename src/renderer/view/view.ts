@@ -594,7 +594,7 @@ class WaylandClient {
             });
             isOp(x, "xdg_surface.get_toplevel", (x) => {
                 const toplevelId = x.args.id;
-                // this.sendMessage(toplevelId, 2, { width: 1920, height: 1080 });
+                this.sendMessageX(toplevelId, "xdg_toplevel.configure_bounds", { width: 1920, height: 1080 });
                 this.sendMessageX(toplevelId, "xdg_toplevel.configure", {
                     width: 0,
                     height: 0,
@@ -626,11 +626,10 @@ class WaylandClient {
             isOp(x, "wl_seat.get_keyboard", (x) => {
                 const keyboardId = x.args.id;
                 this.obj2.keyboard = keyboardId;
-                // todo 版本问题
-                // this.sendMessageX(keyboardId, "wl_keyboard.repeat_info", {
-                //     rate: 25,
-                //     delay: 600,
-                // });
+                this.sendMessageX(keyboardId, "wl_keyboard.repeat_info", {
+                    rate: 25,
+                    delay: 600,
+                });
 
                 const keymapStr = fs.readFileSync(path.join(__dirname, "../../", "script/xcb", "x.xkb"), "utf-8");
                 const { fd, size } = newFd(keymapStr);
