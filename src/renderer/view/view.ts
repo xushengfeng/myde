@@ -179,6 +179,7 @@ class WaylandClient {
     private socket: USocket;
     private objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
     private protoVersions: Map<string, number> = new Map();
+    private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any>; fds?: number[] }[] = [];
     private obj2: Partial<{
         pointer: WaylandObjectId;
         keyboard: WaylandObjectId;
@@ -272,6 +273,7 @@ class WaylandClient {
         }
 
         console.log(`Parsed data from client ${this.id}:`, data.buffer, fds);
+        this.toSend = [];
         while (decoder.getRemainingBytes() > 0) {
             const header = decoder.readHeader();
             const _x = getX(this.objects, "request", header.objectId, header.opcode);
@@ -309,10 +311,9 @@ class WaylandClient {
             const x = { proto: _x.proto, op: _x.op, args, id: header.objectId };
             isOp(x, "wl_display.sync", (x) => {
                 const callbackId = x.args.callback;
-                this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id: callbackId });
+                this.sendMessageImm(waylandObjectId(1), "wl_display.delete_id", { id: callbackId });
 
                 this.sendMessageX(callbackId, "wl_callback.done", { callback_data: 0 });
-                this.deleteId(callbackId);
             });
             isOp(x, "wl_display.get_registry", (x) => {
                 const registryId = x.args.registry;
@@ -511,15 +512,15 @@ class WaylandClient {
                     const bufferId =
                         surface.data.bufferPointer === 0 ? surface.data.buffer2?.id : surface.data.buffer?.id;
                     if (bufferId) {
-                        this.sendMessageX(bufferId, "wl_buffer.release", {});
+                        this.sendMessageImm(bufferId, "wl_buffer.release", {});
                     }
                     surface.data.bufferPointer = surface.data.bufferPointer === 0 ? 1 : 0;
                     const x = surface.data.callback;
                     if (x) {
-                        this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", {
+                        this.sendMessageImm(waylandObjectId(1), "wl_display.delete_id", {
                             id: x,
                         });
-                        this.sendMessageX(x, "wl_callback.done", { callback_data: Date.now() });
+                        this.sendMessageImm(x, "wl_callback.done", { callback_data: Date.now() });
                         this.objects.delete(x);
                         surface.data.callback = undefined;
                     }
@@ -691,6 +692,19 @@ class WaylandClient {
             }
             useOp = false;
         }
+
+        for (const m of this.toSend) {
+            this.sendMessage(m.objectId, m.opcode, m.args, m.fds);
+        }
+        this.toSend = [];
+    }
+    private sendMessageImm<T extends keyof WaylandEventObj>(
+        objectId: WaylandObjectId,
+        op: T,
+        args: WaylandEventObj[T],
+        fds?: number[],
+    ) {
+        this.sendMessage(objectId, WaylandEventOpcode[op.replace(".", "__")], args, fds);
     }
     private sendMessageX<T extends keyof WaylandEventObj>(
         objectId: WaylandObjectId,
@@ -698,7 +712,7 @@ class WaylandClient {
         args: WaylandEventObj[T],
         fds?: number[],
     ) {
-        this.sendMessage(objectId, WaylandEventOpcode[op.replace(".", "__")], args, fds);
+        this.toSend.push({ objectId, opcode: WaylandEventOpcode[op.replace(".", "__")], args, fds });
     }
     private sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>, fds?: number[]) {
         const p = getX(this.objects, "event", objectId, opcode);
@@ -783,20 +797,24 @@ class WaylandClient {
         const { x, y } = p;
         if (!this.obj2.pointer) return;
         if (type === "move") {
-            this.sendMessageX(this.obj2.pointer, "wl_pointer.motion", { time: Date.now(), surface_x: x, surface_y: y });
-            this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
+            this.sendMessageImm(this.obj2.pointer, "wl_pointer.motion", {
+                time: Date.now(),
+                surface_x: x,
+                surface_y: y,
+            });
+            this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
         }
         if (type === "in") {
-            this.sendMessageX(this.obj2.pointer, "wl_pointer.enter", {
+            this.sendMessageImm(this.obj2.pointer, "wl_pointer.enter", {
                 serial: 0,
                 surface: surface,
                 surface_x: x,
                 surface_y: y,
             });
-            this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
+            this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
         }
         if (type === "down") {
-            this.sendMessageX(this.obj2.pointer, "wl_pointer.button", {
+            this.sendMessageImm(this.obj2.pointer, "wl_pointer.button", {
                 serial: 0,
                 time: Date.now(),
                 button:
@@ -809,10 +827,10 @@ class WaylandClient {
                             : InputEventCodes.BTN_LEFT,
                 state: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.button_state", "pressed"),
             });
-            this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
+            this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
         }
         if (type === "up") {
-            this.sendMessageX(this.obj2.pointer, "wl_pointer.button", {
+            this.sendMessageImm(this.obj2.pointer, "wl_pointer.button", {
                 serial: 0,
                 time: Date.now(),
                 button:
@@ -825,7 +843,7 @@ class WaylandClient {
                             : InputEventCodes.BTN_LEFT,
                 state: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.button_state", "released"),
             });
-            this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
+            this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
         }
     }
     sendScrollEvent(op: { p: WheelEvent }) {
@@ -833,27 +851,27 @@ class WaylandClient {
         if (!this.obj2.pointer) return;
         const { deltaX, deltaY } = p;
         if (deltaX !== 0) {
-            this.sendMessageX(this.obj2.pointer, "wl_pointer.axis", {
+            this.sendMessageImm(this.obj2.pointer, "wl_pointer.axis", {
                 time: Date.now(),
                 axis: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.axis", "horizontal_scroll"),
                 value: deltaX,
             });
         }
         if (deltaY !== 0) {
-            this.sendMessageX(this.obj2.pointer, "wl_pointer.axis", {
+            this.sendMessageImm(this.obj2.pointer, "wl_pointer.axis", {
                 time: Date.now(),
                 axis: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.axis", "vertical_scroll"),
                 value: deltaY,
             });
         }
-        this.sendMessageX(this.obj2.pointer, "wl_pointer.frame", {});
+        this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
     }
     keyboard = {
         // todo Surface管理
         focusSurface: (id: WaylandObjectId) => {
             if (!this.obj2.keyboard) return;
-            this.sendMessageX(this.obj2.keyboard, "wl_keyboard.enter", { serial: 0, surface: id, keys: [] });
-            this.sendMessageX(this.obj2.keyboard, "wl_keyboard.modifiers", {
+            this.sendMessageImm(this.obj2.keyboard, "wl_keyboard.enter", { serial: 0, surface: id, keys: [] });
+            this.sendMessageImm(this.obj2.keyboard, "wl_keyboard.modifiers", {
                 serial: 0,
                 mods_depressed: 0,
                 mods_latched: 0,
@@ -863,13 +881,13 @@ class WaylandClient {
         },
         blurSurface: (id: WaylandObjectId) => {
             if (!this.obj2.keyboard) return;
-            this.sendMessageX(this.obj2.keyboard, "wl_keyboard.leave", { serial: 0, surface: id });
+            this.sendMessageImm(this.obj2.keyboard, "wl_keyboard.leave", { serial: 0, surface: id });
         },
         sendKey: (key: number, state: "pressed" | "released") => {
             if (!this.obj2.keyboard) return;
             const s = this.obj2.serial ?? 1;
             this.obj2.serial = s + 2;
-            this.sendMessageX(this.obj2.keyboard, "wl_keyboard.key", {
+            this.sendMessageImm(this.obj2.keyboard, "wl_keyboard.key", {
                 serial: s,
                 time: Date.now(),
                 key: key,
