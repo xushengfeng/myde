@@ -59,6 +59,9 @@ function runApp(execPath: string, args: string[] = []) {
             XDG_RUNTIME_DIR: server.socketDir,
             WAYLAND_DISPLAY: server.socketName,
             ...(Number.isNaN(xServerNum) ? {} : { DISPLAY: `:${xServerNum}` }),
+            // GTK_DEBUG: "interactive",
+            // GDK_DEBUG: "all",
+            // GTK_THEME: "Adwaita:debug",
         },
     });
 
@@ -216,6 +219,7 @@ view()
             "weston-subsurfaces",
             "glxgears",
             "kwrite",
+            "gtk4-demo",
         ].map((app) =>
             button(app)
                 .style({ padding: "4px 8px", background: "#fff" })
