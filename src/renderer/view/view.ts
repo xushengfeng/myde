@@ -41,6 +41,7 @@ type WaylandData = {
         // 双缓冲，不过没有实际作用，只是为了日志对齐，方便调试
         bufferPointer: 0 | 1;
         damageList?: { x: number; y: number; width: number; height: number }[];
+        damageBufferList?: { x: number; y: number; width: number; height: number }[];
         callback?: WaylandObjectId;
         children?: {
             id: WaylandObjectId;
@@ -435,6 +436,18 @@ class WaylandClient {
                 });
                 surface.data.damageList = damageList;
             });
+            isOp(x, "wl_surface.damage_buffer", (x) => {
+                const surfaceId = x.id;
+                const surface = this.getObject<"wl_surface">(surfaceId);
+                const damageBufferList = surface.data.damageBufferList || [];
+                damageBufferList.push({
+                    x: x.args.x,
+                    y: x.args.y,
+                    width: x.args.width,
+                    height: x.args.height,
+                });
+                surface.data.damageBufferList = damageBufferList;
+            });
             isOp(x, "wl_surface.frame", (x) => {
                 const callbackId = x.args.callback;
                 const surface = this.getObject<"wl_surface">(x.id);
@@ -490,8 +503,10 @@ class WaylandClient {
                     }
                     imagedata.data.set(rgba);
 
-                    if (surface.data.damageList?.length) {
-                        for (const damage of surface.data.damageList) {
+                    const damageList = [...(surface.data.damageList || []), ...(surface.data.damageBufferList || [])];
+                    // todo 有区别，但现在先不处理
+                    if (damageList.length) {
+                        for (const damage of damageList) {
                             ctx.putImageData(
                                 imagedata,
                                 0,
@@ -508,6 +523,7 @@ class WaylandClient {
                 }
 
                 surface.data.damageList = [];
+                surface.data.damageBufferList = [];
                 requestAnimationFrame(() => {
                     const bufferId =
                         surface.data.bufferPointer === 0 ? surface.data.buffer2?.id : surface.data.buffer?.id;
