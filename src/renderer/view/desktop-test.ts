@@ -1,4 +1,5 @@
 const fs = require("node:fs") as typeof import("node:fs");
+const path = require("node:path") as typeof import("node:path");
 const child_process = require("node:child_process") as typeof import("node:child_process");
 
 import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
@@ -220,6 +221,19 @@ view()
                 .style({ padding: "4px 8px", background: "#fff" })
                 .on("click", () => {
                     const execPath = `/usr/bin/${app}`;
+                    runApp(execPath);
+                }),
+        ),
+    )
+    .addInto();
+
+view()
+    .add(
+        ["queue-test"].map((app) =>
+            button(app)
+                .style({ padding: "4px 8px", background: "#fff" })
+                .on("click", () => {
+                    const execPath = path.join(__dirname, "../..", "test/offical", `wayland/build/tests/${app}`);
                     runApp(execPath);
                 }),
         ),
