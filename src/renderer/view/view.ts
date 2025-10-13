@@ -305,6 +305,14 @@ class WaylandClient {
                         continue;
                     }
                     this.objects.set(id, { protocol: _interface, data: undefined });
+
+                    const parentObjVer = this.protoVersions.get(_x.proto.name);
+                    const thisObjVer = this.protoVersions.get(v.interface);
+                    if (parentObjVer && !thisObjVer) {
+                        this.protoVersions.set(v.interface, parentObjVer);
+                        console.log(`${v.interface} version inherited ${parentObjVer}`);
+                    }
+
                     console.log(`Client ${this.id} created ${v.interface} with id ${id}`);
                 }
             }
