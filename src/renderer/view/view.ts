@@ -800,12 +800,19 @@ class WaylandClient {
                 });
                 this.sendMessageX(x.id, "xdg_surface.configure", { serial: 0 });
             });
+            isOp(x, "xdg_surface.destroy", (x) => {
+                this.deleteId(x.id);
+            });
             isOp(x, "xdg_popup.destroy", (x) => {
                 const xdgSurfaceId = this.getObject<"xdg_popup">(x.id).data.xdg_surface;
                 const surface = this.getObject<"wl_surface">(this.getObject<"xdg_surface">(xdgSurfaceId).data.surface);
                 surface.data.canvas.remove();
                 // this.obj2.windows.get() // todo remove
                 this.sendMessageX(x.id, "xdg_popup.popup_done", {});
+                this.deleteId(x.id);
+            });
+            isOp(x, "xdg_toplevel.destroy", (x) => {
+                this.obj2.windows.delete(x.id);
                 this.deleteId(x.id);
             });
 
