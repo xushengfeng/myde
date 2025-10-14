@@ -352,16 +352,16 @@ class WaylandClient {
 
                 if (proto.name === "wl_shm") {
                     this.sendMessageX(id, "wl_shm.format", {
-                        format: getEnumValue(proto, "wl_shm.format", "argb8888"),
+                        format: getEnumValue("wl_shm.format", "argb8888"),
                     });
                     this.sendMessageX(id, "wl_shm.format", {
-                        format: getEnumValue(proto, "wl_shm.format", "xrgb8888"),
+                        format: getEnumValue("wl_shm.format", "xrgb8888"),
                     });
                 }
                 if (proto.name === "wl_seat") {
                     this.sendMessageX(id, "wl_seat.name", { name: "seat0" });
                     this.sendMessageX(id, "wl_seat.capabilities", {
-                        capabilities: getEnumValue(proto, "wl_seat.capability", ["pointer", "keyboard"]),
+                        capabilities: getEnumValue("wl_seat.capability", ["pointer", "keyboard"]),
                     });
                 }
                 if (proto.name === "wl_output") {
@@ -371,7 +371,7 @@ class WaylandClient {
                         width: 1920,
                         height: 1080,
                         refresh: 60000,
-                        flags: getEnumValue(proto, "wl_output.mode", "current"),
+                        flags: getEnumValue("wl_output.mode", "current"),
                     });
                     this.sendMessageX(id, "wl_output.geometry", {
                         x: 0,
@@ -380,8 +380,8 @@ class WaylandClient {
                         physical_height: 194,
                         make: "",
                         model: "",
-                        subpixel: getEnumValue(proto, "wl_output.subpixel", "unknown"),
-                        transform: getEnumValue(proto, "wl_output.transform", "normal"),
+                        subpixel: getEnumValue("wl_output.subpixel", "unknown"),
+                        transform: getEnumValue("wl_output.transform", "normal"),
                     });
                     this.sendMessageX(id, "wl_output.done", {});
                 }
@@ -615,11 +615,7 @@ class WaylandClient {
                     keyboardId,
                     "wl_keyboard.keymap",
                     {
-                        format: getEnumValue(
-                            this.getObject(keyboardId).protocol,
-                            "wl_keyboard.keymap_format",
-                            "xkb_v1",
-                        ),
+                        format: getEnumValue("wl_keyboard.keymap_format", "xkb_v1"),
                         fd: 0,
                         size: size,
                     },
@@ -833,7 +829,7 @@ class WaylandClient {
         win: typeof this.obj2.windows extends Map<infer K, infer V> ? V : never,
     ) {
         const s: number[] = [];
-        if (win.actived) s.push(getEnumValue(this.getObject(winid).protocol, "xdg_toplevel.state", "activated"));
+        if (win.actived) s.push(getEnumValue("xdg_toplevel.state", "activated"));
         this.sendMessageImm(winid, "xdg_toplevel.configure", {
             width: 0, // todo
             height: 0,
@@ -928,7 +924,7 @@ class WaylandClient {
                                       : p.button === 2
                                         ? InputEventCodes.BTN_RIGHT
                                         : InputEventCodes.BTN_LEFT,
-                            state: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.button_state", "pressed"),
+                            state: getEnumValue("wl_pointer.button_state", "pressed"),
                         });
                         this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
                     }
@@ -944,7 +940,7 @@ class WaylandClient {
                                       : p.button === 2
                                         ? InputEventCodes.BTN_RIGHT
                                         : InputEventCodes.BTN_LEFT,
-                            state: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.button_state", "released"),
+                            state: getEnumValue("wl_pointer.button_state", "released"),
                         });
                         this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
                     }
@@ -956,14 +952,14 @@ class WaylandClient {
                     if (deltaX !== 0) {
                         this.sendMessageImm(this.obj2.pointer, "wl_pointer.axis", {
                             time: Date.now(),
-                            axis: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.axis", "horizontal_scroll"),
+                            axis: getEnumValue("wl_pointer.axis", "horizontal_scroll"),
                             value: deltaX,
                         });
                     }
                     if (deltaY !== 0) {
                         this.sendMessageImm(this.obj2.pointer, "wl_pointer.axis", {
                             time: Date.now(),
-                            axis: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.axis", "vertical_scroll"),
+                            axis: getEnumValue("wl_pointer.axis", "vertical_scroll"),
                             value: deltaY,
                         });
                     }
@@ -998,7 +994,7 @@ class WaylandClient {
                 serial: s,
                 time: Date.now(),
                 key: key,
-                state: getEnumValue(WaylandProtocols.wl_keyboard, "wl_keyboard.key_state", state), // todo repeat
+                state: getEnumValue("wl_keyboard.key_state", state), // todo repeat
             });
         },
     };
@@ -1084,14 +1080,11 @@ function parseArgs(decoder: WaylandDecoder, args: WaylandOp["args"]) {
     return parsed;
 }
 
-function getEnumValue<T extends keyof WaylandEnumObj>(
-    proto: WaylandProtocol,
-    enumName: T,
-    value: WaylandEnumObj[T] | WaylandEnumObj[T][],
-) {
-    if (!proto.enum) throw new Error(`Protocol ${proto.name} has no enums`);
+function getEnumValue<T extends keyof WaylandEnumObj>(enumName: T, value: WaylandEnumObj[T] | WaylandEnumObj[T][]) {
     const [pName, enumN] = enumName.split(".");
-    if (pName !== proto.name) throw new Error(`Enum ${enumName} does not belong to protocol ${proto.name}`);
+    const proto = WaylandProtocols[pName];
+    if (!proto) throw new Error(`Protocol ${pName} cannot find`);
+    if (!proto.enum) throw new Error(`Protocol ${proto.name} has no enums`);
     const e = proto.enum.find((e) => e.name === enumN);
     if (!e) throw new Error(`Enum ${enumN} not found in protocol ${proto.name}`);
     if (Array.isArray(value)) {
