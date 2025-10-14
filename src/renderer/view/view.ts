@@ -1049,9 +1049,9 @@ class WaylandClient {
                                 this.keyboard.focusSurface(s);
                                 this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
                                 this.obj2.focusSurface = s;
-                                nx = x - offsetX;
-                                ny = y - offsetY;
                             }
+                            nx = x - offsetX;
+                            ny = y - offsetY;
                             break;
                         }
                     }
