@@ -184,17 +184,17 @@ class WaylandClient {
     private obj2: Partial<{
         pointer: WaylandObjectId;
         keyboard: WaylandObjectId;
+        focusSurface: WaylandObjectId | null;
         textInput: { focus: WaylandObjectId | null; m: Map<WaylandObjectId, { focus: boolean }> };
         serial: number;
-        window: Record<
-            WaylandObjectId,
+    }> & {
+        windows: Map<
+            WaylandObjectId, // xdg_toplevel id
             {
-                root: WaylandObjectId;
-                top: { id: WaylandObjectId; x: number; y: number }[];
-                down: { id: WaylandObjectId; x: number; y: number }[];
+                root: WaylandObjectId; // wl_surface id
+                children: Set<WaylandObjectId>; // wl_surface id
             }
         >;
-    }> & {
         surfaces: { id: WaylandObjectId; el: HTMLCanvasElement }[];
     } & Record<string, any>;
     // 事件存储
@@ -204,7 +204,7 @@ class WaylandClient {
         this.id = id;
         this.socket = socket;
         this.objects = new Map();
-        this.obj2 = { surfaces: [] };
+        this.obj2 = { surfaces: [], windows: new Map() };
         socket.on("readable", () => {
             console.log("connected");
             const x = socket.read(undefined, null);
@@ -568,6 +568,13 @@ class WaylandClient {
                 const cs = parent.data.children || [];
                 cs.push({ id: waylandObjectId(x.args.surface), posi: { x: 0, y: 0 } });
                 parent.data.children = cs;
+                for (const [_, w] of this.obj2.windows) {
+                    // todo 如果先绑定小的，在一起绑定大的，会找不到，除非协议规定必须先绑定大的
+                    if (w.children.has(waylandObjectId(x.args.parent))) {
+                        w.children.add(waylandObjectId(x.args.surface));
+                        break;
+                    }
+                }
                 const thisChild = this.getObject<"wl_surface">(waylandObjectId(x.args.surface));
                 parent.data.canvas.parentElement!.appendChild(thisChild.data.canvas);
                 thisChild.data.canvas.style.position = "absolute";
@@ -604,6 +611,10 @@ class WaylandClient {
                 const surfaceId = this.getObject<"xdg_surface">(x.id).data.surface;
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 el.add(surface.data.canvas);
+                this.obj2.windows.set(toplevelId, {
+                    root: surfaceId,
+                    children: new Set([surfaceId]),
+                });
                 this.emit("windowCreated", toplevelId, el.el);
             });
             isOp(x, "xdg_surface.set_window_geometry", (x) => {
@@ -808,11 +819,13 @@ class WaylandClient {
         this.objects.delete(id);
     }
 
-    getAllSurfaces() {
-        return this.obj2.surfaces;
+    getWindows() {
+        return this.obj2.windows;
     }
     win(id: WaylandObjectId) {
-        return {
+        const win = this.obj2.windows.get(id);
+        if (win === undefined) return undefined;
+        const winObj = {
             focus: () => {
                 this.sendMessageX(id, "xdg_toplevel.configure", {
                     width: 0,
@@ -820,80 +833,123 @@ class WaylandClient {
                     states: [getEnumValue(this.getObject(id).protocol, "xdg_toplevel.state", "activated")],
                 });
             },
+            point: {
+                rootEl: () => {
+                    const rootSurfaceId = win.root;
+                    const rootSurface = this.getObject<"wl_surface">(rootSurfaceId);
+                    return rootSurface.data.canvas;
+                },
+                inWin: (p: { x: number; y: number }) => {
+                    const rootSurfaceId = win.root;
+                    const rootSurface = this.getObject<"wl_surface">(rootSurfaceId);
+                    const rect = rootSurface.data.canvas.getBoundingClientRect();
+                    if (p.x < rect.left || p.x >= rect.right || p.y < rect.top || p.y >= rect.bottom) return false;
+                    return true; // todo
+                },
+                sendPointerEvent: (type: "move" | "down" | "up", p: PointerEvent) => {
+                    const { x, y } = p;
+                    if (!this.obj2.pointer) return;
+                    let nx = x;
+                    let ny = y;
+                    const { x: baseX, y: baseY } = winObj.point.rootEl().getBoundingClientRect();
+                    // todo zindex
+                    // todo popup 处理
+                    for (const s of win.children) {
+                        const cs = this.getObject<"wl_surface">(s).data.canvas;
+                        // todo 缓存
+                        const rect = cs.getBoundingClientRect();
+                        const offsetX = rect.left - baseX;
+                        const offsetY = rect.top - baseY;
+                        const offsetX1 = rect.right - baseX;
+                        const offsetY1 = rect.bottom - baseY;
+                        if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
+                            if (this.obj2.focusSurface !== s) {
+                                if (this.obj2.focusSurface) {
+                                    this.sendMessageImm(this.obj2.pointer, "wl_pointer.leave", {
+                                        serial: 0,
+                                        surface: this.obj2.focusSurface,
+                                    });
+                                    this.keyboard.blurSurface(this.obj2.focusSurface);
+                                }
+                                this.sendMessageImm(this.obj2.pointer, "wl_pointer.enter", {
+                                    serial: 0,
+                                    surface: s,
+                                    surface_x: x - offsetX,
+                                    surface_y: y - offsetY,
+                                });
+                                this.keyboard.focusSurface(s);
+                                this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+                                this.obj2.focusSurface = s;
+                                nx = x - offsetX;
+                                ny = y - offsetY;
+                            }
+                            break;
+                        }
+                    }
+                    if (type === "move") {
+                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.motion", {
+                            time: Date.now(),
+                            surface_x: nx,
+                            surface_y: ny,
+                        });
+                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+                    }
+                    if (type === "down") {
+                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.button", {
+                            serial: 0,
+                            time: Date.now(),
+                            button:
+                                p.button === 0
+                                    ? InputEventCodes.BTN_LEFT
+                                    : p.button === 1
+                                      ? InputEventCodes.BTN_MIDDLE
+                                      : p.button === 2
+                                        ? InputEventCodes.BTN_RIGHT
+                                        : InputEventCodes.BTN_LEFT,
+                            state: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.button_state", "pressed"),
+                        });
+                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+                    }
+                    if (type === "up") {
+                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.button", {
+                            serial: 0,
+                            time: Date.now(),
+                            button:
+                                p.button === 0
+                                    ? InputEventCodes.BTN_LEFT
+                                    : p.button === 1
+                                      ? InputEventCodes.BTN_MIDDLE
+                                      : p.button === 2
+                                        ? InputEventCodes.BTN_RIGHT
+                                        : InputEventCodes.BTN_LEFT,
+                            state: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.button_state", "released"),
+                        });
+                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+                    }
+                },
+                sendScrollEvent: (op: { p: WheelEvent }) => {
+                    const { p } = op;
+                    if (!this.obj2.pointer) return;
+                    const { deltaX, deltaY } = p;
+                    if (deltaX !== 0) {
+                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.axis", {
+                            time: Date.now(),
+                            axis: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.axis", "horizontal_scroll"),
+                            value: deltaX,
+                        });
+                    }
+                    if (deltaY !== 0) {
+                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.axis", {
+                            time: Date.now(),
+                            axis: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.axis", "vertical_scroll"),
+                            value: deltaY,
+                        });
+                    }
+                    this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+                },
+            },
         };
-    }
-    sendPointerEvent(type: "move" | "down" | "up" | "in", p: PointerEvent, surface: WaylandObjectId) {
-        const { x, y } = p;
-        if (!this.obj2.pointer) return;
-        if (type === "move") {
-            this.sendMessageImm(this.obj2.pointer, "wl_pointer.motion", {
-                time: Date.now(),
-                surface_x: x,
-                surface_y: y,
-            });
-            this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
-        }
-        if (type === "in") {
-            this.sendMessageImm(this.obj2.pointer, "wl_pointer.enter", {
-                serial: 0,
-                surface: surface,
-                surface_x: x,
-                surface_y: y,
-            });
-            this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
-        }
-        if (type === "down") {
-            this.sendMessageImm(this.obj2.pointer, "wl_pointer.button", {
-                serial: 0,
-                time: Date.now(),
-                button:
-                    p.button === 0
-                        ? InputEventCodes.BTN_LEFT
-                        : p.button === 1
-                          ? InputEventCodes.BTN_MIDDLE
-                          : p.button === 2
-                            ? InputEventCodes.BTN_RIGHT
-                            : InputEventCodes.BTN_LEFT,
-                state: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.button_state", "pressed"),
-            });
-            this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
-        }
-        if (type === "up") {
-            this.sendMessageImm(this.obj2.pointer, "wl_pointer.button", {
-                serial: 0,
-                time: Date.now(),
-                button:
-                    p.button === 0
-                        ? InputEventCodes.BTN_LEFT
-                        : p.button === 1
-                          ? InputEventCodes.BTN_MIDDLE
-                          : p.button === 2
-                            ? InputEventCodes.BTN_RIGHT
-                            : InputEventCodes.BTN_LEFT,
-                state: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.button_state", "released"),
-            });
-            this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
-        }
-    }
-    sendScrollEvent(op: { p: WheelEvent }) {
-        const { p } = op;
-        if (!this.obj2.pointer) return;
-        const { deltaX, deltaY } = p;
-        if (deltaX !== 0) {
-            this.sendMessageImm(this.obj2.pointer, "wl_pointer.axis", {
-                time: Date.now(),
-                axis: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.axis", "horizontal_scroll"),
-                value: deltaX,
-            });
-        }
-        if (deltaY !== 0) {
-            this.sendMessageImm(this.obj2.pointer, "wl_pointer.axis", {
-                time: Date.now(),
-                axis: getEnumValue(WaylandProtocols.wl_pointer, "wl_pointer.axis", "vertical_scroll"),
-                value: deltaY,
-            });
-        }
-        this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+        return winObj;
     }
     keyboard = {
         // todo Surface管理

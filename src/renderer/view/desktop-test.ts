@@ -10,39 +10,30 @@ import { InputEventCodes } from "../input_codes/types";
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
     for (const [id, client] of server.clients) {
-        const data = clientData.get(id);
-        if (!data) {
-            return;
-        }
-        for (const surface of client.getAllSurfaces()) {
-            const rect = surface.el.getBoundingClientRect();
-            if (p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom) {
-                if (!data.in) {
-                    data.in = true;
-                    client.sendPointerEvent(
-                        "in",
-                        new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
-                        surface.id,
-                    );
-                    client.keyboard.focusSurface(surface.id);
-                }
-                client.sendPointerEvent(
-                    type,
-                    new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
-                    surface.id,
-                );
-            }
+        for (const [winId, win] of client.getWindows()) {
+            const xwin = client.win(winId);
+            if (!xwin) continue;
+            const inWin = xwin.point.inWin(p);
+            if (!inWin) continue;
+            const rect = xwin.point.rootEl().getBoundingClientRect();
+            xwin.point.sendPointerEvent(
+                type,
+                new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
+            );
         }
     }
 }
 
 function sendScrollEvent(p: WheelEvent) {
     for (const [_, client] of server.clients) {
-        for (const surface of client.getAllSurfaces()) {
-            const rect = surface.el.getBoundingClientRect();
-            if (p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom) {
-                client.sendScrollEvent({ p: p });
-            }
+        for (const [winId, win] of client.getWindows()) {
+            const xwin = client.win(winId);
+            if (!xwin) continue;
+            const inWin = xwin.point.inWin(p);
+            if (!inWin) continue;
+            xwin.point.sendScrollEvent({
+                p: p,
+            });
         }
     }
 }
@@ -109,11 +100,11 @@ const xdgDir = deEnv.XDG_RUNTIME_DIR;
 const server = new WaylandServer({ socketDir: xdgDir || "/tmp" });
 
 server.on("newClient", (client, clientId) => {
-    clientData.set(clientId, { client, in: false });
+    clientData.set(clientId, { client });
     client.on("windowCreated", (windowId, el) => {
         console.log(`Client ${clientId} created window ${windowId}`);
         body.add(el);
-        client.win(windowId).focus();
+        client.win(windowId)?.focus();
     });
     client.on("windowClosed", (windowId, el) => {
         console.log(`Client ${clientId} deleted window ${windowId}`);
@@ -124,7 +115,7 @@ server.on("clientClose", (_, clientId) => {
     clientData.delete(clientId);
 });
 
-const clientData = new Map<string, { client: WaylandClient; in: boolean }>();
+const clientData = new Map<string, { client: WaylandClient }>();
 
 let xServerNum = NaN;
 
