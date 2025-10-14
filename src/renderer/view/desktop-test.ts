@@ -113,6 +113,7 @@ server.on("newClient", (client, clientId) => {
     client.on("windowCreated", (windowId, el) => {
         console.log(`Client ${clientId} created window ${windowId}`);
         body.add(el);
+        client.win(windowId).focus();
     });
     client.on("windowClosed", (windowId, el) => {
         console.log(`Client ${clientId} deleted window ${windowId}`);

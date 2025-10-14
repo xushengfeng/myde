@@ -595,11 +595,6 @@ class WaylandClient {
             isOp(x, "xdg_surface.get_toplevel", (x) => {
                 const toplevelId = x.args.id;
                 this.sendMessageX(toplevelId, "xdg_toplevel.configure_bounds", { width: 1920, height: 1080 });
-                this.sendMessageX(toplevelId, "xdg_toplevel.configure", {
-                    width: 0,
-                    height: 0,
-                    states: [getEnumValue(this.getObject(toplevelId).protocol, "xdg_toplevel.state", "activated")],
-                });
                 for (const [id, p] of this.objects) {
                     if (p.protocol.name === "xdg_surface") {
                         this.sendMessageX(id, "xdg_surface.configure", { serial: 1 }); // todo
@@ -815,6 +810,17 @@ class WaylandClient {
 
     getAllSurfaces() {
         return this.obj2.surfaces;
+    }
+    win(id: WaylandObjectId) {
+        return {
+            focus: () => {
+                this.sendMessageX(id, "xdg_toplevel.configure", {
+                    width: 0,
+                    height: 0,
+                    states: [getEnumValue(this.getObject(id).protocol, "xdg_toplevel.state", "activated")],
+                });
+            },
+        };
     }
     sendPointerEvent(type: "move" | "down" | "up" | "in", p: PointerEvent, surface: WaylandObjectId) {
         const { x, y } = p;
