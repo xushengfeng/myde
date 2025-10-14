@@ -27,6 +27,7 @@ import { WaylandEncoder } from "../wayland/wayland-encoder";
 import { ele, view } from "dkh-ui";
 import { InputEventCodes } from "../input_codes/types";
 import { createFormatTableBuffer, DRM_FORMAT } from "../wayland/dma-buf";
+import { getRectKeyPoint } from "../wayland/xdg";
 
 export { WaylandClient, WaylandServer };
 
@@ -56,8 +57,21 @@ type WaylandData = {
         parent: WaylandObjectId;
         child: WaylandObjectId;
     };
-    xdg_surface: { surface: WaylandObjectId };
     wl_buffer: { fd: number; start: number; end: number; imageData: ImageData };
+    xdg_surface: { surface: WaylandObjectId; xdg_role?: WaylandObjectId };
+    xdg_positioner: {
+        size: { width: number; height: number };
+        anchor_rect: { x: number; y: number; width: number; height: number };
+        anchor: number;
+        gravity: number;
+        constraint_adjustment: number;
+        offset: { x: number; y: number };
+        reactive: boolean;
+        parent_size: { parent_width: number; parent_height: number };
+    };
+    xdg_popup: {
+        xdg_surface: WaylandObjectId;
+    };
 };
 
 type WaylandObjectX<T extends keyof WaylandData> = { protocol: WaylandProtocol; data: WaylandData[T] };
@@ -394,6 +408,7 @@ class WaylandClient {
                 const surfaceId = x.args.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 const canvasEl = ele("canvas");
+                canvasEl.data({ id: String(surfaceId) });
                 const canvas = canvasEl.el;
                 canvas.width = 1;
                 canvas.height = 1;
@@ -629,6 +644,51 @@ class WaylandClient {
                 const surfaceId = x.args.surface as WaylandObjectId;
                 xdgSurface.data = { surface: surfaceId };
             });
+            isOp(x, "xdg_wm_base.create_positioner", (x) => {
+                const thisObj = this.getObject<"xdg_positioner">(x.args.id);
+                thisObj.data = {
+                    size: { width: 0, height: 0 },
+                    anchor_rect: { x: 0, y: 0, width: 0, height: 0 },
+                    anchor: getEnumValue("xdg_positioner.anchor", "none"),
+                    gravity: getEnumValue("xdg_positioner.gravity", "none"),
+                    constraint_adjustment: getEnumValue("xdg_positioner.constraint_adjustment", "none"),
+                    offset: { x: 0, y: 0 },
+                    parent_size: { parent_width: 0, parent_height: 0 },
+                    reactive: false,
+                };
+            });
+            isOp(x, "xdg_positioner.set_size", (x) => {
+                const pData = this.getObject<"xdg_positioner">(x.id).data;
+                pData.size = x.args;
+            });
+            isOp(x, "xdg_positioner.set_anchor_rect", (x) => {
+                const pData = this.getObject<"xdg_positioner">(x.id).data;
+                pData.anchor_rect = x.args;
+            });
+            isOp(x, "xdg_positioner.set_anchor", (x) => {
+                const pData = this.getObject<"xdg_positioner">(x.id).data;
+                pData.anchor = x.args.anchor;
+            });
+            isOp(x, "xdg_positioner.set_gravity", (x) => {
+                const pData = this.getObject<"xdg_positioner">(x.id).data;
+                pData.gravity = x.args.gravity;
+            });
+            isOp(x, "xdg_positioner.set_constraint_adjustment", (x) => {
+                const pData = this.getObject<"xdg_positioner">(x.id).data;
+                pData.constraint_adjustment = x.args.constraint_adjustment;
+            });
+            isOp(x, "xdg_positioner.set_offset", (x) => {
+                const pData = this.getObject<"xdg_positioner">(x.id).data;
+                pData.offset = x.args;
+            });
+            isOp(x, "xdg_positioner.set_parent_size", (x) => {
+                const pData = this.getObject<"xdg_positioner">(x.id).data;
+                pData.parent_size = x.args;
+            });
+            isOp(x, "xdg_positioner.set_reactive", (x) => {
+                const pData = this.getObject<"xdg_positioner">(x.id).data;
+                pData.reactive = true;
+            });
             isOp(x, "xdg_surface.get_toplevel", (x) => {
                 const toplevelId = x.args.id;
                 this.sendMessageX(toplevelId, "xdg_toplevel.configure_bounds", { width: 1920, height: 1080 });
@@ -641,6 +701,7 @@ class WaylandClient {
                 const surfaceId = this.getObject<"xdg_surface">(x.id).data.surface;
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 el.add(surface.data.canvas);
+                this.getObject<"xdg_surface">(x.id).data.xdg_role = toplevelId;
                 this.obj2.windows.set(toplevelId, {
                     root: surfaceId,
                     xdg_surface: x.id,
@@ -656,6 +717,96 @@ class WaylandClient {
                 canvas.width = x.args.width;
                 canvas.height = x.args.height;
                 // todo xy
+            });
+            isOp(x, "xdg_surface.get_popup", (x) => {
+                const thisSurfaceId = this.getObject<"xdg_surface">(x.id).data.surface;
+                const thisSurface = this.getObject<"wl_surface">(thisSurfaceId);
+                const parentXdgSurfaceId = x.args.parent;
+                if (!parentXdgSurfaceId) {
+                    console.error("No parent for popup");
+                    return;
+                }
+                const parentSurfaceId = this.getObject<"xdg_surface">(waylandObjectId(parentXdgSurfaceId)).data.surface;
+                const parentSurface = this.getObject<"wl_surface">(parentSurfaceId);
+
+                this.getObject<"xdg_popup">(x.args.id).data = { xdg_surface: x.id };
+                this.getObject<"xdg_surface">(x.id).data.xdg_role = x.args.id;
+                const win = this.obj2.windows.get(
+                    this.getObject<"xdg_surface">(waylandObjectId(parentXdgSurfaceId)).data.xdg_role!,
+                );
+                if (win) {
+                    win.children.add(thisSurfaceId);
+                } else {
+                    console.error(`cannt find window by xdg_surface ${parentXdgSurfaceId}`);
+                }
+
+                const positioner = this.getObject<"xdg_positioner">(waylandObjectId(x.args.positioner));
+                const positionerData = positioner.data;
+
+                const anchor = positionerData.anchor;
+                const anchorPoint = getRectKeyPoint(
+                    positionerData.anchor_rect,
+                    (
+                        {
+                            [getEnumValue("xdg_positioner.anchor", "none")]: "none",
+                            [getEnumValue("xdg_positioner.anchor", "top")]: "top",
+                            [getEnumValue("xdg_positioner.anchor", "bottom")]: "bottom",
+                            [getEnumValue("xdg_positioner.anchor", "left")]: "left",
+                            [getEnumValue("xdg_positioner.anchor", "right")]: "right",
+                            [getEnumValue("xdg_positioner.anchor", "top_left")]: "top_left",
+                            [getEnumValue("xdg_positioner.anchor", "top_right")]: "top_right",
+                            [getEnumValue("xdg_positioner.anchor", "bottom_left")]: "bottom_left",
+                            [getEnumValue("xdg_positioner.anchor", "bottom_right")]: "bottom_right",
+                        } as const
+                    )[anchor],
+                );
+                const popupPoint = getRectKeyPoint(
+                    { x: 0, y: 0, width: positionerData.size.width, height: positionerData.size.height },
+                    (
+                        {
+                            [getEnumValue("xdg_positioner.gravity", "none")]: "none",
+                            [getEnumValue("xdg_positioner.gravity", "top")]: "bottom",
+                            [getEnumValue("xdg_positioner.gravity", "bottom")]: "top",
+                            [getEnumValue("xdg_positioner.gravity", "left")]: "right",
+                            [getEnumValue("xdg_positioner.gravity", "right")]: "left",
+                            [getEnumValue("xdg_positioner.gravity", "top_left")]: "bottom_right",
+                            [getEnumValue("xdg_positioner.gravity", "top_right")]: "bottom_left",
+                            [getEnumValue("xdg_positioner.gravity", "bottom_left")]: "top_right",
+                            [getEnumValue("xdg_positioner.gravity", "bottom_right")]: "top_left",
+                        } as const
+                    )[positionerData.gravity],
+                );
+
+                // todo offset
+                // todo constraint_adjustment
+                const nx = anchorPoint.x - popupPoint.x;
+                const ny = anchorPoint.y - popupPoint.y;
+
+                parentSurface.data.canvas.parentElement!.appendChild(thisSurface.data.canvas);
+                thisSurface.data.canvas.style.position = "absolute";
+
+                // todo 给定外部处理的接口
+
+                // @ts-expect-error
+                parentSurface.data.canvas.style.anchorName = `--${parentSurfaceId}`;
+                thisSurface.data.canvas.style.left = `calc(anchor(--${parentSurfaceId} left) + ${Math.floor(nx)}px)`;
+                thisSurface.data.canvas.style.top = `calc(anchor(--${parentSurfaceId} top) + ${Math.floor(ny)}px)`;
+
+                this.sendMessageX(x.args.id, "xdg_popup.configure", {
+                    x: Math.floor(nx),
+                    y: Math.floor(ny),
+                    width: positionerData.size.width,
+                    height: positionerData.size.height,
+                });
+                this.sendMessageX(x.id, "xdg_surface.configure", { serial: 0 });
+            });
+            isOp(x, "xdg_popup.destroy", (x) => {
+                const xdgSurfaceId = this.getObject<"xdg_popup">(x.id).data.xdg_surface;
+                const surface = this.getObject<"wl_surface">(this.getObject<"xdg_surface">(xdgSurfaceId).data.surface);
+                surface.data.canvas.remove();
+                // this.obj2.windows.get() // todo remove
+                this.sendMessageX(x.id, "xdg_popup.popup_done", {});
+                this.deleteId(x.id);
             });
 
             isOp(x, "zwp_linux_dmabuf_v1.get_surface_feedback", (x) => {
@@ -871,8 +1022,7 @@ class WaylandClient {
                     let ny = y;
                     const { x: baseX, y: baseY } = winObj.point.rootEl().getBoundingClientRect();
                     // todo zindex
-                    // todo popup 处理
-                    for (const s of win.children) {
+                    for (const s of Array.from(win.children).toReversed()) {
                         const cs = this.getObject<"wl_surface">(s).data.canvas;
                         // todo 缓存
                         const rect = cs.getBoundingClientRect();
@@ -881,6 +1031,7 @@ class WaylandClient {
                         const offsetX1 = rect.right - baseX;
                         const offsetY1 = rect.bottom - baseY;
                         if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
+                            console.log(`pointer in surface ${s}`);
                             if (this.obj2.focusSurface !== s) {
                                 if (this.obj2.focusSurface) {
                                     this.sendMessageImm(this.obj2.pointer, "wl_pointer.leave", {
