@@ -192,7 +192,9 @@ class WaylandClient {
             WaylandObjectId, // xdg_toplevel id
             {
                 root: WaylandObjectId; // wl_surface id
+                xdg_surface: WaylandObjectId;
                 children: Set<WaylandObjectId>; // wl_surface id
+                actived: boolean;
             }
         >;
         surfaces: { id: WaylandObjectId; el: HTMLCanvasElement }[];
@@ -613,7 +615,9 @@ class WaylandClient {
                 el.add(surface.data.canvas);
                 this.obj2.windows.set(toplevelId, {
                     root: surfaceId,
+                    xdg_surface: x.id,
                     children: new Set([surfaceId]),
+                    actived: false,
                 });
                 this.emit("windowCreated", toplevelId, el.el);
             });
@@ -822,16 +826,32 @@ class WaylandClient {
     getWindows() {
         return this.obj2.windows;
     }
+    private configureWin(
+        winid: WaylandObjectId,
+        win: typeof this.obj2.windows extends Map<infer K, infer V> ? V : never,
+    ) {
+        const s: number[] = [];
+        if (win.actived) s.push(getEnumValue(this.getObject(winid).protocol, "xdg_toplevel.state", "activated"));
+        this.sendMessageImm(winid, "xdg_toplevel.configure", {
+            width: 0, // todo
+            height: 0,
+            states: s,
+        });
+        this.sendMessageImm(win.xdg_surface, "xdg_surface.configure", { serial: 1 });
+    }
     win(id: WaylandObjectId) {
         const win = this.obj2.windows.get(id);
         if (win === undefined) return undefined;
         const winObj = {
             focus: () => {
-                this.sendMessageX(id, "xdg_toplevel.configure", {
-                    width: 0,
-                    height: 0,
-                    states: [getEnumValue(this.getObject(id).protocol, "xdg_toplevel.state", "activated")],
-                });
+                if (win.actived) return;
+                win.actived = true;
+                this.configureWin(id, win);
+            },
+            blur: () => {
+                if (!win.actived) return;
+                win.actived = false;
+                this.configureWin(id, win);
             },
             point: {
                 rootEl: () => {

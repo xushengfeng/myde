@@ -20,6 +20,15 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
                 type,
                 new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
             );
+            if (type === "down") {
+                xwin.focus();
+                for (const [otherWinId, otherWin] of client.getWindows()) {
+                    if (otherWinId !== winId) {
+                        client.win(otherWinId)?.blur();
+                    }
+                }
+            }
+            break;
         }
     }
 }
