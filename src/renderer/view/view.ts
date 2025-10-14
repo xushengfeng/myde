@@ -400,12 +400,6 @@ class WaylandClient {
                 this.obj2.surfaces.push({ id: surfaceId, el: canvas });
                 surface.data = { canvas, bufferPointer: 0 };
             });
-            isOp(x, "xdg_wm_base.get_xdg_surface", (x) => {
-                const xdgSurfaceId = x.args.id;
-                const xdgSurface = this.getObject<"xdg_surface">(xdgSurfaceId);
-                const surfaceId = x.args.surface as WaylandObjectId;
-                xdgSurface.data = { surface: surfaceId };
-            });
             isOp(x, "wl_shm_pool.create_buffer", (x) => {
                 const thisObj = this.getObject<"wl_shm_pool">(x.id);
                 const bufferId = x.args.id;
@@ -601,34 +595,7 @@ class WaylandClient {
                 thisChild.data.canvas.style.left = `calc(anchor(--${thisData.data.parent} left) + ${x.args.x}px)`;
                 thisChild.data.canvas.style.top = `calc(anchor(--${thisData.data.parent} top) + ${x.args.y}px)`;
             });
-            isOp(x, "xdg_surface.get_toplevel", (x) => {
-                const toplevelId = x.args.id;
-                this.sendMessageX(toplevelId, "xdg_toplevel.configure_bounds", { width: 1920, height: 1080 });
-                for (const [id, p] of this.objects) {
-                    if (p.protocol.name === "xdg_surface") {
-                        this.sendMessageX(id, "xdg_surface.configure", { serial: 1 }); // todo
-                    }
-                }
-                const el = view().style({ position: "relative" });
-                const surfaceId = this.getObject<"xdg_surface">(x.id).data.surface;
-                const surface = this.getObject<"wl_surface">(surfaceId);
-                el.add(surface.data.canvas);
-                this.obj2.windows.set(toplevelId, {
-                    root: surfaceId,
-                    xdg_surface: x.id,
-                    children: new Set([surfaceId]),
-                    actived: false,
-                });
-                this.emit("windowCreated", toplevelId, el.el);
-            });
-            isOp(x, "xdg_surface.set_window_geometry", (x) => {
-                const surfaceId = this.getObject<"xdg_surface">(x.id).data.surface;
-                const surface = this.getObject<"wl_surface">(surfaceId);
-                const canvas = surface.data.canvas;
-                canvas.width = x.args.width;
-                canvas.height = x.args.height;
-                // todo xy
-            });
+
             isOp(x, "wl_seat.get_pointer", (x) => {
                 const pointerId = x.args.id;
                 this.obj2.pointer = pointerId;
@@ -658,6 +625,41 @@ class WaylandClient {
                     },
                     [fd],
                 );
+            });
+
+            isOp(x, "xdg_wm_base.get_xdg_surface", (x) => {
+                const xdgSurfaceId = x.args.id;
+                const xdgSurface = this.getObject<"xdg_surface">(xdgSurfaceId);
+                const surfaceId = x.args.surface as WaylandObjectId;
+                xdgSurface.data = { surface: surfaceId };
+            });
+            isOp(x, "xdg_surface.get_toplevel", (x) => {
+                const toplevelId = x.args.id;
+                this.sendMessageX(toplevelId, "xdg_toplevel.configure_bounds", { width: 1920, height: 1080 });
+                for (const [id, p] of this.objects) {
+                    if (p.protocol.name === "xdg_surface") {
+                        this.sendMessageX(id, "xdg_surface.configure", { serial: 1 }); // todo
+                    }
+                }
+                const el = view().style({ position: "relative" });
+                const surfaceId = this.getObject<"xdg_surface">(x.id).data.surface;
+                const surface = this.getObject<"wl_surface">(surfaceId);
+                el.add(surface.data.canvas);
+                this.obj2.windows.set(toplevelId, {
+                    root: surfaceId,
+                    xdg_surface: x.id,
+                    children: new Set([surfaceId]),
+                    actived: false,
+                });
+                this.emit("windowCreated", toplevelId, el.el);
+            });
+            isOp(x, "xdg_surface.set_window_geometry", (x) => {
+                const surfaceId = this.getObject<"xdg_surface">(x.id).data.surface;
+                const surface = this.getObject<"wl_surface">(surfaceId);
+                const canvas = surface.data.canvas;
+                canvas.width = x.args.width;
+                canvas.height = x.args.height;
+                // todo xy
             });
 
             isOp(x, "zwp_linux_dmabuf_v1.get_surface_feedback", (x) => {
