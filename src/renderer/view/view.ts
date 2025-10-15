@@ -52,12 +52,16 @@ type WaylandData = {
             };
         }[]; // 索引大的在上面
         childrenEl?: HTMLElement;
+        inputRegion?: WaylandData["wl_region"]["rects"];
     };
     wl_subsurface: {
         parent: WaylandObjectId;
         child: WaylandObjectId;
     };
     wl_buffer: { fd: number; start: number; end: number; imageData: ImageData };
+    wl_region: {
+        rects: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
+    };
     xdg_surface: { surface: WaylandObjectId; warpEl: HTMLElement; xdg_role?: WaylandObjectId };
     xdg_positioner: {
         size: { width: number; height: number };
@@ -270,6 +274,14 @@ class WaylandClient {
         if (!obj) throw new Error(`Wayland object not found: ${id}`);
         return obj as WaylandObjectX<T>;
     }
+    private getObjectOption<T extends keyof WaylandData>(
+        id: WaylandObjectId | undefined,
+    ): WaylandObjectX<T> | undefined {
+        if (typeof id === "undefined") return undefined;
+        const obj = this.objects.get(id);
+        if (!obj) return undefined;
+        return obj as WaylandObjectX<T>;
+    }
 
     private handleClientMessage(data: Buffer, fds: number[] = []) {
         // 解析并处理客户端消息
@@ -415,6 +427,11 @@ class WaylandClient {
                 canvas.height = 1;
                 this.obj2.surfaces.push({ id: surfaceId, el: canvas });
                 surface.data = { canvas, bufferPointer: 0 };
+            });
+            isOp(x, "wl_compositor.create_region", (x) => {
+                const regionId = x.args.id;
+                const region = this.getObject<"wl_region">(regionId);
+                region.data = { rects: [] };
             });
             isOp(x, "wl_shm_pool.create_buffer", (x) => {
                 const thisObj = this.getObject<"wl_shm_pool">(x.id);
@@ -572,6 +589,12 @@ class WaylandClient {
                 }
                 this.deleteId(surfaceId);
             });
+            isOp(x, "wl_surface.set_input_region", (x) => {
+                const surface = this.getObject<"wl_surface">(x.id);
+                console.error("re", x.args);
+                const region = this.getObjectOption<"wl_region">(waylandObjectId(x.args.region));
+                surface.data.inputRegion = region?.data.rects;
+            });
             isOp(x, "wl_subcompositor.get_subsurface", (x) => {
                 const surfaceRelation = this.getObject<"wl_subsurface">(x.args.id);
                 surfaceRelation.data = {
@@ -640,6 +663,17 @@ class WaylandClient {
                     },
                     [fd],
                 );
+            });
+            isOp(x, "wl_region.add", (x) => {
+                const region = this.getObject<"wl_region">(x.id);
+                region.data.rects.push({ ...x.args, type: "+" });
+            });
+            isOp(x, "wl_region.subtract", (x) => {
+                const region = this.getObject<"wl_region">(x.id);
+                region.data.rects.push({ ...x.args, type: "-" });
+            });
+            isOp(x, "wl_region.destroy", (x) => {
+                this.deleteId(x.id);
             });
 
             isOp(x, "xdg_wm_base.get_xdg_surface", (x) => {
@@ -1039,6 +1073,7 @@ class WaylandClient {
                     if (!this.obj2.pointer) return;
                     let nx = x;
                     let ny = y;
+                    let canSend = false;
                     const { x: baseX, y: baseY } = winObj.point.rootEl().getBoundingClientRect();
                     // todo zindex
                     for (const s of Array.from(win.children).toReversed()) {
@@ -1051,6 +1086,21 @@ class WaylandClient {
                         const offsetY1 = rect.bottom - baseY;
                         if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
                             console.log(`pointer in surface ${s}`);
+                            nx = x - offsetX;
+                            ny = y - offsetY;
+                            const surfaceInputRegion = this.getObject<"wl_surface">(s).data.inputRegion;
+                            if (surfaceInputRegion) {
+                                for (const r of surfaceInputRegion) {
+                                    if (x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
+                                        if (r.type === "+") {
+                                            canSend = true;
+                                        } else {
+                                            canSend = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                            } else canSend = true;
                             if (this.obj2.focusSurface !== s) {
                                 if (this.obj2.focusSurface && this.objects.has(this.obj2.focusSurface)) {
                                     this.sendMessageImm(this.obj2.pointer, "wl_pointer.leave", {
@@ -1062,18 +1112,17 @@ class WaylandClient {
                                 this.sendMessageImm(this.obj2.pointer, "wl_pointer.enter", {
                                     serial: 0,
                                     surface: s,
-                                    surface_x: x - offsetX,
-                                    surface_y: y - offsetY,
+                                    surface_x: nx,
+                                    surface_y: ny,
                                 });
                                 this.keyboard.focusSurface(s);
                                 this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
                                 this.obj2.focusSurface = s;
                             }
-                            nx = x - offsetX;
-                            ny = y - offsetY;
                             break;
                         }
                     }
+                    if (!canSend) return;
                     if (type === "move") {
                         this.sendMessageImm(this.obj2.pointer, "wl_pointer.motion", {
                             time: Date.now(),
@@ -1118,6 +1167,7 @@ class WaylandClient {
                 sendScrollEvent: (op: { p: WheelEvent }) => {
                     const { p } = op;
                     if (!this.obj2.pointer) return;
+                    // todo region
                     const { deltaX, deltaY } = p;
                     if (deltaX !== 0) {
                         this.sendMessageImm(this.obj2.pointer, "wl_pointer.axis", {
