@@ -11,7 +11,7 @@ const outputTypesPath = path.resolve(__dirname, "../../src/renderer/input_codes/
 const codeMap = new Map<string, number>();
 
 for (const i of fs.readFileSync(chPath, "utf-8").split("\n")) {
-    const match = i.match(/^#define\s+([A-Z_]+)\s+(\(.+\)|\S+)/);
+    const match = i.match(/^#define\s+([A-Z_0-9]+)\s+(\(.+\)|\S+)/);
     if (match) {
         if (match[2].match(/^[A-Z]/)) {
             const value = codeMap.get(match[2]);
