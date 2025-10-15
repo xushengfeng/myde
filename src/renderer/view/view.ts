@@ -690,6 +690,9 @@ class WaylandClient {
                 const pData = this.getObject<"xdg_positioner">(x.id).data;
                 pData.reactive = true;
             });
+            isOp(x, "xdg_positioner.destroy", (x) => {
+                this.deleteId(x.id);
+            });
             isOp(x, "xdg_surface.get_toplevel", (x) => {
                 const toplevelId = x.args.id;
                 this.sendMessageX(toplevelId, "xdg_toplevel.configure_bounds", { width: 1920, height: 1080 }); // todo
