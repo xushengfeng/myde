@@ -567,6 +567,9 @@ class WaylandClient {
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 surface.data.canvas.remove();
                 this.obj2.surfaces = this.obj2.surfaces.filter((s) => s.id !== surfaceId);
+                for (const [_, w] of this.obj2.windows) {
+                    w.children.delete(surfaceId);
+                }
                 this.deleteId(surfaceId);
             });
             isOp(x, "wl_subcompositor.get_subsurface", (x) => {
