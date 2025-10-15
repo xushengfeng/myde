@@ -696,11 +696,7 @@ class WaylandClient {
             isOp(x, "xdg_surface.get_toplevel", (x) => {
                 const toplevelId = x.args.id;
                 this.sendMessageX(toplevelId, "xdg_toplevel.configure_bounds", { width: 1920, height: 1080 }); // todo
-                for (const [id, p] of this.objects) {
-                    if (p.protocol.name === "xdg_surface") {
-                        this.sendMessageX(id, "xdg_surface.configure", { serial: 1 }); // todo
-                    }
-                }
+                this.sendMessageX(x.id, "xdg_surface.configure", { serial: 1 }); // todo
                 const thisXdgSurface = this.getObject<"xdg_surface">(x.id);
                 const surfaceId = thisXdgSurface.data.surface;
                 const el = pack(thisXdgSurface.data.warpEl);
