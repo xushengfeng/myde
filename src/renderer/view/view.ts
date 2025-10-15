@@ -1024,9 +1024,10 @@ class WaylandClient {
                     return rootSurface.data.canvas;
                 },
                 inWin: (p: { x: number; y: number }) => {
-                    const rootSurfaceId = win.root;
-                    const rootSurface = this.getObject<"wl_surface">(rootSurfaceId);
-                    const rect = rootSurface.data.canvas.getBoundingClientRect();
+                    const rootSurfaceId = win.xdg_surface;
+                    const rootSurface = this.getObject<"xdg_surface">(rootSurfaceId);
+                    const rect = rootSurface.data.warpEl.getBoundingClientRect(); // todo 缓存
+                    // todo popup
                     if (p.x < rect.left || p.x >= rect.right || p.y < rect.top || p.y >= rect.bottom) return false;
                     return true; // todo
                 },
