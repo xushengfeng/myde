@@ -54,6 +54,8 @@ function runApp(execPath: string, args: string[] = []) {
         stdio: ["ignore", "pipe", "pipe"],
         env: {
             HOME: deEnv.HOME,
+            LANG: deEnv.LANG || "en_US.UTF-8",
+            LANGUAGE: deEnv.LANGUAGE || "en_US:en",
             WAYLAND_DEBUG: "1",
             XDG_SESSION_TYPE: "wayland",
             XDG_RUNTIME_DIR: server.socketDir,
