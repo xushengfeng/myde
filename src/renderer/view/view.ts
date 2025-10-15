@@ -72,6 +72,7 @@ type WaylandData = {
     xdg_popup: {
         xdg_surface: WaylandObjectId;
     };
+    xdg_toplevel: { xdg_surface: WaylandObjectId };
 };
 
 type WaylandObjectX<T extends keyof WaylandData> = { protocol: WaylandProtocol; data: WaylandData[T] };
@@ -703,6 +704,7 @@ class WaylandClient {
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 el.add(surface.data.canvas);
                 thisXdgSurface.data.xdg_role = toplevelId;
+                this.getObject<"xdg_toplevel">(toplevelId).data = { xdg_surface: x.id };
                 this.obj2.windows.set(toplevelId, {
                     root: surfaceId,
                     xdg_surface: x.id,
@@ -810,13 +812,14 @@ class WaylandClient {
             });
             isOp(x, "xdg_popup.destroy", (x) => {
                 const xdgSurfaceId = this.getObject<"xdg_popup">(x.id).data.xdg_surface;
-                const surface = this.getObject<"wl_surface">(this.getObject<"xdg_surface">(xdgSurfaceId).data.surface);
-                surface.data.canvas.remove();
+                this.getObject<"xdg_surface">(xdgSurfaceId).data.warpEl.remove(); // todo 可以外部处理
                 // this.obj2.windows.get() // todo remove
                 this.sendMessageX(x.id, "xdg_popup.popup_done", {});
                 this.deleteId(x.id);
             });
             isOp(x, "xdg_toplevel.destroy", (x) => {
+                const xdgSurfaceId = this.getObject<"xdg_toplevel">(x.id).data.xdg_surface;
+                this.getObject<"xdg_surface">(xdgSurfaceId).data.warpEl.remove(); // todo 可以外部处理
                 this.obj2.windows.delete(x.id);
                 this.deleteId(x.id);
             });
