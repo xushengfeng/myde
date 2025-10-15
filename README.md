@@ -6,16 +6,24 @@
 
 期望：当经过多层抽象后，就可以用 web 技术来控制窗口。无论是堆叠还是平铺，桌面还是手机 ui，都可以简单地通过 web api 自定义。
 
-目前可以显示的窗口：`weston-flower`、`weston-simple-damage`、`weston-simple-shm`、`weston-simple-egl`、`weston-clickdot`
+目前可以显示的窗口：`weston-flower`、`weston-simple-damage`、`weston-simple-shm`、`weston-simple-egl`、`weston-clickdot`等
 
-许多协议只是看起来支持，实际上具体实现没有搞好。
+以及：`gtk4-demos` `google-chrome`
 
-现在没有处理 mmap，所以一些内存共享还要多一次复制。GPU 渲染只支持有限的颜色格式，并且也是要复制到内存再渲染。全程还是软件渲染合成。
+许多协议只是看起来支持，实际上具体实现没有搞好。目前支持鼠标、键盘输入，popup 弹窗等。
+
+现在没有处理 mmap，所以一些内存共享还要多一次复制。暂时不支持 GPU 渲染，全程还是软件渲染合成。
 
 ## 运行
+
+运行环境为 Linux，带有 X11 或 Wayland 的桌面
+
+在`script/xcb/`下运行`xkbcomp $DISPLAY x.xcb`（需要 X11 支持）
 
 ```shell
 pnpm i
 pnpm run pkgRebuild
 pnpm run start
 ```
+
+将弹出一个窗口，可以在里面启动软件。
