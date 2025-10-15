@@ -1068,9 +1068,9 @@ class WaylandClient {
                     if (p.x < rect.left || p.x >= rect.right || p.y < rect.top || p.y >= rect.bottom) return false;
                     return true; // todo
                 },
-                sendPointerEvent: (type: "move" | "down" | "up", p: PointerEvent) => {
-                    const { x, y } = p;
+                updatePointerFocus: (p: { x: number; y: number }) => {
                     if (!this.obj2.pointer) return;
+                    const { x, y } = p;
                     let nx = x;
                     let ny = y;
                     let canSend = false;
@@ -1122,7 +1122,14 @@ class WaylandClient {
                             break;
                         }
                     }
-                    if (!canSend) return;
+                    if (!canSend) return undefined;
+                    return { x: nx, y: ny };
+                },
+                sendPointerEvent: (type: "move" | "down" | "up", p: PointerEvent) => {
+                    if (!this.obj2.pointer) return;
+                    const pos = winObj.point.updatePointerFocus({ x: p.x, y: p.y });
+                    if (!pos) return;
+                    const { x: nx, y: ny } = pos;
                     if (type === "move") {
                         this.sendMessageImm(this.obj2.pointer, "wl_pointer.motion", {
                             time: Date.now(),
