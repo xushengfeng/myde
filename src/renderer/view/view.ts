@@ -1048,7 +1048,7 @@ class WaylandClient {
                         if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
                             console.log(`pointer in surface ${s}`);
                             if (this.obj2.focusSurface !== s) {
-                                if (this.obj2.focusSurface) {
+                                if (this.obj2.focusSurface && this.objects.has(this.obj2.focusSurface)) {
                                     this.sendMessageImm(this.obj2.pointer, "wl_pointer.leave", {
                                         serial: 0,
                                         surface: this.obj2.focusSurface,
