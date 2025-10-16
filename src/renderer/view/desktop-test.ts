@@ -1,11 +1,11 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
-const child_process = require("node:child_process") as typeof import("node:child_process");
 
 import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
+import { myde } from "../desktop-api";
 
 import { button, image, pack, txt, view, initDKH, input, addStyle } from "dkh-ui";
-import { type WaylandClient, WaylandServer } from "./view";
+import type { WaylandClient } from "./view";
 import { InputEventCodes } from "../input_codes/types";
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
@@ -50,22 +50,7 @@ function sendScrollEvent(p: WheelEvent) {
 function runApp(execPath: string, args: string[] = []) {
     console.log(`Running application: ${execPath}`);
 
-    const subprocess = child_process.spawn(execPath, args, {
-        stdio: ["ignore", "pipe", "pipe"],
-        env: {
-            HOME: deEnv.HOME,
-            LANG: deEnv.LANG || "en_US.UTF-8",
-            LANGUAGE: deEnv.LANGUAGE || "en_US:en",
-            WAYLAND_DEBUG: "1",
-            XDG_SESSION_TYPE: "wayland",
-            XDG_RUNTIME_DIR: server.socketDir,
-            WAYLAND_DISPLAY: server.socketName,
-            ...(Number.isNaN(xServerNum) ? {} : { DISPLAY: `:${xServerNum}` }),
-            // GTK_DEBUG: "interactive",
-            // GDK_DEBUG: "all",
-            // GTK_THEME: "Adwaita:debug",
-        },
-    });
+    const subprocess = serverX.runApp(`${execPath} ${args.join(" ")}`);
 
     const logData: string[] = [];
 
@@ -104,11 +89,8 @@ function runApp(execPath: string, args: string[] = []) {
         .addInto();
 }
 
-const deEnv = JSON.parse(new URLSearchParams(location.search).get("env") ?? "{}");
-
-const xdgDir = deEnv.XDG_RUNTIME_DIR;
-
-const server = new WaylandServer({ socketDir: xdgDir || "/tmp" });
+const serverX = myde.sysApi.server({ dev: true });
+const server = serverX.server;
 
 server.on("newClient", (client, clientId) => {
     clientData.set(clientId, { client });

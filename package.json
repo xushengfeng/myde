@@ -10,7 +10,7 @@
         "dev": "electron-vite --ignoreConfigWarning dev",
         "build": "electron-vite --ignoreConfigWarning build",
         "pkgRebuild": "electron-rebuild",
-        "desktop": "export desktop='desktop' && electron-vite --ignoreConfigWarning preview"
+        "desktop": "cd desktop && npm run build && cd .. && export desktop='desktop' && electron-vite --ignoreConfigWarning preview"
     },
     "author": {
         "name": "xsf",
