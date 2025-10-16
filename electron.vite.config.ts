@@ -8,6 +8,7 @@ export default defineConfig({
             rollupOptions: {
                 input: {
                     frame: path.resolve(__dirname, "src/renderer/main.html"),
+                    test: path.resolve(__dirname, "src/renderer/test.html"),
                 },
             },
         },

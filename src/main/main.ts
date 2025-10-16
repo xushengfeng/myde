@@ -1,9 +1,7 @@
 /// <reference types="vite/client" />
-// Modules to control application life and create native browser window
-import { app, globalShortcut, BaseWindow, nativeTheme, BrowserWindow } from "electron";
+import { app, globalShortcut, nativeTheme, BrowserWindow } from "electron";
 import * as path from "node:path";
 const run_path = path.join(path.resolve(__dirname, ""), "../../");
-import { t, lan, getLans, matchFitLan } from "../../lib/translate/translate";
 import url from "node:url";
 
 let /** 是否开启开发模式 */ dev: boolean;
@@ -69,9 +67,20 @@ async function createWin() {
             contextIsolation: false,
         },
     });
-    rendererPath(main_window.webContents, "main.html", {
-        query: { userData: app.getPath("userData"), env: JSON.stringify(process.env) },
-    });
+
+    if (process.env.desktop) {
+        let desktop_path = process.env.desktop;
+        if (!path.isAbsolute(desktop_path)) {
+            desktop_path = path.join(run_path, desktop_path);
+        }
+        log("加载桌面", desktop_path);
+        rendererPath(main_window.webContents, "main.html", {
+            query: { userData: app.getPath("userData"), env: JSON.stringify(process.env), desktop: desktop_path },
+        });
+    } else
+        rendererPath(main_window.webContents, "test.html", {
+            query: { userData: app.getPath("userData"), env: JSON.stringify(process.env) },
+        });
     if (dev) main_window.webContents.openDevTools();
 }
 
