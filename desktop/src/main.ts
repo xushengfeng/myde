@@ -1,8 +1,9 @@
-// @ts-ignore
-const { sys_api } = window.myde; // todo 类型
+const { sysApi } =
+    // @ts-expect-error
+    window.myde as typeof import("../../src/renderer/desktop-api");
 
-console.log("sys_api", sys_api);
+console.log("sysApi", sysApi);
 
 console.log("Hello from desktop/index.js");
 
-console.log(sys_api.getDesktopEntries());
+console.log(sysApi.getDesktopEntries());

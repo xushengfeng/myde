@@ -1,7 +1,8 @@
 const fs = require("node:fs") as typeof import("node:fs");
 
+import { myde } from "../desktop-api";
+
 import { initDKH, pack } from "dkh-ui";
-import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
 
 function loadDesktop(p: string) {
     const dirPath = p;
@@ -29,13 +30,8 @@ pack(document.body).style({
     background: "black",
 });
 
-const sys_api = {
-    getDesktopEntries,
-    getDesktopIcon,
-};
-
-// @ts-ignore
-window.myde = { sys_api };
+// @ts-expect-error
+window.myde = myde;
 
 const urlParams = new URLSearchParams(window.location.search);
 const desktopPath = urlParams.get("desktop");
