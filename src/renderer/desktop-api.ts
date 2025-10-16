@@ -5,7 +5,8 @@ export const myde = {
         getDesktopEntries,
         getDesktopIcon,
     },
+    rootDir: "./",
 };
 export type DesktopApi = typeof myde;
 
-export const sysApi = myde.sysApi;
+export default myde;

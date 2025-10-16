@@ -1,9 +1,15 @@
-const { sysApi } =
+import { image, view } from "dkh-ui";
+
+const { sysApi, rootDir } =
     // @ts-expect-error
-    window.myde as typeof import("../../src/renderer/desktop-api");
+    window.myde as typeof import("../../src/renderer/desktop-api").default;
 
-console.log("sysApi", sysApi);
+const mainEl = view().style({ width: "100vw", height: "100vh" }).addInto();
 
-console.log("Hello from desktop/index.js");
-
-console.log(sysApi.getDesktopEntries());
+image(`${rootDir}/assets/wallpaper/1.svg`, "wallpaper")
+    .style({
+        width: "100%",
+        height: "100%",
+        objectFit: "cover",
+    })
+    .addInto(mainEl);

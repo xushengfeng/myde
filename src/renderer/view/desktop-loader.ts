@@ -5,12 +5,13 @@ import { myde } from "../desktop-api";
 import { initDKH, pack } from "dkh-ui";
 
 function loadDesktop(p: string) {
-    const dirPath = p;
+    const dirPath = p.replace(/\/$/, "");
     const packagePath = `${dirPath}/package.json`;
     if (!fs.existsSync(packagePath)) {
         console.error("Desktop package.json not found:", packagePath);
         return;
     }
+    myde.rootDir = dirPath;
     const packageData = fs.readFileSync(packagePath, "utf-8");
     const packageJson = JSON.parse(packageData);
     const mainPath = `${dirPath}/${packageJson.main || "index.js"}`;
