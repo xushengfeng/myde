@@ -2,7 +2,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 
 import { myde } from "../desktop-api";
 
-import { initDKH, pack } from "dkh-ui";
+import { addStyle, initDKH, pack } from "dkh-ui";
 
 function loadDesktop(p: string) {
     const dirPath = p.replace(/\/$/, "");
@@ -29,6 +29,12 @@ pack(document.body).style({
     height: "100vh",
     overflow: "hidden",
     background: "black",
+});
+
+addStyle({
+    "*": {
+        cursor: "none !important",
+    },
 });
 
 // @ts-expect-error

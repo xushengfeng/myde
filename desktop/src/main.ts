@@ -1,11 +1,16 @@
-import { image, view } from "dkh-ui";
+import { image, pack, view } from "dkh-ui";
 
 import type { WaylandClient } from "../../src/renderer/desktop-api";
 import { txt } from "dkh-ui";
 
-const { sysApi, rootDir } =
+const { sysApi, rootDir, inputMap } =
     // @ts-expect-error
     window.myde as typeof import("../../src/renderer/desktop-api").default;
+
+function mouseMove(x: number, y: number) {
+    mouseEl.style({ top: `${y}px`, left: `${x}px` });
+    sendPointerEvent("move", new PointerEvent("pointermove", { clientX: x, clientY: y }));
+}
 
 function addWindow(el: HTMLElement) {
     windowEl.add(el);
@@ -42,6 +47,45 @@ function appIcon(iconPath: string, name: string, exec: string) {
         server.runApp(exec);
     });
     return p;
+}
+
+function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
+    for (const [_id, client] of server.server.clients) {
+        for (const [winId, _win] of client.getWindows()) {
+            const xwin = client.win(winId);
+            if (!xwin) continue;
+            const inWin = xwin.point.inWin(p);
+            if (!inWin) continue;
+            const rect = xwin.point.rootEl().getBoundingClientRect();
+            xwin.point.sendPointerEvent(
+                type,
+                new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
+            );
+            if (type === "down") {
+                xwin.focus();
+                for (const [otherWinId, _otherWin] of client.getWindows()) {
+                    if (otherWinId !== winId) {
+                        client.win(otherWinId)?.blur();
+                    }
+                }
+            }
+            break;
+        }
+    }
+}
+
+function sendScrollEvent(p: WheelEvent) {
+    for (const [_, client] of server.server.clients) {
+        for (const [winId, _win] of client.getWindows()) {
+            const xwin = client.win(winId);
+            if (!xwin) continue;
+            const inWin = xwin.point.inWin(p);
+            if (!inWin) continue;
+            xwin.point.sendScrollEvent({
+                p: p,
+            });
+        }
+    }
 }
 
 const server = sysApi.server();
@@ -180,3 +224,46 @@ if (terminalApp) {
     const iconPath = sysApi.getDesktopIcon(terminalApp.icon) || `${rootDir}/assets/icons/terminal.png`;
     appIcon(iconPath, terminalApp.name, terminalApp.exec).addInto(dockEl);
 }
+
+const body = pack(document.body);
+
+body.on("pointermove", (e) => {
+    mouseMove(e.x, e.y);
+});
+body.on("pointerdown", (e) => {
+    sendPointerEvent("down", e);
+});
+body.on("pointerup", (e) => {
+    sendPointerEvent("up", e);
+});
+
+body.on("keydown", (e) => {
+    if (e.repeat) return;
+    for (const client of server.server.clients.values()) {
+        client.keyboard.sendKey(inputMap.mapKeyCode(e.code), "pressed");
+    }
+});
+body.on("keyup", (e) => {
+    if (e.repeat) return;
+    for (const client of server.server.clients.values()) {
+        client.keyboard.sendKey(inputMap.mapKeyCode(e.code), "released");
+    }
+});
+
+body.on("wheel", (e) => {
+    sendScrollEvent(e);
+});
+
+const mouseEl = view().addInto().style({
+    position: "fixed",
+    width: "10px",
+    height: "10px",
+    background: "rgba(0,0,0,0.5)",
+    outline: "1px solid #fff",
+    borderRadius: "50%",
+    pointerEvents: "none",
+    top: "0px",
+    left: "0px",
+    transform: "translate(-50%, -50%)",
+    zIndex: 9999,
+});
