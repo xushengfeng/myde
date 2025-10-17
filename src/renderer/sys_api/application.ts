@@ -1,4 +1,4 @@
-const fs = require("node:fs") as typeof import("node:fs");
+const fs = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path") as typeof import("node:path");
 const os = require("node:os") as typeof import("node:os");
 import ini from "ini";
@@ -9,7 +9,7 @@ const appPaths = [
     path.join(os.homedir() || "", ".local/share/applications/"),
 ];
 
-function getDesktopEntries(lans: string[] = []) {
+async function getDesktopEntries(lans: string[] = []) {
     const entries: Array<{
         name: string;
         nameLocal: string;
@@ -22,14 +22,15 @@ function getDesktopEntries(lans: string[] = []) {
     for (const dir of appPaths) {
         let files: string[] = [];
         try {
-            files = fs.readdirSync(dir).filter((f) => f.endsWith(".desktop"));
-        } catch {
+            files = (await fs.readdir(dir)).filter((f) => f.endsWith(".desktop"));
+        } catch (e) {
+            console.error(`Error reading directory ${dir}:`, e);
             continue;
         }
         for (const file of files) {
             const filePath = path.join(dir, file);
             try {
-                const content = fs.readFileSync(filePath, "utf-8");
+                const content = await fs.readFile(filePath, "utf-8");
                 const parsed = ini.parse(content);
                 const entry = parsed["Desktop Entry"] || {};
                 const exec = entry.Exec || "";
@@ -54,11 +55,11 @@ function getDesktopEntries(lans: string[] = []) {
     return entries;
 }
 
-function getDesktopIcon(icon: string): string | undefined {
+async function getDesktopIcon(icon: string): Promise<string | undefined> {
     // 如果 icon 是绝对路径或文件存在则直接返回
     if (!icon) return undefined;
     if (icon.startsWith("/")) {
-        if (fs.existsSync(icon)) return icon;
+        if (await fs.stat(icon).catch(() => false)) return icon;
         return undefined;
     }
     // 常见图标搜索路径
@@ -75,7 +76,7 @@ function getDesktopIcon(icon: string): string | undefined {
     for (const dir of iconDirs.toReversed()) {
         for (const ext of exts) {
             const iconPath = path.join(dir, icon + ext);
-            if (fs.existsSync(iconPath)) {
+            if (await fs.stat(iconPath).catch(() => false)) {
                 if (icon === "com.coolapk.market") console.log(iconPath);
                 return iconPath;
             }

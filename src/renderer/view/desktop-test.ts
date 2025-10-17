@@ -249,7 +249,7 @@ view()
     )
     .addInto();
 
-const allApps = getDesktopEntries(["zh_CN", "zh", "zh-Hans"]);
+const allApps = await getDesktopEntries(["zh_CN", "zh", "zh-Hans"]);
 console.log("Found desktop entries:", allApps);
 const apps: typeof allApps = [];
 const appNameSet = new Set<string>();
@@ -264,12 +264,14 @@ for (const app of allApps) {
 view("y")
     .add(
         apps.map((app) => {
-            const iconPath = getDesktopIcon(app.icon) || "";
+            const imageView = view();
+            getDesktopIcon(app.icon).then((iconPath) => {
+                if (iconPath) {
+                    imageView.add(image(`file://${iconPath}`, app.name).style({ width: "24px" }));
+                }
+            });
             return view("x")
-                .add([
-                    iconPath ? image(`file://${iconPath}`, app.name).style({ width: "24px" }) : "",
-                    txt(app.nameLocal),
-                ])
+                .add([imageView, txt(app.nameLocal)])
                 .on("click", () => {
                     const exec = app.exec.split(" ")[0]; // 简单处理参数
                     runApp(exec, app.exec.split(" ").slice(1));

@@ -152,7 +152,7 @@ const startMenuBtn = view()
         borderRadius: "12px",
         background: "#00aaff",
     })
-    .on("click", () => {
+    .on("click", async () => {
         const menu = view("x", "wrap")
             .style({
                 position: "absolute",
@@ -172,8 +172,7 @@ const startMenuBtn = view()
                 menu.remove();
             }
         });
-        for (const app of sysApi.getDesktopEntries()) {
-            const iconPath = sysApi.getDesktopIcon(app.icon) || `${rootDir}/assets/icons/application.png`;
+        for (const app of await sysApi.getDesktopEntries()) {
             const appEl = view("y")
                 .style({
                     width: "80px",
@@ -182,14 +181,18 @@ const startMenuBtn = view()
                     justifyContent: "flex-start",
                 })
                 .addInto(menu);
-            appIcon(iconPath, app.name, app.exec)
-                .style({
-                    width: "40px",
-                    height: "40px",
-                    borderRadius: "8px",
-                    background: "#ffffff",
-                })
-                .addInto(appEl);
+            const iconView = view().addInto(appEl);
+            sysApi.getDesktopIcon(app.icon).then((_iconPath) => {
+                const iconPath = _iconPath || `${rootDir}/assets/icons/application.png`;
+                iconView.add(
+                    appIcon(iconPath, app.name, app.exec).style({
+                        width: "40px",
+                        height: "40px",
+                        borderRadius: "8px",
+                        background: "#ffffff",
+                    }),
+                );
+            });
             appEl.add(
                 txt(app.nameLocal).style({
                     fontSize: "12px",
@@ -202,7 +205,9 @@ const startMenuBtn = view()
     });
 startMenuBtn.addInto(dockEl);
 
-const apps = sysApi.getDesktopEntries();
+const apps = await sysApi.getDesktopEntries();
+
+console.log(apps);
 
 const browserApp =
     apps.find((app) => app.name === "Google Chrome") ||
@@ -213,15 +218,15 @@ const fileManagerApp =
 const terminalApp = apps.find((app) => app.name === "org.gnome.Terminal") || apps.find((app) => app.name === "Konsole");
 
 if (browserApp) {
-    const iconPath = sysApi.getDesktopIcon(browserApp.icon) || `${rootDir}/assets/icons/browser.png`;
+    const iconPath = (await sysApi.getDesktopIcon(browserApp.icon)) || `${rootDir}/assets/icons/browser.png`;
     appIcon(iconPath, browserApp.name, browserApp.exec).addInto(dockEl);
 }
 if (fileManagerApp) {
-    const iconPath = sysApi.getDesktopIcon(fileManagerApp.icon) || `${rootDir}/assets/icons/file-manager.png`;
+    const iconPath = (await sysApi.getDesktopIcon(fileManagerApp.icon)) || `${rootDir}/assets/icons/file-manager.png`;
     appIcon(iconPath, fileManagerApp.name, fileManagerApp.exec).addInto(dockEl);
 }
 if (terminalApp) {
-    const iconPath = sysApi.getDesktopIcon(terminalApp.icon) || `${rootDir}/assets/icons/terminal.png`;
+    const iconPath = (await sysApi.getDesktopIcon(terminalApp.icon)) || `${rootDir}/assets/icons/terminal.png`;
     appIcon(iconPath, terminalApp.name, terminalApp.exec).addInto(dockEl);
 }
 
