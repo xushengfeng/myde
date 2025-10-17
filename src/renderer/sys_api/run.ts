@@ -33,6 +33,7 @@ export function runApp(
             HOME: string;
             LANG?: string;
             LANGUAGE?: string;
+            WAYLAND_DEBUG?: string;
         };
         server: {
             socketDir: string;
@@ -52,6 +53,7 @@ export function runApp(
             XDG_SESSION_TYPE: "wayland",
             XDG_RUNTIME_DIR: op.server.socketDir,
             WAYLAND_DISPLAY: op.server.socketName,
+            WAYLAND_DEBUG: op.deEnv.WAYLAND_DEBUG || "",
             ...(Number.isNaN(op.xServerNum) ? {} : { DISPLAY: `:${op.xServerNum}` }),
         },
     });
