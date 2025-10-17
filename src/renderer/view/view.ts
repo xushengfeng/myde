@@ -75,6 +75,7 @@ type WaylandData = {
     };
     xdg_popup: {
         xdg_surface: WaylandObjectId;
+        parent_xdg_surface: WaylandObjectId;
     };
     xdg_toplevel: { xdg_surface: WaylandObjectId };
 };
@@ -204,6 +205,7 @@ class WaylandClient {
         pointer: WaylandObjectId;
         keyboard: WaylandObjectId;
         focusSurface: WaylandObjectId | null;
+        focusSurfaceType: "main" | "popup" | null;
         textInput: { focus: WaylandObjectId | null; m: Map<WaylandObjectId, { focus: boolean }> };
         serial: number;
     }> & {
@@ -213,6 +215,7 @@ class WaylandClient {
                 root: WaylandObjectId; // wl_surface id
                 xdg_surface: WaylandObjectId;
                 children: Set<WaylandObjectId>; // wl_surface id
+                popups: Set<WaylandObjectId>; // xdg_popup id
                 actived: boolean;
             }
         >;
@@ -746,6 +749,7 @@ class WaylandClient {
                     root: surfaceId,
                     xdg_surface: x.id,
                     children: new Set([surfaceId]),
+                    popups: new Set(),
                     actived: false,
                 });
                 this.emit("windowCreated", toplevelId, el.el);
@@ -773,11 +777,15 @@ class WaylandClient {
                 }
                 const parentXdgSurface = this.getObject<"xdg_surface">(parentXdgSurfaceId);
 
-                this.getObject<"xdg_popup">(x.args.id).data = { xdg_surface: x.id };
+                this.getObject<"xdg_popup">(x.args.id).data = {
+                    xdg_surface: x.id,
+                    parent_xdg_surface: parentXdgSurfaceId,
+                };
                 thisXdgSurface.data.xdg_role = x.args.id;
                 const win = this.obj2.windows.get(parentXdgSurface.data.xdg_role!);
                 if (win) {
                     win.children.add(thisSurfaceId);
+                    win.popups.add(x.args.id);
                 } else {
                     console.error(`cannt find window by xdg_surface ${parentXdgSurfaceId}`);
                 }
@@ -850,7 +858,13 @@ class WaylandClient {
             isOp(x, "xdg_popup.destroy", (x) => {
                 const xdgSurfaceId = this.getObject<"xdg_popup">(x.id).data.xdg_surface;
                 this.getObject<"xdg_surface">(xdgSurfaceId).data.warpEl.remove(); // todo 可以外部处理
-                // this.obj2.windows.get() // todo remove
+                for (const s of this.obj2.windows.values()) {
+                    // todo 不用循环而是向上找到对应的window
+                    if (s.popups.has(x.id)) {
+                        s.popups.delete(x.id);
+                        break;
+                    }
+                }
                 this.sendMessageX(x.id, "xdg_popup.popup_done", {});
                 this.deleteId(x.id);
             });
@@ -1074,9 +1088,49 @@ class WaylandClient {
                     let nx = x;
                     let ny = y;
                     let canSend = false;
-                    const { x: baseX, y: baseY } = winObj.point.rootEl().getBoundingClientRect();
+                    let inXdgSurface: WaylandObjectId | undefined;
+                    let reasonSurfaceType: "main" | "popup" | null = null;
+                    const {
+                        x: baseX,
+                        y: baseY,
+                        bottom: baseBottom,
+                        right: baseRight,
+                    } = winObj.point.rootEl().getBoundingClientRect();
                     // todo zindex
-                    for (const s of Array.from(win.children).toReversed()) {
+                    for (const p of Array.from(win.popups).toReversed()) {
+                        const popup = this.getObject<"xdg_popup">(p);
+                        const popupSurface = this.getObject<"xdg_surface">(popup.data.xdg_surface);
+                        const rect = popupSurface.data.warpEl.getBoundingClientRect();
+                        const offsetX = rect.left - baseX;
+                        const offsetY = rect.top - baseY;
+                        const offsetX1 = rect.right - baseX;
+                        const offsetY1 = rect.bottom - baseY;
+                        if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
+                            console.log(`pointer in popup surface ${popup.data.xdg_surface}`);
+                            inXdgSurface = popup.data.xdg_surface;
+                            reasonSurfaceType = "popup";
+                            break;
+                        }
+                    }
+                    if (!inXdgSurface) {
+                        if (0 < x && x < baseRight - baseX && 0 < y && y < baseBottom - baseY) {
+                            inXdgSurface = win.xdg_surface;
+                            reasonSurfaceType = "main";
+                        } else {
+                            return undefined;
+                        }
+                    }
+                    const surfaces: WaylandObjectId[] = [];
+                    const mainSurfaceId = this.getObject<"xdg_surface">(inXdgSurface).data.surface;
+                    surfaces.push(mainSurfaceId);
+                    const mainSurface = this.getObject<"wl_surface">(mainSurfaceId);
+                    if (mainSurface.data.children) {
+                        // todo 遍历树
+                        for (const c of mainSurface.data.children) {
+                            surfaces.push(c.id);
+                        }
+                    }
+                    for (const s of surfaces.toReversed()) {
                         const cs = this.getObject<"wl_surface">(s).data.canvas;
                         // todo 缓存
                         const rect = cs.getBoundingClientRect();
@@ -1107,7 +1161,8 @@ class WaylandClient {
                                         serial: 0,
                                         surface: this.obj2.focusSurface,
                                     });
-                                    this.keyboard.blurSurface(this.obj2.focusSurface);
+                                    if (this.obj2.focusSurfaceType === "main" && reasonSurfaceType === "main")
+                                        this.keyboard.blurSurface(this.obj2.focusSurface); // todo popup
                                 }
                                 this.sendMessageImm(this.obj2.pointer, "wl_pointer.enter", {
                                     serial: 0,
@@ -1115,9 +1170,14 @@ class WaylandClient {
                                     surface_x: nx,
                                     surface_y: ny,
                                 });
-                                this.keyboard.focusSurface(s);
                                 this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+                                if (
+                                    (this.obj2.focusSurfaceType === "main" || !this.obj2.focusSurfaceType) &&
+                                    reasonSurfaceType === "main"
+                                )
+                                    this.keyboard.focusSurface(s);
                                 this.obj2.focusSurface = s;
+                                this.obj2.focusSurfaceType = reasonSurfaceType;
                             }
                             break;
                         }
