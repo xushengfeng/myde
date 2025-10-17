@@ -3,9 +3,7 @@ import { image, pack, view } from "dkh-ui";
 import type { WaylandClient } from "../../src/renderer/desktop-api";
 import { txt } from "dkh-ui";
 
-const { sysApi, rootDir, inputMap } =
-    // @ts-expect-error
-    window.myde as typeof import("../../src/renderer/desktop-api").default;
+const { MSysApi, MRootDir, MInputMap } = window.myde;
 
 function mouseMove(x: number, y: number) {
     mouseEl.style({ top: `${y}px`, left: `${x}px` });
@@ -88,7 +86,7 @@ function sendScrollEvent(p: WheelEvent) {
     }
 }
 
-const server = sysApi.server();
+const server = MSysApi.server();
 
 server.server.on("newClient", (client, clientId) => {
     clientData.set(clientId, { client });
@@ -110,7 +108,7 @@ const clientData = new Map<string, { client: WaylandClient }>();
 
 const mainEl = view().style({ width: "100vw", height: "100vh" }).addInto();
 
-image(`${rootDir}/assets/wallpaper/1.svg`, "wallpaper")
+image(`${MRootDir}/assets/wallpaper/1.svg`, "wallpaper")
     .style({
         width: "100%",
         height: "100%",
@@ -172,7 +170,7 @@ const startMenuBtn = view()
                 menu.remove();
             }
         });
-        for (const app of await sysApi.getDesktopEntries()) {
+        for (const app of await MSysApi.getDesktopEntries()) {
             const appEl = view("y")
                 .style({
                     width: "80px",
@@ -182,8 +180,8 @@ const startMenuBtn = view()
                 })
                 .addInto(menu);
             const iconView = view().addInto(appEl);
-            sysApi.getDesktopIcon(app.icon).then((_iconPath) => {
-                const iconPath = _iconPath || `${rootDir}/assets/icons/application.png`;
+            MSysApi.getDesktopIcon(app.icon).then((_iconPath) => {
+                const iconPath = _iconPath || `${MRootDir}/assets/icons/application.png`;
                 iconView.add(
                     appIcon(iconPath, app.name, app.exec).style({
                         width: "40px",
@@ -205,7 +203,7 @@ const startMenuBtn = view()
     });
 startMenuBtn.addInto(dockEl);
 
-const apps = await sysApi.getDesktopEntries();
+const apps = await MSysApi.getDesktopEntries();
 
 console.log(apps);
 
@@ -218,15 +216,15 @@ const fileManagerApp =
 const terminalApp = apps.find((app) => app.name === "org.gnome.Terminal") || apps.find((app) => app.name === "Konsole");
 
 if (browserApp) {
-    const iconPath = (await sysApi.getDesktopIcon(browserApp.icon)) || `${rootDir}/assets/icons/browser.png`;
+    const iconPath = (await MSysApi.getDesktopIcon(browserApp.icon)) || `${MRootDir}/assets/icons/browser.png`;
     appIcon(iconPath, browserApp.name, browserApp.exec).addInto(dockEl);
 }
 if (fileManagerApp) {
-    const iconPath = (await sysApi.getDesktopIcon(fileManagerApp.icon)) || `${rootDir}/assets/icons/file-manager.png`;
+    const iconPath = (await MSysApi.getDesktopIcon(fileManagerApp.icon)) || `${MRootDir}/assets/icons/file-manager.png`;
     appIcon(iconPath, fileManagerApp.name, fileManagerApp.exec).addInto(dockEl);
 }
 if (terminalApp) {
-    const iconPath = (await sysApi.getDesktopIcon(terminalApp.icon)) || `${rootDir}/assets/icons/terminal.png`;
+    const iconPath = (await MSysApi.getDesktopIcon(terminalApp.icon)) || `${MRootDir}/assets/icons/terminal.png`;
     appIcon(iconPath, terminalApp.name, terminalApp.exec).addInto(dockEl);
 }
 
@@ -245,13 +243,13 @@ body.on("pointerup", (e) => {
 body.on("keydown", (e) => {
     if (e.repeat) return;
     for (const client of server.server.clients.values()) {
-        client.keyboard.sendKey(inputMap.mapKeyCode(e.code), "pressed");
+        client.keyboard.sendKey(MInputMap.mapKeyCode(e.code), "pressed");
     }
 });
 body.on("keyup", (e) => {
     if (e.repeat) return;
     for (const client of server.server.clients.values()) {
-        client.keyboard.sendKey(inputMap.mapKeyCode(e.code), "released");
+        client.keyboard.sendKey(MInputMap.mapKeyCode(e.code), "released");
     }
 });
 

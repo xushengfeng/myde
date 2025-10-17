@@ -4,19 +4,22 @@ import { getEnv } from "./sys_api/env";
 import { server } from "./sys_api/run";
 
 export const myde = {
-    sysApi: {
+    MSysApi: {
         getDesktopEntries,
         getDesktopIcon,
         getEnv,
         server,
     },
-    inputMap: {
+    MInputMap: {
         mapKeyCode,
     },
-    rootDir: "./",
+    MRootDir: "./",
 };
 export type DesktopApi = typeof myde;
-
-export default myde;
+declare global {
+    interface Window {
+        myde: DesktopApi;
+    }
+}
 
 export type { WaylandClient } from "../renderer/view/view";

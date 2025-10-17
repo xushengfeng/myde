@@ -11,7 +11,7 @@ function loadDesktop(p: string) {
         console.error("Desktop package.json not found:", packagePath);
         return;
     }
-    myde.rootDir = dirPath;
+    myde.MRootDir = dirPath;
     const packageData = fs.readFileSync(packagePath, "utf-8");
     const packageJson = JSON.parse(packageData);
     const mainPath = `${dirPath}/${packageJson.main || "index.js"}`;
@@ -37,7 +37,6 @@ addStyle({
     },
 });
 
-// @ts-expect-error
 window.myde = myde;
 // @ts-expect-error
 delete window.require;

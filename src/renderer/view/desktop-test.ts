@@ -88,7 +88,7 @@ function runApp(execPath: string, args: string[] = []) {
         .addInto();
 }
 
-const serverX = myde.sysApi.server({ dev: true });
+const serverX = myde.MSysApi.server({ dev: true });
 const server = serverX.server;
 
 server.on("newClient", (client, clientId) => {
@@ -162,7 +162,7 @@ body.on("wheel", (e) => {
 });
 
 function mapKeyCode(code: string): number {
-    return myde.inputMap.mapKeyCode(code);
+    return myde.MInputMap.mapKeyCode(code);
 }
 
 body.style({
