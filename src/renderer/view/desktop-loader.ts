@@ -39,6 +39,11 @@ addStyle({
 
 // @ts-expect-error
 window.myde = myde;
+// @ts-expect-error
+delete window.require;
+// @ts-expect-error
+delete window.module;
+delete window.exports;
 
 const urlParams = new URLSearchParams(window.location.search);
 const desktopPath = urlParams.get("desktop");
