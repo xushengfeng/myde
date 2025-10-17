@@ -7,8 +7,8 @@ export function server(op?: { dev?: boolean }) {
     const env = getEnv();
     const server = new WaylandServer({ socketDir: env.XDG_RUNTIME_DIR || "/tmp" });
     return {
-        runApp: (exec: string) => {
-            const execParts = exec.split(" ");
+        runApp: (exec: string, xServerNum?: number) => {
+            const execParts = exec.trim().split(" ");
             return runApp(execParts[0], {
                 args: execParts.slice(1),
                 deEnv: {
@@ -18,6 +18,7 @@ export function server(op?: { dev?: boolean }) {
                     ...(op?.dev ? { WAYLAND_DEBUG: "1" } : {}),
                 },
                 server: { socketDir: server.socketDir, socketName: server.socketName },
+                xServerNum,
             });
         },
         server,

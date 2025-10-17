@@ -49,7 +49,7 @@ function sendScrollEvent(p: WheelEvent) {
 function runApp(execPath: string, args: string[] = []) {
     console.log(`Running application: ${execPath}`);
 
-    const subprocess = serverX.runApp(`${execPath} ${args.join(" ")}`);
+    const subprocess = serverX.runApp(`${execPath} ${args.join(" ")}`, xServerNum);
 
     const logData: string[] = [];
 
@@ -241,7 +241,7 @@ view()
                 const socketPath = `/tmp/.X11-unix/X${i}`;
                 if (!fs.existsSync(socketPath)) {
                     xServerNum = i;
-                    runApp("/usr/bin/Xwayland", [`:${xServerNum}`]);
+                    runApp("/usr/bin/xwayland-satellite", [`:${xServerNum}`]);
                     break;
                 }
             }
