@@ -451,9 +451,6 @@ class WaylandClient {
             isOp(x, "wl_shm_pool.destroy", (x) => {
                 this.deleteId(x.id);
             });
-            isOp(x, "wl_region.destroy", (x) => {
-                this.deleteId(x.id);
-            });
             isOp(x, "wl_surface.attach", (x) => {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
