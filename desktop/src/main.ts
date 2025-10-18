@@ -5,7 +5,13 @@ import { txt } from "dkh-ui";
 
 const { MSysApi, MRootDir, MInputMap } = window.myde;
 
+// 全局记录当前鼠标坐标（与页面视口坐标系一致）
+const mousePos = { x: 0, y: 0 } as { x: number; y: number };
+
 function mouseMove(x: number, y: number) {
+    // 更新全局鼠标坐标
+    mousePos.x = x;
+    mousePos.y = y;
     mouseEl.style({ top: `${y}px`, left: `${x}px` });
     sendPointerEvent("move", new PointerEvent("pointermove", { clientX: x, clientY: y }));
 }
@@ -99,6 +105,41 @@ server.server.on("newClient", (client, clientId) => {
         console.log(`Client ${clientId} deleted window ${windowId}`);
         el.remove();
     });
+    client.on("windowStartMove", (windowId) => {
+        const xwin = client.win(windowId);
+        if (!xwin) return;
+
+        const winEl = xwin.point.rootWinEl();
+        const rect = winEl.getBoundingClientRect();
+
+        // todo track point
+        const startX = mousePos.x;
+        const startY = mousePos.y;
+
+        const origLeft = rect.left;
+        const origTop = rect.top;
+
+        function onPointerMove() {
+            const newLeft = Math.round(mousePos.x - startX + origLeft);
+            const newTop = Math.round(mousePos.y - startY + origTop);
+            winEl.style.left = `${newLeft}px`;
+            winEl.style.top = `${newTop}px`;
+        }
+
+        function cleanup() {
+            window.removeEventListener("pointermove", onPointerMove);
+            window.removeEventListener("pointerup", onPointerUp);
+            window.removeEventListener("pointercancel", onPointerUp);
+        }
+
+        function onPointerUp() {
+            cleanup();
+        }
+
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", onPointerUp, { once: true });
+        window.addEventListener("pointercancel", onPointerUp, { once: true });
+    });
 });
 server.server.on("clientClose", (_, clientId) => {
     clientData.delete(clientId);
@@ -134,7 +175,7 @@ const dockEl = view()
         transform: "translateX(-50%)",
         height: "64px",
         padding: "0 10px",
-        background: "rgba(255, 255, 255, 0.1)",
+        background: "rgba(255, 255, 255, 0.6)",
         borderRadius: "22px",
         display: "flex",
         alignItems: "center",

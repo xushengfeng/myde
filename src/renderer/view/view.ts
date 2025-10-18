@@ -90,6 +90,7 @@ interface WaylandClientEventMap {
     close: () => void;
     windowCreated: (xdgToplevelId: WaylandObjectId, el: HTMLElement) => void;
     windowClosed: (xdgToplevelId: WaylandObjectId, el: HTMLElement) => void;
+    windowStartMove: (xdgToplevelId: WaylandObjectId) => void;
 }
 
 function waylandName(name: number): WaylandName {
@@ -865,6 +866,9 @@ class WaylandClient {
                 this.sendMessageX(x.id, "xdg_popup.popup_done", {});
                 this.deleteId(x.id);
             });
+            isOp(x, "xdg_toplevel.move", (x) => {
+                this.emit("windowStartMove", x.id);
+            });
             isOp(x, "xdg_toplevel.destroy", (x) => {
                 const xdgSurfaceId = this.getObject<"xdg_toplevel">(x.id).data.xdg_surface;
                 this.getObject<"xdg_surface">(xdgSurfaceId).data.warpEl.remove(); // todo 可以外部处理
@@ -1070,6 +1074,11 @@ class WaylandClient {
                     const rootSurfaceId = win.root;
                     const rootSurface = this.getObject<"wl_surface">(rootSurfaceId);
                     return rootSurface.data.canvas;
+                },
+                rootWinEl: () => {
+                    const rootSurfaceId = win.xdg_surface;
+                    const rootSurface = this.getObject<"xdg_surface">(rootSurfaceId);
+                    return rootSurface.data.warpEl;
                 },
                 inWin: (p: { x: number; y: number }) => {
                     const rootSurfaceId = win.xdg_surface;
