@@ -405,6 +405,191 @@
       "enum": []
     },
     {
+      "name": "wl_data_offer",
+      "version": 3,
+      "request": [
+        {
+          "name": "accept",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint"
+            },
+            {
+              "name": "mime_type",
+              "type": "string",
+              "allowNull": true
+            }
+          ]
+        },
+        {
+          "name": "receive",
+          "args": [
+            {
+              "name": "mime_type",
+              "type": "string"
+            },
+            {
+              "name": "fd",
+              "type": "fd"
+            }
+          ]
+        },
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "finish",
+          "args": [],
+          "since": 3
+        },
+        {
+          "name": "set_actions",
+          "args": [
+            {
+              "name": "dnd_actions",
+              "type": "uint"
+            },
+            {
+              "name": "preferred_action",
+              "type": "uint"
+            }
+          ],
+          "since": 3
+        }
+      ],
+      "event": [
+        {
+          "name": "offer",
+          "args": [
+            {
+              "name": "mime_type",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "source_actions",
+          "args": [
+            {
+              "name": "source_actions",
+              "type": "uint"
+            }
+          ],
+          "since": 3
+        },
+        {
+          "name": "action",
+          "args": [
+            {
+              "name": "dnd_action",
+              "type": "uint"
+            }
+          ],
+          "since": 3
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "invalid_finish": 0,
+            "invalid_action_mask": 1,
+            "invalid_action": 2,
+            "invalid_offer": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "wl_data_source",
+      "version": 3,
+      "request": [
+        {
+          "name": "offer",
+          "args": [
+            {
+              "name": "mime_type",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "destroy",
+          "args": []
+        },
+        {
+          "name": "set_actions",
+          "args": [
+            {
+              "name": "dnd_actions",
+              "type": "uint"
+            }
+          ],
+          "since": 3
+        }
+      ],
+      "event": [
+        {
+          "name": "target",
+          "args": [
+            {
+              "name": "mime_type",
+              "type": "string",
+              "allowNull": true
+            }
+          ]
+        },
+        {
+          "name": "send",
+          "args": [
+            {
+              "name": "mime_type",
+              "type": "string"
+            },
+            {
+              "name": "fd",
+              "type": "fd"
+            }
+          ]
+        },
+        {
+          "name": "cancelled",
+          "args": []
+        },
+        {
+          "name": "dnd_drop_performed",
+          "args": [],
+          "since": 3
+        },
+        {
+          "name": "dnd_finished",
+          "args": [],
+          "since": 3
+        },
+        {
+          "name": "action",
+          "args": [
+            {
+              "name": "dnd_action",
+              "type": "uint"
+            }
+          ],
+          "since": 3
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "invalid_action_mask": 0,
+            "invalid_source": 1
+          }
+        }
+      ]
+    },
+    {
       "name": "wl_data_device",
       "version": 3,
       "request": [

@@ -78,6 +78,7 @@ type WaylandData = {
         parent_xdg_surface: WaylandObjectId;
     };
     xdg_toplevel: { xdg_surface: WaylandObjectId };
+    wl_data_source: { offers: string[] };
 };
 
 type WaylandObjectX<T extends keyof WaylandData> = { protocol: WaylandProtocol; data: WaylandData[T] };
@@ -91,6 +92,7 @@ interface WaylandClientEventMap {
     windowCreated: (xdgToplevelId: WaylandObjectId, el: HTMLElement) => void;
     windowClosed: (xdgToplevelId: WaylandObjectId, el: HTMLElement) => void;
     windowStartMove: (xdgToplevelId: WaylandObjectId) => void;
+    copy: (text: string) => void;
 }
 
 function waylandName(name: number): WaylandName {
@@ -675,6 +677,96 @@ class WaylandClient {
             });
             isOp(x, "wl_region.destroy", (x) => {
                 this.deleteId(x.id);
+            });
+            isOp(x, "wl_data_device_manager.create_data_source", (x) => {
+                const id = x.args.id;
+                const src = this.getObject<"wl_data_source">(id);
+                src.data = { offers: [] };
+            });
+            isOp(x, "wl_data_source.offer", (x) => {
+                const src = this.getObject<"wl_data_source">(x.id);
+                if (!src) return;
+                src.data.offers.push(x.args.mime_type);
+                console.log(`wl_data_source#${x.id} offer ${x.args.mime_type}`);
+            });
+            isOp(x, "wl_data_device.set_selection", (x) => {
+                const srcId = waylandObjectId(x.args.source);
+                if (!srcId) {
+                    console.log("Selection cleared");
+                    return;
+                }
+
+                const src = this.getObject<"wl_data_source">(srcId);
+                if (!src) {
+                    console.warn(`Selection source ${srcId} not found`);
+                    return;
+                }
+
+                const offers = src.data.offers;
+                // 优先尝试 text/plain;charset=utf-8，然后 text/plain
+                let mime = offers.find((m: string) => /text\/plain.*utf-?8/i.test(m));
+                if (!mime) mime = offers.find((m: string) => /^text\/plain($|;)/i.test(m));
+                if (!mime) {
+                    // 回退到第一个 offer
+                    mime = offers[0];
+                }
+
+                if (!mime) {
+                    console.log(`No offered mime types from source ${srcId}`);
+                    return;
+                }
+
+                // 创建一个临时 fd 传给客户端，让客户端往里面写入数据
+                const { fd } = newFd("");
+
+                try {
+                    // 发送请求，要求客户端把 mime 类型的数据写入我们提供的 fd
+                    this.sendMessageImm(srcId, "wl_data_source.send", { mime_type: mime, fd: 0 }, [fd]);
+
+                    // TODO: 使用基于 EOF 的读取更优雅，但客户端行为差异导致未能稳定工作，
+                    // 先回退到简单的延时读取（不优雅），以后再改进为可靠的 EOF/poll 检测。
+                    setTimeout(() => {
+                        try {
+                            const st = fs.fstatSync(fd);
+                            const len = Number(st.size) || 0;
+                            if (len === 0) {
+                                // 若 size 为 0，尝试读取最多 64KB 的数据
+                                const tryBuf = new Uint8Array(65536);
+                                let read = 0;
+                                try {
+                                    read = fs.readSync(fd, tryBuf, 0, tryBuf.length, 0);
+                                } catch (e) {
+                                    // ignore
+                                }
+                                const content = Buffer.from(tryBuf.buffer, tryBuf.byteOffset, read).toString("utf8");
+                                console.log(`Clipboard (from ${srcId}) [len=${read}]:`, content);
+                            } else {
+                                const arr = new Uint8Array(len);
+                                fs.readSync(fd, arr, 0, len, 0);
+                                const content = Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength).toString(
+                                    "utf8",
+                                );
+                                console.log(`Clipboard (from ${srcId}) [len=${len}]:`, content);
+                                this.emit("copy", content);
+                            }
+                        } catch (err) {
+                            console.error("Error reading selection fd:", err);
+                        } finally {
+                            try {
+                                fs.closeSync(fd);
+                            } catch (e) {
+                                // ignore
+                            }
+                        }
+                    }, 200);
+                } catch (err) {
+                    console.error("Error sending wl_data_source.send:", err);
+                    try {
+                        fs.closeSync(fd);
+                    } catch (e) {
+                        // ignore
+                    }
+                }
             });
 
             isOp(x, "xdg_wm_base.get_xdg_surface", (x) => {

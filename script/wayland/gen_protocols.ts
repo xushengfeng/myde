@@ -26,6 +26,8 @@ const supportedProtocols: Array<{ name: string; interfaces: Array<{ name: string
             { name: "wl_region", version: 1 },
             { name: "wl_data_device", version: 3 },
             { name: "wl_data_device_manager", version: 3 },
+            { name: "wl_data_offer", version: 3 },
+            { name: "wl_data_source", version: 3 },
             { name: "wl_subcompositor", version: 1 },
             { name: "wl_subsurface", version: 1 },
         ],
