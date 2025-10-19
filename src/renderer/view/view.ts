@@ -1219,9 +1219,10 @@ class WaylandClient {
         if (win === undefined) return undefined;
         const winObj = {
             focus: () => {
-                if (win.actived) return;
+                if (win.actived) return false;
                 win.actived = true;
                 this.configureWin(id, win);
+                return true;
             },
             blur: () => {
                 if (!win.actived) return;

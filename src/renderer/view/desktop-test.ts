@@ -20,8 +20,8 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
                 new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
             );
             if (type === "down") {
-                xwin.focus();
-                client.offerTo();
+                const f = xwin.focus();
+                if (f) client.offerTo();
                 for (const [otherWinId, _otherWin] of client.getWindows()) {
                     if (otherWinId !== winId) {
                         client.win(otherWinId)?.blur();
