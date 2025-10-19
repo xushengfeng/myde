@@ -21,6 +21,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
             );
             if (type === "down") {
                 xwin.focus();
+                client.offerTo();
                 for (const [otherWinId, _otherWin] of client.getWindows()) {
                     if (otherWinId !== winId) {
                         client.win(otherWinId)?.blur();
@@ -101,6 +102,13 @@ server.on("newClient", (client, clientId) => {
     client.on("windowClosed", (windowId, el) => {
         console.log(`Client ${clientId} deleted window ${windowId}`);
         el.remove();
+    });
+    client.on("copy", (text: string) => {
+        console.log(`Client ${clientId} copy text:`, text);
+    });
+    client.on("paste", () => {
+        // todo copy后似乎抢占了，如果是自定义粘贴需要重新offer
+        client.paste("hello");
     });
 });
 server.on("clientClose", (_, clientId) => {

@@ -59,9 +59,8 @@ export class WaylandEncoder {
         this.writeUint(objectId);
     }
 
-    writeNewId(interfaceName: string, version: number): void {
-        // new_id在客户端请求中需要指定接口，在服务端事件中返回新对象ID
-        this.writeUint(0); // 占位，实际由接收方填充
+    writeNewId(objId: WaylandObjectId): void {
+        this.writeUint(objId);
     }
 
     writeArray(data: Uint8Array): void {

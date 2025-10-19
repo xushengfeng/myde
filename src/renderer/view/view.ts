@@ -93,6 +93,7 @@ interface WaylandClientEventMap {
     windowClosed: (xdgToplevelId: WaylandObjectId, el: HTMLElement) => void;
     windowStartMove: (xdgToplevelId: WaylandObjectId) => void;
     copy: (text: string) => void;
+    paste: () => void;
 }
 
 function waylandName(name: number): WaylandName {
@@ -204,6 +205,7 @@ class WaylandClient {
     private objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
     private protoVersions: Map<string, number> = new Map();
     private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any>; fds?: number[] }[] = [];
+    private nextObjectId: number = 0xff000000;
     private obj2: Partial<{
         pointer: WaylandObjectId;
         keyboard: WaylandObjectId;
@@ -211,6 +213,8 @@ class WaylandClient {
         focusSurfaceType: "main" | "popup" | null;
         textInput: { focus: WaylandObjectId | null; m: Map<WaylandObjectId, { focus: boolean }> };
         serial: number;
+        dataDevices: Set<WaylandObjectId>;
+        pendingPaste: { offerId: WaylandObjectId; fd: number; mime: string; timeout: NodeJS.Timeout };
     }> & {
         windows: Map<
             WaylandObjectId, // xdg_toplevel id
@@ -249,6 +253,11 @@ class WaylandClient {
             this.emit("close");
             this.close();
         });
+    }
+
+    private allocateObjectId(): WaylandObjectId {
+        const id = this.nextObjectId++ as WaylandObjectId;
+        return id;
     }
 
     // 注册事件
@@ -683,11 +692,53 @@ class WaylandClient {
                 const src = this.getObject<"wl_data_source">(id);
                 src.data = { offers: [] };
             });
+            isOp(x, "wl_data_device_manager.get_data_device", (x) => {
+                const ddId = x.args.id;
+                const dataDevices = this.obj2.dataDevices || new Set<WaylandObjectId>();
+                dataDevices.add(ddId);
+                this.obj2.dataDevices = dataDevices;
+            });
             isOp(x, "wl_data_source.offer", (x) => {
                 const src = this.getObject<"wl_data_source">(x.id);
                 if (!src) return;
                 src.data.offers.push(x.args.mime_type);
                 console.log(`wl_data_source#${x.id} offer ${x.args.mime_type}`);
+            });
+
+            // 客户端想要从 compositor 接收数据（粘贴）
+            isOp(x, "wl_data_offer.receive", (x) => {
+                const offerId = x.id;
+                const mime = x.args.mime_type;
+                const fd = x.args.fd;
+
+                // fallback: compositor-local paste flow – keep pendingPaste and emit paste for external handler
+                if (this.obj2.pendingPaste) {
+                    console.warn("Existing pending paste request - rejecting previous");
+                    try {
+                        fs.closeSync(this.obj2.pendingPaste.fd);
+                    } catch (e) {
+                        // ignore
+                    }
+                    clearTimeout(this.obj2.pendingPaste.timeout);
+                    this.obj2.pendingPaste = undefined;
+                }
+
+                const timeout = setTimeout(() => {
+                    if (!this.obj2.pendingPaste) return;
+                    console.warn("paste request timed out");
+                    try {
+                        fs.closeSync(this.obj2.pendingPaste.fd);
+                    } catch (e) {
+                        // ignore
+                    }
+                    this.obj2.pendingPaste = undefined;
+                }, 10000);
+
+                this.obj2.pendingPaste = { offerId, fd, mime, timeout };
+                this.emit("paste");
+            });
+            isOp(x, "wl_data_source.destroy", (x) => {
+                this.objects.delete(x.id);
             });
             isOp(x, "wl_data_device.set_selection", (x) => {
                 const srcId = waylandObjectId(x.args.source);
@@ -1039,6 +1090,22 @@ class WaylandClient {
         }
         this.toSend = [];
     }
+
+    public offerTo() {
+        const dd = this.obj2.dataDevices || new Set();
+        if (!this.obj2.dataDevices) {
+            console.error("No data devices to offer to");
+        }
+        for (const ddId of dd) {
+            const dataOfferId = this.allocateObjectId();
+            this.objects.set(dataOfferId, { protocol: WaylandProtocols.wl_data_offer, data: {} });
+
+            this.sendMessageImm(ddId, "wl_data_device.data_offer", { id: dataOfferId });
+            this.sendMessageImm(dataOfferId, "wl_data_offer.offer", { mime_type: "text/plain;charset=utf-8" });
+            this.sendMessageImm(dataOfferId, "wl_data_offer.offer", { mime_type: "text/plain" });
+            this.sendMessageImm(ddId, "wl_data_device.selection", { id: dataOfferId });
+        }
+    }
     private sendMessageImm<T extends keyof WaylandEventObj>(
         objectId: WaylandObjectId,
         op: T,
@@ -1097,7 +1164,7 @@ class WaylandClient {
                     encoder.writeObject(argValue);
                     break;
                 case WaylandArgType.NEW_ID:
-                    encoder.writeNewId(a.interface!, 1);
+                    encoder.writeNewId(argValue);
                     break;
                 case WaylandArgType.ARRAY:
                     encoder.writeArray(new Uint8Array(argValue));
@@ -1382,6 +1449,37 @@ class WaylandClient {
                 state: getEnumValue("wl_keyboard.key_state", state), // todo repeat
             });
         },
+    };
+    paste: (text: string) => void = (text: string) => {
+        if (!this.obj2.pendingPaste) {
+            console.warn("No pending paste request");
+            return;
+        }
+        const p = this.obj2.pendingPaste;
+        try {
+            // write text into fd
+            try {
+                const u8 = new Uint8Array(Buffer.from(text, "utf8").buffer);
+                fs.writeSync(p.fd, u8 as any, 0, u8.length, 0);
+            } catch (_e) {
+                // some fds may not support position; fallback to writeFileSync via fd
+                try {
+                    fs.writeFileSync(p.fd, text, { encoding: "utf8" as any });
+                } catch (_e2) {
+                    console.error("Failed to write paste text to fd:", _e2);
+                }
+            }
+        } catch (err) {
+            console.error("Error during paste():", err);
+        } finally {
+            clearTimeout(p.timeout);
+            try {
+                fs.closeSync(p.fd);
+            } catch {
+                // ignore
+            }
+            this.obj2.pendingPaste = undefined;
+        }
     };
     close() {
         for (const obj of this.objects.values()) {
