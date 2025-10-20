@@ -51,7 +51,6 @@ type WaylandData = {
                 y: number;
             };
         }[]; // 索引大的在上面
-        childrenEl?: HTMLElement;
         inputRegion?: WaylandData["wl_region"]["rects"];
     };
     wl_subsurface: {
@@ -228,8 +227,7 @@ class WaylandClient {
                 actived: boolean;
             }
         >;
-        surfaces: { id: WaylandObjectId; el: HTMLCanvasElement }[];
-    } & Record<string, any>;
+    };
     // 事件存储
     private events: { [K in keyof WaylandClientEventMap]?: WaylandClientEventMap[K][] } = {};
 
@@ -237,7 +235,7 @@ class WaylandClient {
         this.id = id;
         this.socket = socket;
         this.objects = new Map();
-        this.obj2 = { surfaces: [], windows: new Map() };
+        this.obj2 = { windows: new Map() };
         socket.on("readable", () => {
             console.log("connected");
             const x = socket.read(undefined, null);
@@ -442,7 +440,6 @@ class WaylandClient {
                 const canvas = canvasEl.el;
                 canvas.width = 1;
                 canvas.height = 1;
-                this.obj2.surfaces.push({ id: surfaceId, el: canvas });
                 surface.data = { canvas, bufferPointer: 0 };
             });
             isOp(x, "wl_compositor.create_region", (x) => {
@@ -597,7 +594,6 @@ class WaylandClient {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 surface.data.canvas.remove();
-                this.obj2.surfaces = this.obj2.surfaces.filter((s) => s.id !== surfaceId);
                 this.deleteId(surfaceId);
             });
             isOp(x, "wl_surface.set_input_region", (x) => {
@@ -1474,8 +1470,9 @@ class WaylandClient {
                 fs.closeSync(obj.data.fd);
             }
         }
-        for (const s of this.obj2.surfaces) {
-            s.el.remove();
+        for (const win of this.obj2.windows.values()) {
+            const xdgSurface = this.getObject<"xdg_surface">(win.xdg_surface);
+            xdgSurface.data.warpEl.remove();
         }
         this.socket.end();
         this.socket.destroy();
