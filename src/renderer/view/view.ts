@@ -219,6 +219,7 @@ class WaylandClient {
         serial: number;
         dataDevices: Set<WaylandObjectId>;
         pendingPaste: { offerId: WaylandObjectId; fd: number; mime: string; timeout: NodeJS.Timeout };
+        modifiers: Set<number>;
     }> & {
         windows: Map<
             WaylandObjectId, // xdg_toplevel id
@@ -236,7 +237,7 @@ class WaylandClient {
         this.id = id;
         this.socket = socket;
         this.objects = new Map();
-        this.obj2 = { windows: new Map() };
+        this.obj2 = { windows: new Map(), modifiers: new Set() };
         socket.on("readable", () => {
             console.log("connected");
             const x = socket.read(undefined, null);
@@ -1437,8 +1438,48 @@ class WaylandClient {
                 key: key,
                 state: getEnumValue("wl_keyboard.key_state", state), // todo repeat
             });
+
+            const isPressed = state === "pressed";
+            const modKeyToBit: { [k: number]: number } = {
+                [InputEventCodes.KEY_LEFTSHIFT]: 0, // Shift -> bit 0
+                [InputEventCodes.KEY_RIGHTSHIFT]: 0,
+                [InputEventCodes.KEY_CAPSLOCK]: 1, // CapsLock -> bit 1
+                [InputEventCodes.KEY_LEFTCTRL]: 2, // Ctrl -> bit 2
+                [InputEventCodes.KEY_RIGHTCTRL]: 2,
+                [InputEventCodes.KEY_LEFTALT]: 3, // Alt -> bit 3
+                [InputEventCodes.KEY_RIGHTALT]: 3,
+                [InputEventCodes.KEY_LEFTMETA]: 4, // Meta/Super -> bit 4
+                [InputEventCodes.KEY_RIGHTMETA]: 4,
+            };
+
+            const bit = modKeyToBit[key];
+            if (bit !== undefined && this.obj2.modifiers) {
+                if (isPressed) this.obj2.modifiers.add(bit);
+                else this.obj2.modifiers.delete(bit);
+
+                const mods_depressed = this.computeModsDepressed();
+                const mods_latched = 0; // todo not tracking latched in this implementation
+                const mods_locked = 0; // todo not tracking locked separately here
+
+                this.sendMessageImm(this.obj2.keyboard, "wl_keyboard.modifiers", {
+                    serial: s,
+                    mods_depressed,
+                    mods_latched,
+                    mods_locked,
+                    group: 0,
+                });
+            }
         },
     };
+
+    private computeModsDepressed(): number {
+        if (!this.obj2.modifiers) return 0;
+        let mask = 0;
+        for (const b of this.obj2.modifiers) {
+            mask |= 1 << b;
+        }
+        return mask;
+    }
     paste: (text: string) => void = (text: string) => {
         if (!this.obj2.pendingPaste) {
             console.warn("No pending paste request");
