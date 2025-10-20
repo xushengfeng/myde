@@ -51,6 +51,7 @@ type WaylandData = {
                 y: number;
             };
         }[]; // 索引大的在上面
+        parentSurface?: WaylandObjectId;
         inputRegion?: WaylandData["wl_region"]["rects"];
     };
     wl_subsurface: {
@@ -594,6 +595,10 @@ class WaylandClient {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 surface.data.canvas.remove();
+                const parentSurface = this.getObjectOption<"wl_surface">(surface.data.parentSurface);
+                if (parentSurface) {
+                    parentSurface.data.children = parentSurface.data.children?.filter((i) => i.id !== surfaceId);
+                }
                 this.deleteId(surfaceId);
             });
             isOp(x, "wl_surface.set_input_region", (x) => {
@@ -614,6 +619,7 @@ class WaylandClient {
                 cs.push({ id: waylandObjectId(x.args.surface), posi: { x: 0, y: 0 } });
                 parent.data.children = cs;
                 const thisChild = this.getObject<"wl_surface">(waylandObjectId(x.args.surface));
+                thisChild.data.parentSurface = waylandObjectId(x.args.parent);
                 parent.data.canvas.parentElement!.appendChild(thisChild.data.canvas);
                 thisChild.data.canvas.style.position = "absolute";
                 // @ts-expect-error
