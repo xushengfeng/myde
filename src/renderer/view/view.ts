@@ -1292,19 +1292,21 @@ class WaylandClient {
                             console.log(`pointer in surface ${s}`);
                             nx = x - offsetX;
                             ny = y - offsetY;
-                            const surfaceInputRegion = this.getObject<"wl_surface">(s).data.inputRegion;
-                            if (surfaceInputRegion) {
-                                for (const r of surfaceInputRegion) {
-                                    if (x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
-                                        if (r.type === "+") {
-                                            canSend = true;
-                                        } else {
-                                            canSend = false;
-                                            break;
-                                        }
-                                    }
-                                }
-                            } else canSend = true;
+                            // todo input region
+                            // const surfaceInputRegion = this.getObject<"wl_surface">(s).data.inputRegion;
+                            // if (surfaceInputRegion) {
+                            //     for (const r of surfaceInputRegion) {
+                            //         if (x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
+                            //             if (r.type === "+") {
+                            //                 canSend = true;
+                            //             } else {
+                            //                 canSend = false;
+                            //                 break;
+                            //             }
+                            //         }
+                            //     }
+                            // } else canSend = true;
+                            canSend = true;
                             if (this.obj2.focusSurface !== s) {
                                 if (this.obj2.focusSurface && this.objects.has(this.obj2.focusSurface)) {
                                     this.sendMessageImm(this.obj2.pointer, "wl_pointer.leave", {
