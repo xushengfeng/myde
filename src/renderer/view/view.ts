@@ -204,6 +204,14 @@ class WaylandServer {
 }
 
 class WaylandClient {
+    logConfig = {
+        receive: true,
+        send: true,
+    } as {
+        receive: true | string[];
+        send: true | string[];
+    };
+
     private id: string;
     private socket: USocket;
     private objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
@@ -255,6 +263,20 @@ class WaylandClient {
             this.emit("close");
             this.close();
         });
+    }
+
+    private receiveLog(...data: unknown[]) {
+        if (this.logConfig.receive === true) {
+            console.log(...data);
+        }
+    }
+    private sendLog(...data: unknown[]) {
+        if (this.logConfig.send === true) {
+            console.log(...data);
+        }
+    }
+    setLogConfig(op: typeof this.logConfig) {
+        this.logConfig = op;
     }
 
     private allocateObjectId(): WaylandObjectId {
@@ -319,7 +341,7 @@ class WaylandClient {
             return false;
         }
 
-        console.log(`Parsed data from client ${this.id}:`, data.buffer, fds);
+        this.receiveLog(`Parsed data from client ${this.id}:`, data.buffer, fds);
         this.toSend = [];
         while (decoder.getRemainingBytes() > 0) {
             const header = decoder.readHeader();
@@ -330,7 +352,7 @@ class WaylandClient {
             }
             const args = parseArgs(decoder, _x.op.args);
             const rest = decoder.final();
-            console.log(
+            this.receiveLog(
                 `Parsed args for ${_x.proto.name}#${header.objectId}.${_x.op.name}:`,
                 args,
                 Object.fromEntries(_x.op.args.filter((a) => a.interface).map((i) => [i.name, i.interface])),
@@ -359,7 +381,7 @@ class WaylandClient {
                         console.log(`${v.interface} version inherited ${parentObjVer}`);
                     }
 
-                    console.log(`Client ${this.id} created ${v.interface} with id ${id}`);
+                    this.receiveLog(`Client ${this.id} created ${v.interface} with id ${id}`);
                 }
             }
 
@@ -1173,7 +1195,7 @@ class WaylandClient {
         }
         const x = encoder.finalizeMessage();
 
-        console.log(`-> ${this.id}:`, {
+        this.sendLog(`-> ${this.id}:`, {
             p: `${p.proto.name}#${objectId}.${p.op.name}`,
             args,
             fds,
