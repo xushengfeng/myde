@@ -45,7 +45,7 @@ type WaylandData = {
         damageBufferList?: { x: number; y: number; width: number; height: number }[];
         callback?: WaylandObjectId;
         children?: {
-            id: WaylandObjectId;
+            id: WaylandObjectId; // wl_surface
             posi: {
                 x: number;
                 y: number;
@@ -55,14 +55,18 @@ type WaylandData = {
         inputRegion?: WaylandData["wl_region"]["rects"];
     };
     wl_subsurface: {
-        parent: WaylandObjectId;
-        child: WaylandObjectId;
+        parent: WaylandObjectId; // wl_surface
+        child: WaylandObjectId; // wl_surface
     };
     wl_buffer: { fd: number; start: number; end: number; imageData: ImageData };
     wl_region: {
         rects: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
     };
-    xdg_surface: { surface: WaylandObjectId; warpEl: HTMLElement; xdg_role?: WaylandObjectId };
+    xdg_surface: {
+        surface: WaylandObjectId; // wl_surface
+        warpEl: HTMLElement;
+        xdg_role?: WaylandObjectId;
+    };
     xdg_positioner: {
         size: { width: number; height: number };
         anchor_rect: { x: number; y: number; width: number; height: number };
@@ -219,9 +223,7 @@ class WaylandClient {
         windows: Map<
             WaylandObjectId, // xdg_toplevel id
             {
-                root: WaylandObjectId; // wl_surface id
                 xdg_surface: WaylandObjectId;
-                children: Set<WaylandObjectId>; // wl_surface id
                 popups: Set<WaylandObjectId>; // xdg_popup id
                 actived: boolean;
             }
@@ -596,9 +598,6 @@ class WaylandClient {
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 surface.data.canvas.remove();
                 this.obj2.surfaces = this.obj2.surfaces.filter((s) => s.id !== surfaceId);
-                for (const [_, w] of this.obj2.windows) {
-                    w.children.delete(surfaceId);
-                }
                 this.deleteId(surfaceId);
             });
             isOp(x, "wl_surface.set_input_region", (x) => {
@@ -618,13 +617,6 @@ class WaylandClient {
                 const cs = parent.data.children || [];
                 cs.push({ id: waylandObjectId(x.args.surface), posi: { x: 0, y: 0 } });
                 parent.data.children = cs;
-                for (const [_, w] of this.obj2.windows) {
-                    // todo 如果先绑定小的，在一起绑定大的，会找不到，除非协议规定必须先绑定大的
-                    if (w.children.has(waylandObjectId(x.args.parent))) {
-                        w.children.add(waylandObjectId(x.args.surface));
-                        break;
-                    }
-                }
                 const thisChild = this.getObject<"wl_surface">(waylandObjectId(x.args.surface));
                 parent.data.canvas.parentElement!.appendChild(thisChild.data.canvas);
                 thisChild.data.canvas.style.position = "absolute";
@@ -887,9 +879,7 @@ class WaylandClient {
                 thisXdgSurface.data.xdg_role = toplevelId;
                 this.getObject<"xdg_toplevel">(toplevelId).data = { xdg_surface: x.id };
                 this.obj2.windows.set(toplevelId, {
-                    root: surfaceId,
                     xdg_surface: x.id,
-                    children: new Set([surfaceId]),
                     popups: new Set(),
                     actived: false,
                 });
@@ -925,7 +915,6 @@ class WaylandClient {
                 thisXdgSurface.data.xdg_role = x.args.id;
                 const win = this.obj2.windows.get(parentXdgSurface.data.xdg_role!);
                 if (win) {
-                    win.children.add(thisSurfaceId);
                     win.popups.add(x.args.id);
                 } else {
                     console.error(`cannt find window by xdg_surface ${parentXdgSurfaceId}`);
@@ -1230,11 +1219,6 @@ class WaylandClient {
                 this.configureWin(id, win);
             },
             point: {
-                rootEl: () => {
-                    const rootSurfaceId = win.root;
-                    const rootSurface = this.getObject<"wl_surface">(rootSurfaceId);
-                    return rootSurface.data.canvas;
-                },
                 rootWinEl: () => {
                     const rootSurfaceId = win.xdg_surface;
                     const rootSurface = this.getObject<"xdg_surface">(rootSurfaceId);
@@ -1261,7 +1245,7 @@ class WaylandClient {
                         y: baseY,
                         bottom: baseBottom,
                         right: baseRight,
-                    } = winObj.point.rootEl().getBoundingClientRect();
+                    } = winObj.point.rootWinEl().getBoundingClientRect();
                     // todo zindex
                     for (const p of Array.from(win.popups).toReversed()) {
                         const popup = this.getObject<"xdg_popup">(p);

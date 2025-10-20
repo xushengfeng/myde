@@ -60,7 +60,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
             if (!xwin) continue;
             const inWin = xwin.point.inWin(p);
             if (!inWin) continue;
-            const rect = xwin.point.rootEl().getBoundingClientRect();
+            const rect = xwin.point.rootWinEl().getBoundingClientRect();
             xwin.point.sendPointerEvent(
                 type,
                 new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
