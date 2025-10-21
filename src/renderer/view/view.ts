@@ -220,7 +220,7 @@ class WaylandClient {
     private socket: USocket;
     private objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
     private protoVersions: Map<string, number> = new Map();
-    private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any>; fds?: number[] }[] = [];
+    private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
     private nextObjectId: number = 0xff000000;
     private obj2: Partial<{
         pointer: WaylandObjectId;
@@ -716,16 +716,11 @@ class WaylandClient {
                 const keymapStr = fs.readFileSync(path.join(__dirname, "../../", "script/xcb", "x.xkb"), "utf-8");
                 const { fd, size } = newFd(keymapStr);
 
-                this.sendMessageX(
-                    keyboardId,
-                    "wl_keyboard.keymap",
-                    {
-                        format: getEnumValue("wl_keyboard.keymap_format", "xkb_v1"),
-                        fd: 0,
-                        size: size,
-                    },
-                    [fd],
-                );
+                this.sendMessageX(keyboardId, "wl_keyboard.keymap", {
+                    format: getEnumValue("wl_keyboard.keymap_format", "xkb_v1"),
+                    fd: fd,
+                    size: size,
+                });
             });
             isOp(x, "wl_region.add", (x) => {
                 const region = this.getObject<"wl_region">(x.id);
@@ -823,7 +818,7 @@ class WaylandClient {
 
                 try {
                     // 发送请求，要求客户端把 mime 类型的数据写入我们提供的 fd
-                    this.sendMessageImm(srcId, "wl_data_source.send", { mime_type: mime, fd: 0 }, [fd]);
+                    this.sendMessageImm(srcId, "wl_data_source.send", { mime_type: mime, fd: fd });
 
                     // TODO: 使用基于 EOF 的读取更优雅，但客户端行为差异导致未能稳定工作，
                     // 先回退到简单的延时读取（不优雅），以后再改进为可靠的 EOF/poll 检测。
@@ -1087,15 +1082,10 @@ class WaylandClient {
                     { format: DRM_FORMAT.DRM_FORMAT_XRGB8888, modifier: 0n },
                 ]);
                 const { fd } = newFd(new Uint8Array(formatTable.buffer));
-                this.sendMessageX(
-                    feedbackId,
-                    "zwp_linux_dmabuf_feedback_v1.format_table",
-                    {
-                        fd: 0,
-                        size: formatTable.byteLength,
-                    },
-                    [fd],
-                );
+                this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.format_table", {
+                    fd: fd,
+                    size: formatTable.byteLength,
+                });
 
                 const r = fs.statSync("/dev/dri/card1"); // todo
                 const buffer = Buffer.alloc(8);
@@ -1142,7 +1132,7 @@ class WaylandClient {
         }
 
         for (const m of this.toSend) {
-            this.sendMessage(m.objectId, m.opcode, m.args, m.fds);
+            this.sendMessage(m.objectId, m.opcode, m.args);
         }
         this.toSend = [];
     }
@@ -1166,19 +1156,13 @@ class WaylandClient {
         objectId: WaylandObjectId,
         op: T,
         args: WaylandEventObj[T],
-        fds?: number[],
     ) {
-        this.sendMessage(objectId, WaylandEventOpcode[op.replace(".", "__")], args, fds);
+        this.sendMessage(objectId, WaylandEventOpcode[op.replace(".", "__")], args);
     }
-    private sendMessageX<T extends keyof WaylandEventObj>(
-        objectId: WaylandObjectId,
-        op: T,
-        args: WaylandEventObj[T],
-        fds?: number[],
-    ) {
-        this.toSend.push({ objectId, opcode: WaylandEventOpcode[op.replace(".", "__")], args, fds });
+    private sendMessageX<T extends keyof WaylandEventObj>(objectId: WaylandObjectId, op: T, args: WaylandEventObj[T]) {
+        this.toSend.push({ objectId, opcode: WaylandEventOpcode[op.replace(".", "__")], args });
     }
-    private sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>, fds?: number[]) {
+    private sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
         const p = getX(this.objects, "event", objectId, opcode);
         if (!p) {
             console.error("Cannot find protocol for sending message", objectId, opcode);
@@ -1195,6 +1179,8 @@ class WaylandClient {
                 return;
             }
         }
+
+        const fds: number[] = [];
 
         const encoder = new WaylandEncoder();
         encoder.writeHeader(objectId, opcode);
@@ -1229,10 +1215,7 @@ class WaylandClient {
                     }
                     break;
                 case WaylandArgType.FD:
-                    if (!fds || !fds.length) {
-                        console.error("No FD provided for sending message with FD argument");
-                        break;
-                    }
+                    fds.push(argValue);
                     break;
                 default:
                     break;
