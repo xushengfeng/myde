@@ -37,13 +37,14 @@ async function getDesktopEntries(lans: string[] = []) {
                 const name = entry[lans.map((i) => `Name[${i}]`).find((l) => l in entry) || "Name"];
                 const comment = entry[lans.map((i) => `Comment[${i}]`).find((l) => l in entry) || "Comment"] || "";
                 if (exec) {
+                    const pureExec = (exec as string).replace(/%.?/g, ""); // 去掉参数
                     entries.push({
                         name: entry.Name || "",
                         nameLocal: name,
                         comment: entry.Comment || "",
                         commentLocal: comment,
                         icon: entry.Icon || "",
-                        exec: exec,
+                        exec: pureExec.trim(),
                         rawDesktopPath: filePath,
                     });
                 }
