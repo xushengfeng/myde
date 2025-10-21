@@ -70,15 +70,20 @@ async function getDesktopIcon(icon: string): Promise<string | undefined> {
         iconSizes.flatMap((size) => [
             `/usr/share/icons/hicolor/${size}x${size}/apps/`,
             path.join(userIconDirs, `${size}x${size}/apps/`),
+            `/usr/share/icons/breeze/apps/${size}`,
         ]),
     );
-    const exts = [".png", ".svg", ".xpm"];
-    if (icon === "com.coolapk.market") console.log(iconDirs);
-    for (const dir of iconDirs.toReversed()) {
+    const iconDirs2: string[] = [];
+    for (const dir of iconDirs) {
+        if (await fs.stat(dir).catch(() => false)) {
+            iconDirs2.push(dir);
+        }
+    }
+    const exts = [".png", ".svg"];
+    for (const dir of iconDirs2.toReversed()) {
         for (const ext of exts) {
             const iconPath = path.join(dir, icon + ext);
             if (await fs.stat(iconPath).catch(() => false)) {
-                if (icon === "com.coolapk.market") console.log(iconPath);
                 return iconPath;
             }
         }
