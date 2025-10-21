@@ -20,6 +20,8 @@
 
 运行环境为 Linux，带有 X11 或 Wayland 的桌面
 
+需要安装 xwayland-satellite
+
 在`script/xcb/`下运行`xkbcomp $DISPLAY x.xcb`（需要 X11 支持）
 
 安装依赖：
