@@ -18,15 +18,14 @@ function mouseMove(x: number, y: number) {
 
 function addWindow(el: HTMLElement) {
     windowEl.add(el);
-    const winRect = el.getBoundingClientRect();
-    const desktopRect = windowEl.el.getBoundingClientRect();
-    console.log(winRect, desktopRect);
 
     el.style.position = "absolute";
     setTimeout(() => {
+        const winRect = el.getBoundingClientRect();
+        const desktopRect = windowEl.el.getBoundingClientRect();
         el.style.top = `${(desktopRect.height - winRect.height) / 2}px`;
         el.style.left = `${(desktopRect.width - winRect.width) / 2}px`;
-    }, 100);
+    }, 400);
 }
 
 function appIcon(iconPath: string, name: string, exec: string) {
@@ -96,9 +95,15 @@ const server = MSysApi.server();
 
 server.server.on("newClient", (client, clientId) => {
     clientData.set(clientId, { client });
+    client.setLogConfig({ receive: [], send: [] });
+    client.onSync("windowBound", () => {
+        const rect = windowEl.el.getBoundingClientRect();
+        return { width: rect.width, height: rect.height };
+    });
     client.on("windowCreated", (windowId, el) => {
         console.log(`Client ${clientId} created window ${windowId}`);
         addWindow(el);
+        client.win(windowId)?.setWinBoxData({ width: 800, height: 600 });
         client.win(windowId)?.focus();
     });
     client.on("windowClosed", (windowId, el) => {

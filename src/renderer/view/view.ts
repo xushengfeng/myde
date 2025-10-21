@@ -100,6 +100,10 @@ interface WaylandClientEventMap {
     paste: () => void;
 }
 
+interface WaylandClientSyncEventMap {
+    windowBound?: () => { width: number; height: number } | undefined;
+}
+
 function waylandName(name: number): WaylandName {
     return name as WaylandName;
 }
@@ -235,11 +239,41 @@ class WaylandClient {
                 xdg_surface: WaylandObjectId;
                 popups: Set<WaylandObjectId>; // xdg_popup id
                 actived: boolean;
+                box: {
+                    width: number;
+                    height: number;
+                };
             }
         >;
     };
     // 事件存储
     private events: { [K in keyof WaylandClientEventMap]?: WaylandClientEventMap[K][] } = {};
+
+    private syncHandlers: { [K in keyof WaylandClientSyncEventMap]?: WaylandClientSyncEventMap[K] } = {};
+
+    public onSync<K extends keyof WaylandClientSyncEventMap>(
+        event: K,
+        handler: NonNullable<WaylandClientSyncEventMap[K]>,
+    ): () => void {
+        this.syncHandlers[event] = handler;
+        return () => {
+            if (this.syncHandlers[event] === handler) this.syncHandlers[event] = undefined;
+        };
+    }
+
+    public emitSync<K extends keyof WaylandClientSyncEventMap>(
+        event: K,
+        ...args: Parameters<NonNullable<WaylandClientSyncEventMap[K]>>
+    ): ReturnType<NonNullable<WaylandClientSyncEventMap[K]>> | undefined {
+        const h = this.syncHandlers[event];
+        if (!h) return undefined;
+        try {
+            return (h as any)(...(args as any));
+        } catch (err) {
+            console.error("sync handler error for", String(event), err);
+            return undefined;
+        }
+    }
 
     constructor({ id, socket }: { id: string; socket: USocket }) {
         this.id = id;
@@ -894,8 +928,12 @@ class WaylandClient {
             });
             isOp(x, "xdg_surface.get_toplevel", (x) => {
                 const toplevelId = x.args.id;
-                this.sendMessageX(toplevelId, "xdg_toplevel.configure_bounds", { width: 1920, height: 1080 }); // todo
-                this.sendMessageX(x.id, "xdg_surface.configure", { serial: 1 }); // todo
+                const outerBounds = this.emitSync("windowBound") || { width: 800, height: 600 };
+                this.sendMessageX(toplevelId, "xdg_toplevel.configure_bounds", {
+                    width: outerBounds.width,
+                    height: outerBounds.height,
+                });
+                this.sendMessageX(x.id, "xdg_surface.configure", { serial: 1 });
                 const thisXdgSurface = this.getObject<"xdg_surface">(x.id);
                 const surfaceId = thisXdgSurface.data.surface;
                 const el = pack(thisXdgSurface.data.warpEl);
@@ -907,6 +945,10 @@ class WaylandClient {
                     xdg_surface: x.id,
                     popups: new Set(),
                     actived: false,
+                    box: {
+                        width: 0,
+                        height: 0,
+                    },
                 });
                 this.emit("windowCreated", toplevelId, el.el);
             });
@@ -1222,8 +1264,8 @@ class WaylandClient {
         const s: number[] = [];
         if (win.actived) s.push(getEnumValue("xdg_toplevel.state", "activated"));
         this.sendMessageImm(winid, "xdg_toplevel.configure", {
-            width: 0, // todo
-            height: 0,
+            width: win.box.width,
+            height: win.box.height,
             states: s,
         });
         this.sendMessageImm(win.xdg_surface, "xdg_surface.configure", { serial: 1 });
@@ -1232,6 +1274,9 @@ class WaylandClient {
         const win = this.obj2.windows.get(id);
         if (win === undefined) return undefined;
         const winObj = {
+            setWinBoxData: (box: { width: number; height: number }) => {
+                win.box = box;
+            },
             focus: () => {
                 if (win.actived) return false;
                 win.actived = true;
