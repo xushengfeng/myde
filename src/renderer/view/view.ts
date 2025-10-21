@@ -1223,7 +1223,10 @@ class WaylandClient {
                     encoder.writeNewId(argValue);
                     break;
                 case WaylandArgType.ARRAY:
-                    encoder.writeArray(new Uint8Array(argValue));
+                    {
+                        const u32 = new Uint32Array(argValue);
+                        encoder.writeArray(new Uint8Array(u32.buffer));
+                    }
                     break;
                 case WaylandArgType.FD:
                     if (!fds || !fds.length) {
