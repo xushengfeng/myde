@@ -145,6 +145,36 @@ server.server.on("newClient", (client, clientId) => {
         window.addEventListener("pointerup", onPointerUp, { once: true });
         window.addEventListener("pointercancel", onPointerUp, { once: true });
     });
+    client.on("windowMaximized", (windowId) => {
+        const xwin = client.win(windowId);
+        if (!xwin) return;
+
+        const winEl = xwin.point.rootWinEl();
+        const width = windowEl.el.offsetWidth;
+        const height = windowEl.el.offsetHeight;
+        pack(winEl).style({
+            width: `${width}px`,
+            height: `${height}px`,
+            left: "0px",
+            top: "0px",
+        });
+        xwin.maximize(width, height);
+    });
+    client.on("windowUnMaximized", (windowId) => {
+        const xwin = client.win(windowId);
+        if (!xwin) return;
+
+        const winEl = xwin.point.rootWinEl();
+        const width = 800;
+        const height = 600;
+        pack(winEl).style({
+            width: `${width}px`,
+            height: `${height}px`,
+            left: "0px",
+            top: "0px",
+        });
+        xwin.unmaximize(width, height);
+    });
 });
 server.server.on("clientClose", (_, clientId) => {
     clientData.delete(clientId);

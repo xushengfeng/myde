@@ -96,6 +96,9 @@ interface WaylandClientEventMap {
     windowCreated: (xdgToplevelId: WaylandObjectId, el: HTMLElement) => void;
     windowClosed: (xdgToplevelId: WaylandObjectId, el: HTMLElement) => void;
     windowStartMove: (xdgToplevelId: WaylandObjectId) => void;
+    windowResized: (xdgToplevelId: WaylandObjectId, width: number, height: number) => void;
+    windowMaximized: (xdgToplevelId: WaylandObjectId) => void;
+    windowUnMaximized: (xdgToplevelId: WaylandObjectId) => void;
     copy: (text: string) => void;
     paste: () => void;
 }
@@ -923,6 +926,12 @@ class WaylandClient {
             });
             isOp(x, "xdg_surface.get_toplevel", (x) => {
                 const toplevelId = x.args.id;
+                this.sendMessageImm(toplevelId, "xdg_toplevel.wm_capabilities", {
+                    capabilities: [
+                        getEnumValue("xdg_toplevel.wm_capabilities", "minimize"),
+                        getEnumValue("xdg_toplevel.wm_capabilities", "maximize"),
+                    ],
+                });
                 const outerBounds = this.emitSync("windowBound") || { width: 800, height: 600 };
                 this.sendMessageX(toplevelId, "xdg_toplevel.configure_bounds", {
                     width: outerBounds.width,
@@ -958,6 +967,9 @@ class WaylandClient {
                     width: `${x.args.width}px`,
                     height: `${x.args.height}px`,
                 });
+                if (thisXdgSurface.data.xdg_role) {
+                    this.emit("windowResized", thisXdgSurface.data.xdg_role, x.args.width, x.args.height);
+                }
             });
             isOp(x, "xdg_surface.get_popup", (x) => {
                 const thisXdgSurface = this.getObject<"xdg_surface">(x.id);
@@ -1063,6 +1075,13 @@ class WaylandClient {
             isOp(x, "xdg_toplevel.move", (x) => {
                 this.emit("windowStartMove", x.id);
             });
+            isOp(x, "xdg_toplevel.set_maximized", () => {
+                this.emit("windowMaximized", x.id);
+            });
+            isOp(x, "xdg_toplevel.unset_maximized", () => {
+                this.emit("windowUnMaximized", x.id);
+            });
+
             isOp(x, "xdg_toplevel.destroy", (x) => {
                 const xdgSurfaceId = this.getObject<"xdg_toplevel">(x.id).data.xdg_surface;
                 this.getObject<"xdg_surface">(xdgSurfaceId).data.warpEl.remove(); // todo 可以外部处理
@@ -1273,6 +1292,38 @@ class WaylandClient {
                 if (!win.actived) return;
                 win.actived = false;
                 this.configureWin(id, win);
+            },
+            setSize: (w: number, h: number) => {
+                win.box.width = w;
+                win.box.height = h;
+                this.configureWin(id, win);
+            },
+            maximize: (width: number, height: number) => {
+                win.actived = true;
+                win.box.width = width;
+                win.box.height = height;
+
+                this.sendMessageImm(id, "xdg_toplevel.configure", {
+                    width,
+                    height,
+                    states: [
+                        getEnumValue("xdg_toplevel.state", "activated"),
+                        getEnumValue("xdg_toplevel.state", "maximized"),
+                    ],
+                });
+                this.sendMessageImm(win.xdg_surface, "xdg_surface.configure", { serial: 1 });
+            },
+            unmaximize: (width: number, height: number) => {
+                win.box.width = width;
+                win.box.height = height;
+                this.configureWin(id, win);
+            },
+            minimize: () => {
+                win.actived = false;
+                this.configureWin(id, win);
+            },
+            close: () => {
+                this.sendMessageImm(id, "xdg_toplevel.close", {});
             },
             point: {
                 rootWinEl: () => {

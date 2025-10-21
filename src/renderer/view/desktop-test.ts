@@ -94,6 +94,9 @@ const server = serverX.server;
 
 server.on("newClient", (client, clientId) => {
     clientData.set(clientId, { client });
+    client.onSync("windowBound", () => {
+        return { width: window.innerWidth, height: window.innerHeight };
+    });
     client.on("windowCreated", (windowId, el) => {
         console.log(`Client ${clientId} created window ${windowId}`);
         body.add(el);
@@ -102,6 +105,21 @@ server.on("newClient", (client, clientId) => {
     client.on("windowClosed", (windowId, el) => {
         console.log(`Client ${clientId} deleted window ${windowId}`);
         el.remove();
+    });
+    client.on("windowMaximized", (windowId) => {
+        const xwin = client.win(windowId);
+        if (!xwin) return;
+
+        const winEl = xwin.point.rootWinEl();
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        pack(winEl).style({
+            width: `${width}px`,
+            height: `${height}px`,
+            left: "0px",
+            top: "0px",
+        });
+        xwin.maximize(width, height);
     });
     client.on("copy", (text: string) => {
         console.log(`Client ${clientId} copy text:`, text);
