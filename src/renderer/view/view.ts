@@ -148,6 +148,7 @@ class WaylandServer {
     }
     public on<K extends keyof WaylandServerEventMap>(event: K, handler: WaylandServerEventMap[K]): void {
         if (!this.events[event]) this.events[event] = [];
+        // biome-ignore lint/style/noNonNullAssertion: 上面已经保证
         this.events[event]!.push(handler);
     }
 
@@ -324,6 +325,7 @@ class WaylandClient {
     // 注册事件
     public on<K extends keyof WaylandClientEventMap>(event: K, handler: WaylandClientEventMap[K]): void {
         if (!this.events[event]) this.events[event] = [];
+        // biome-ignore lint/style/noNonNullAssertion: 上面已经保证
         this.events[event]!.push(handler);
     }
 
@@ -566,6 +568,7 @@ class WaylandClient {
                 const surfaceId = x.id;
                 const surface = this.getObject<"wl_surface">(surfaceId);
                 const canvas = surface.data.canvas;
+                // biome-ignore lint/style/noNonNullAssertion: 忽略小概率
                 const ctx = canvas.getContext("2d")!;
                 const buffer = surface.data.bufferPointer === 0 ? surface.data.buffer : surface.data.buffer2;
                 const imagedata = buffer?.data;
@@ -575,19 +578,19 @@ class WaylandClient {
                     if (imagedata.width !== canvas.width || imagedata.height !== canvas.height) {
                         canvas.width = imagedata.width;
                         canvas.height = imagedata.height;
-                        for (const [id, p] of this.objects) {
-                            if (p.protocol.name === "xdg_toplevel") {
-                                // this.sendMessage(id, 0, {
-                                //     width: canvas.width,
-                                //     height: canvas.height,
-                                //     states: new Uint8Array([
-                                //         WaylandProtocols.xdg_toplevel.enum![2].enum.resizing,
-                                //         WaylandProtocols.xdg_toplevel.enum![2].enum.activated,
-                                //     ]),
-                                // });
-                                // todo 考虑实际窗口的几何，否则有外边框的会变大
-                            }
-                        }
+                        // for (const [id, p] of this.objects) {
+                        //     if (p.protocol.name === "xdg_toplevel") {
+                        // this.sendMessage(id, 0, {
+                        //     width: canvas.width,
+                        //     height: canvas.height,
+                        //     states: new Uint8Array([
+                        //         WaylandProtocols.xdg_toplevel.enum![2].enum.resizing,
+                        //         WaylandProtocols.xdg_toplevel.enum![2].enum.activated,
+                        //     ]),
+                        // });
+                        // todo 考虑实际窗口的几何，否则有外边框的会变大
+                        //     }
+                        // }
                         for (const [id, p] of this.objects) {
                             if (p.protocol.name === "xdg_surface") {
                                 this.sendMessageX(id, "xdg_surface.configure", { serial: 1 });
@@ -680,6 +683,8 @@ class WaylandClient {
                 parent.data.children = cs;
                 const thisChild = this.getObject<"wl_surface">(waylandObjectId(x.args.surface));
                 thisChild.data.parentSurface = waylandObjectId(x.args.parent);
+                // todo 渲染el可能需要分离
+                // biome-ignore lint/style/noNonNullAssertion: 假装有
                 parent.data.canvas.parentElement!.appendChild(thisChild.data.canvas);
                 thisChild.data.canvas.style.position = "absolute";
                 // @ts-expect-error
@@ -765,7 +770,7 @@ class WaylandClient {
                     console.warn("Existing pending paste request - rejecting previous");
                     try {
                         fs.closeSync(this.obj2.pendingPaste.fd);
-                    } catch (e) {
+                    } catch {
                         // ignore
                     }
                     clearTimeout(this.obj2.pendingPaste.timeout);
@@ -777,7 +782,7 @@ class WaylandClient {
                     console.warn("paste request timed out");
                     try {
                         fs.closeSync(this.obj2.pendingPaste.fd);
-                    } catch (e) {
+                    } catch {
                         // ignore
                     }
                     this.obj2.pendingPaste = undefined;
@@ -835,7 +840,7 @@ class WaylandClient {
                                 let read = 0;
                                 try {
                                     read = fs.readSync(fd, tryBuf, 0, tryBuf.length, 0);
-                                } catch (e) {
+                                } catch {
                                     // ignore
                                 }
                                 const content = Buffer.from(tryBuf.buffer, tryBuf.byteOffset, read).toString("utf8");
@@ -854,7 +859,7 @@ class WaylandClient {
                         } finally {
                             try {
                                 fs.closeSync(fd);
-                            } catch (e) {
+                            } catch {
                                 // ignore
                             }
                         }
@@ -863,7 +868,7 @@ class WaylandClient {
                     console.error("Error sending wl_data_source.send:", err);
                     try {
                         fs.closeSync(fd);
-                    } catch (e) {
+                    } catch {
                         // ignore
                     }
                 }
@@ -987,6 +992,8 @@ class WaylandClient {
                     parent_xdg_surface: parentXdgSurfaceId,
                 };
                 thisXdgSurface.data.xdg_role = x.args.id;
+                // todo 错误处理
+                // biome-ignore lint/style/noNonNullAssertion: 先不管
                 const win = this.obj2.windows.get(parentXdgSurface.data.xdg_role!);
                 if (win) {
                     win.popups.add(x.args.id);
@@ -1127,7 +1134,9 @@ class WaylandClient {
             isOp(x, "zwp_text_input_v1.activate", (x) => {
                 this.sendMessageX(x.id, "zwp_text_input_v1.enter", { surface: x.args.surface });
                 if (!this.obj2.textInput) return;
+                // biome-ignore lint/style/noNonNullAssertion: 假装有 // todo
                 this.obj2.textInput.m.get(x.id)!.focus = true;
+                // biome-ignore lint/style/noNonNullAssertion: 上面已经保证了
                 for (const [k, v] of this.obj2.textInput!.m) {
                     if (k !== x.id && v.focus) {
                         this.sendMessageX(k, "zwp_text_input_v1.leave", {});
@@ -1141,6 +1150,7 @@ class WaylandClient {
                 }
                 this.sendMessageX(x.id, "zwp_text_input_v1.leave", {});
                 if (!this.obj2.textInput) return;
+                // biome-ignore lint/style/noNonNullAssertion: 假装有 // todo
                 this.obj2.textInput.m.get(x.id)!.focus = false;
             });
 
@@ -1264,7 +1274,7 @@ class WaylandClient {
     }
     private configureWin(
         winid: WaylandObjectId,
-        win: typeof this.obj2.windows extends Map<infer K, infer V> ? V : never,
+        win: typeof this.obj2.windows extends Map<infer _K, infer V> ? V : never,
     ) {
         const s: number[] = [];
         if (win.actived) s.push(getEnumValue("xdg_toplevel.state", "activated"));
