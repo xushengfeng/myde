@@ -1,4 +1,4 @@
-import { type ElType, image, pack, setProperty, view } from "dkh-ui";
+import { button, type ElType, image, pack, setProperty, view } from "dkh-ui";
 
 import type { WaylandClient } from "../../src/renderer/desktop-api";
 import { txt } from "dkh-ui";
@@ -33,7 +33,7 @@ class Tools {
 const viewData: View[] = [];
 
 const planteData: Plant[] = [
-    { id: "0", posi: "top", items: [{ id: "clock" }], glow: true },
+    { id: "0", posi: "top", items: [{ id: "showAllView" }, { id: "clock" }], glow: true },
     {
         id: "1",
         posi: "bottom",
@@ -46,6 +46,8 @@ const tools = new Tools();
 
 // 全局记录当前鼠标坐标（与页面视口坐标系一致）
 const mousePos = { x: 0, y: 0 } as { x: number; y: number };
+
+let viewAllShowing = false;
 
 function mouseMove(x: number, y: number) {
     // 更新全局鼠标坐标
@@ -75,13 +77,21 @@ function newView() {
     return v;
 }
 function newViewEl(v: View) {
-    const el = view().style({
-        left: `calc(${viewWidth.getName()} * ${v.ox})`,
-        top: `calc(${viewHeight.getName()} * ${v.oy})`,
-        width: "100%",
-        height: "100%",
-        position: "absolute",
-    });
+    const el = view()
+        .style({
+            left: `calc(${viewWidth.getName()} * ${v.ox})`,
+            top: `calc(${viewHeight.getName()} * ${v.oy})`,
+            width: "100%",
+            height: "100%",
+            position: "absolute",
+        })
+        .on("click", () => {
+            if (viewAllShowing) {
+                viewAllShowing = false;
+                viewAll(false);
+                setViewScorll({ x: v.ox, y: v.oy });
+            }
+        });
     windowEl.add(el);
     return el;
 }
@@ -91,6 +101,20 @@ function setViewScorll({ x, y }: { x: number; y: number }) {
         left: `${-x * 100}%`,
         top: `${-y * 100}%`,
     });
+}
+
+function viewAll(s: boolean) {
+    if (s) {
+        windowElWarp.style({
+            transition: "all 0.3s ease-in-out",
+            transform: "scale(0.25)",
+        });
+    } else {
+        windowElWarp.style({
+            transition: "all 0.3s ease-in-out",
+            transform: "none",
+        });
+    }
 }
 
 function addWindow(el: HTMLElement) {
@@ -132,6 +156,7 @@ function appIcon(iconPath: string, name: string, exec: string) {
 }
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
+    if (viewAllShowing) return;
     for (const [_id, client] of server.server.clients) {
         for (const [winId, _win] of client.getWindows()) {
             const xwin = client.win(winId);
@@ -157,6 +182,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
 }
 
 function sendScrollEvent(p: WheelEvent) {
+    if (viewAllShowing) return;
     for (const [_, client] of server.server.clients) {
         for (const [winId, _win] of client.getWindows()) {
             const xwin = client.win(winId);
@@ -288,6 +314,7 @@ const windowEl = view()
         left: 0,
         width: "100%",
         height: "100%",
+        transition: "0.4s",
     })
     .addInto(windowElWarp);
 
@@ -300,6 +327,14 @@ const ob = new ResizeObserver((e) => {
 });
 
 ob.observe(windowEl.el);
+
+tools.registerTool("showAllView", () => {
+    const showAllViewBtn = button("≡").on("click", () => {
+        viewAllShowing = !viewAllShowing;
+        viewAll(viewAllShowing);
+    });
+    return showAllViewBtn;
+});
 
 tools.registerTool("startMenuFullScreen", () => {
     const startMenuBtn = view()
