@@ -1,9 +1,16 @@
-import { image, pack, view } from "dkh-ui";
+import { image, pack, setProperty, view } from "dkh-ui";
 
 import type { WaylandClient } from "../../src/renderer/desktop-api";
 import { txt } from "dkh-ui";
 
 const { MSysApi, MRootDir, MInputMap } = window.myde;
+
+type View = {
+    ox: number;
+    oy: number;
+};
+
+const viewData: View[] = [];
 
 // 全局记录当前鼠标坐标（与页面视口坐标系一致）
 const mousePos = { x: 0, y: 0 } as { x: number; y: number };
@@ -16,16 +23,56 @@ function mouseMove(x: number, y: number) {
     sendPointerEvent("move", new PointerEvent("pointermove", { clientX: x, clientY: y }));
 }
 
-function addWindow(el: HTMLElement) {
-    windowEl.add(el);
+function cssVar(name: string) {
+    return {
+        getName() {
+            return `var(--${name})`;
+        },
+        setValue(value: string) {
+            setProperty(`--${name}`, value);
+        },
+    };
+}
 
-    el.style.position = "absolute";
-    setTimeout(() => {
-        const winRect = el.getBoundingClientRect();
-        const desktopRect = windowEl.el.getBoundingClientRect();
-        el.style.top = `${(desktopRect.height - winRect.height) / 2}px`;
-        el.style.left = `${(desktopRect.width - winRect.width) / 2}px`;
-    }, 400);
+const viewWidth = cssVar("view-width");
+const viewHeight = cssVar("view-height");
+
+function newView() {
+    const v: View = { ox: viewData.length, oy: 0 };
+    viewData.push(v);
+    return v;
+}
+function newViewEl(v: View) {
+    const el = view().style({
+        left: `calc(${viewWidth.getName()} * ${v.ox})`,
+        top: `calc(${viewHeight.getName()} * ${v.oy})`,
+        width: "100%",
+        height: "100%",
+        position: "absolute",
+    });
+    windowEl.add(el);
+    return el;
+}
+
+function setViewScorll({ x, y }: { x: number; y: number }) {
+    windowEl.style({
+        left: `${-x * 100}%`,
+        top: `${-y * 100}%`,
+    });
+}
+
+function addWindow(el: HTMLElement) {
+    const v = newView();
+    const pel = newViewEl(v);
+    pel.add(el);
+    setViewScorll({ x: v.ox, y: v.oy });
+
+    pack(el).style({
+        position: "absolute",
+        top: "50%",
+        left: "50%",
+        transform: "translate(-50%,-50%)",
+    });
 }
 
 function appIcon(iconPath: string, name: string, exec: string) {
@@ -192,7 +239,7 @@ image(`${MRootDir}/assets/wallpaper/1.svg`, "wallpaper")
     })
     .addInto(mainEl);
 
-const windowEl = view()
+const windowElWarp = view()
     .style({
         position: "absolute",
         top: 0,
@@ -201,6 +248,26 @@ const windowEl = view()
         height: "100%",
     })
     .addInto(mainEl);
+
+const windowEl = view()
+    .style({
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: "100%",
+        height: "100%",
+    })
+    .addInto(windowElWarp);
+
+const ob = new ResizeObserver((e) => {
+    for (const entry of e) {
+        const rect = entry.contentRect;
+        viewWidth.setValue(`${rect.width}px`);
+        viewHeight.setValue(`${rect.height}px`);
+    }
+});
+
+ob.observe(windowEl.el);
 
 const dockEl = view()
     .style({
