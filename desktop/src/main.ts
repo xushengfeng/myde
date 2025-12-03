@@ -1,4 +1,4 @@
-import { image, pack, setProperty, view } from "dkh-ui";
+import { type ElType, image, pack, setProperty, view } from "dkh-ui";
 
 import type { WaylandClient } from "../../src/renderer/desktop-api";
 import { txt } from "dkh-ui";
@@ -10,7 +10,39 @@ type View = {
     oy: number;
 };
 
+type Plant = {
+    id: string;
+    items: { id: string; posi?: { archor: "center" | "start" | "end"; offset: number } }[];
+    glow: boolean;
+    posi: "top" | "left" | "right" | "bottom";
+};
+
+class Tools {
+    tools: Map<string, () => ElType<HTMLElement>>;
+    constructor() {
+        this.tools = new Map();
+    }
+    registerTool(name: string, tool: () => ElType<HTMLElement>) {
+        this.tools.set(name, tool);
+    }
+    getTool(name: string) {
+        return this.tools.get(name);
+    }
+}
+
 const viewData: View[] = [];
+
+const planteData: Plant[] = [
+    { id: "0", posi: "top", items: [{ id: "clock" }], glow: true },
+    {
+        id: "1",
+        posi: "bottom",
+        items: [{ id: "startMenuFullScreen" }, { id: "apps" }],
+        glow: false,
+    },
+];
+
+const tools = new Tools();
 
 // 全局记录当前鼠标坐标（与页面视口坐标系一致）
 const mousePos = { x: 0, y: 0 } as { x: number; y: number };
@@ -269,106 +301,155 @@ const ob = new ResizeObserver((e) => {
 
 ob.observe(windowEl.el);
 
-const dockEl = view()
-    .style({
-        position: "absolute",
-        bottom: "20px",
-        left: "50%",
-        transform: "translateX(-50%)",
-        height: "64px",
-        padding: "0 10px",
-        background: "rgba(255, 255, 255, 0.6)",
-        borderRadius: "22px",
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        backdropFilter: "blur(10px)",
-    })
-    .addInto(mainEl);
-
-const startMenuBtn = view()
-    .style({
-        width: "48px",
-        height: "48px",
-        borderRadius: "12px",
-        background: "#00aaff",
-    })
-    .on("click", async () => {
-        const menu = view("x", "wrap")
-            .style({
-                position: "absolute",
-                left: 0,
-                top: 0,
-                width: "100%",
-                height: "100%",
-                padding: "20px",
-                background: "rgba(255, 255, 255, 0.4)",
-                backdropFilter: "blur(24px)",
-                zIndex: 1000,
-                overflowY: "scroll",
-            })
-            .addInto(mainEl);
-        menu.on("click", (_, el) => {
-            if (el.el === menu.el) {
-                menu.remove();
-            }
-        });
-        for (const app of await MSysApi.getDesktopEntries()) {
-            const appEl = view("y")
+tools.registerTool("startMenuFullScreen", () => {
+    const startMenuBtn = view()
+        .style({
+            width: "48px",
+            height: "48px",
+            borderRadius: "12px",
+            background: "#00aaff",
+        })
+        .on("click", async () => {
+            const menu = view("x", "wrap")
                 .style({
-                    width: "80px",
-                    height: "80px",
-                    alignItems: "center",
-                    justifyContent: "flex-start",
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    width: "100%",
+                    height: "100%",
+                    padding: "20px",
+                    background: "rgba(255, 255, 255, 0.4)",
+                    backdropFilter: "blur(24px)",
+                    zIndex: 1000,
+                    overflowY: "scroll",
                 })
-                .addInto(menu);
-            const iconView = view().addInto(appEl);
-            MSysApi.getDesktopIcon(app.icon).then((_iconPath) => {
-                const iconPath = _iconPath || `${MRootDir}/assets/icons/application.png`;
-                iconView.add(
-                    appIcon(iconPath, app.name, app.exec).style({
-                        width: "40px",
-                        height: "40px",
-                        borderRadius: "8px",
-                        background: "#ffffff",
+                .addInto(mainEl);
+            menu.on("click", (_, el) => {
+                if (el.el === menu.el) {
+                    menu.remove();
+                }
+            });
+            for (const app of await MSysApi.getDesktopEntries()) {
+                const appEl = view("y")
+                    .style({
+                        width: "80px",
+                        height: "80px",
+                        alignItems: "center",
+                        justifyContent: "flex-start",
+                    })
+                    .addInto(menu);
+                const iconView = view().addInto(appEl);
+                MSysApi.getDesktopIcon(app.icon).then((_iconPath) => {
+                    const iconPath = _iconPath || `${MRootDir}/assets/icons/application.png`;
+                    iconView.add(
+                        appIcon(iconPath, app.name, app.exec).style({
+                            width: "40px",
+                            height: "40px",
+                            borderRadius: "8px",
+                            background: "#ffffff",
+                        }),
+                    );
+                });
+                appEl.add(
+                    txt(app.nameLocal).style({
+                        fontSize: "12px",
+                        maxWidth: "80%",
+                        overflow: "hidden",
+                        textAlign: "center",
                     }),
                 );
-            });
-            appEl.add(
-                txt(app.nameLocal).style({
-                    fontSize: "12px",
-                    maxWidth: "80%",
-                    overflow: "hidden",
-                    textAlign: "center",
-                }),
-            );
+            }
+        });
+    return startMenuBtn;
+});
+
+tools.registerTool("clock", () => {
+    const clockEl = txt("00:00");
+    function updateTime() {
+        const now = new Date();
+        const hours = now.getHours().toString().padStart(2, "0");
+        const minutes = now.getMinutes().toString().padStart(2, "0");
+        clockEl.sv(`${hours}:${minutes}`);
+    }
+    updateTime();
+    setInterval(updateTime, 60000);
+    return clockEl;
+});
+
+tools.registerTool("apps", () => {
+    const appsEl = view().style({
+        display: "flex",
+        flexDirection: "inherit",
+    });
+
+    MSysApi.getDesktopEntries().then(async (apps) => {
+        console.log(apps);
+
+        const browserApp =
+            apps.find((app) => app.name === "Google Chrome") ||
+            apps.find((app) => app.name === "Firefox") ||
+            apps.find((app) => app.name === "Microsoft Edge");
+        const fileManagerApp =
+            apps.find((app) => app.name === "org.gnome.Nautilus") || apps.find((app) => app.name === "Dolphin");
+        const terminalApp =
+            apps.find((app) => app.name === "org.gnome.Terminal") || apps.find((app) => app.name === "Konsole");
+
+        if (browserApp) {
+            const iconPath = (await MSysApi.getDesktopIcon(browserApp.icon)) || `${MRootDir}/assets/icons/browser.png`;
+            appIcon(iconPath, browserApp.name, browserApp.exec).addInto(appsEl);
+        }
+        if (fileManagerApp) {
+            const iconPath =
+                (await MSysApi.getDesktopIcon(fileManagerApp.icon)) || `${MRootDir}/assets/icons/file-manager.png`;
+            appIcon(iconPath, fileManagerApp.name, fileManagerApp.exec).addInto(appsEl);
+        }
+        if (terminalApp) {
+            const iconPath =
+                (await MSysApi.getDesktopIcon(terminalApp.icon)) || `${MRootDir}/assets/icons/terminal.png`;
+            appIcon(iconPath, terminalApp.name, terminalApp.exec).addInto(appsEl);
         }
     });
-startMenuBtn.addInto(dockEl);
+    return appsEl;
+});
 
-const apps = await MSysApi.getDesktopEntries();
-
-console.log(apps);
-
-const browserApp =
-    apps.find((app) => app.name === "Google Chrome") ||
-    apps.find((app) => app.name === "Firefox") ||
-    apps.find((app) => app.name === "Microsoft Edge");
-const fileManagerApp =
-    apps.find((app) => app.name === "org.gnome.Nautilus") || apps.find((app) => app.name === "Dolphin");
-const terminalApp = apps.find((app) => app.name === "org.gnome.Terminal") || apps.find((app) => app.name === "Konsole");
-
-if (browserApp) {
-    const iconPath = (await MSysApi.getDesktopIcon(browserApp.icon)) || `${MRootDir}/assets/icons/browser.png`;
-    appIcon(iconPath, browserApp.name, browserApp.exec).addInto(dockEl);
-}
-if (fileManagerApp) {
-    const iconPath = (await MSysApi.getDesktopIcon(fileManagerApp.icon)) || `${MRootDir}/assets/icons/file-manager.png`;
-    appIcon(iconPath, fileManagerApp.name, fileManagerApp.exec).addInto(dockEl);
-}
-if (terminalApp) {
-    const iconPath = (await MSysApi.getDesktopIcon(terminalApp.icon)) || `${MRootDir}/assets/icons/terminal.png`;
-    appIcon(iconPath, terminalApp.name, terminalApp.exec).addInto(dockEl);
+for (const p of planteData) {
+    const plantEl = view().style({ position: "absolute" }).addInto(mainEl);
+    switch (p.posi) {
+        case "left":
+            plantEl.style({ left: "0px", flexDirection: "column" });
+            break;
+        case "right":
+            plantEl.style({ right: "0px", flexDirection: "column" });
+            break;
+        case "top":
+            plantEl.style({ top: "0px" });
+            break;
+        case "bottom":
+            plantEl.style({ bottom: "0px" });
+            break;
+    }
+    const d = p.posi === "left" || p.posi === "right" ? "y" : "x";
+    plantEl.style({
+        display: "flex",
+        background: "rgba(255, 255, 255, 0.6)",
+        borderRadius: "22px",
+        backdropFilter: "blur(10px)",
+    });
+    if (p.glow) {
+        plantEl.style(d === "x" ? { width: "100%" } : { height: "100%" });
+    } else {
+        plantEl.style(
+            d === "x" ? { left: "50%", transform: "translateX(-50%)" } : { top: "50%", transform: "translateY(-50%)" },
+        );
+    }
+    for (const t of p.items) {
+        const tt = tools.getTool(t.id);
+        if (!tt) {
+            console.warn(`Tool ${t.id} not found`);
+            continue;
+        }
+        plantEl.add(tt());
+    }
 }
 
 const body = pack(document.body);
