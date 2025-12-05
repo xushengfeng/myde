@@ -7,7 +7,11 @@ import type { WaylandProtocol, WaylandArgType } from "../../src/renderer/wayland
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const supportedProtocols: Array<{ name: string; interfaces: Array<{ name: string; version: number }> }> = [
+const supportedProtocols: Array<{
+    name: string;
+    interfaces: Array<{ name: string; version: number }>;
+    developing?: true;
+}> = [
     {
         name: "wayland",
         interfaces: [
@@ -49,13 +53,13 @@ const supportedProtocols: Array<{ name: string; interfaces: Array<{ name: string
             { name: "wp_viewport", version: 1 },
         ],
     },
-    {
-        name: "presentation-time",
-        interfaces: [
-            { name: "wp_presentation", version: 2 },
-            { name: "wp_presentation_feedback", version: 2 },
-        ],
-    },
+    // {
+    //     name: "presentation-time",
+    //     interfaces: [
+    //         { name: "wp_presentation", version: 2 },
+    //         { name: "wp_presentation_feedback", version: 2 },
+    //     ],
+    // },
     {
         name: "linux-dmabuf-v1",
         interfaces: [
@@ -63,14 +67,15 @@ const supportedProtocols: Array<{ name: string; interfaces: Array<{ name: string
             { name: "zwp_linux_buffer_params_v1", version: 5 },
             { name: "zwp_linux_dmabuf_feedback_v1", version: 5 },
         ],
+        developing: true,
     },
-    {
-        name: "text-input-unstable-v3",
-        interfaces: [
-            { name: "zwp_text_input_v3", version: 1 },
-            { name: "zwp_text_input_manager_v3", version: 1 },
-        ],
-    },
+    // {
+    //     name: "text-input-unstable-v3",
+    //     interfaces: [
+    //         { name: "zwp_text_input_v3", version: 1 },
+    //         { name: "zwp_text_input_manager_v3", version: 1 },
+    //     ],
+    // },
     {
         name: "text-input-unstable-v1",
         interfaces: [
@@ -86,14 +91,7 @@ const outputPath = path.resolve(__dirname, "../../src/renderer/wayland/protocols
 const outputTypesPath = path.resolve(__dirname, "../../src/renderer/wayland/wayland-types.ts");
 
 // 先读取已有 JSON 内容
-let allResults: Record<string, WaylandProtocol[]> = {};
-if (fs.existsSync(outputPath)) {
-    try {
-        allResults = JSON.parse(fs.readFileSync(outputPath, "utf-8"));
-    } catch (e) {
-        allResults = {};
-    }
-}
+const allResults: Record<string, WaylandProtocol[]> = {};
 
 supportedProtocols.forEach((proto) => {
     const xmlFile = path.join(xmlDir, `${proto.name}.xml`);
@@ -120,12 +118,6 @@ supportedProtocols.forEach((proto) => {
             }
             if (match.version !== version) {
                 overVersion.push(`${name} ${version} > ${match.version}`);
-                // 保留原 protocols.json 中的内容
-                const oldList = allResults[proto.name] || [];
-                const old = oldList.find((item) => item.name === name);
-                if (old) {
-                    protocols.push(old);
-                }
                 return;
             }
             const request = (iface.request || []).map((req: any) => ({
@@ -156,7 +148,7 @@ supportedProtocols.forEach((proto) => {
                 ),
                 ...(enm.$.bitfield && { bitfield: true }),
             }));
-            protocols.push({ name, version, request, event, enum: enums });
+            protocols.push({ name, version: proto.developing ? 0 : version, request, event, enum: enums });
         });
         allResults[proto.name] = protocols;
 
