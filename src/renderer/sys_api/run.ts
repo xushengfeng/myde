@@ -56,6 +56,7 @@ export function runApp(
             WAYLAND_DEBUG: op.deEnv.WAYLAND_DEBUG || "",
             ...(Number.isNaN(op.xServerNum) ? {} : { DISPLAY: `:${op.xServerNum}` }),
         },
+        cwd: op.deEnv.HOME,
     });
 
     return subprocess;
