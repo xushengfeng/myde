@@ -49,6 +49,103 @@ const mousePos = { x: 0, y: 0 } as { x: number; y: number };
 
 let viewAllShowing = false;
 
+class trigger {
+    private cbs: (() => undefined | true)[] = [];
+    on(cb: () => undefined | true) {
+        this.cbs.push(cb);
+    }
+    fire() {
+        for (const cb of this.cbs) {
+            const once = cb();
+            if (once === true) break;
+        }
+    }
+}
+
+type StateMachineOnCallback<next extends string> = (op: {
+    nextTrigger: (t: next) => void;
+    leave: (cb: () => void) => void;
+}) => void;
+
+class stateMachine<T extends string, subT extends T> {
+    private nowState: T | undefined;
+    private onCallbacks = new Map<string, StateMachineOnCallback<T>>();
+    private leaveFuns = new Map<T, () => void>();
+    private x: Record<T, { next: { t?: trigger; n: subT }[] }>;
+
+    constructor(x: typeof this.x) {
+        this.x = x;
+
+        for (const [k, v] of Object.entries(x) as [T, { next: { t?: trigger; n: T }[] }][]) {
+            const hasT = new Set<trigger>();
+            for (const n of v.next) {
+                if (n.t && hasT.has(n.t)) {
+                    console.error(`State ${k} has multiple transitions for the same trigger.`);
+                } else {
+                    if (n.t) hasT.add(n.t);
+                }
+            }
+        }
+
+        for (const [k, v] of Object.entries(x) as [T, { next: { t?: trigger; n: T }[] }][]) {
+            for (const n of v.next) {
+                if (n.t) {
+                    n.t.on(() => {
+                        if (this.nowState === k) {
+                            this.setState(n.n);
+                            return true;
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    setState(s: T) {
+        if (this.nowState === undefined || this.x[this.nowState].next.find((n) => n.n === s)) {
+            const old = this.nowState;
+            for (const [k, v] of this.leaveFuns)
+                if (k !== s) {
+                    v();
+                    this.leaveFuns.delete(k);
+                }
+            this.onCallbacks.get(s)?.({
+                nextTrigger: (x) => this.setState(x),
+                leave: (cb) => {
+                    this.leaveFuns.set(s, cb);
+                },
+            });
+            if (this.x[s].next.length === 0) this.nowState = undefined;
+            else this.nowState = s;
+            console.log(`${s} ${old} -> ${this.nowState}`);
+        } else {
+            console.error(`Invalid state transition from ${this.nowState} to ${s}`);
+        }
+    }
+    getState() {
+        return this.nowState;
+    }
+    on(bindState: T, cb: StateMachineOnCallback<(typeof this.x)[T]["next"][number]["n"]>) {
+        this.onCallbacks.set(bindState, cb);
+    }
+}
+
+const dyj电源键 = new trigger();
+const state = new stateMachine({
+    normal: { next: [{ t: dyj电源键, n: "lock" }] },
+    lock: { next: [{ n: "normal" }] },
+});
+const stateLock = new stateMachine({
+    xipin: { next: [{ t: dyj电源键, n: "lock" }] },
+    lock: {
+        next: [{ t: dyj电源键, n: "xipin" }, { n: "passwd" }],
+    },
+    passwd: {
+        next: [{ n: "lock" }, { n: "out" }],
+    },
+    out: { next: [] },
+});
+
 function mouseMove(x: number, y: number) {
     // 更新全局鼠标坐标
     mousePos.x = x;
@@ -196,6 +293,9 @@ function sendScrollEvent(p: WheelEvent) {
     }
 }
 
+// @ts-expect-error
+window.dy = () => dyj电源键.fire();
+
 const server = MSysApi.server();
 
 server.server.on("newClient", (client, clientId) => {
@@ -289,23 +389,76 @@ const clientData = new Map<string, { client: WaylandClient }>();
 
 const mainEl = view().style({ width: "100vw", height: "100vh" }).addInto();
 
-image(`${MRootDir}/assets/wallpaper/1.svg`, "wallpaper")
-    .style({
-        width: "100%",
-        height: "100%",
-        objectFit: "cover",
-    })
-    .addInto(mainEl);
+const bg = image(`${MRootDir}/assets/wallpaper/1.svg`, "wallpaper").style({
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+});
 
-const windowElWarp = view()
-    .style({
-        position: "absolute",
-        top: 0,
-        left: 0,
-        width: "100%",
-        height: "100%",
-    })
-    .addInto(mainEl);
+// todo 大小限制
+const windowElWarp = view().style({
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
+});
+
+const toolsBottom = view();
+const toolsTop = view();
+const topest = view(); // 也是通知控制栏、锁屏
+const toolTip = view();
+
+state.setState("normal");
+state.on("normal", () => {
+    toolTip.style({ transform: "translateY(-100%)", transition: "0.4s" });
+});
+state.on("lock", () => {
+    stateLock.setState("xipin");
+});
+
+stateLock.on("xipin", ({ nextTrigger }) => {
+    toolTip
+        .clear()
+        .style({
+            width: "100vw",
+            height: "100vh",
+            position: "fixed",
+            top: "0",
+            left: "0",
+            background: "rgb(0,0,0)",
+            transform: "translateY(0)",
+        })
+        .on("click", () => nextTrigger("lock"), { once: true });
+});
+stateLock.on("lock", ({ nextTrigger, leave }) => {
+    toolTip
+        .clear()
+        .style({ background: "white" })
+        .add("时间等")
+        .on("click", () => nextTrigger("passwd"), { once: true });
+    const t = setTimeout(() => {
+        nextTrigger("xipin");
+    }, 3000);
+    leave(() => {
+        clearTimeout(t);
+    });
+});
+stateLock.on("passwd", ({ nextTrigger, leave }) => {
+    toolTip.clear().add(button("确认进入").on("click", () => nextTrigger("out"), { once: true }));
+    const t = setTimeout(() => {
+        nextTrigger("lock");
+    }, 3000);
+    leave(() => {
+        clearTimeout(t);
+    });
+});
+stateLock.on("out", () => {
+    toolTip.clear();
+    state.setState("normal");
+});
+
+mainEl.add([bg, toolsBottom, windowElWarp, toolsTop, topest, toolTip]);
 
 const windowEl = view()
     .style({
@@ -448,7 +601,7 @@ tools.registerTool("apps", () => {
 });
 
 for (const p of planteData) {
-    const plantEl = view().style({ position: "absolute" }).addInto(mainEl);
+    const plantEl = view().style({ position: "absolute" }).addInto(toolsBottom);
     switch (p.posi) {
         case "left":
             plantEl.style({ left: "0px", flexDirection: "column" });
