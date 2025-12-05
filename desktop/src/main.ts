@@ -395,13 +395,8 @@ const bg = image(`${MRootDir}/assets/wallpaper/1.svg`, "wallpaper").style({
     objectFit: "cover",
 });
 
-// todo 大小限制
 const windowElWarp = view().style({
     position: "absolute",
-    top: 0,
-    left: 0,
-    width: "100%",
-    height: "100%",
 });
 
 const toolsBottom = view();
@@ -600,6 +595,7 @@ tools.registerTool("apps", () => {
     return appsEl;
 });
 
+const wino = { t: 0, l: 0, r: 0, b: 0 };
 for (const p of planteData) {
     const plantEl = view().style({ position: "absolute" }).addInto(toolsBottom);
     switch (p.posi) {
@@ -638,7 +634,31 @@ for (const p of planteData) {
         }
         plantEl.add(tt());
     }
+    if (d === "x") {
+        const x = plantEl.el.offsetHeight;
+        if (p.posi === "top") {
+            wino.t = Math.max(wino.t, x);
+        }
+        if (p.posi === "bottom") {
+            wino.b = Math.max(wino.b, x);
+        }
+    }
+    if (d === "y") {
+        const x = plantEl.el.offsetWidth;
+        if (p.posi === "left") {
+            wino.l = Math.max(wino.l, x);
+        }
+        if (p.posi === "right") {
+            wino.r = Math.max(wino.r, x);
+        }
+    }
 }
+windowElWarp.style({
+    left: `${wino.l}px`,
+    right: `${wino.r}px`,
+    top: `${wino.t}px`,
+    bottom: `${wino.b}px`,
+});
 
 const body = pack(document.body);
 
