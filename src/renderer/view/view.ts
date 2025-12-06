@@ -232,7 +232,10 @@ class WaylandClient {
         keyboard: WaylandObjectId;
         focusSurface: WaylandObjectId | null;
         focusSurfaceType: "main" | "popup" | null;
-        textInput: { focus: WaylandObjectId | null; m: Map<WaylandObjectId, { focus: boolean }> };
+        textInputV1: {
+            focus: WaylandObjectId | null;
+            m: Map<WaylandObjectId, { focus: boolean; serial: number }>;
+        };
         serial: number;
         dataDevices: Set<WaylandObjectId>;
         pendingPaste: { offerId: WaylandObjectId; fd: number; mime: string; timeout: NodeJS.Timeout };
@@ -1072,30 +1075,36 @@ class WaylandClient {
 
         isOp("zwp_text_input_manager_v1.create_text_input", (x) => {
             const textInputId = x.args.id;
-            if (!this.obj2.textInput) this.obj2.textInput = { focus: null, m: new Map() };
-            this.obj2.textInput.m.set(textInputId, { focus: false });
+            if (!this.obj2.textInputV1) this.obj2.textInputV1 = { focus: null, m: new Map() };
+            this.obj2.textInputV1.m.set(textInputId, { focus: false, serial: 1 });
         });
         isOp("zwp_text_input_v1.activate", (x) => {
             this.sendMessageX(x.id, "zwp_text_input_v1.enter", { surface: x.args.surface });
-            if (!this.obj2.textInput) return;
-            // biome-ignore lint/style/noNonNullAssertion: 假装有 // todo
-            this.obj2.textInput.m.get(x.id)!.focus = true;
-            // biome-ignore lint/style/noNonNullAssertion: 上面已经保证了
-            for (const [k, v] of this.obj2.textInput!.m) {
+            if (!this.obj2.textInputV1) return;
+            for (const [k, v] of this.obj2.textInputV1.m) {
                 if (k !== x.id && v.focus) {
                     this.sendMessageX(k, "zwp_text_input_v1.leave", {});
                     v.focus = false;
                 }
+                if (k === x.id) {
+                    v.focus = true;
+                }
             }
         });
         isOp("zwp_text_input_v1.deactivate", (x) => {
-            if (this.obj2.textInput?.m.get(x.id)?.focus !== true) {
+            if (this.obj2.textInputV1?.m.get(x.id)?.focus !== true) {
                 return;
             }
             this.sendMessageX(x.id, "zwp_text_input_v1.leave", {});
-            if (!this.obj2.textInput) return;
-            // biome-ignore lint/style/noNonNullAssertion: 假装有 // todo
-            this.obj2.textInput.m.get(x.id)!.focus = false;
+            if (!this.obj2.textInputV1) return;
+            const t = this.obj2.textInputV1.m.get(x.id);
+            if (t) t.focus = false;
+        });
+        isOp("zwp_text_input_v1.commit_state", (x) => {
+            const xx = this.obj2.textInputV1?.m.get(x.id);
+            if (xx) {
+                xx.serial = x.args.serial;
+            }
         });
 
         return {
@@ -1588,6 +1597,34 @@ class WaylandClient {
                     mods_locked,
                     group: 0,
                 });
+            }
+        },
+        sendText: (text: string, preedit: boolean) => {
+            const input1 = this.obj2.textInputV1;
+            console.log(text, preedit, input1);
+            if (input1) {
+                const id = Array.from(input1.m).find((i) => i[1].focus === true);
+                if (!id) return;
+                if (preedit) {
+                    this.sendMessageImm(id[0], "zwp_text_input_v1.preedit_cursor", {
+                        index: text.length,
+                    });
+                    this.sendMessageImm(id[0], "zwp_text_input_v1.preedit_string", {
+                        text: text,
+                        commit: text,
+                        serial: id[1].serial,
+                    });
+                } else {
+                    this.sendMessageImm(id[0], "zwp_text_input_v1.commit_string", {
+                        serial: id[1].serial,
+                        text: text,
+                    });
+                    this.sendMessageImm(id[0], "zwp_text_input_v1.preedit_string", {
+                        text: "",
+                        commit: "",
+                        serial: id[1].serial,
+                    });
+                }
             }
         },
     };
