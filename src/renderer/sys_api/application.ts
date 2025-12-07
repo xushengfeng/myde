@@ -66,7 +66,7 @@ async function getDesktopIcon(icon: string): Promise<string | undefined> {
     // 常见图标搜索路径
     const iconSizes = [16, 32, 48, 64, 128, 256, 512];
     const userIconDirs = path.join(os.homedir() || "", ".local/share/icons/hicolor/");
-    const iconDirs = ["/usr/share/pixmaps/", "/usr/share/icons/hicolor/scalable/apps/"].concat(
+    const iconDirs = ["/usr/share/pixmaps/", "/usr/share/icons/", "/usr/share/icons/hicolor/scalable/apps/"].concat(
         iconSizes.flatMap((size) => [
             `/usr/share/icons/hicolor/${size}x${size}/apps/`,
             path.join(userIconDirs, `${size}x${size}/apps/`),
