@@ -1,6 +1,6 @@
 import { button, type ElType, image, pack, setProperty, view } from "dkh-ui";
 
-import type { WaylandClient } from "../../src/renderer/desktop-api";
+import type { DesktopIconConfig, WaylandClient } from "../../src/renderer/desktop-api";
 import { txt } from "dkh-ui";
 
 const { MSysApi, MRootDir, MInputMap } = window.myde;
@@ -238,13 +238,14 @@ function appIcon(iconPath: string, name: string, exec: string) {
         background: "#ffffff",
         flexShrink: 0,
     });
-    image(iconPath, name)
-        .style({
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-        })
-        .addInto(p);
+    if (iconPath)
+        image(iconPath, name)
+            .style({
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+            })
+            .addInto(p);
     p.on("click", () => {
         console.log("exec", exec);
         server.runApp(exec);
@@ -485,6 +486,9 @@ tools.registerTool("showAllView", () => {
 });
 
 tools.registerTool("startMenuFullScreen", () => {
+    const iconConfig: DesktopIconConfig = {
+        theme: "breeze",
+    };
     const startMenuBtn = view()
         .style({
             width: "48px",
@@ -522,8 +526,8 @@ tools.registerTool("startMenuFullScreen", () => {
                     })
                     .addInto(menu);
                 const iconView = view().addInto(appEl);
-                MSysApi.getDesktopIcon(app.icon).then((_iconPath) => {
-                    const iconPath = _iconPath || `${MRootDir}/assets/icons/application.png`;
+                MSysApi.getDesktopIcon(app.icon, iconConfig).then((_iconPath) => {
+                    const iconPath = _iconPath || "";
                     iconView.add(
                         appIcon(iconPath, app.name, app.exec).style({
                             width: "40px",
@@ -565,6 +569,10 @@ tools.registerTool("apps", () => {
         flexDirection: "inherit",
     });
 
+    const iconConfig: DesktopIconConfig = {
+        theme: "breeze",
+    };
+
     MSysApi.getDesktopEntries().then(async (apps) => {
         console.log(apps);
 
@@ -578,17 +586,19 @@ tools.registerTool("apps", () => {
             apps.find((app) => app.name === "org.gnome.Terminal") || apps.find((app) => app.name === "Konsole");
 
         if (browserApp) {
-            const iconPath = (await MSysApi.getDesktopIcon(browserApp.icon)) || `${MRootDir}/assets/icons/browser.png`;
+            const iconPath =
+                (await MSysApi.getDesktopIcon(browserApp.icon, iconConfig)) || `${MRootDir}/assets/icons/browser.png`;
             appIcon(iconPath, browserApp.name, browserApp.exec).addInto(appsEl);
         }
         if (fileManagerApp) {
             const iconPath =
-                (await MSysApi.getDesktopIcon(fileManagerApp.icon)) || `${MRootDir}/assets/icons/file-manager.png`;
+                (await MSysApi.getDesktopIcon(fileManagerApp.icon, iconConfig)) ||
+                `${MRootDir}/assets/icons/file-manager.png`;
             appIcon(iconPath, fileManagerApp.name, fileManagerApp.exec).addInto(appsEl);
         }
         if (terminalApp) {
             const iconPath =
-                (await MSysApi.getDesktopIcon(terminalApp.icon)) || `${MRootDir}/assets/icons/terminal.png`;
+                (await MSysApi.getDesktopIcon(terminalApp.icon, iconConfig)) || `${MRootDir}/assets/icons/terminal.png`;
             appIcon(iconPath, terminalApp.name, terminalApp.exec).addInto(appsEl);
         }
     });
