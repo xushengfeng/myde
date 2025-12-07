@@ -33,6 +33,7 @@ async function getDesktopEntries(lans: string[] = []) {
                 const content = await fs.readFile(filePath, "utf-8");
                 const parsed = ini.parse(content);
                 const entry = parsed["Desktop Entry"] || {};
+                if (entry.NoDisplay === true) continue;
                 const exec = entry.Exec || "";
                 const name = entry[lans.map((i) => `Name[${i}]`).find((l) => l in entry) || "Name"];
                 const comment = entry[lans.map((i) => `Comment[${i}]`).find((l) => l in entry) || "Comment"] || "";
