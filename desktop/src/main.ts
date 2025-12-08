@@ -759,10 +759,8 @@ tools.registerTool("apps", (_tipEl, a) => {
             return;
         }
         const desk = await MSysApi.getDesktopEntry(appid);
-        if (!desk) return;
-        const iconPath =
-            (await MSysApi.getDesktopIcon(desk.icon, iconConfig)) || `${MRootDir}/assets/icons/unknown-app.png`;
-        const appEl = appIcon(iconPath, desk.name);
+        const iconPath = (await MSysApi.getDesktopIcon(desk?.icon || "", iconConfig)) || "";
+        const appEl = appIcon(iconPath, desk?.name || appid);
         appsEl.add(appEl);
         nowApps.set(appid, { iconEl: appEl, clients: new Set([c]) });
         appEl.on("click", () => {
