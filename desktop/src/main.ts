@@ -545,6 +545,9 @@ const toolsTop = view()
         ),
     );
 tools.setTipEl(toolsTop.el);
+
+const fullscreen = view();
+
 const topest = view(); // 也是通知控制栏、锁屏
 const toolTip = view();
 
@@ -597,7 +600,7 @@ stateLock.on("out", () => {
     state.setState("normal");
 });
 
-mainEl.add([bg, toolsBottom, windowElWarp, toolsTop, topest, toolTip]);
+mainEl.add([bg, windowElWarp, toolsBottom, toolsTop, fullscreen, topest, toolTip]);
 
 const windowEl = view()
     .style({
