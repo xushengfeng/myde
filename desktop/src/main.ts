@@ -41,11 +41,49 @@ class Tools {
 
 type MWinId = string & { __brand: "MWinId" };
 
+function 回布局(index: number): { x: number; y: number } {
+    const xi = index + 1;
+    const w = Math.sqrt(xi);
+    const 宽 = w % 2 === 1 ? w : Math.ceil(w) % 2 === 0 ? Math.ceil(w) + 1 : Math.ceil(w);
+    const d = Math.floor(宽 / 2);
+    const start = (宽 - 2) ** 2 + 1;
+    const offset = (xi - start) % ((宽 - 1) * 4);
+    const n = Math.floor(offset / (宽 - 1));
+    const offsetOfN = offset % (宽 - 1);
+
+    if (n === 0) {
+        const y = -d;
+        const x = -offsetOfN + d;
+        return { x, y };
+    } else if (n === 1) {
+        const x = -d;
+        const y = offsetOfN - d;
+        return { x, y };
+    } else if (n === 2) {
+        const y = d;
+        const x = offsetOfN - d;
+        return { x, y };
+    } else {
+        const x = d;
+        const y = -offsetOfN + d;
+        return { x, y };
+    }
+}
+
 class ViewData {
     // todo 聚焦
     private views: View[] = [];
     private win2View = new Map<MWinId, View>();
     newView() {
+        for (let i = 1; i <= this.views.length + 1; i++) {
+            const pos = 回布局(i);
+            const exists = this.views.find((v) => v.ox === pos.x && v.oy === pos.y);
+            if (!exists) {
+                const v: View = { ox: pos.x, oy: pos.y };
+                this.views.push(v);
+                return v;
+            }
+        }
         const v: View = { ox: this.views.length, oy: 0 };
         this.views.push(v);
         return v;
@@ -55,6 +93,15 @@ class ViewData {
     }
     moveWinToView(winid: MWinId, v: View) {
         this.win2View.set(winid, v);
+        this.checkAndRmView();
+    }
+    closeWin(winid: MWinId) {
+        this.win2View.delete(winid);
+        this.checkAndRmView();
+    }
+    private checkAndRmView() {
+        const allAliveViews = new Set(this.win2View.values());
+        this.views = this.views.filter((v) => allAliveViews.has(v));
     }
     static winId(clientId: string, windowId: WaylandWinId) {
         return `${clientId}-${windowId}` as MWinId;
@@ -222,7 +269,12 @@ function cssVar(name: string) {
 const viewWidth = cssVar("view-width");
 const viewHeight = cssVar("view-height");
 
-function newViewEl(v: View) {
+function newViewEl(v: { ox: number; oy: number }) {
+    const id = `view-${v.ox}-${v.oy}`;
+    if (windowViewMap.has(id)) {
+        // biome-ignore lint/style/noNonNullAssertion: ---
+        return windowViewMap.get(id)!;
+    }
     const el = view()
         .style({
             left: `calc(${viewWidth.getName()} * ${v.ox})`,
@@ -239,6 +291,7 @@ function newViewEl(v: View) {
             }
         });
     windowEl.add(el);
+    windowViewMap.set(id, el);
     return el;
 }
 
@@ -386,6 +439,8 @@ server.server.on("newClient", (client, clientId) => {
     });
     client.on("windowClosed", (windowId, el) => {
         console.log(`Client ${clientId} deleted window ${windowId}`);
+        const winid = ViewData.winId(clientId, windowId);
+        viewData.closeWin(winid);
         el.remove();
     });
     client.on("windowStartMove", (windowId) => {
@@ -454,8 +509,12 @@ server.server.on("newClient", (client, clientId) => {
         xwin.unmaximize(width, height);
     });
 });
-server.server.on("clientClose", (_, clientId) => {
+server.server.on("clientClose", (client, clientId) => {
     clientData.delete(clientId);
+    for (const [winId, _] of client.getWindows()) {
+        const winid = ViewData.winId(clientId, winId);
+        viewData.closeWin(winid);
+    }
 });
 
 const clientData = new Map<string, { client: WaylandClient }>();
@@ -550,6 +609,7 @@ const windowEl = view()
         transition: "0.4s",
     })
     .addInto(windowElWarp);
+const windowViewMap = new Map<string, ElType<HTMLElement>>();
 
 const ob = new ResizeObserver((e) => {
     for (const entry of e) {
@@ -749,7 +809,6 @@ tools.registerTool("apps", (_tipEl, a) => {
                         const win = x.c.win(x.id);
                         if (!win) return undefined;
                         const rawCanvas = win.getPreview();
-                        // todo 比例
                         const { w, h } = fitRect({ w: rawCanvas.width, h: rawCanvas.height }, 200, 150);
                         canvas.attr({ width: w, height: h });
                         // biome-ignore lint/style/noNonNullAssertion: ---
