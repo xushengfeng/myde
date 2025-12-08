@@ -72,9 +72,10 @@ function 回布局(index: number): { x: number; y: number } {
 }
 
 class ViewData {
-    // todo 聚焦
     private views: View[] = [];
     private win2View = new Map<MWinId, View>();
+    private winid2ClientId = new Map<MWinId, { clientId: string; winId: WaylandWinId }>();
+    focusClient: string | undefined;
     newView() {
         for (let i = 1; i <= this.views.length + 1; i++) {
             const pos = 回布局(i);
@@ -96,9 +97,35 @@ class ViewData {
         this.win2View.set(winid, v);
         this.checkAndRmView();
     }
+    bindWinidClientid(winid: MWinId, clientId: string, winId: WaylandWinId) {
+        this.winid2ClientId.set(winid, { clientId, winId });
+    }
     closeWin(winid: MWinId) {
         this.win2View.delete(winid);
         this.checkAndRmView();
+    }
+    focusWin(winid: MWinId) {
+        const id = this.winid2ClientId.get(winid);
+        if (!id) {
+            console.warn("cant find clientid", winid);
+            return;
+        }
+        this.focusClient = id.clientId;
+        for (const [cid, c] of server.server.clients) {
+            for (const [wid] of c.getWindows()) {
+                if (cid === id.clientId && wid === id.winId) {
+                    c.win(wid)?.focus();
+                } else {
+                    c.win(wid)?.blur();
+                }
+            }
+        }
+    }
+    blurAll() {
+        this.focusClient = undefined;
+        for (const c of server.server.clients.values()) {
+            for (const w of c.getWindows().keys()) c.win(w)?.blur();
+        }
     }
     private checkAndRmView() {
         const allAliveViews = new Set(this.win2View.values());
@@ -334,6 +361,7 @@ function jump2Win(winid: MWinId) {
     const v = viewData.getViewByWinId(winid);
     if (!v) return;
     setViewScorll({ x: v.ox, y: v.oy });
+    viewData.focusWin(winid);
 }
 
 function appLauncher(iconPath: string, name: string, exec: string) {
@@ -381,6 +409,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
             );
             if (type === "down") {
                 xwin.focus();
+                viewData.focusWin(ViewData.winId(_id, winId));
                 for (const [otherWinId, _otherWin] of client.getWindows()) {
                     if (otherWinId !== winId) {
                         client.win(otherWinId)?.blur();
@@ -424,7 +453,6 @@ window.dy = () => dyj电源键.fire();
 const server = MSysApi.server();
 
 server.server.on("newClient", (client, clientId) => {
-    clientData.set(clientId, { client });
     client.setLogConfig({ receive: [], send: [] });
     client.onSync("windowBound", () => {
         const rect = windowEl.el.getBoundingClientRect();
@@ -433,8 +461,11 @@ server.server.on("newClient", (client, clientId) => {
     client.on("windowCreated", (windowId, el) => {
         console.log(`Client ${clientId} created window ${windowId}`);
         const v = viewData.newView();
-        viewData.moveWinToView(ViewData.winId(clientId, windowId), v);
+        const wid = ViewData.winId(clientId, windowId);
+        viewData.moveWinToView(wid, v);
+        viewData.bindWinidClientid(wid, clientId, windowId);
         addWindow(v, el);
+        viewData.focusWin(wid);
         client.win(windowId)?.setWinBoxData({ width: 800, height: 600 });
         client.win(windowId)?.focus();
     });
@@ -511,14 +542,11 @@ server.server.on("newClient", (client, clientId) => {
     });
 });
 server.server.on("clientClose", (client, clientId) => {
-    clientData.delete(clientId);
     for (const [winId, _] of client.getWindows()) {
         const winid = ViewData.winId(clientId, winId);
         viewData.closeWin(winid);
     }
 });
-
-const clientData = new Map<string, { client: WaylandClient }>();
 
 const mainEl = view().style({ width: "100vw", height: "100vh" }).addInto();
 
@@ -979,27 +1007,31 @@ const body = pack(document.body);
 body.on("pointermove", (e) => {
     mouseMove(e.x, e.y);
 });
-body.on("pointerdown", (e) => {
+windowEl.on("pointerdown", (e) => {
     sendPointerEvent("down", e);
 });
-body.on("pointerup", (e) => {
+windowEl.on("pointerup", (e) => {
     sendPointerEvent("up", e);
 });
 
 body.on("keydown", (e) => {
+    e.preventDefault();
     if (e.repeat) return;
-    for (const client of server.server.clients.values()) {
+    for (const [id, client] of server.server.clients) {
+        if (id !== viewData.focusClient) continue;
         client.keyboard.sendKey(MInputMap.mapKeyCode(e.code), "pressed");
     }
 });
 body.on("keyup", (e) => {
+    e.preventDefault();
     if (e.repeat) return;
-    for (const client of server.server.clients.values()) {
+    for (const [id, client] of server.server.clients) {
+        if (id !== viewData.focusClient) continue;
         client.keyboard.sendKey(MInputMap.mapKeyCode(e.code), "released");
     }
 });
 
-body.on("wheel", (e) => {
+windowEl.on("wheel", (e) => {
     sendScrollEvent(e);
 });
 
