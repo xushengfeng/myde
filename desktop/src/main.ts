@@ -47,7 +47,8 @@ function 回布局(index: number): { x: number; y: number } {
     const 宽 = w % 2 === 1 ? w : Math.ceil(w) % 2 === 0 ? Math.ceil(w) + 1 : Math.ceil(w);
     const d = Math.floor(宽 / 2);
     const start = (宽 - 2) ** 2 + 1;
-    const offset = (xi - start) % ((宽 - 1) * 4);
+    const _offset = xi - start - d;
+    const offset = _offset < 0 ? (宽 - 1) * 4 - _offset : _offset;
     const n = Math.floor(offset / (宽 - 1));
     const offsetOfN = offset % (宽 - 1);
 
