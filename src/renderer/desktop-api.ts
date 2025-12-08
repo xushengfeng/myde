@@ -1,10 +1,16 @@
 import { mapKeyCode } from "./input_map/web2x";
-import { getDesktopEntries, getDesktopIcon, type DesktopIconConfig as dskIcon } from "./sys_api/application";
+import {
+    getDesktopEntries,
+    getDesktopEntry,
+    getDesktopIcon,
+    type DesktopIconConfig as dskIcon,
+} from "./sys_api/application";
 import { getEnv } from "./sys_api/env";
 import { server } from "./sys_api/run";
 
 export const myde = {
     MSysApi: {
+        getDesktopEntry,
         getDesktopEntries,
         getDesktopIcon,
         getEnv,

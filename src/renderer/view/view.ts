@@ -99,6 +99,7 @@ interface WaylandClientEventMap {
     windowResized: (xdgToplevelId: WaylandObjectId, width: number, height: number) => void;
     windowMaximized: (xdgToplevelId: WaylandObjectId) => void;
     windowUnMaximized: (xdgToplevelId: WaylandObjectId) => void;
+    appid: (id: string) => void;
     copy: (text: string) => void;
     paste: () => void;
 }
@@ -253,6 +254,7 @@ class WaylandClient {
                 };
             }
         >;
+        appid: undefined | string;
     };
     // 事件存储
     private events: { [K in keyof WaylandClientEventMap]?: WaylandClientEventMap[K][] } = {};
@@ -287,9 +289,8 @@ class WaylandClient {
         this.id = id;
         this.socket = socket;
         this.objects = new Map();
-        this.obj2 = { windows: new Map(), modifiers: new Set() };
+        this.obj2 = { windows: new Map(), modifiers: new Set(), appid: undefined };
         socket.on("readable", () => {
-            console.log("connected");
             const x = socket.read(undefined, null);
             if (x?.data) this.handleClientMessage(x.data, x.fds);
         });
@@ -1026,6 +1027,12 @@ class WaylandClient {
             this.sendMessageX(x.id, "xdg_popup.popup_done", {});
             this.deleteId(x.id);
         });
+        isOp("xdg_toplevel.set_app_id", (x) => {
+            if (!this.obj2.appid) {
+                this.obj2.appid = x.args.app_id;
+                this.emit("appid", x.args.app_id);
+            }
+        });
         isOp("xdg_toplevel.move", (x) => {
             this.emit("windowStartMove", x.id);
         });
@@ -1038,9 +1045,9 @@ class WaylandClient {
 
         isOp("xdg_toplevel.destroy", (x) => {
             const xdgSurfaceId = this.getObject<"xdg_toplevel">(x.id).data.xdg_surface;
-            this.getObject<"xdg_surface">(xdgSurfaceId).data.warpEl.remove(); // todo 可以外部处理
             this.obj2.windows.delete(x.id);
             this.deleteId(x.id);
+            this.emit("windowClosed", xdgSurfaceId, this.getObject<"xdg_surface">(xdgSurfaceId).data.warpEl);
         });
 
         isOp("zwp_linux_dmabuf_v1.get_surface_feedback", (x) => {
@@ -1284,6 +1291,9 @@ class WaylandClient {
         this.objects.delete(id);
     }
 
+    getAppid() {
+        return this.obj2.appid;
+    }
     getWindows() {
         return this.obj2.windows;
     }

@@ -8,6 +8,49 @@ const appPaths = [
     "/usr/local/share/applications/",
     path.join(os.homedir() || "", ".local/share/applications/"),
 ];
+async function getDesktopEntry(appId: string, lans: string[] = []) {
+    return _getDesktopEntry(appId, appPaths, lans);
+}
+
+async function _getDesktopEntry(appId: string, dirs: string[], lans: string[] = []) {
+    type T = {
+        name: string;
+        nameLocal: string;
+        comment: string;
+        commentLocal: string;
+        icon: string;
+        exec: string;
+        rawDesktopPath: string;
+    };
+    const desktopFile = `${appId}.desktop`;
+    for (const dir of dirs) {
+        const filePath = path.join(dir, desktopFile);
+        try {
+            const content = await fs.readFile(filePath, "utf-8");
+            const parsed = ini.parse(content);
+            const entry = parsed["Desktop Entry"] || {};
+            if (entry.NoDisplay === true) return undefined;
+            const exec = entry.Exec || "";
+            const name = entry[lans.map((i) => `Name[${i}]`).find((l) => l in entry) || "Name"];
+            const comment = entry[lans.map((i) => `Comment[${i}]`).find((l) => l in entry) || "Comment"] || "";
+            if (exec) {
+                const pureExec = (exec as string).replace(/%.?/g, ""); // 去掉参数
+                return {
+                    name: entry.Name || "",
+                    nameLocal: name,
+                    comment: entry.Comment || "",
+                    commentLocal: comment,
+                    icon: entry.Icon || "",
+                    exec: pureExec.trim(),
+                    rawDesktopPath: filePath,
+                } as T;
+            }
+        } catch {
+            /* skip error */
+        }
+    }
+    return undefined;
+}
 
 async function getDesktopEntries(lans: string[] = []) {
     const entries: Array<{
@@ -28,30 +71,9 @@ async function getDesktopEntries(lans: string[] = []) {
             continue;
         }
         for (const file of files) {
-            const filePath = path.join(dir, file);
-            try {
-                const content = await fs.readFile(filePath, "utf-8");
-                const parsed = ini.parse(content);
-                const entry = parsed["Desktop Entry"] || {};
-                if (entry.NoDisplay === true) continue;
-                const exec = entry.Exec || "";
-                const name = entry[lans.map((i) => `Name[${i}]`).find((l) => l in entry) || "Name"];
-                const comment = entry[lans.map((i) => `Comment[${i}]`).find((l) => l in entry) || "Comment"] || "";
-                if (exec) {
-                    const pureExec = (exec as string).replace(/%.?/g, ""); // 去掉参数
-                    entries.push({
-                        name: entry.Name || "",
-                        nameLocal: name,
-                        comment: entry.Comment || "",
-                        commentLocal: comment,
-                        icon: entry.Icon || "",
-                        exec: pureExec.trim(),
-                        rawDesktopPath: filePath,
-                    });
-                }
-            } catch {
-                /* skip error */
-            }
+            const appid = file.replace(/\.desktop$/, "");
+            const e = await _getDesktopEntry(appid, [dir], lans);
+            if (e) entries.push(e);
         }
     }
     return entries;
@@ -195,7 +217,7 @@ async function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<st
         await findThemeDirs("hicolor"),
         await findThemeDirsUser("hicolor"),
         "/usr/share/pixmaps/",
-    ].filter((i) => i !== undefined);
+    ].filter((i) => i !== undefined) as string[];
     for (const dir of iconDirs) {
         const s = await findInDir(dir);
         if (s) return s;
@@ -208,5 +230,6 @@ async function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<st
     return undefined;
 }
 
+export { getDesktopEntry };
 export { getDesktopEntries };
 export { getDesktopIcon };
