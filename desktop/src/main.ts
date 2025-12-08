@@ -353,6 +353,17 @@ function sendScrollEvent(p: WheelEvent) {
     }
 }
 
+function fitRect(rect: { w: number; h: number }, maxW: number, maxH: number) {
+    const w1 = maxW;
+    const h1 = maxW * (rect.h / rect.w);
+    if (h1 <= maxH) {
+        return { w: w1, h: Math.floor(h1) };
+    }
+    const h2 = maxH;
+    const w2 = maxH * (rect.w / rect.h);
+    return { w: Math.floor(w2), h: h2 };
+}
+
 // @ts-expect-error
 window.dy = () => dyj电源键.fire();
 
@@ -739,19 +750,11 @@ tools.registerTool("apps", (_tipEl, a) => {
                         if (!win) return undefined;
                         const rawCanvas = win.getPreview();
                         // todo 比例
+                        const { w, h } = fitRect({ w: rawCanvas.width, h: rawCanvas.height }, 200, 150);
+                        canvas.attr({ width: w, height: h });
                         // biome-ignore lint/style/noNonNullAssertion: ---
                         const ctx = canvas.el.getContext("2d")!;
-                        ctx.drawImage(
-                            rawCanvas,
-                            0,
-                            0,
-                            rawCanvas.width,
-                            rawCanvas.height,
-                            0,
-                            0,
-                            canvas.el.width,
-                            canvas.el.height,
-                        );
+                        ctx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, w, h);
                         el.on("click", () => {
                             jump2Win(ViewData.winId(x.c.id, x.id));
                         });
