@@ -91,14 +91,16 @@ interface WaylandServerEventMap {
     newClient: (client: WaylandClient, clientId: string) => void;
     clientClose: (client: WaylandClient, clientId: string) => void;
 }
+
+export type WaylandWinId = WaylandObjectId;
 interface WaylandClientEventMap {
     close: () => void;
-    windowCreated: (xdgToplevelId: WaylandObjectId, el: HTMLElement) => void;
-    windowClosed: (xdgToplevelId: WaylandObjectId, el: HTMLElement) => void;
-    windowStartMove: (xdgToplevelId: WaylandObjectId) => void;
-    windowResized: (xdgToplevelId: WaylandObjectId, width: number, height: number) => void;
-    windowMaximized: (xdgToplevelId: WaylandObjectId) => void;
-    windowUnMaximized: (xdgToplevelId: WaylandObjectId) => void;
+    windowCreated: (xdgToplevelId: WaylandWinId, el: HTMLElement) => void;
+    windowClosed: (xdgToplevelId: WaylandWinId, el: HTMLElement) => void;
+    windowStartMove: (xdgToplevelId: WaylandWinId) => void;
+    windowResized: (xdgToplevelId: WaylandWinId, width: number, height: number) => void;
+    windowMaximized: (xdgToplevelId: WaylandWinId) => void;
+    windowUnMaximized: (xdgToplevelId: WaylandWinId) => void;
     appid: (id: string) => void;
     copy: (text: string) => void;
     paste: () => void;
@@ -221,7 +223,7 @@ class WaylandClient {
         send: true | string[];
     };
 
-    private id: string;
+    readonly id: string;
     private socket: USocket;
     private opa = this.newOp();
     private objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
@@ -1295,7 +1297,10 @@ class WaylandClient {
         return this.obj2.appid;
     }
     getWindows() {
-        return this.obj2.windows;
+        return this.obj2.windows as Map<
+            WaylandWinId,
+            typeof this.obj2.windows extends Map<infer _K, infer V> ? V : never
+        >;
     }
     private configureWin(
         winid: WaylandObjectId,
@@ -1310,7 +1315,7 @@ class WaylandClient {
         });
         this.sendMessageImm(win.xdg_surface, "xdg_surface.configure", { serial: 1 });
     }
-    win(id: WaylandObjectId) {
+    win(id: WaylandWinId) {
         const win = this.obj2.windows.get(id);
         if (win === undefined) return undefined;
         const winObj = {
@@ -1546,6 +1551,12 @@ class WaylandClient {
                     }
                     this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
                 },
+            },
+            getPreview: () => {
+                const rootSurfaceId = win.xdg_surface;
+                const rootSurface = this.getObject<"xdg_surface">(rootSurfaceId).data.surface;
+                const cs = this.getObject<"wl_surface">(rootSurface).data.canvas;
+                return cs;
             },
         };
         return winObj;

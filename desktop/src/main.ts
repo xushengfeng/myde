@@ -1,6 +1,6 @@
-import { button, type ElType, image, pack, setProperty, view } from "dkh-ui";
+import { addClass, button, ele, type ElType, image, pack, setProperty, view } from "dkh-ui";
 
-import type { DesktopIconConfig, WaylandClient } from "../../src/renderer/desktop-api";
+import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/renderer/desktop-api";
 import { txt } from "dkh-ui";
 
 const { MSysApi, MRootDir, MInputMap } = window.myde;
@@ -18,19 +18,50 @@ type Plant = {
 };
 
 class Tools {
-    tools: Map<string, () => ElType<HTMLElement>>;
+    tools: Map<string, (tipEl: HTMLElement, showA: "left" | "right" | "top" | "bottom") => ElType<HTMLElement>>;
+    private tipEl: HTMLElement = view().el;
     constructor() {
         this.tools = new Map();
     }
-    registerTool(name: string, tool: () => ElType<HTMLElement>) {
+    setTipEl(tipEl: HTMLElement) {
+        this.tipEl = tipEl;
+    }
+    registerTool(
+        name: string,
+        tool: (tipEl: HTMLElement, showA: "left" | "right" | "top" | "bottom") => ElType<HTMLElement>,
+    ) {
         this.tools.set(name, tool);
     }
     getTool(name: string) {
-        return this.tools.get(name);
+        const tool = this.tools.get(name);
+        if (!tool) return undefined;
+        return { getEl: (showA: "left" | "right" | "top" | "bottom") => tool(this.tipEl, showA) };
     }
 }
 
-const viewData: View[] = [];
+type MWinId = string & { __brand: "MWinId" };
+
+class ViewData {
+    // todo 聚焦
+    private views: View[] = [];
+    private win2View = new Map<MWinId, View>();
+    newView() {
+        const v: View = { ox: this.views.length, oy: 0 };
+        this.views.push(v);
+        return v;
+    }
+    getViewByWinId(winid: MWinId) {
+        return this.win2View.get(winid);
+    }
+    moveWinToView(winid: MWinId, v: View) {
+        this.win2View.set(winid, v);
+    }
+    static winId(clientId: string, windowId: WaylandWinId) {
+        return `${clientId}-${windowId}` as MWinId;
+    }
+}
+
+const viewData = new ViewData();
 
 const planteData: Plant[] = [
     { id: "0", posi: "top", items: [{ id: "showAllView" }, { id: "clock" }], glow: true },
@@ -146,6 +177,29 @@ const stateLock = new stateMachine({
     out: { next: [] },
 });
 
+class Timer {
+    private timerId: number | undefined;
+    private onxcb: () => void = () => {};
+    private delay = 0;
+    end = true;
+    constructor(delay: number) {
+        this.delay = delay;
+    }
+    reset() {
+        clearTimeout(this.timerId);
+    }
+    on(cb: () => void) {
+        this.onxcb = cb;
+    }
+    start() {
+        this.end = false;
+        this.timerId = window.setTimeout(() => {
+            this.onxcb();
+            this.end = true;
+        }, this.delay);
+    }
+}
+
 function mouseMove(x: number, y: number) {
     // 更新全局鼠标坐标
     mousePos.x = x;
@@ -168,11 +222,6 @@ function cssVar(name: string) {
 const viewWidth = cssVar("view-width");
 const viewHeight = cssVar("view-height");
 
-function newView() {
-    const v: View = { ox: viewData.length, oy: 0 };
-    viewData.push(v);
-    return v;
-}
 function newViewEl(v: View) {
     const el = view()
         .style({
@@ -214,8 +263,7 @@ function viewAll(s: boolean) {
     }
 }
 
-function addWindow(el: HTMLElement) {
-    const v = newView();
+function addWindow(v: View, el: HTMLElement) {
     const pel = newViewEl(v);
     pel.add(el);
     setViewScorll({ x: v.ox, y: v.oy });
@@ -226,6 +274,12 @@ function addWindow(el: HTMLElement) {
         left: "50%",
         transform: "translate(-50%,-50%)",
     });
+}
+
+function jump2Win(winid: MWinId) {
+    const v = viewData.getViewByWinId(winid);
+    if (!v) return;
+    setViewScorll({ x: v.ox, y: v.oy });
 }
 
 function appLauncher(iconPath: string, name: string, exec: string) {
@@ -313,7 +367,9 @@ server.server.on("newClient", (client, clientId) => {
     });
     client.on("windowCreated", (windowId, el) => {
         console.log(`Client ${clientId} created window ${windowId}`);
-        addWindow(el);
+        const v = viewData.newView();
+        viewData.moveWinToView(ViewData.winId(clientId, windowId), v);
+        addWindow(v, el);
         client.win(windowId)?.setWinBoxData({ width: 800, height: 600 });
         client.win(windowId)?.focus();
     });
@@ -406,7 +462,19 @@ const windowElWarp = view().style({
 });
 
 const toolsBottom = view();
-const toolsTop = view();
+const toolsTop = view()
+    .style({ position: "absolute", top: 0, left: 0 })
+    .class(
+        addClass(
+            { pointerEvents: "none" },
+            {
+                "&>*": {
+                    pointerEvents: "auto",
+                },
+            },
+        ),
+    );
+tools.setTipEl(toolsTop.el);
 const topest = view(); // 也是通知控制栏、锁屏
 const toolTip = view();
 
@@ -566,11 +634,12 @@ tools.registerTool("clock", () => {
     return clockEl;
 });
 
-tools.registerTool("apps", () => {
+tools.registerTool("apps", (_tipEl) => {
     const appsEl = view().style({
         display: "flex",
         flexDirection: "inherit",
     });
+    const tipEl = pack(_tipEl);
 
     const iconConfig: DesktopIconConfig = {
         theme: "breeze",
@@ -618,9 +687,76 @@ tools.registerTool("apps", () => {
         if (!desk) return;
         const iconPath =
             (await MSysApi.getDesktopIcon(desk.icon, iconConfig)) || `${MRootDir}/assets/icons/unknown-app.png`;
-        const appEl = appIcon(iconPath, desk.name); // todo 选择窗口
+        const appEl = appIcon(iconPath, desk.name);
         appsEl.add(appEl);
         nowApps.set(appid, { iconEl: appEl, clients: new Set([c]) });
+        appEl.on("click", () => {
+            const data = nowApps.get(appid);
+            if (!data) return;
+            const allWin = Array.from(data.clients).flatMap((c) => Array.from(c.getWindows()));
+            if (allWin.length === 0) return;
+            const focusedWinIndex = allWin.findIndex(([_, w]) => w.actived);
+            if (focusedWinIndex === -1) {
+                jump2Win(ViewData.winId(c.id, allWin[0][0]));
+            } else {
+                const nextIndex = (focusedWinIndex + 1) % allWin.length;
+                jump2Win(ViewData.winId(c.id, allWin[nextIndex][0]));
+            }
+        });
+        const timer = new Timer(400);
+        timer.on(() => {
+            preview.remove();
+        });
+        const preview = view()
+            .on("pointerenter", () => {
+                timer.reset();
+            })
+            .on("pointerleave", () => {
+                timer.start();
+            });
+        appEl
+            .on("pointerenter", () => {
+                const data = nowApps.get(appid);
+                if (!data) return;
+                timer.reset();
+                if (!timer.end) return;
+                tipEl.add(preview);
+                // todo 位置
+                const allWin = Array.from(data.clients).flatMap((c) =>
+                    Array.from(c.getWindows()).map((x) => ({ ...x[1], id: x[0], c })),
+                );
+
+                preview.clear().add(
+                    allWin.map((x) => {
+                        const el = view();
+                        const canvas = ele("canvas").addInto(el);
+                        const win = x.c.win(x.id);
+                        if (!win) return undefined;
+                        const rawCanvas = win.getPreview();
+                        // todo 比例
+                        // biome-ignore lint/style/noNonNullAssertion: ---
+                        const ctx = canvas.el.getContext("2d")!;
+                        ctx.drawImage(
+                            rawCanvas,
+                            0,
+                            0,
+                            rawCanvas.width,
+                            rawCanvas.height,
+                            0,
+                            0,
+                            canvas.el.width,
+                            canvas.el.height,
+                        );
+                        el.on("click", () => {
+                            jump2Win(ViewData.winId(x.c.id, x.id));
+                        });
+                        return el;
+                    }),
+                );
+            })
+            .on("pointerleave", () => {
+                timer.start();
+            });
     }
     for (const [_id, c] of server.server.clients) {
         addAppIcon(c);
@@ -700,7 +836,7 @@ for (const p of planteData) {
             console.warn(`Tool ${t.id} not found`);
             continue;
         }
-        plantEl.add(tt());
+        plantEl.add(tt.getEl(({ top: "bottom", bottom: "top", left: "right", right: "left" } as const)[p.posi]));
     }
     if (d === "x") {
         const x = plantEl.el.offsetHeight;
