@@ -634,7 +634,7 @@ tools.registerTool("clock", () => {
     return clockEl;
 });
 
-tools.registerTool("apps", (_tipEl) => {
+tools.registerTool("apps", (_tipEl, a) => {
     const appsEl = view().style({
         display: "flex",
         flexDirection: "inherit",
@@ -708,6 +708,7 @@ tools.registerTool("apps", (_tipEl) => {
             preview.remove();
         });
         const preview = view()
+            .style({ display: "flex" })
             .on("pointerenter", () => {
                 timer.reset();
             })
@@ -721,7 +722,11 @@ tools.registerTool("apps", (_tipEl) => {
                 timer.reset();
                 if (!timer.end) return;
                 tipEl.add(preview);
-                // todo 位置
+                if (a === "left" || a === "right") {
+                    preview.style({ flexDirection: "column" });
+                } else {
+                    preview.style({ flexDirection: "row" });
+                }
                 const allWin = Array.from(data.clients).flatMap((c) =>
                     Array.from(c.getWindows()).map((x) => ({ ...x[1], id: x[0], c })),
                 );
@@ -753,6 +758,47 @@ tools.registerTool("apps", (_tipEl) => {
                         return el;
                     }),
                 );
+                const anchorPos = appEl.el.getBoundingClientRect();
+                const thisPos = preview.el.getBoundingClientRect();
+                const x = Math.max(
+                    0,
+                    Math.min(
+                        window.innerWidth - thisPos.width,
+                        anchorPos.left + anchorPos.width / 2 - thisPos.width / 2,
+                    ),
+                );
+                const y = Math.max(
+                    0,
+                    Math.min(
+                        window.innerHeight - thisPos.height,
+                        anchorPos.top + anchorPos.height / 2 - thisPos.height / 2,
+                    ),
+                );
+                preview.style({
+                    position: "fixed",
+                    maxWidth: `${window.innerWidth}px`,
+                    maxHeight: `${window.innerHeight}px`,
+                    overflow: `auto`,
+                    ...(a === "left"
+                        ? {
+                              right: `${window.innerWidth - anchorPos.left}px`,
+                              top: `${y}px`,
+                          }
+                        : a === "top"
+                          ? {
+                                bottom: `${window.innerHeight - anchorPos.top}px`,
+                                left: `${x}px`,
+                            }
+                          : a === "right"
+                            ? {
+                                  left: `${anchorPos.right}px`,
+                                  top: `${y}px`,
+                              }
+                            : {
+                                  top: `${anchorPos.bottom}px`,
+                                  left: `${x}px`,
+                              }),
+                });
             })
             .on("pointerleave", () => {
                 timer.start();
