@@ -228,7 +228,16 @@ function addWindow(el: HTMLElement) {
     });
 }
 
-function appIcon(iconPath: string, name: string, exec: string) {
+function appLauncher(iconPath: string, name: string, exec: string) {
+    const p = appIcon(iconPath, name);
+    p.on("click", () => {
+        console.log("exec", exec);
+        server.runApp(exec);
+    });
+    return p;
+}
+
+function appIcon(iconPath: string, name: string) {
     const p = view().style({
         width: "48px",
         height: "48px",
@@ -246,10 +255,6 @@ function appIcon(iconPath: string, name: string, exec: string) {
                 objectFit: "cover",
             })
             .addInto(p);
-    p.on("click", () => {
-        console.log("exec", exec);
-        server.runApp(exec);
-    });
     return p;
 }
 
@@ -529,11 +534,9 @@ tools.registerTool("startMenuFullScreen", () => {
                 MSysApi.getDesktopIcon(app.icon, iconConfig).then((_iconPath) => {
                     const iconPath = _iconPath || "";
                     iconView.add(
-                        appIcon(iconPath, app.name, app.exec).style({
+                        appLauncher(iconPath, app.name, app.exec).style({
                             width: "40px",
                             height: "40px",
-                            borderRadius: "8px",
-                            background: "#ffffff",
                         }),
                     );
                 });
@@ -588,19 +591,74 @@ tools.registerTool("apps", () => {
         if (browserApp) {
             const iconPath =
                 (await MSysApi.getDesktopIcon(browserApp.icon, iconConfig)) || `${MRootDir}/assets/icons/browser.png`;
-            appIcon(iconPath, browserApp.name, browserApp.exec).addInto(appsEl);
+            appLauncher(iconPath, browserApp.name, browserApp.exec).addInto(appsEl);
         }
         if (fileManagerApp) {
             const iconPath =
                 (await MSysApi.getDesktopIcon(fileManagerApp.icon, iconConfig)) ||
                 `${MRootDir}/assets/icons/file-manager.png`;
-            appIcon(iconPath, fileManagerApp.name, fileManagerApp.exec).addInto(appsEl);
+            appLauncher(iconPath, fileManagerApp.name, fileManagerApp.exec).addInto(appsEl);
         }
         if (terminalApp) {
             const iconPath =
                 (await MSysApi.getDesktopIcon(terminalApp.icon, iconConfig)) || `${MRootDir}/assets/icons/terminal.png`;
-            appIcon(iconPath, terminalApp.name, terminalApp.exec).addInto(appsEl);
+            appLauncher(iconPath, terminalApp.name, terminalApp.exec).addInto(appsEl);
         }
+    });
+    const nowApps = new Map<string, { iconEl: ElType<HTMLElement>; clients: Set<WaylandClient> }>();
+    async function addAppIcon(c: WaylandClient) {
+        const appid = c.getAppid();
+        if (!appid) return;
+        if (nowApps.has(appid)) {
+            // biome-ignore lint/style/noNonNullAssertion: ---
+            nowApps.get(appid)!.clients.add(c);
+            return;
+        }
+        const desk = await MSysApi.getDesktopEntry(appid);
+        if (!desk) return;
+        const iconPath =
+            (await MSysApi.getDesktopIcon(desk.icon, iconConfig)) || `${MRootDir}/assets/icons/unknown-app.png`;
+        const appEl = appIcon(iconPath, desk.name); // todo 选择窗口
+        appsEl.add(appEl);
+        nowApps.set(appid, { iconEl: appEl, clients: new Set([c]) });
+    }
+    for (const [_id, c] of server.server.clients) {
+        addAppIcon(c);
+        bindC(c);
+    }
+    function checkAndTryRm(id: string) {
+        const app = nowApps.get(id);
+        if (!app) return;
+        if (
+            Array.from(app.clients)
+                .map((i) => i.getWindows().size)
+                .reduce((a, b) => a + b, 0) === 0
+        ) {
+            app.iconEl.remove();
+            nowApps.delete(id);
+        }
+    }
+    function bindC(c: WaylandClient) {
+        c.on("appid", () => {
+            addAppIcon(c);
+        });
+        c.on("close", () => {
+            const appid = c.getAppid();
+            if (!appid) return;
+            const app = nowApps.get(appid);
+            if (app) {
+                app.clients.delete(c);
+                checkAndTryRm(appid);
+            }
+        });
+        c.on("windowClosed", () => {
+            const appid = c.getAppid();
+            if (!appid) return;
+            checkAndTryRm(appid);
+        });
+    }
+    server.server.on("newClient", (c, _id) => {
+        bindC(c);
     });
     return appsEl;
 });
