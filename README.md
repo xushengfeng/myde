@@ -4,7 +4,7 @@
 
 目前在开发中，不能原生启动，仅支持部分软件，性能不行
 
-这个项目再次证明了 web 技术开发的潜力（之前也有人开发了 [term.everything](https://github.com/mmulet/term.everything) 和 [greenfield](https://github.com/udevbe/greenfield)）
+这个项目再次证明了 web 技术开发的潜力（之前也有人开发了 [term.everything](https://github.com/mmulet/term.everything/tree/typescript) 和 [greenfield](https://github.com/udevbe/greenfield)）
 
 前端的美术基础、ux 交互以及造轮子的热情很适合开发桌面窗口管理器，kwin 和 gnome 也或多或少提供了前端开发接口。
 
