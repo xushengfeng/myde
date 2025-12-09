@@ -17,8 +17,19 @@ type Plant = {
     posi: "top" | "left" | "right" | "bottom";
 };
 
+type ToolsItem = {
+    cb: (tipEl: HTMLElement, showA: "left" | "right" | "top" | "bottom") => ElType<HTMLElement>;
+    sizeLimit: {
+        maxW: number;
+        minW: number;
+        maxH: number;
+        minH: number;
+    };
+    selfBackground: boolean; // tool自身是否带背景，否则应为透明
+};
+
 class Tools {
-    tools: Map<string, (tipEl: HTMLElement, showA: "left" | "right" | "top" | "bottom") => ElType<HTMLElement>>;
+    tools: Map<string, ToolsItem>;
     private tipEl: HTMLElement = view().el;
     constructor() {
         this.tools = new Map();
@@ -28,14 +39,24 @@ class Tools {
     }
     registerTool(
         name: string,
-        tool: (tipEl: HTMLElement, showA: "left" | "right" | "top" | "bottom") => ElType<HTMLElement>,
+        tool: ToolsItem["cb"],
+        op?: { selfBackground?: ToolsItem["selfBackground"]; sizeLimit?: Partial<ToolsItem["sizeLimit"]> },
     ) {
-        this.tools.set(name, tool);
+        this.tools.set(name, {
+            cb: tool,
+            selfBackground: op?.selfBackground ?? false,
+            sizeLimit: {
+                minH: op?.sizeLimit?.minH ?? 0,
+                minW: op?.sizeLimit?.minW ?? 0,
+                maxH: op?.sizeLimit?.maxH ?? Infinity,
+                maxW: op?.sizeLimit?.maxW ?? Infinity,
+            },
+        });
     }
     getTool(name: string) {
         const tool = this.tools.get(name);
         if (!tool) return undefined;
-        return { getEl: (showA: "left" | "right" | "top" | "bottom") => tool(this.tipEl, showA) };
+        return { getEl: (showA: "left" | "right" | "top" | "bottom") => tool.cb(this.tipEl, showA) };
     }
 }
 
