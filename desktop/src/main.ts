@@ -835,6 +835,8 @@ tools.registerTool("apps", (_tipEl, a) => {
                 preview.clear().add(
                     allWin.map((x) => {
                         const el = view();
+                        const titleText = x.c.win(x.id)?.getTitle() || "";
+                        el.add(txt(titleText));
                         const canvas = ele("canvas").addInto(el);
                         const win = x.c.win(x.id);
                         if (!win) return undefined;

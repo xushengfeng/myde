@@ -102,6 +102,7 @@ interface WaylandClientEventMap {
     windowMaximized: (xdgToplevelId: WaylandWinId) => void;
     windowUnMaximized: (xdgToplevelId: WaylandWinId) => void;
     appid: (id: string) => void;
+    title: (xdgToplevelId: WaylandWinId, title: string) => void;
     copy: (text: string) => void;
     paste: () => void;
 }
@@ -254,6 +255,7 @@ class WaylandClient {
                     width: number;
                     height: number;
                 };
+                title: string;
             }
         >;
         appid: undefined | string;
@@ -908,6 +910,7 @@ class WaylandClient {
                     width: 0,
                     height: 0,
                 },
+                title: "",
             });
             this.emit("windowCreated", toplevelId, el.el);
         });
@@ -1033,6 +1036,13 @@ class WaylandClient {
             if (!this.obj2.appid) {
                 this.obj2.appid = x.args.app_id;
                 this.emit("appid", x.args.app_id);
+            }
+        });
+        isOp("xdg_toplevel.set_title", (x) => {
+            this.emit("title", x.id, x.args.title);
+            const win = this.obj2.windows.get(x.id);
+            if (win) {
+                win.title = x.args.title;
             }
         });
         isOp("xdg_toplevel.move", (x) => {
@@ -1557,6 +1567,9 @@ class WaylandClient {
                 const rootSurface = this.getObject<"xdg_surface">(rootSurfaceId).data.surface;
                 const cs = this.getObject<"wl_surface">(rootSurface).data.canvas;
                 return cs;
+            },
+            getTitle: () => {
+                return win.title;
             },
         };
         return winObj;
