@@ -6,6 +6,9 @@ import { getEnv } from "./env";
 export function server(op?: { dev?: boolean }) {
     const env = getEnv();
     const server = new WaylandServer({ socketDir: env.XDG_RUNTIME_DIR || "/tmp" });
+    const user = env.USER || "root";
+    const uid = child_process.execSync(`id -u ${user}`).toString().trim();
+    const gid = child_process.execSync(`id -g ${user}`).toString().trim();
     return {
         runApp: (exec: string, xServerNum?: number) => {
             const execParts = exec.trim().split(" ");
@@ -19,6 +22,10 @@ export function server(op?: { dev?: boolean }) {
                 },
                 server: { socketDir: server.socketDir, socketName: server.socketName },
                 xServerNum,
+                user: {
+                    uid: Number.isNaN(Number(uid)) ? undefined : Number(uid),
+                    gid: Number.isNaN(Number(gid)) ? undefined : Number(gid),
+                },
             });
         },
         server,
@@ -40,6 +47,7 @@ export function runApp(
             socketName: string;
         };
         xServerNum?: number;
+        user?: { uid?: number; gid?: number };
     },
 ) {
     console.log(`Running application: ${execPath}`);
@@ -57,6 +65,8 @@ export function runApp(
             ...(Number.isNaN(op.xServerNum) ? {} : { DISPLAY: `:${op.xServerNum}` }),
         },
         cwd: op.deEnv.HOME,
+        uid: op.user?.uid,
+        gid: op.user?.gid,
     });
 
     return subprocess;
