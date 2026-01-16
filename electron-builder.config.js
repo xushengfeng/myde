@@ -119,6 +119,7 @@ const ignoreDir = [
     "**/*.ts",
     "src",
     "docs",
+    "test",
     "node_modules/**/*.flow",
     "node_modules/**/*.md",
     "node_modules/**/**esm**",

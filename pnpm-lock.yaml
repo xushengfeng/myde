@@ -1221,9 +1221,6 @@ packages:
     resolution: {integrity: sha512-NWv9YLW4PoW2B7xtzaS3NCot75m6nK7Icdv0o3lfMceJVRfSoQwqD4wEH5rLwoKJwUiZ/rfpiVBhnaF0FK4HoA==}
     engines: {node: '>= 12'}
 
-  ip@2.0.0:
-    resolution: {integrity: sha512-WKa+XuLG1A1R0UWhl2+1XQSi+fZWMsYKffMZTTYsiZaUD8k2yDAj5atimTUD2TZkyCkNEeYE5NhFZmupOGtjYQ==}
-
   is-ci@3.0.1:
     resolution: {integrity: sha512-ZYvCgrefwqoQ6yTyYUbQu64HsITZ3NfKX1lzaEYdkTDcfKzzCI/wthRRYKkdjHKFVgNiXKAKm65Zo1pk2as/QQ==}
     hasBin: true
@@ -1440,8 +1437,8 @@ packages:
   ms@2.1.2:
     resolution: {integrity: sha512-sGkPx+VjMtmA6MX27oA4FBFELFCZZ4S4XqeGOXCv68tT+jb3vk/RyaKWP0PTKyWtmLSM0b+adUTEvbs1PEaH2w==}
 
-  nan@2.23.0:
-    resolution: {integrity: sha512-1UxuyYGdoQHcGg87Lkqm3FzefucTa0NAiOcuRsDmysep3c1LVCRK2krrUDafMWtjSG04htvAmvg96+SDknOmgQ==}
+  nan@2.24.0:
+    resolution: {integrity: sha512-Vpf9qnVW1RaDkoNKFUvfxqAbtI8ncb8OJlqZ9wwpXzWPEsvsB1nvdUi6oYrHIkQ1Y/tMDnr1h4nczS0VB9Xykg==}
 
   nanoid@3.3.11:
     resolution: {integrity: sha512-N8SpfPUnUp1bK+PMYW8qSWdl9U+wwNWI4QKxOYDy9JAro3WMX7p2OeVRF9v+347pnakNevPmiHhNmZ2HbFA76w==}
@@ -1701,10 +1698,6 @@ packages:
   socks-proxy-agent@8.0.5:
     resolution: {integrity: sha512-HehCEsotFqbPW9sJ8WVYB6UbmIMv7kUUORIF2Nncq4VQvBfNBLibW9YZR5dlYCSUhwcD628pRllm7n+E+YTzJw==}
     engines: {node: '>= 14'}
-
-  socks@2.7.1:
-    resolution: {integrity: sha512-7maUZy1N7uo6+WVEX6psASxtNlKaNVMlGQKkG/63nEDdLOWNbiUMoLK7X4uYoLhQstau72mLgfEWcXcwsaHbYQ==}
-    engines: {node: '>= 10.13.0', npm: '>= 3.0.0'}
 
   socks@2.8.7:
     resolution: {integrity: sha512-HLpt+uLy/pxB+bum/9DzAgiKS8CX1EvbWxI4zlmgGCExImLdiad2iCwXT5Z4c9c3Eq8rP2318mPW2c+QbtjK8A==}
@@ -2157,7 +2150,7 @@ snapshots:
       node-api-version: 0.1.4
       node-gyp: 9.4.0
       ora: 5.4.1
-      semver: 7.5.1
+      semver: 7.7.2
       tar: 6.1.15
       yargs: 17.7.2
     transitivePeerDependencies:
@@ -2348,11 +2341,11 @@ snapshots:
 
   '@npmcli/fs@3.1.0':
     dependencies:
-      semver: 7.5.1
+      semver: 7.7.2
 
   '@npmcli/fs@4.0.0':
     dependencies:
-      semver: 7.5.1
+      semver: 7.7.2
 
   '@pkgjs/parseargs@0.11.0':
     optional: true
@@ -2488,7 +2481,7 @@ snapshots:
     dependencies:
       bindings: 1.5.0
       debug: 4.3.4
-      nan: 2.23.0
+      nan: 2.24.0
       node-gyp: 11.4.2
     transitivePeerDependencies:
       - supports-color
@@ -2569,7 +2562,7 @@ snapshots:
       minimatch: 5.1.6
       read-config-file: 6.3.2
       sanitize-filename: 1.6.3
-      semver: 7.5.1
+      semver: 7.7.2
       tar: 6.1.15
       temp-file: 3.4.0
     transitivePeerDependencies:
@@ -3115,7 +3108,7 @@ snapshots:
       es6-error: 4.1.1
       matcher: 3.0.0
       roarr: 2.15.4
-      semver: 7.5.1
+      semver: 7.7.2
       serialize-error: 7.0.1
     optional: true
 
@@ -3230,8 +3223,6 @@ snapshots:
   ini@5.0.0: {}
 
   ip-address@10.0.1: {}
-
-  ip@2.0.0: {}
 
   is-ci@3.0.1:
     dependencies:
@@ -3450,7 +3441,7 @@ snapshots:
 
   ms@2.1.2: {}
 
-  nan@2.23.0: {}
+  nan@2.24.0: {}
 
   nanoid@3.3.11: {}
 
@@ -3460,7 +3451,7 @@ snapshots:
 
   node-abi@3.45.0:
     dependencies:
-      semver: 7.5.1
+      semver: 7.7.2
 
   node-abi@4.14.0:
     dependencies:
@@ -3471,11 +3462,11 @@ snapshots:
 
   node-api-version@0.1.4:
     dependencies:
-      semver: 7.5.1
+      semver: 7.7.2
 
   node-api-version@0.2.1:
     dependencies:
-      semver: 7.5.1
+      semver: 7.7.2
 
   node-gyp@11.4.2:
     dependencies:
@@ -3485,7 +3476,7 @@ snapshots:
       make-fetch-happen: 14.0.3
       nopt: 8.1.0
       proc-log: 5.0.0
-      semver: 7.5.1
+      semver: 7.7.2
       tar: 7.5.1
       tinyglobby: 0.2.15
       which: 5.0.0
@@ -3502,7 +3493,7 @@ snapshots:
       nopt: 6.0.0
       npmlog: 6.0.2
       rimraf: 3.0.2
-      semver: 7.5.1
+      semver: 7.7.2
       tar: 6.1.15
       which: 2.0.2
     transitivePeerDependencies:
@@ -3737,7 +3728,7 @@ snapshots:
     dependencies:
       agent-base: 6.0.2
       debug: 4.3.4
-      socks: 2.7.1
+      socks: 2.8.7
     transitivePeerDependencies:
       - supports-color
 
@@ -3748,11 +3739,6 @@ snapshots:
       socks: 2.8.7
     transitivePeerDependencies:
       - supports-color
-
-  socks@2.7.1:
-    dependencies:
-      ip: 2.0.0
-      smart-buffer: 4.2.0
 
   socks@2.8.7:
     dependencies:
