@@ -33,7 +33,6 @@ import { getRectKeyPoint } from "../wayland/xdg";
 export { WaylandClient, WaylandServer };
 
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
-type anyObj = any;
 type WaylandObjectId2<t extends WaylandInterfaces> = number & { __brand: "WaylandObjectId"; __interface: t };
 type WaylandObjectId3<t extends string> = number & { __brand: "WaylandObjectId"; __interface: t };
 
@@ -122,7 +121,10 @@ function waylandName(name: number): WaylandName {
     return name as WaylandName;
 }
 
-function waylandObjectId<T extends number | undefined>(id: T): T extends number ? WaylandObjectId2<anyObj> : undefined {
+function waylandObjectId<T extends number | undefined, i extends WaylandInterfaces>(
+    id: T,
+    _interface: i,
+): T extends number ? WaylandObjectId2<i> : undefined {
     if (id === undefined) {
         return undefined as any;
     }
@@ -233,6 +235,7 @@ class WaylandClient {
     readonly id: string;
     private socket: USocket;
     private opa = this.newOp();
+    private displayId = waylandObjectId(1, "wl_display");
     private objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
     private protoVersions: Map<string, number> = new Map();
     private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
@@ -362,18 +365,13 @@ class WaylandClient {
         }
     }
 
-    private getObjectT<T extends WaylandInterfaces>(id: WaylandObjectId): WaylandObjectX<T> {
-        const obj = this.objects.get(id);
-        if (!obj) throw new Error(`Wayland object not found: ${id}`);
-        return obj as WaylandObjectX<T>;
-    }
     private getObject<T extends WaylandInterfaces>(id: WaylandObjectId2<T>): WaylandObjectX<T> {
         const obj = this.objects.get(id);
         if (!obj) throw new Error(`Wayland object not found: ${id}`);
         return obj as WaylandObjectX<T>;
     }
     private getObjectOption<T extends WaylandInterfaces>(
-        id: WaylandObjectId | undefined,
+        id: WaylandObjectId2<T> | undefined,
     ): WaylandObjectX<T> | undefined {
         if (typeof id === "undefined") return undefined;
         const obj = this.objects.get(id);
@@ -394,7 +392,7 @@ class WaylandClient {
 
         isOp("wl_display.sync", (x) => {
             const callbackId = x.args.callback;
-            this.sendMessageImm(waylandObjectId(1), "wl_display.delete_id", { id: callbackId });
+            this.sendMessageImm(this.displayId, "wl_display.delete_id", { id: callbackId });
 
             this.sendMessageX(callbackId, "wl_callback.done", { callback_data: 0 });
         });
@@ -495,7 +493,7 @@ class WaylandClient {
         });
         isOp("wl_surface.attach", (x) => {
             const surface = this.getObject(x.id);
-            const bufferId = waylandObjectId(x.args.buffer) as WaylandObjectId2<"wl_buffer"> | undefined; // todo 自动判断类型
+            const bufferId = waylandObjectId(x.args.buffer, "wl_buffer");
             if (!bufferId) return;
             const buffer = this.getObject(bufferId);
             const imageData = buffer.data.imageData;
@@ -611,7 +609,7 @@ class WaylandClient {
                 surface.data.bufferPointer = surface.data.bufferPointer === 0 ? 1 : 0;
                 const x = surface.data.callback;
                 if (x) {
-                    this.sendMessageImm(waylandObjectId(1), "wl_display.delete_id", {
+                    this.sendMessageImm(this.displayId, "wl_display.delete_id", {
                         id: x,
                     });
                     this.sendMessageImm(x, "wl_callback.done", { callback_data: Date.now() });
@@ -624,7 +622,7 @@ class WaylandClient {
             const surfaceId = x.id;
             const surface = this.getObject(surfaceId);
             surface.data.canvas.remove();
-            const parentSurface = this.getObjectOption<"wl_surface">(surface.data.parentSurface);
+            const parentSurface = this.getObjectOption(surface.data.parentSurface);
             if (parentSurface) {
                 parentSurface.data.children = parentSurface.data.children?.filter((i) => i.id !== surfaceId);
             }
@@ -633,22 +631,22 @@ class WaylandClient {
         isOp("wl_surface.set_input_region", (x) => {
             const surface = this.getObject(x.id);
             console.error("re", x.args);
-            const region = this.getObjectOption<"wl_region">(waylandObjectId(x.args.region));
+            const region = this.getObjectOption(waylandObjectId(x.args.region, "wl_region"));
             surface.data.inputRegion = region?.data.rects;
         });
         isOp("wl_subcompositor.get_subsurface", (x) => {
             const surfaceRelation = this.getObject(x.args.id);
             surfaceRelation.data = {
-                parent: waylandObjectId(x.args.parent),
-                child: waylandObjectId(x.args.surface),
+                parent: waylandObjectId(x.args.parent, "wl_surface"),
+                child: waylandObjectId(x.args.surface, "wl_surface"),
             };
 
-            const parent = this.getObjectT<"wl_surface">(waylandObjectId(x.args.parent));
+            const parent = this.getObject(waylandObjectId(x.args.parent, "wl_surface"));
             const cs = parent.data.children || [];
-            cs.push({ id: waylandObjectId(x.args.surface), posi: { x: 0, y: 0 } });
+            cs.push({ id: waylandObjectId(x.args.surface, "wl_surface"), posi: { x: 0, y: 0 } });
             parent.data.children = cs;
-            const thisChild = this.getObjectT<"wl_surface">(waylandObjectId(x.args.surface));
-            thisChild.data.parentSurface = waylandObjectId(x.args.parent);
+            const thisChild = this.getObject(waylandObjectId(x.args.surface, "wl_surface"));
+            thisChild.data.parentSurface = waylandObjectId(x.args.parent, "wl_surface");
             // todo 渲染el可能需要分离
             // biome-ignore lint/style/noNonNullAssertion: 假装有
             parent.data.canvas.parentElement!.appendChild(thisChild.data.canvas);
@@ -760,13 +758,13 @@ class WaylandClient {
             this.objects.delete(x.id);
         });
         isOp("wl_data_device.set_selection", (x) => {
-            const srcId = waylandObjectId(x.args.source);
+            const srcId = waylandObjectId(x.args.source, "wl_data_source");
             if (!srcId) {
                 console.log("Selection cleared");
                 return;
             }
 
-            const src = this.getObjectT<"wl_data_source">(srcId);
+            const src = this.getObject(srcId);
             if (!src) {
                 console.warn(`Selection source ${srcId} not found`);
                 return;
@@ -839,7 +837,7 @@ class WaylandClient {
 
         isOp("xdg_wm_base.get_xdg_surface", (x) => {
             const xdgSurface = this.getObject(x.args.id);
-            const surfaceId = waylandObjectId(x.args.surface) as WaylandObjectId2<"wl_surface">;
+            const surfaceId = waylandObjectId(x.args.surface, "wl_surface");
             const el = view().style({ position: "relative" });
             xdgSurface.data = { surface: surfaceId, warpEl: el.el };
         });
@@ -951,12 +949,12 @@ class WaylandClient {
             const thisXdgSurface = this.getObject(xid);
             const thisSurfaceId = thisXdgSurface.data.surface;
             const thisSurface = this.getObject(thisSurfaceId);
-            const parentXdgSurfaceId = waylandObjectId(x.args.parent);
+            const parentXdgSurfaceId = waylandObjectId(x.args.parent, "xdg_surface");
             if (!parentXdgSurfaceId) {
                 console.error("No parent for popup");
                 return;
             }
-            const parentXdgSurface = this.getObjectT<"xdg_surface">(parentXdgSurfaceId);
+            const parentXdgSurface = this.getObject(parentXdgSurfaceId);
 
             this.getObject(popupId).data = {
                 xdg_surface: xid,
@@ -974,7 +972,7 @@ class WaylandClient {
                 .style({ position: "absolute" })
                 .add(thisSurface.data.canvas);
 
-            const positioner = this.getObjectT<"xdg_positioner">(waylandObjectId(x.args.positioner));
+            const positioner = this.getObject(waylandObjectId(x.args.positioner, "xdg_positioner"));
             const positionerData = positioner.data;
 
             const anchor = positionerData.anchor;
@@ -1321,7 +1319,7 @@ class WaylandClient {
         });
     }
     private deleteId(id: WaylandObjectId) {
-        this.sendMessageX(waylandObjectId(1), "wl_display.delete_id", { id });
+        this.sendMessageX(this.displayId, "wl_display.delete_id", { id });
         this.objects.delete(id);
     }
 
