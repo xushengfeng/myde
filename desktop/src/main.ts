@@ -421,9 +421,11 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
         for (const [winId, _win] of client.getWindows()) {
             const xwin = client.win(winId);
             if (!xwin) continue;
-            const inWin = xwin.point.inWin(p);
-            if (!inWin) continue;
             const rect = xwin.point.rootWinEl().getBoundingClientRect();
+            const nx = p.x - rect.left;
+            const ny = p.y - rect.top;
+            const inWin = xwin.point.inWin({ x: nx, y: ny });
+            if (!inWin) continue;
             xwin.point.sendPointerEvent(
                 type,
                 new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
@@ -448,7 +450,11 @@ function sendScrollEvent(p: WheelEvent) {
         for (const [winId, _win] of client.getWindows()) {
             const xwin = client.win(winId);
             if (!xwin) continue;
-            const inWin = xwin.point.inWin(p);
+            const rootEl = xwin.point.rootWinEl();
+            const rect = rootEl.getBoundingClientRect();
+            const nx = p.x - rect.left;
+            const ny = p.y - rect.top;
+            const inWin = xwin.point.inWin({ x: nx, y: ny });
             if (!inWin) continue;
             xwin.point.sendScrollEvent({
                 p: p,

@@ -1384,9 +1384,9 @@ class WaylandClient {
                 inWin: (p: { x: number; y: number }) => {
                     const rootSurfaceId = win.xdg_surface;
                     const rootSurface = this.getObject<"xdg_surface">(rootSurfaceId);
-                    const rect = rootSurface.data.warpEl.getBoundingClientRect(); // todo 缓存
+                    const rel = rootSurface.data.warpEl;
                     // todo popup
-                    if (p.x < rect.left || p.x >= rect.right || p.y < rect.top || p.y >= rect.bottom) return false;
+                    if (p.x < 0 || p.x >= rel.offsetWidth || p.y < 0 || p.y >= rel.offsetHeight) return false;
                     return true; // todo
                 },
                 updatePointerFocus: (p: { x: number; y: number }) => {
