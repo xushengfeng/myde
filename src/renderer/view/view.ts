@@ -47,7 +47,7 @@ type WaylandData = {
         bufferPointer: 0 | 1;
         damageList?: { x: number; y: number; width: number; height: number }[];
         damageBufferList?: { x: number; y: number; width: number; height: number }[];
-        callback?: WaylandObjectId;
+        callback?: WaylandObjectId2<"wl_callback">;
         children?: {
             id: WaylandObjectId2<"wl_surface">;
             posi: {
@@ -99,7 +99,7 @@ interface WaylandServerEventMap {
     clientClose: (client: WaylandClient, clientId: string) => void;
 }
 
-export type WaylandWinId = WaylandObjectId;
+export type WaylandWinId = WaylandObjectId2<"xdg_toplevel">;
 interface WaylandClientEventMap {
     close: () => void;
     windowCreated: (xdgToplevelId: WaylandWinId, el: HTMLElement) => void;
@@ -238,16 +238,16 @@ class WaylandClient {
     private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
     private nextObjectId: number = 0xff000000;
     private obj2: Partial<{
-        pointer: WaylandObjectId;
-        keyboard: WaylandObjectId;
+        pointer: WaylandObjectId2<"wl_pointer">;
+        keyboard: WaylandObjectId2<"wl_keyboard">;
         focusSurface: WaylandObjectId | null;
         focusSurfaceType: "main" | "popup" | null;
         textInputV1: {
             focus: WaylandObjectId | null;
-            m: Map<WaylandObjectId, { focus: boolean; serial: number }>;
+            m: Map<WaylandObjectId2<"zwp_text_input_v1">, { focus: boolean; serial: number }>;
         };
         serial: number;
-        dataDevices: Set<WaylandObjectId>;
+        dataDevices: Set<WaylandObjectId2<"wl_data_device">>;
         pendingPaste: { offerId: WaylandObjectId; fd: number; mime: string; timeout: NodeJS.Timeout };
         modifiers: Set<number>;
     }> & {
@@ -410,19 +410,20 @@ class WaylandClient {
         });
         isOp("wl_registry.bind", (x) => {
             const name = x.args.name as WaylandName;
-            const id = x.args.id;
+            const _id = x.args.id;
             const proto = waylandProtocolsNameMap.get(name);
             if (!proto) {
                 console.warn(`Unknown global name: ${name}`);
                 return;
             }
-            this.objects.set(id, { protocol: proto, data: undefined });
+            this.objects.set(_id, { protocol: proto, data: undefined });
             this.protoVersions.set(proto.name, x.args._version);
-            console.log(`Client ${this.id} bound ${proto.name} to id ${id}`);
+            console.log(`Client ${this.id} bound ${proto.name} to id ${_id}`);
 
             // todo 添加自定义
 
             if (proto.name === "wl_shm") {
+                const id = _id as WaylandObjectId2<"wl_shm">;
                 this.sendMessageX(id, "wl_shm.format", {
                     format: getEnumValue("wl_shm.format", "argb8888"),
                 });
@@ -431,12 +432,14 @@ class WaylandClient {
                 });
             }
             if (proto.name === "wl_seat") {
+                const id = _id as WaylandObjectId2<"wl_seat">;
                 this.sendMessageX(id, "wl_seat.name", { name: "seat0" });
                 this.sendMessageX(id, "wl_seat.capabilities", {
                     capabilities: getEnumValue("wl_seat.capability", ["pointer", "keyboard"]),
                 });
             }
             if (proto.name === "wl_output") {
+                const id = _id as WaylandObjectId2<"wl_output">;
                 this.sendMessageX(id, "wl_output.name", { name: "output0" });
                 this.sendMessageX(id, "wl_output.description", { description: "Output 0" });
                 this.sendMessageX(id, "wl_output.mode", {
@@ -555,7 +558,9 @@ class WaylandClient {
                     // }
                     for (const [id, p] of this.objects) {
                         if (p.protocol.name === "xdg_surface") {
-                            this.sendMessageX(id, "xdg_surface.configure", { serial: 1 });
+                            this.sendMessageX(id as WaylandObjectId2<"xdg_surface">, "xdg_surface.configure", {
+                                serial: 1,
+                            });
                         }
                     }
                 }
@@ -708,7 +713,7 @@ class WaylandClient {
         });
         isOp("wl_data_device_manager.get_data_device", (x) => {
             const ddId = x.args.id;
-            const dataDevices = this.obj2.dataDevices || new Set<WaylandObjectId>();
+            const dataDevices = this.obj2.dataDevices || new Set();
             dataDevices.add(ddId);
             this.obj2.dataDevices = dataDevices;
         });
@@ -932,7 +937,12 @@ class WaylandClient {
                 height: `${x.args.height}px`,
             });
             if (thisXdgSurface.data.xdg_role) {
-                this.emit("windowResized", thisXdgSurface.data.xdg_role, x.args.width, x.args.height);
+                this.emit(
+                    "windowResized",
+                    thisXdgSurface.data.xdg_role as WaylandObjectId2<"xdg_toplevel">, // todo check
+                    x.args.width,
+                    x.args.height,
+                );
             }
         });
         isOp("xdg_surface.get_popup", (x) => {
@@ -954,9 +964,7 @@ class WaylandClient {
             };
             thisXdgSurface.data.xdg_role = popupId;
             // todo 错误处理
-            // @ts-ignore 等待新的数据结构
-            // biome-ignore lint/style/noNonNullAssertion: 先不管
-            const win = this.obj2.windows.get(parentXdgSurface.data.xdg_role!);
+            const win = this.obj2.windows.get(parentXdgSurface.data.xdg_role as WaylandObjectId2<"xdg_toplevel">); // todo check
             if (win) {
                 win.popups.add(popupId);
             } else {
@@ -1069,7 +1077,7 @@ class WaylandClient {
             const xdgSurfaceId = this.getObject(x.id).data.xdg_surface;
             this.obj2.windows.delete(x.id);
             this.deleteId(x.id);
-            this.emit("windowClosed", xdgSurfaceId, this.getObject(xdgSurfaceId).data.warpEl);
+            this.emit("windowClosed", x.id, this.getObject(xdgSurfaceId).data.warpEl);
         });
 
         isOp("zwp_linux_dmabuf_v1.get_surface_feedback", (x) => {
@@ -1225,14 +1233,18 @@ class WaylandClient {
             this.sendMessageImm(ddId, "wl_data_device.selection", { id: dataOfferId });
         }
     }
-    private sendMessageImm<T extends keyof WaylandEventObj>(
-        objectId: WaylandObjectId,
+    private sendMessageImm<i extends WaylandInterfaces, T extends keyof WaylandEventObj & `${i}.${string}`>(
+        objectId: WaylandObjectId2<i>,
         op: T,
         args: WaylandEventObj[T],
     ) {
         this.sendMessage(objectId, WaylandEventOpcode[op.replace(".", "__")], args);
     }
-    private sendMessageX<T extends keyof WaylandEventObj>(objectId: WaylandObjectId, op: T, args: WaylandEventObj[T]) {
+    private sendMessageX<i extends WaylandInterfaces, T extends keyof WaylandEventObj & `${i}.${string}`>(
+        objectId: WaylandObjectId2<i>,
+        op: T,
+        args: WaylandEventObj[T],
+    ) {
         this.toSend.push({ objectId, opcode: WaylandEventOpcode[op.replace(".", "__")], args });
     }
     private sendMessage(objectId: WaylandObjectId, opcode: number, args: Record<string, any>) {
@@ -1323,7 +1335,7 @@ class WaylandClient {
         >;
     }
     private configureWin(
-        winid: WaylandObjectId,
+        winid: WaylandObjectId2<"xdg_toplevel">,
         win: typeof this.obj2.windows extends Map<infer _K, infer V> ? V : never,
     ) {
         const s: number[] = [];
@@ -1336,7 +1348,7 @@ class WaylandClient {
         this.sendMessageImm(win.xdg_surface, "xdg_surface.configure", { serial: 1 });
     }
     win(id: WaylandWinId) {
-        const win = this.obj2.windows.get(id as WaylandObjectId2<"xdg_toplevel">);
+        const win = this.obj2.windows.get(id);
         if (win === undefined) return undefined;
         const winObj = {
             setWinBoxData: (box: { width: number; height: number }) => {

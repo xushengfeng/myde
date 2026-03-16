@@ -518,7 +518,7 @@ export type WaylandRequestObj = {
         /** unique numeric name of the object*/
         name: number;
         /** bounded object*/
-        id: WaylandObjectId2<"undefined">;
+        id: WaylandObjectId2<string>;
     };
     "wl_compositor.create_surface": {
         /** the new surface*/

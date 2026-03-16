@@ -210,7 +210,9 @@ function argsMap(
         .map(
             (arg) =>
                 `${arg.summary ? `        /** ${arg.summary}*/\n` : ""}        ${arg.name}${arg.allowNull ? "?" : ""}: ${
-                    arg.type === "new_id" ? `${map[arg.type]}<"${arg.interface}">` : map[arg.type] || "any"
+                    arg.type === "new_id"
+                        ? `${map[arg.type]}<${arg.interface ? `"${arg.interface}"` : "string"}>`
+                        : map[arg.type] || "any"
                 };`,
         )
         .join("\n");
