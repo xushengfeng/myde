@@ -173,6 +173,12 @@ waylandTypeLines.push('import type { WaylandObjectId } from "./wayland-binary";'
 waylandTypeLines.push("type WaylandObjectId2<T extends string> = WaylandObjectId & { __interface: T };");
 waylandTypeLines.push("");
 
+waylandTypeLines.push(
+    `export type WaylandInterfaces = ${supportedProtocols.flatMap((i) => i.interfaces.map((x) => x.name).map((i) => `"${i}"`)).join(" | ")};`,
+);
+
+waylandTypeLines.push("");
+
 waylandTypeLines.push("export enum WaylandEventOpcode {");
 for (const protos of Object.values(allResults)) {
     for (const proto of protos) {

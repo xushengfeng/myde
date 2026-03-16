@@ -16,6 +16,7 @@ import {
     type WaylandEnumObj,
     type WaylandEventObj,
     WaylandEventOpcode,
+    type WaylandInterfaces,
     type WaylandRequestObj,
 } from "../wayland/wayland-types";
 import { WaylandDecoder } from "../wayland/wayland-decoder";
@@ -33,7 +34,7 @@ export { WaylandClient, WaylandServer };
 
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
 type anyObj = any;
-type WaylandObjectId2<t extends keyof WaylandData> = number & { __brand: "WaylandObjectId"; __interface: t };
+type WaylandObjectId2<t extends WaylandInterfaces> = number & { __brand: "WaylandObjectId"; __interface: t };
 type WaylandObjectId3<t extends string> = number & { __brand: "WaylandObjectId"; __interface: t };
 
 type WaylandData = {
@@ -88,7 +89,10 @@ type WaylandData = {
     wl_data_source: { offers: string[] };
 };
 
-type WaylandObjectX<T extends keyof WaylandData> = { protocol: WaylandProtocol; data: WaylandData[T] };
+type WaylandObjectX<T extends WaylandInterfaces> = {
+    protocol: WaylandProtocol;
+    data: T extends keyof WaylandData ? WaylandData[T] : never;
+};
 
 interface WaylandServerEventMap {
     newClient: (client: WaylandClient, clientId: string) => void;
@@ -358,17 +362,17 @@ class WaylandClient {
         }
     }
 
-    private getObjectT<T extends keyof WaylandData>(id: WaylandObjectId): WaylandObjectX<T> {
+    private getObjectT<T extends WaylandInterfaces>(id: WaylandObjectId): WaylandObjectX<T> {
         const obj = this.objects.get(id);
         if (!obj) throw new Error(`Wayland object not found: ${id}`);
         return obj as WaylandObjectX<T>;
     }
-    private getObject<T extends keyof WaylandData>(id: WaylandObjectId2<T>): WaylandObjectX<T> {
+    private getObject<T extends WaylandInterfaces>(id: WaylandObjectId2<T>): WaylandObjectX<T> {
         const obj = this.objects.get(id);
         if (!obj) throw new Error(`Wayland object not found: ${id}`);
         return obj as WaylandObjectX<T>;
     }
-    private getObjectOption<T extends keyof WaylandData>(
+    private getObjectOption<T extends WaylandInterfaces>(
         id: WaylandObjectId | undefined,
     ): WaylandObjectX<T> | undefined {
         if (typeof id === "undefined") return undefined;
@@ -382,7 +386,6 @@ class WaylandClient {
         type ExtractInterface<T extends string> = T extends `${infer I}.${string}` ? I : never;
         function isOp<T extends keyof WaylandRequestObj>(
             op: T,
-            // @ts-expect-error 强制给wyid添加类型
             f: (x: ParsedMessage & { args: WaylandRequestObj[T]; id: WaylandObjectId2<ExtractInterface<T>> }) => void,
         ) {
             // @ts-expect-error
@@ -884,8 +887,8 @@ class WaylandClient {
             this.deleteId(x.id);
         });
         isOp("xdg_surface.get_toplevel", (x) => {
-            const xid = x.id as WaylandObjectId2<"xdg_surface">;
-            const toplevelId = x.args.id as WaylandObjectId2<"xdg_toplevel">;
+            const xid = x.id;
+            const toplevelId = x.args.id;
             this.sendMessageImm(toplevelId, "xdg_toplevel.wm_capabilities", {
                 capabilities: [
                     getEnumValue("xdg_toplevel.wm_capabilities", "minimize"),
@@ -933,8 +936,8 @@ class WaylandClient {
             }
         });
         isOp("xdg_surface.get_popup", (x) => {
-            const xid = x.id as WaylandObjectId2<"xdg_surface">;
-            const popupId = x.args.id as WaylandObjectId2<"xdg_popup">;
+            const xid = x.id;
+            const popupId = x.args.id;
             const thisXdgSurface = this.getObject(xid);
             const thisSurfaceId = thisXdgSurface.data.surface;
             const thisSurface = this.getObject(thisSurfaceId);
@@ -1026,7 +1029,7 @@ class WaylandClient {
             this.deleteId(x.id);
         });
         isOp("xdg_popup.destroy", (x) => {
-            const xid = x.id as WaylandObjectId2<"xdg_popup">;
+            const xid = x.id;
             const xdgSurfaceId = this.getObject(xid).data.xdg_surface;
             this.getObject(xdgSurfaceId).data.warpEl.remove(); // todo 可以外部处理
             for (const s of this.obj2.windows.values()) {
@@ -1047,7 +1050,7 @@ class WaylandClient {
         });
         isOp("xdg_toplevel.set_title", (x) => {
             this.emit("title", x.id, x.args.title);
-            const win = this.obj2.windows.get(x.id as WaylandObjectId2<"xdg_toplevel">);
+            const win = this.obj2.windows.get(x.id);
             if (win) {
                 win.title = x.args.title;
             }
