@@ -1,5 +1,6 @@
 // 自动生成，勿手动编辑
 import type { WaylandObjectId } from "./wayland-binary";
+type WaylandObjectId2<T extends string> = WaylandObjectId & { __interface: T };
 
 export enum WaylandEventOpcode {
     wl_display__error = 0,
@@ -135,7 +136,7 @@ export type WaylandEventObj = {
         dnd_action: number;
     };
     "wl_data_device.data_offer": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"wl_data_offer">;
     };
     "wl_data_device.enter": {
         serial: number;
@@ -313,7 +314,7 @@ export type WaylandEventObj = {
         modifier_lo: number;
     };
     "zwp_linux_buffer_params_v1.created": {
-        buffer: WaylandObjectId;
+        buffer: WaylandObjectId2<"wl_buffer">;
     };
     "zwp_linux_buffer_params_v1.failed": {};
     "zwp_linux_dmabuf_feedback_v1.done": {};
@@ -388,23 +389,23 @@ export type WaylandEventObj = {
 
 export type WaylandRequestObj = {
     "wl_display.sync": {
-        callback: WaylandObjectId;
+        callback: WaylandObjectId2<"wl_callback">;
     };
     "wl_display.get_registry": {
-        registry: WaylandObjectId;
+        registry: WaylandObjectId2<"wl_registry">;
     };
     "wl_registry.bind": {
         name: number;
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"undefined">;
     };
     "wl_compositor.create_surface": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"wl_surface">;
     };
     "wl_compositor.create_region": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"wl_region">;
     };
     "wl_shm_pool.create_buffer": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"wl_buffer">;
         offset: number;
         width: number;
         height: number;
@@ -416,7 +417,7 @@ export type WaylandRequestObj = {
         size: number;
     };
     "wl_shm.create_pool": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"wl_shm_pool">;
         fd: number;
         size: number;
     };
@@ -455,10 +456,10 @@ export type WaylandRequestObj = {
     };
     "wl_data_device.release": {};
     "wl_data_device_manager.create_data_source": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"wl_data_source">;
     };
     "wl_data_device_manager.get_data_device": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"wl_data_device">;
         seat: number;
     };
     "wl_surface.destroy": {};
@@ -474,7 +475,7 @@ export type WaylandRequestObj = {
         height: number;
     };
     "wl_surface.frame": {
-        callback: WaylandObjectId;
+        callback: WaylandObjectId2<"wl_callback">;
     };
     "wl_surface.set_opaque_region": {
         region?: number;
@@ -500,13 +501,13 @@ export type WaylandRequestObj = {
         y: number;
     };
     "wl_seat.get_pointer": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"wl_pointer">;
     };
     "wl_seat.get_keyboard": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"wl_keyboard">;
     };
     "wl_seat.get_touch": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"wl_touch">;
     };
     "wl_seat.release": {};
     "wl_pointer.set_cursor": {
@@ -533,7 +534,7 @@ export type WaylandRequestObj = {
     };
     "wl_subcompositor.destroy": {};
     "wl_subcompositor.get_subsurface": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"wl_subsurface">;
         surface: number;
         parent: number;
     };
@@ -552,10 +553,10 @@ export type WaylandRequestObj = {
     "wl_subsurface.set_desync": {};
     "xdg_wm_base.destroy": {};
     "xdg_wm_base.create_positioner": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"xdg_positioner">;
     };
     "xdg_wm_base.get_xdg_surface": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"xdg_surface">;
         surface: number;
     };
     "xdg_wm_base.pong": {
@@ -595,10 +596,10 @@ export type WaylandRequestObj = {
     };
     "xdg_surface.destroy": {};
     "xdg_surface.get_toplevel": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"xdg_toplevel">;
     };
     "xdg_surface.get_popup": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"xdg_popup">;
         parent?: number;
         positioner: number;
     };
@@ -662,7 +663,7 @@ export type WaylandRequestObj = {
     };
     "wp_viewporter.destroy": {};
     "wp_viewporter.get_viewport": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"wp_viewport">;
         surface: number;
     };
     "wp_viewport.destroy": {};
@@ -678,13 +679,13 @@ export type WaylandRequestObj = {
     };
     "zwp_linux_dmabuf_v1.destroy": {};
     "zwp_linux_dmabuf_v1.create_params": {
-        params_id: WaylandObjectId;
+        params_id: WaylandObjectId2<"zwp_linux_buffer_params_v1">;
     };
     "zwp_linux_dmabuf_v1.get_default_feedback": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"zwp_linux_dmabuf_feedback_v1">;
     };
     "zwp_linux_dmabuf_v1.get_surface_feedback": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"zwp_linux_dmabuf_feedback_v1">;
         surface: number;
     };
     "zwp_linux_buffer_params_v1.destroy": {};
@@ -703,7 +704,7 @@ export type WaylandRequestObj = {
         flags: number;
     };
     "zwp_linux_buffer_params_v1.create_immed": {
-        buffer_id: WaylandObjectId;
+        buffer_id: WaylandObjectId2<"wl_buffer">;
         width: number;
         height: number;
         format: number;
@@ -746,7 +747,7 @@ export type WaylandRequestObj = {
         index: number;
     };
     "zwp_text_input_manager_v1.create_text_input": {
-        id: WaylandObjectId;
+        id: WaylandObjectId2<"zwp_text_input_v1">;
     };
 };
 

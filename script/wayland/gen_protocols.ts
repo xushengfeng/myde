@@ -168,7 +168,9 @@ console.log(`已生成协议文件: ${outputPath}`);
 const waylandTypeLines: string[] = [];
 waylandTypeLines.push("// 自动生成，勿手动编辑");
 waylandTypeLines.push('import type { WaylandObjectId } from "./wayland-binary";');
+waylandTypeLines.push("type WaylandObjectId2<T extends string> = WaylandObjectId & { __interface: T };");
 waylandTypeLines.push("");
+
 waylandTypeLines.push("export enum WaylandEventOpcode {");
 for (const protos of Object.values(allResults)) {
     for (const proto of protos) {
@@ -199,10 +201,15 @@ for (const protos of Object.values(allResults)) {
                 fixed: "number",
                 fd: "number",
                 object: "number",
-                new_id: "WaylandObjectId",
+                new_id: "WaylandObjectId2",
             };
             const fields = evt.args
-                .map((arg) => `        ${arg.name}${arg.allowNull ? "?" : ""}: ${map[arg.type] || "any"};`)
+                .map(
+                    (arg) =>
+                        `        ${arg.name}${arg.allowNull ? "?" : ""}: ${
+                            arg.type === "new_id" ? `${map[arg.type]}<"${arg.interface}">` : map[arg.type] || "any"
+                        };`,
+                )
                 .join("\n");
             waylandTypeLines.push(`    ${key}: {\n${fields}\n    };`);
         }
@@ -229,10 +236,15 @@ for (const protos of Object.values(allResults)) {
                 fixed: "number",
                 fd: "number",
                 object: "number",
-                new_id: "WaylandObjectId",
+                new_id: "WaylandObjectId2",
             };
             const fields = req.args
-                .map((arg) => `        ${arg.name}${arg.allowNull ? "?" : ""}: ${map[arg.type] || "any"};`)
+                .map(
+                    (arg) =>
+                        `        ${arg.name}${arg.allowNull ? "?" : ""}: ${
+                            arg.type === "new_id" ? `${map[arg.type]}<"${arg.interface}">` : map[arg.type] || "any"
+                        };`,
+                )
                 .join("\n");
             waylandTypeLines.push(`    ${key}: {\n${fields}\n    };`);
         }

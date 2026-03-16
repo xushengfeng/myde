@@ -32,40 +32,43 @@ import { getRectKeyPoint } from "../wayland/xdg";
 export { WaylandClient, WaylandServer };
 
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
+type anyObj = any;
+type WaylandObjectId2<t extends keyof WaylandData> = number & { __brand: "WaylandObjectId"; __interface: t };
+type WaylandObjectId3<t extends string> = number & { __brand: "WaylandObjectId"; __interface: t };
 
 type WaylandData = {
     wl_shm_pool: { fd: number };
     wl_surface: {
         canvas: HTMLCanvasElement;
-        buffer?: { id: WaylandObjectId; data: ImageData };
-        buffer2?: { id: WaylandObjectId; data: ImageData };
+        buffer?: { id: WaylandObjectId2<"wl_buffer">; data: ImageData };
+        buffer2?: { id: WaylandObjectId2<"wl_buffer">; data: ImageData };
         // 双缓冲，不过没有实际作用，只是为了日志对齐，方便调试
         bufferPointer: 0 | 1;
         damageList?: { x: number; y: number; width: number; height: number }[];
         damageBufferList?: { x: number; y: number; width: number; height: number }[];
         callback?: WaylandObjectId;
         children?: {
-            id: WaylandObjectId; // wl_surface
+            id: WaylandObjectId2<"wl_surface">;
             posi: {
                 x: number;
                 y: number;
             };
         }[]; // 索引大的在上面
-        parentSurface?: WaylandObjectId;
+        parentSurface?: WaylandObjectId2<"wl_surface">;
         inputRegion?: WaylandData["wl_region"]["rects"];
     };
     wl_subsurface: {
-        parent: WaylandObjectId; // wl_surface
-        child: WaylandObjectId; // wl_surface
+        parent: WaylandObjectId2<"wl_surface">;
+        child: WaylandObjectId2<"wl_surface">;
     };
     wl_buffer: { fd: number; start: number; end: number; imageData: ImageData };
     wl_region: {
         rects: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
     };
     xdg_surface: {
-        surface: WaylandObjectId; // wl_surface
+        surface: WaylandObjectId2<"wl_surface">;
         warpEl: HTMLElement;
-        xdg_role?: WaylandObjectId;
+        xdg_role?: WaylandObjectId2<"xdg_toplevel" | "xdg_popup">;
     };
     xdg_positioner: {
         size: { width: number; height: number };
@@ -78,10 +81,10 @@ type WaylandData = {
         parent_size: { parent_width: number; parent_height: number };
     };
     xdg_popup: {
-        xdg_surface: WaylandObjectId;
-        parent_xdg_surface: WaylandObjectId;
+        xdg_surface: WaylandObjectId2<"xdg_surface">;
+        parent_xdg_surface: WaylandObjectId2<"xdg_surface">;
     };
-    xdg_toplevel: { xdg_surface: WaylandObjectId };
+    xdg_toplevel: { xdg_surface: WaylandObjectId2<"xdg_surface"> };
     wl_data_source: { offers: string[] };
 };
 
@@ -115,7 +118,7 @@ function waylandName(name: number): WaylandName {
     return name as WaylandName;
 }
 
-function waylandObjectId<T extends number | undefined>(id: T): T extends number ? WaylandObjectId : undefined {
+function waylandObjectId<T extends number | undefined>(id: T): T extends number ? WaylandObjectId2<anyObj> : undefined {
     if (id === undefined) {
         return undefined as any;
     }
@@ -214,7 +217,6 @@ class WaylandServer {
         return protocol in WaylandProtocols;
     }
 }
-
 class WaylandClient {
     logConfig = {
         receive: true,
@@ -246,10 +248,10 @@ class WaylandClient {
         modifiers: Set<number>;
     }> & {
         windows: Map<
-            WaylandObjectId, // xdg_toplevel id
+            WaylandObjectId2<"xdg_toplevel">,
             {
-                xdg_surface: WaylandObjectId;
-                popups: Set<WaylandObjectId>; // xdg_popup id
+                xdg_surface: WaylandObjectId2<"xdg_surface">;
+                popups: Set<WaylandObjectId2<"xdg_popup">>;
                 actived: boolean;
                 box: {
                     width: number;
@@ -356,7 +358,12 @@ class WaylandClient {
         }
     }
 
-    private getObject<T extends keyof WaylandData>(id: WaylandObjectId): WaylandObjectX<T> {
+    private getObjectT<T extends keyof WaylandData>(id: WaylandObjectId): WaylandObjectX<T> {
+        const obj = this.objects.get(id);
+        if (!obj) throw new Error(`Wayland object not found: ${id}`);
+        return obj as WaylandObjectX<T>;
+    }
+    private getObject<T extends keyof WaylandData>(id: WaylandObjectId2<T>): WaylandObjectX<T> {
         const obj = this.objects.get(id);
         if (!obj) throw new Error(`Wayland object not found: ${id}`);
         return obj as WaylandObjectX<T>;
@@ -372,11 +379,13 @@ class WaylandClient {
 
     private newOp() {
         const m = new Map<string, (x: ParsedMessage & { args: any }) => void>();
-
+        type ExtractInterface<T extends string> = T extends `${infer I}.${string}` ? I : never;
         function isOp<T extends keyof WaylandRequestObj>(
             op: T,
-            f: (x: ParsedMessage & { args: WaylandRequestObj[T] }) => void,
+            // @ts-expect-error 强制给wyid添加类型
+            f: (x: ParsedMessage & { args: WaylandRequestObj[T]; id: WaylandObjectId2<ExtractInterface<T>> }) => void,
         ) {
+            // @ts-expect-error
             m.set(op, f);
         }
 
@@ -448,11 +457,11 @@ class WaylandClient {
         });
         isOp("wl_shm.create_pool", (x) => {
             const fd = x.args.fd;
-            this.getObject<"wl_shm_pool">(x.args.id).data = { fd };
+            this.getObject(x.args.id).data = { fd };
         });
         isOp("wl_compositor.create_surface", (x) => {
             const surfaceId = x.args.id;
-            const surface = this.getObject<"wl_surface">(surfaceId);
+            const surface = this.getObject(surfaceId);
             const canvasEl = ele("canvas");
             canvasEl.data({ id: String(surfaceId) });
             const canvas = canvasEl.el;
@@ -461,14 +470,12 @@ class WaylandClient {
             surface.data = { canvas, bufferPointer: 0 };
         });
         isOp("wl_compositor.create_region", (x) => {
-            const regionId = x.args.id;
-            const region = this.getObject<"wl_region">(regionId);
+            const region = this.getObject(x.args.id);
             region.data = { rects: [] };
         });
         isOp("wl_shm_pool.create_buffer", (x) => {
-            const thisObj = this.getObject<"wl_shm_pool">(x.id);
-            const bufferId = x.args.id;
-            const buffer = this.getObject<"wl_buffer">(bufferId);
+            const thisObj = this.getObject(x.id);
+            const buffer = this.getObject(x.args.id);
             const imageData = new ImageData(x.args.width, x.args.height);
             buffer.data = {
                 fd: thisObj.data.fd,
@@ -481,18 +488,16 @@ class WaylandClient {
             this.deleteId(x.id);
         });
         isOp("wl_surface.attach", (x) => {
-            const surfaceId = x.id;
-            const surface = this.getObject<"wl_surface">(surfaceId);
-            const bufferId = waylandObjectId(x.args.buffer);
+            const surface = this.getObject(x.id);
+            const bufferId = waylandObjectId(x.args.buffer) as WaylandObjectId2<"wl_buffer"> | undefined; // todo 自动判断类型
             if (!bufferId) return;
-            const buffer = this.getObject<"wl_buffer">(bufferId);
+            const buffer = this.getObject(bufferId);
             const imageData = buffer.data.imageData;
             if (surface.data.bufferPointer === 0) surface.data.buffer = { id: bufferId, data: imageData };
             else surface.data.buffer2 = { id: bufferId, data: imageData };
         });
         isOp("wl_surface.damage", (x) => {
-            const surfaceId = x.id;
-            const surface = this.getObject<"wl_surface">(surfaceId);
+            const surface = this.getObject(x.id);
             const damageList = surface.data.damageList || [];
             damageList.push({
                 x: x.args.x,
@@ -503,8 +508,7 @@ class WaylandClient {
             surface.data.damageList = damageList;
         });
         isOp("wl_surface.damage_buffer", (x) => {
-            const surfaceId = x.id;
-            const surface = this.getObject<"wl_surface">(surfaceId);
+            const surface = this.getObject(x.id);
             const damageBufferList = surface.data.damageBufferList || [];
             damageBufferList.push({
                 x: x.args.x,
@@ -516,12 +520,12 @@ class WaylandClient {
         });
         isOp("wl_surface.frame", (x) => {
             const callbackId = x.args.callback;
-            const surface = this.getObject<"wl_surface">(x.id);
+            const surface = this.getObject(x.id);
             surface.data.callback = callbackId;
         });
         isOp("wl_surface.commit", (x) => {
             const surfaceId = x.id;
-            const surface = this.getObject<"wl_surface">(surfaceId);
+            const surface = this.getObject(surfaceId);
             const canvas = surface.data.canvas;
             // biome-ignore lint/style/noNonNullAssertion: 忽略小概率
             const ctx = canvas.getContext("2d")!;
@@ -553,7 +557,7 @@ class WaylandClient {
                     }
                 }
 
-                const bufferX = this.getObject<"wl_buffer">(buffer.id);
+                const bufferX = this.getObject(buffer.id);
                 const buffern = new Uint8ClampedArray(bufferX.data.end - bufferX.data.start);
                 try {
                     fs.readSync(bufferX.data.fd, buffern, bufferX.data.start, buffern.length, 0);
@@ -610,7 +614,7 @@ class WaylandClient {
         });
         isOp("wl_surface.destroy", (x) => {
             const surfaceId = x.id;
-            const surface = this.getObject<"wl_surface">(surfaceId);
+            const surface = this.getObject(surfaceId);
             surface.data.canvas.remove();
             const parentSurface = this.getObjectOption<"wl_surface">(surface.data.parentSurface);
             if (parentSurface) {
@@ -619,23 +623,23 @@ class WaylandClient {
             this.deleteId(surfaceId);
         });
         isOp("wl_surface.set_input_region", (x) => {
-            const surface = this.getObject<"wl_surface">(x.id);
+            const surface = this.getObject(x.id);
             console.error("re", x.args);
             const region = this.getObjectOption<"wl_region">(waylandObjectId(x.args.region));
             surface.data.inputRegion = region?.data.rects;
         });
         isOp("wl_subcompositor.get_subsurface", (x) => {
-            const surfaceRelation = this.getObject<"wl_subsurface">(x.args.id);
+            const surfaceRelation = this.getObject(x.args.id);
             surfaceRelation.data = {
                 parent: waylandObjectId(x.args.parent),
                 child: waylandObjectId(x.args.surface),
             };
 
-            const parent = this.getObject<"wl_surface">(waylandObjectId(x.args.parent));
+            const parent = this.getObjectT<"wl_surface">(waylandObjectId(x.args.parent));
             const cs = parent.data.children || [];
             cs.push({ id: waylandObjectId(x.args.surface), posi: { x: 0, y: 0 } });
             parent.data.children = cs;
-            const thisChild = this.getObject<"wl_surface">(waylandObjectId(x.args.surface));
+            const thisChild = this.getObjectT<"wl_surface">(waylandObjectId(x.args.surface));
             thisChild.data.parentSurface = waylandObjectId(x.args.parent);
             // todo 渲染el可能需要分离
             // biome-ignore lint/style/noNonNullAssertion: 假装有
@@ -645,8 +649,8 @@ class WaylandClient {
             parent.data.canvas.style.anchorName = `--${x.args.parent}`;
         });
         isOp("wl_subsurface.set_position", (x) => {
-            const thisData = this.getObject<"wl_subsurface">(x.id);
-            const parent = this.getObject<"wl_surface">(thisData.data.parent);
+            const thisData = this.getObject(x.id);
+            const parent = this.getObject(thisData.data.parent);
             const cs = parent.data.children;
             if (!cs) {
                 console.error("No children found");
@@ -658,7 +662,7 @@ class WaylandClient {
                 return;
             }
             child.posi = { x: x.args.x, y: x.args.y };
-            const thisChild = this.getObject<"wl_surface">(thisData.data.child);
+            const thisChild = this.getObject(thisData.data.child);
             thisChild.data.canvas.style.left = `calc(anchor(--${thisData.data.parent} left) + ${x.args.x}px)`;
             thisChild.data.canvas.style.top = `calc(anchor(--${thisData.data.parent} top) + ${x.args.y}px)`;
         });
@@ -685,19 +689,18 @@ class WaylandClient {
             });
         });
         isOp("wl_region.add", (x) => {
-            const region = this.getObject<"wl_region">(x.id);
+            const region = this.getObject(x.id);
             region.data.rects.push({ ...x.args, type: "+" });
         });
         isOp("wl_region.subtract", (x) => {
-            const region = this.getObject<"wl_region">(x.id);
+            const region = this.getObject(x.id);
             region.data.rects.push({ ...x.args, type: "-" });
         });
         isOp("wl_region.destroy", (x) => {
             this.deleteId(x.id);
         });
         isOp("wl_data_device_manager.create_data_source", (x) => {
-            const id = x.args.id;
-            const src = this.getObject<"wl_data_source">(id);
+            const src = this.getObject(x.args.id);
             src.data = { offers: [] };
         });
         isOp("wl_data_device_manager.get_data_device", (x) => {
@@ -707,7 +710,7 @@ class WaylandClient {
             this.obj2.dataDevices = dataDevices;
         });
         isOp("wl_data_source.offer", (x) => {
-            const src = this.getObject<"wl_data_source">(x.id);
+            const src = this.getObject(x.id);
             if (!src) return;
             src.data.offers.push(x.args.mime_type);
             console.log(`wl_data_source#${x.id} offer ${x.args.mime_type}`);
@@ -755,7 +758,7 @@ class WaylandClient {
                 return;
             }
 
-            const src = this.getObject<"wl_data_source">(srcId);
+            const src = this.getObjectT<"wl_data_source">(srcId);
             if (!src) {
                 console.warn(`Selection source ${srcId} not found`);
                 return;
@@ -827,14 +830,13 @@ class WaylandClient {
         });
 
         isOp("xdg_wm_base.get_xdg_surface", (x) => {
-            const xdgSurfaceId = x.args.id;
-            const xdgSurface = this.getObject<"xdg_surface">(xdgSurfaceId);
-            const surfaceId = x.args.surface as WaylandObjectId;
+            const xdgSurface = this.getObject(x.args.id);
+            const surfaceId = waylandObjectId(x.args.surface) as WaylandObjectId2<"wl_surface">;
             const el = view().style({ position: "relative" });
             xdgSurface.data = { surface: surfaceId, warpEl: el.el };
         });
         isOp("xdg_wm_base.create_positioner", (x) => {
-            const thisObj = this.getObject<"xdg_positioner">(x.args.id);
+            const thisObj = this.getObject(x.args.id);
             thisObj.data = {
                 size: { width: 0, height: 0 },
                 anchor_rect: { x: 0, y: 0, width: 0, height: 0 },
@@ -847,42 +849,43 @@ class WaylandClient {
             };
         });
         isOp("xdg_positioner.set_size", (x) => {
-            const pData = this.getObject<"xdg_positioner">(x.id).data;
+            const pData = this.getObject(x.id).data;
             pData.size = x.args;
         });
         isOp("xdg_positioner.set_anchor_rect", (x) => {
-            const pData = this.getObject<"xdg_positioner">(x.id).data;
+            const pData = this.getObject(x.id).data;
             pData.anchor_rect = x.args;
         });
         isOp("xdg_positioner.set_anchor", (x) => {
-            const pData = this.getObject<"xdg_positioner">(x.id).data;
+            const pData = this.getObject(x.id).data;
             pData.anchor = x.args.anchor;
         });
         isOp("xdg_positioner.set_gravity", (x) => {
-            const pData = this.getObject<"xdg_positioner">(x.id).data;
+            const pData = this.getObject(x.id).data;
             pData.gravity = x.args.gravity;
         });
         isOp("xdg_positioner.set_constraint_adjustment", (x) => {
-            const pData = this.getObject<"xdg_positioner">(x.id).data;
+            const pData = this.getObject(x.id).data;
             pData.constraint_adjustment = x.args.constraint_adjustment;
         });
         isOp("xdg_positioner.set_offset", (x) => {
-            const pData = this.getObject<"xdg_positioner">(x.id).data;
+            const pData = this.getObject(x.id).data;
             pData.offset = x.args;
         });
         isOp("xdg_positioner.set_parent_size", (x) => {
-            const pData = this.getObject<"xdg_positioner">(x.id).data;
+            const pData = this.getObject(x.id).data;
             pData.parent_size = x.args;
         });
         isOp("xdg_positioner.set_reactive", (x) => {
-            const pData = this.getObject<"xdg_positioner">(x.id).data;
+            const pData = this.getObject(x.id).data;
             pData.reactive = true;
         });
         isOp("xdg_positioner.destroy", (x) => {
             this.deleteId(x.id);
         });
         isOp("xdg_surface.get_toplevel", (x) => {
-            const toplevelId = x.args.id;
+            const xid = x.id as WaylandObjectId2<"xdg_surface">;
+            const toplevelId = x.args.id as WaylandObjectId2<"xdg_toplevel">;
             this.sendMessageImm(toplevelId, "xdg_toplevel.wm_capabilities", {
                 capabilities: [
                     getEnumValue("xdg_toplevel.wm_capabilities", "minimize"),
@@ -895,15 +898,15 @@ class WaylandClient {
                 height: outerBounds.height,
             });
             this.sendMessageX(x.id, "xdg_surface.configure", { serial: 1 });
-            const thisXdgSurface = this.getObject<"xdg_surface">(x.id);
+            const thisXdgSurface = this.getObject(xid);
             const surfaceId = thisXdgSurface.data.surface;
             const el = pack(thisXdgSurface.data.warpEl);
-            const surface = this.getObject<"wl_surface">(surfaceId);
+            const surface = this.getObject(surfaceId);
             el.add(surface.data.canvas);
             thisXdgSurface.data.xdg_role = toplevelId;
-            this.getObject<"xdg_toplevel">(toplevelId).data = { xdg_surface: x.id };
+            this.getObject(toplevelId).data = { xdg_surface: xid };
             this.obj2.windows.set(toplevelId, {
-                xdg_surface: x.id,
+                xdg_surface: xid,
                 popups: new Set(),
                 actived: false,
                 box: {
@@ -915,9 +918,9 @@ class WaylandClient {
             this.emit("windowCreated", toplevelId, el.el);
         });
         isOp("xdg_surface.set_window_geometry", (x) => {
-            const thisXdgSurface = this.getObject<"xdg_surface">(x.id);
+            const thisXdgSurface = this.getObject(x.id);
             const surfaceId = thisXdgSurface.data.surface;
-            const surface = this.getObject<"wl_surface">(surfaceId);
+            const surface = this.getObject(surfaceId);
             const canvas = surface.data.canvas;
             const canvasEl = pack(canvas);
             canvasEl.style({ position: "absolute", top: `-${x.args.y}px`, left: `-${x.args.x}px` });
@@ -930,26 +933,29 @@ class WaylandClient {
             }
         });
         isOp("xdg_surface.get_popup", (x) => {
-            const thisXdgSurface = this.getObject<"xdg_surface">(x.id);
+            const xid = x.id as WaylandObjectId2<"xdg_surface">;
+            const popupId = x.args.id as WaylandObjectId2<"xdg_popup">;
+            const thisXdgSurface = this.getObject(xid);
             const thisSurfaceId = thisXdgSurface.data.surface;
-            const thisSurface = this.getObject<"wl_surface">(thisSurfaceId);
+            const thisSurface = this.getObject(thisSurfaceId);
             const parentXdgSurfaceId = waylandObjectId(x.args.parent);
             if (!parentXdgSurfaceId) {
                 console.error("No parent for popup");
                 return;
             }
-            const parentXdgSurface = this.getObject<"xdg_surface">(parentXdgSurfaceId);
+            const parentXdgSurface = this.getObjectT<"xdg_surface">(parentXdgSurfaceId);
 
-            this.getObject<"xdg_popup">(x.args.id).data = {
-                xdg_surface: x.id,
+            this.getObject(popupId).data = {
+                xdg_surface: xid,
                 parent_xdg_surface: parentXdgSurfaceId,
             };
-            thisXdgSurface.data.xdg_role = x.args.id;
+            thisXdgSurface.data.xdg_role = popupId;
             // todo 错误处理
+            // @ts-ignore 等待新的数据结构
             // biome-ignore lint/style/noNonNullAssertion: 先不管
             const win = this.obj2.windows.get(parentXdgSurface.data.xdg_role!);
             if (win) {
-                win.popups.add(x.args.id);
+                win.popups.add(popupId);
             } else {
                 console.error(`cannt find window by xdg_surface ${parentXdgSurfaceId}`);
             }
@@ -957,7 +963,7 @@ class WaylandClient {
                 .style({ position: "absolute" })
                 .add(thisSurface.data.canvas);
 
-            const positioner = this.getObject<"xdg_positioner">(waylandObjectId(x.args.positioner));
+            const positioner = this.getObjectT<"xdg_positioner">(waylandObjectId(x.args.positioner));
             const positionerData = positioner.data;
 
             const anchor = positionerData.anchor;
@@ -1020,12 +1026,13 @@ class WaylandClient {
             this.deleteId(x.id);
         });
         isOp("xdg_popup.destroy", (x) => {
-            const xdgSurfaceId = this.getObject<"xdg_popup">(x.id).data.xdg_surface;
-            this.getObject<"xdg_surface">(xdgSurfaceId).data.warpEl.remove(); // todo 可以外部处理
+            const xid = x.id as WaylandObjectId2<"xdg_popup">;
+            const xdgSurfaceId = this.getObject(xid).data.xdg_surface;
+            this.getObject(xdgSurfaceId).data.warpEl.remove(); // todo 可以外部处理
             for (const s of this.obj2.windows.values()) {
                 // todo 不用循环而是向上找到对应的window
-                if (s.popups.has(x.id)) {
-                    s.popups.delete(x.id);
+                if (s.popups.has(xid)) {
+                    s.popups.delete(xid);
                     break;
                 }
             }
@@ -1040,7 +1047,7 @@ class WaylandClient {
         });
         isOp("xdg_toplevel.set_title", (x) => {
             this.emit("title", x.id, x.args.title);
-            const win = this.obj2.windows.get(x.id);
+            const win = this.obj2.windows.get(x.id as WaylandObjectId2<"xdg_toplevel">);
             if (win) {
                 win.title = x.args.title;
             }
@@ -1056,10 +1063,10 @@ class WaylandClient {
         });
 
         isOp("xdg_toplevel.destroy", (x) => {
-            const xdgSurfaceId = this.getObject<"xdg_toplevel">(x.id).data.xdg_surface;
+            const xdgSurfaceId = this.getObject(x.id).data.xdg_surface;
             this.obj2.windows.delete(x.id);
             this.deleteId(x.id);
-            this.emit("windowClosed", xdgSurfaceId, this.getObject<"xdg_surface">(xdgSurfaceId).data.warpEl);
+            this.emit("windowClosed", xdgSurfaceId, this.getObject(xdgSurfaceId).data.warpEl);
         });
 
         isOp("zwp_linux_dmabuf_v1.get_surface_feedback", (x) => {
@@ -1206,7 +1213,7 @@ class WaylandClient {
             console.error("No data devices to offer to");
         }
         for (const ddId of dd) {
-            const dataOfferId = this.allocateObjectId();
+            const dataOfferId = this.allocateObjectId() as WaylandObjectId3<"wl_data_offer">;
             this.objects.set(dataOfferId, { protocol: WaylandProtocols.wl_data_offer, data: {} });
 
             this.sendMessageImm(ddId, "wl_data_device.data_offer", { id: dataOfferId });
@@ -1326,7 +1333,7 @@ class WaylandClient {
         this.sendMessageImm(win.xdg_surface, "xdg_surface.configure", { serial: 1 });
     }
     win(id: WaylandWinId) {
-        const win = this.obj2.windows.get(id);
+        const win = this.obj2.windows.get(id as WaylandObjectId2<"xdg_toplevel">);
         if (win === undefined) return undefined;
         const winObj = {
             setWinBoxData: (box: { width: number; height: number }) => {
@@ -1378,12 +1385,12 @@ class WaylandClient {
             point: {
                 rootWinEl: () => {
                     const rootSurfaceId = win.xdg_surface;
-                    const rootSurface = this.getObject<"xdg_surface">(rootSurfaceId);
+                    const rootSurface = this.getObject(rootSurfaceId);
                     return rootSurface.data.warpEl;
                 },
                 inWin: (p: { x: number; y: number }) => {
                     const rootSurfaceId = win.xdg_surface;
-                    const rootSurface = this.getObject<"xdg_surface">(rootSurfaceId);
+                    const rootSurface = this.getObject(rootSurfaceId);
                     const rel = rootSurface.data.warpEl;
                     // todo popup
                     if (p.x < 0 || p.x >= rel.offsetWidth || p.y < 0 || p.y >= rel.offsetHeight) return false;
@@ -1395,7 +1402,7 @@ class WaylandClient {
                     let nx = x;
                     let ny = y;
                     let canSend = false;
-                    let inXdgSurface: WaylandObjectId | undefined;
+                    let inXdgSurface: WaylandObjectId2<"xdg_surface"> | undefined;
                     let reasonSurfaceType: "main" | "popup" | null = null;
                     const {
                         x: baseX,
@@ -1405,8 +1412,8 @@ class WaylandClient {
                     } = winObj.point.rootWinEl().getBoundingClientRect();
                     // todo zindex
                     for (const p of Array.from(win.popups).toReversed()) {
-                        const popup = this.getObject<"xdg_popup">(p);
-                        const popupSurface = this.getObject<"xdg_surface">(popup.data.xdg_surface);
+                        const popup = this.getObject(p);
+                        const popupSurface = this.getObject(popup.data.xdg_surface);
                         const rect = popupSurface.data.warpEl.getBoundingClientRect();
                         const offsetX = rect.left - baseX;
                         const offsetY = rect.top - baseY;
@@ -1427,10 +1434,10 @@ class WaylandClient {
                             return undefined;
                         }
                     }
-                    const surfaces: WaylandObjectId[] = [];
-                    const mainSurfaceId = this.getObject<"xdg_surface">(inXdgSurface).data.surface;
+                    const surfaces: WaylandObjectId2<"wl_surface">[] = [];
+                    const mainSurfaceId = this.getObject(inXdgSurface).data.surface;
                     surfaces.push(mainSurfaceId);
-                    const mainSurface = this.getObject<"wl_surface">(mainSurfaceId);
+                    const mainSurface = this.getObject(mainSurfaceId);
                     if (mainSurface.data.children) {
                         // todo 遍历树
                         for (const c of mainSurface.data.children) {
@@ -1438,7 +1445,7 @@ class WaylandClient {
                         }
                     }
                     for (const s of surfaces.toReversed()) {
-                        const cs = this.getObject<"wl_surface">(s).data.canvas;
+                        const cs = this.getObject(s).data.canvas;
                         // todo 缓存
                         const rect = cs.getBoundingClientRect();
                         const offsetX = rect.left - baseX;
@@ -1564,8 +1571,8 @@ class WaylandClient {
             },
             getPreview: () => {
                 const rootSurfaceId = win.xdg_surface;
-                const rootSurface = this.getObject<"xdg_surface">(rootSurfaceId).data.surface;
-                const cs = this.getObject<"wl_surface">(rootSurface).data.canvas;
+                const rootSurface = this.getObject(rootSurfaceId).data.surface;
+                const cs = this.getObject(rootSurface).data.canvas;
                 return cs;
             },
             getTitle: () => {
@@ -1709,7 +1716,7 @@ class WaylandClient {
             }
         }
         for (const win of this.obj2.windows.values()) {
-            const xdgSurface = this.getObject<"xdg_surface">(win.xdg_surface);
+            const xdgSurface = this.getObject(win.xdg_surface);
             xdgSurface.data.warpEl.remove();
         }
         this.socket.end();
