@@ -10,7 +10,8 @@
             {
               "name": "callback",
               "type": "new_id",
-              "interface": "wl_callback"
+              "interface": "wl_callback",
+              "summary": "callback object for the sync request"
             }
           ]
         },
@@ -20,7 +21,8 @@
             {
               "name": "registry",
               "type": "new_id",
-              "interface": "wl_registry"
+              "interface": "wl_registry",
+              "summary": "global registry object"
             }
           ]
         }
@@ -31,15 +33,18 @@
           "args": [
             {
               "name": "object_id",
-              "type": "object"
+              "type": "object",
+              "summary": "object where the error occurred"
             },
             {
               "name": "code",
-              "type": "uint"
+              "type": "uint",
+              "summary": "error code"
             },
             {
               "name": "message",
-              "type": "string"
+              "type": "string",
+              "summary": "error description"
             }
           ]
         },
@@ -48,7 +53,8 @@
           "args": [
             {
               "name": "id",
-              "type": "uint"
+              "type": "uint",
+              "summary": "deleted object ID"
             }
           ]
         }
@@ -74,11 +80,13 @@
           "args": [
             {
               "name": "name",
-              "type": "uint"
+              "type": "uint",
+              "summary": "unique numeric name of the object"
             },
             {
               "name": "id",
-              "type": "new_id"
+              "type": "new_id",
+              "summary": "bounded object"
             }
           ]
         }
@@ -89,15 +97,18 @@
           "args": [
             {
               "name": "name",
-              "type": "uint"
+              "type": "uint",
+              "summary": "numeric name of the global object"
             },
             {
               "name": "interface",
-              "type": "string"
+              "type": "string",
+              "summary": "interface implemented by the object"
             },
             {
               "name": "version",
-              "type": "uint"
+              "type": "uint",
+              "summary": "interface version"
             }
           ]
         },
@@ -106,7 +117,8 @@
           "args": [
             {
               "name": "name",
-              "type": "uint"
+              "type": "uint",
+              "summary": "numeric name of the global object"
             }
           ]
         }
@@ -123,7 +135,8 @@
           "args": [
             {
               "name": "callback_data",
-              "type": "uint"
+              "type": "uint",
+              "summary": "request-specific data for the callback"
             }
           ]
         }
@@ -140,7 +153,8 @@
             {
               "name": "id",
               "type": "new_id",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "summary": "the new surface"
             }
           ]
         },
@@ -150,7 +164,8 @@
             {
               "name": "id",
               "type": "new_id",
-              "interface": "wl_region"
+              "interface": "wl_region",
+              "summary": "the new region"
             }
           ]
         }
@@ -168,27 +183,33 @@
             {
               "name": "id",
               "type": "new_id",
-              "interface": "wl_buffer"
+              "interface": "wl_buffer",
+              "summary": "buffer to create"
             },
             {
               "name": "offset",
-              "type": "int"
+              "type": "int",
+              "summary": "buffer byte offset within the pool"
             },
             {
               "name": "width",
-              "type": "int"
+              "type": "int",
+              "summary": "buffer width, in pixels"
             },
             {
               "name": "height",
-              "type": "int"
+              "type": "int",
+              "summary": "buffer height, in pixels"
             },
             {
               "name": "stride",
-              "type": "int"
+              "type": "int",
+              "summary": "number of bytes from the beginning of one row to the beginning of the next row"
             },
             {
               "name": "format",
-              "type": "uint"
+              "type": "uint",
+              "summary": "buffer pixel format"
             }
           ]
         },
@@ -201,7 +222,8 @@
           "args": [
             {
               "name": "size",
-              "type": "int"
+              "type": "int",
+              "summary": "new size of the pool, in bytes"
             }
           ]
         }
@@ -219,15 +241,18 @@
             {
               "name": "id",
               "type": "new_id",
-              "interface": "wl_shm_pool"
+              "interface": "wl_shm_pool",
+              "summary": "pool to create"
             },
             {
               "name": "fd",
-              "type": "fd"
+              "type": "fd",
+              "summary": "file descriptor for the pool"
             },
             {
               "name": "size",
-              "type": "int"
+              "type": "int",
+              "summary": "pool size, in bytes"
             }
           ]
         },
@@ -243,7 +268,8 @@
           "args": [
             {
               "name": "format",
-              "type": "uint"
+              "type": "uint",
+              "summary": "buffer pixel format"
             }
           ]
         }
@@ -413,12 +439,14 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial number of the accept request"
             },
             {
               "name": "mime_type",
               "type": "string",
-              "allowNull": true
+              "allowNull": true,
+              "summary": "mime type accepted by the client"
             }
           ]
         },
@@ -427,11 +455,13 @@
           "args": [
             {
               "name": "mime_type",
-              "type": "string"
+              "type": "string",
+              "summary": "mime type desired by receiver"
             },
             {
               "name": "fd",
-              "type": "fd"
+              "type": "fd",
+              "summary": "file descriptor for data transfer"
             }
           ]
         },
@@ -449,11 +479,13 @@
           "args": [
             {
               "name": "dnd_actions",
-              "type": "uint"
+              "type": "uint",
+              "summary": "actions supported by the destination client"
             },
             {
               "name": "preferred_action",
-              "type": "uint"
+              "type": "uint",
+              "summary": "action preferred by the destination client"
             }
           ],
           "since": 3
@@ -465,7 +497,8 @@
           "args": [
             {
               "name": "mime_type",
-              "type": "string"
+              "type": "string",
+              "summary": "offered mime type"
             }
           ]
         },
@@ -474,7 +507,8 @@
           "args": [
             {
               "name": "source_actions",
-              "type": "uint"
+              "type": "uint",
+              "summary": "actions offered by the data source"
             }
           ],
           "since": 3
@@ -484,7 +518,8 @@
           "args": [
             {
               "name": "dnd_action",
-              "type": "uint"
+              "type": "uint",
+              "summary": "action selected by the compositor"
             }
           ],
           "since": 3
@@ -511,7 +546,8 @@
           "args": [
             {
               "name": "mime_type",
-              "type": "string"
+              "type": "string",
+              "summary": "mime type offered by the data source"
             }
           ]
         },
@@ -524,7 +560,8 @@
           "args": [
             {
               "name": "dnd_actions",
-              "type": "uint"
+              "type": "uint",
+              "summary": "actions supported by the data source"
             }
           ],
           "since": 3
@@ -537,7 +574,8 @@
             {
               "name": "mime_type",
               "type": "string",
-              "allowNull": true
+              "allowNull": true,
+              "summary": "mime type accepted by the target"
             }
           ]
         },
@@ -546,11 +584,13 @@
           "args": [
             {
               "name": "mime_type",
-              "type": "string"
+              "type": "string",
+              "summary": "mime type for the data"
             },
             {
               "name": "fd",
-              "type": "fd"
+              "type": "fd",
+              "summary": "file descriptor for the data"
             }
           ]
         },
@@ -573,7 +613,8 @@
           "args": [
             {
               "name": "dnd_action",
-              "type": "uint"
+              "type": "uint",
+              "summary": "action selected by the compositor"
             }
           ],
           "since": 3
@@ -600,22 +641,26 @@
               "name": "source",
               "type": "object",
               "interface": "wl_data_source",
-              "allowNull": true
+              "allowNull": true,
+              "summary": "data source for the eventual transfer"
             },
             {
               "name": "origin",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "summary": "surface where the drag originates"
             },
             {
               "name": "icon",
               "type": "object",
               "interface": "wl_surface",
-              "allowNull": true
+              "allowNull": true,
+              "summary": "drag-and-drop icon surface"
             },
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial number of the implicit grab on the origin"
             }
           ]
         },
@@ -626,11 +671,13 @@
               "name": "source",
               "type": "object",
               "interface": "wl_data_source",
-              "allowNull": true
+              "allowNull": true,
+              "summary": "data source for the selection"
             },
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial number of the event that triggered this request"
             }
           ]
         },
@@ -647,7 +694,8 @@
             {
               "name": "id",
               "type": "new_id",
-              "interface": "wl_data_offer"
+              "interface": "wl_data_offer",
+              "summary": "the new data_offer object"
             }
           ]
         },
@@ -656,26 +704,31 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial number of the enter event"
             },
             {
               "name": "surface",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "summary": "client surface entered"
             },
             {
               "name": "x",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "surface-local x coordinate"
             },
             {
               "name": "y",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "surface-local y coordinate"
             },
             {
               "name": "id",
               "type": "object",
               "interface": "wl_data_offer",
-              "allowNull": true
+              "allowNull": true,
+              "summary": "source data_offer object"
             }
           ]
         },
@@ -688,15 +741,18 @@
           "args": [
             {
               "name": "time",
-              "type": "uint"
+              "type": "uint",
+              "summary": "timestamp with millisecond granularity"
             },
             {
               "name": "x",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "surface-local x coordinate"
             },
             {
               "name": "y",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "surface-local y coordinate"
             }
           ]
         },
@@ -711,7 +767,8 @@
               "name": "id",
               "type": "object",
               "interface": "wl_data_offer",
-              "allowNull": true
+              "allowNull": true,
+              "summary": "selection data_offer object"
             }
           ]
         }
@@ -736,7 +793,8 @@
             {
               "name": "id",
               "type": "new_id",
-              "interface": "wl_data_source"
+              "interface": "wl_data_source",
+              "summary": "data source to create"
             }
           ]
         },
@@ -746,12 +804,14 @@
             {
               "name": "id",
               "type": "new_id",
-              "interface": "wl_data_device"
+              "interface": "wl_data_device",
+              "summary": "data device to create"
             },
             {
               "name": "seat",
               "type": "object",
-              "interface": "wl_seat"
+              "interface": "wl_seat",
+              "summary": "seat associated with the data device"
             }
           ]
         }
@@ -785,15 +845,18 @@
               "name": "buffer",
               "type": "object",
               "interface": "wl_buffer",
-              "allowNull": true
+              "allowNull": true,
+              "summary": "buffer of surface contents"
             },
             {
               "name": "x",
-              "type": "int"
+              "type": "int",
+              "summary": "surface-local x coordinate"
             },
             {
               "name": "y",
-              "type": "int"
+              "type": "int",
+              "summary": "surface-local y coordinate"
             }
           ]
         },
@@ -802,19 +865,23 @@
           "args": [
             {
               "name": "x",
-              "type": "int"
+              "type": "int",
+              "summary": "surface-local x coordinate"
             },
             {
               "name": "y",
-              "type": "int"
+              "type": "int",
+              "summary": "surface-local y coordinate"
             },
             {
               "name": "width",
-              "type": "int"
+              "type": "int",
+              "summary": "width of damage rectangle"
             },
             {
               "name": "height",
-              "type": "int"
+              "type": "int",
+              "summary": "height of damage rectangle"
             }
           ]
         },
@@ -824,7 +891,8 @@
             {
               "name": "callback",
               "type": "new_id",
-              "interface": "wl_callback"
+              "interface": "wl_callback",
+              "summary": "callback object for the frame request"
             }
           ]
         },
@@ -835,7 +903,8 @@
               "name": "region",
               "type": "object",
               "interface": "wl_region",
-              "allowNull": true
+              "allowNull": true,
+              "summary": "opaque region of the surface"
             }
           ]
         },
@@ -846,7 +915,8 @@
               "name": "region",
               "type": "object",
               "interface": "wl_region",
-              "allowNull": true
+              "allowNull": true,
+              "summary": "input region of the surface"
             }
           ]
         },
@@ -859,7 +929,8 @@
           "args": [
             {
               "name": "transform",
-              "type": "int"
+              "type": "int",
+              "summary": "transform for interpreting buffer contents"
             }
           ],
           "since": 2
@@ -869,7 +940,8 @@
           "args": [
             {
               "name": "scale",
-              "type": "int"
+              "type": "int",
+              "summary": "scale for interpreting buffer contents"
             }
           ],
           "since": 3
@@ -879,19 +951,23 @@
           "args": [
             {
               "name": "x",
-              "type": "int"
+              "type": "int",
+              "summary": "buffer-local x coordinate"
             },
             {
               "name": "y",
-              "type": "int"
+              "type": "int",
+              "summary": "buffer-local y coordinate"
             },
             {
               "name": "width",
-              "type": "int"
+              "type": "int",
+              "summary": "width of damage rectangle"
             },
             {
               "name": "height",
-              "type": "int"
+              "type": "int",
+              "summary": "height of damage rectangle"
             }
           ],
           "since": 4
@@ -901,11 +977,13 @@
           "args": [
             {
               "name": "x",
-              "type": "int"
+              "type": "int",
+              "summary": "surface-local x coordinate"
             },
             {
               "name": "y",
-              "type": "int"
+              "type": "int",
+              "summary": "surface-local y coordinate"
             }
           ],
           "since": 5
@@ -918,7 +996,8 @@
             {
               "name": "output",
               "type": "object",
-              "interface": "wl_output"
+              "interface": "wl_output",
+              "summary": "output entered by the surface"
             }
           ]
         },
@@ -928,7 +1007,8 @@
             {
               "name": "output",
               "type": "object",
-              "interface": "wl_output"
+              "interface": "wl_output",
+              "summary": "output left by the surface"
             }
           ]
         },
@@ -937,7 +1017,8 @@
           "args": [
             {
               "name": "factor",
-              "type": "int"
+              "type": "int",
+              "summary": "preferred scaling factor"
             }
           ],
           "since": 6
@@ -947,7 +1028,8 @@
           "args": [
             {
               "name": "transform",
-              "type": "uint"
+              "type": "uint",
+              "summary": "preferred transform"
             }
           ],
           "since": 6
@@ -976,7 +1058,8 @@
             {
               "name": "id",
               "type": "new_id",
-              "interface": "wl_pointer"
+              "interface": "wl_pointer",
+              "summary": "seat pointer"
             }
           ]
         },
@@ -986,7 +1069,8 @@
             {
               "name": "id",
               "type": "new_id",
-              "interface": "wl_keyboard"
+              "interface": "wl_keyboard",
+              "summary": "seat keyboard"
             }
           ]
         },
@@ -996,7 +1080,8 @@
             {
               "name": "id",
               "type": "new_id",
-              "interface": "wl_touch"
+              "interface": "wl_touch",
+              "summary": "seat touch interface"
             }
           ]
         },
@@ -1012,7 +1097,8 @@
           "args": [
             {
               "name": "capabilities",
-              "type": "uint"
+              "type": "uint",
+              "summary": "capabilities of the seat"
             }
           ]
         },
@@ -1021,7 +1107,8 @@
           "args": [
             {
               "name": "name",
-              "type": "string"
+              "type": "string",
+              "summary": "seat identifier"
             }
           ],
           "since": 2
@@ -1054,21 +1141,25 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial number of the enter event"
             },
             {
               "name": "surface",
               "type": "object",
               "interface": "wl_surface",
-              "allowNull": true
+              "allowNull": true,
+              "summary": "pointer surface"
             },
             {
               "name": "hotspot_x",
-              "type": "int"
+              "type": "int",
+              "summary": "surface-local x coordinate"
             },
             {
               "name": "hotspot_y",
-              "type": "int"
+              "type": "int",
+              "summary": "surface-local y coordinate"
             }
           ]
         },
@@ -1084,20 +1175,24 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial number of the enter event"
             },
             {
               "name": "surface",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "summary": "surface entered by the pointer"
             },
             {
               "name": "surface_x",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "surface-local x coordinate"
             },
             {
               "name": "surface_y",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "surface-local y coordinate"
             }
           ]
         },
@@ -1106,12 +1201,14 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial number of the leave event"
             },
             {
               "name": "surface",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "summary": "surface left by the pointer"
             }
           ]
         },
@@ -1120,15 +1217,18 @@
           "args": [
             {
               "name": "time",
-              "type": "uint"
+              "type": "uint",
+              "summary": "timestamp with millisecond granularity"
             },
             {
               "name": "surface_x",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "surface-local x coordinate"
             },
             {
               "name": "surface_y",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "surface-local y coordinate"
             }
           ]
         },
@@ -1137,19 +1237,23 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial number of the button event"
             },
             {
               "name": "time",
-              "type": "uint"
+              "type": "uint",
+              "summary": "timestamp with millisecond granularity"
             },
             {
               "name": "button",
-              "type": "uint"
+              "type": "uint",
+              "summary": "button that produced the event"
             },
             {
               "name": "state",
-              "type": "uint"
+              "type": "uint",
+              "summary": "physical state of the button"
             }
           ]
         },
@@ -1158,15 +1262,18 @@
           "args": [
             {
               "name": "time",
-              "type": "uint"
+              "type": "uint",
+              "summary": "timestamp with millisecond granularity"
             },
             {
               "name": "axis",
-              "type": "uint"
+              "type": "uint",
+              "summary": "axis type"
             },
             {
               "name": "value",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "length of vector in surface-local coordinate space"
             }
           ]
         },
@@ -1180,7 +1287,8 @@
           "args": [
             {
               "name": "axis_source",
-              "type": "uint"
+              "type": "uint",
+              "summary": "source of the axis event"
             }
           ],
           "since": 5
@@ -1190,11 +1298,13 @@
           "args": [
             {
               "name": "time",
-              "type": "uint"
+              "type": "uint",
+              "summary": "timestamp with millisecond granularity"
             },
             {
               "name": "axis",
-              "type": "uint"
+              "type": "uint",
+              "summary": "the axis stopped with this event"
             }
           ],
           "since": 5
@@ -1204,11 +1314,13 @@
           "args": [
             {
               "name": "axis",
-              "type": "uint"
+              "type": "uint",
+              "summary": "axis type"
             },
             {
               "name": "discrete",
-              "type": "int"
+              "type": "int",
+              "summary": "number of steps"
             }
           ],
           "since": 5
@@ -1218,11 +1330,13 @@
           "args": [
             {
               "name": "axis",
-              "type": "uint"
+              "type": "uint",
+              "summary": "axis type"
             },
             {
               "name": "value120",
-              "type": "int"
+              "type": "int",
+              "summary": "scroll distance as fraction of 120"
             }
           ],
           "since": 8
@@ -1232,11 +1346,13 @@
           "args": [
             {
               "name": "axis",
-              "type": "uint"
+              "type": "uint",
+              "summary": "axis type"
             },
             {
               "name": "direction",
-              "type": "uint"
+              "type": "uint",
+              "summary": "physical direction relative to axis motion"
             }
           ],
           "since": 9
@@ -1297,15 +1413,18 @@
           "args": [
             {
               "name": "format",
-              "type": "uint"
+              "type": "uint",
+              "summary": "keymap format"
             },
             {
               "name": "fd",
-              "type": "fd"
+              "type": "fd",
+              "summary": "keymap file descriptor"
             },
             {
               "name": "size",
-              "type": "uint"
+              "type": "uint",
+              "summary": "keymap size, in bytes"
             }
           ]
         },
@@ -1314,16 +1433,19 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial number of the enter event"
             },
             {
               "name": "surface",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "summary": "surface gaining keyboard focus"
             },
             {
               "name": "keys",
-              "type": "array"
+              "type": "array",
+              "summary": "the keys currently logically down"
             }
           ]
         },
@@ -1332,12 +1454,14 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial number of the leave event"
             },
             {
               "name": "surface",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "summary": "surface that lost keyboard focus"
             }
           ]
         },
@@ -1346,19 +1470,23 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial number of the key event"
             },
             {
               "name": "time",
-              "type": "uint"
+              "type": "uint",
+              "summary": "timestamp with millisecond granularity"
             },
             {
               "name": "key",
-              "type": "uint"
+              "type": "uint",
+              "summary": "key that produced the event"
             },
             {
               "name": "state",
-              "type": "uint"
+              "type": "uint",
+              "summary": "physical state of the key"
             }
           ]
         },
@@ -1367,23 +1495,28 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial number of the modifiers event"
             },
             {
               "name": "mods_depressed",
-              "type": "uint"
+              "type": "uint",
+              "summary": "depressed modifiers"
             },
             {
               "name": "mods_latched",
-              "type": "uint"
+              "type": "uint",
+              "summary": "latched modifiers"
             },
             {
               "name": "mods_locked",
-              "type": "uint"
+              "type": "uint",
+              "summary": "locked modifiers"
             },
             {
               "name": "group",
-              "type": "uint"
+              "type": "uint",
+              "summary": "keyboard layout"
             }
           ]
         },
@@ -1392,11 +1525,13 @@
           "args": [
             {
               "name": "rate",
-              "type": "int"
+              "type": "int",
+              "summary": "the rate of repeating keys in characters per second"
             },
             {
               "name": "delay",
-              "type": "int"
+              "type": "int",
+              "summary": "delay in milliseconds since key down until repeating starts"
             }
           ],
           "since": 4
@@ -1436,35 +1571,43 @@
           "args": [
             {
               "name": "x",
-              "type": "int"
+              "type": "int",
+              "summary": "x position within the global compositor space"
             },
             {
               "name": "y",
-              "type": "int"
+              "type": "int",
+              "summary": "y position within the global compositor space"
             },
             {
               "name": "physical_width",
-              "type": "int"
+              "type": "int",
+              "summary": "width in millimeters of the output"
             },
             {
               "name": "physical_height",
-              "type": "int"
+              "type": "int",
+              "summary": "height in millimeters of the output"
             },
             {
               "name": "subpixel",
-              "type": "int"
+              "type": "int",
+              "summary": "subpixel orientation of the output"
             },
             {
               "name": "make",
-              "type": "string"
+              "type": "string",
+              "summary": "textual description of the manufacturer"
             },
             {
               "name": "model",
-              "type": "string"
+              "type": "string",
+              "summary": "textual description of the model"
             },
             {
               "name": "transform",
-              "type": "int"
+              "type": "int",
+              "summary": "additional transformation applied to buffer contents during presentation"
             }
           ]
         },
@@ -1473,19 +1616,23 @@
           "args": [
             {
               "name": "flags",
-              "type": "uint"
+              "type": "uint",
+              "summary": "bitfield of mode flags"
             },
             {
               "name": "width",
-              "type": "int"
+              "type": "int",
+              "summary": "width of the mode in hardware units"
             },
             {
               "name": "height",
-              "type": "int"
+              "type": "int",
+              "summary": "height of the mode in hardware units"
             },
             {
               "name": "refresh",
-              "type": "int"
+              "type": "int",
+              "summary": "vertical refresh rate in mHz"
             }
           ]
         },
@@ -1499,7 +1646,8 @@
           "args": [
             {
               "name": "factor",
-              "type": "int"
+              "type": "int",
+              "summary": "scaling factor of output"
             }
           ],
           "since": 2
@@ -1509,7 +1657,8 @@
           "args": [
             {
               "name": "name",
-              "type": "string"
+              "type": "string",
+              "summary": "output name"
             }
           ],
           "since": 4
@@ -1519,7 +1668,8 @@
           "args": [
             {
               "name": "description",
-              "type": "string"
+              "type": "string",
+              "summary": "output description"
             }
           ],
           "since": 4
@@ -1573,19 +1723,23 @@
           "args": [
             {
               "name": "x",
-              "type": "int"
+              "type": "int",
+              "summary": "region-local x coordinate"
             },
             {
               "name": "y",
-              "type": "int"
+              "type": "int",
+              "summary": "region-local y coordinate"
             },
             {
               "name": "width",
-              "type": "int"
+              "type": "int",
+              "summary": "rectangle width"
             },
             {
               "name": "height",
-              "type": "int"
+              "type": "int",
+              "summary": "rectangle height"
             }
           ]
         },
@@ -1594,19 +1748,23 @@
           "args": [
             {
               "name": "x",
-              "type": "int"
+              "type": "int",
+              "summary": "region-local x coordinate"
             },
             {
               "name": "y",
-              "type": "int"
+              "type": "int",
+              "summary": "region-local y coordinate"
             },
             {
               "name": "width",
-              "type": "int"
+              "type": "int",
+              "summary": "rectangle width"
             },
             {
               "name": "height",
-              "type": "int"
+              "type": "int",
+              "summary": "rectangle height"
             }
           ]
         }
@@ -1628,17 +1786,20 @@
             {
               "name": "id",
               "type": "new_id",
-              "interface": "wl_subsurface"
+              "interface": "wl_subsurface",
+              "summary": "the new sub-surface object ID"
             },
             {
               "name": "surface",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "summary": "the surface to be turned into a sub-surface"
             },
             {
               "name": "parent",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "summary": "the parent surface"
             }
           ]
         }
@@ -1667,11 +1828,13 @@
           "args": [
             {
               "name": "x",
-              "type": "int"
+              "type": "int",
+              "summary": "x coordinate in the parent surface"
             },
             {
               "name": "y",
-              "type": "int"
+              "type": "int",
+              "summary": "y coordinate in the parent surface"
             }
           ]
         },
@@ -1681,7 +1844,8 @@
             {
               "name": "sibling",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "summary": "the reference surface"
             }
           ]
         },
@@ -1691,7 +1855,8 @@
             {
               "name": "sibling",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "summary": "the reference surface"
             }
           ]
         },
@@ -1754,7 +1919,8 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial of the ping event"
             }
           ]
         }
@@ -1765,7 +1931,8 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "pass this to the pong request"
             }
           ]
         }
@@ -1798,11 +1965,13 @@
           "args": [
             {
               "name": "width",
-              "type": "int"
+              "type": "int",
+              "summary": "width of positioned rectangle"
             },
             {
               "name": "height",
-              "type": "int"
+              "type": "int",
+              "summary": "height of positioned rectangle"
             }
           ]
         },
@@ -1811,19 +1980,23 @@
           "args": [
             {
               "name": "x",
-              "type": "int"
+              "type": "int",
+              "summary": "x position of anchor rectangle"
             },
             {
               "name": "y",
-              "type": "int"
+              "type": "int",
+              "summary": "y position of anchor rectangle"
             },
             {
               "name": "width",
-              "type": "int"
+              "type": "int",
+              "summary": "width of anchor rectangle"
             },
             {
               "name": "height",
-              "type": "int"
+              "type": "int",
+              "summary": "height of anchor rectangle"
             }
           ]
         },
@@ -1832,7 +2005,8 @@
           "args": [
             {
               "name": "anchor",
-              "type": "uint"
+              "type": "uint",
+              "summary": "anchor"
             }
           ]
         },
@@ -1841,7 +2015,8 @@
           "args": [
             {
               "name": "gravity",
-              "type": "uint"
+              "type": "uint",
+              "summary": "gravity direction"
             }
           ]
         },
@@ -1850,7 +2025,8 @@
           "args": [
             {
               "name": "constraint_adjustment",
-              "type": "uint"
+              "type": "uint",
+              "summary": "bit mask of constraint adjustments"
             }
           ]
         },
@@ -1859,11 +2035,13 @@
           "args": [
             {
               "name": "x",
-              "type": "int"
+              "type": "int",
+              "summary": "surface position x offset"
             },
             {
               "name": "y",
-              "type": "int"
+              "type": "int",
+              "summary": "surface position y offset"
             }
           ]
         },
@@ -1877,11 +2055,13 @@
           "args": [
             {
               "name": "parent_width",
-              "type": "int"
+              "type": "int",
+              "summary": "future window geometry width of parent"
             },
             {
               "name": "parent_height",
-              "type": "int"
+              "type": "int",
+              "summary": "future window geometry height of parent"
             }
           ],
           "since": 3
@@ -1891,7 +2071,8 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial of parent configure event"
             }
           ],
           "since": 3
@@ -2013,7 +2194,8 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "the serial from the configure event"
             }
           ]
         }
@@ -2024,7 +2206,8 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial of the configure event"
             }
           ]
         }
@@ -2086,19 +2269,23 @@
             {
               "name": "seat",
               "type": "object",
-              "interface": "wl_seat"
+              "interface": "wl_seat",
+              "summary": "the wl_seat of the user event"
             },
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "the serial of the user event"
             },
             {
               "name": "x",
-              "type": "int"
+              "type": "int",
+              "summary": "the x position to pop up the window menu at"
             },
             {
               "name": "y",
-              "type": "int"
+              "type": "int",
+              "summary": "the y position to pop up the window menu at"
             }
           ]
         },
@@ -2108,11 +2295,13 @@
             {
               "name": "seat",
               "type": "object",
-              "interface": "wl_seat"
+              "interface": "wl_seat",
+              "summary": "the wl_seat of the user event"
             },
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "the serial of the user event"
             }
           ]
         },
@@ -2122,15 +2311,18 @@
             {
               "name": "seat",
               "type": "object",
-              "interface": "wl_seat"
+              "interface": "wl_seat",
+              "summary": "the wl_seat of the user event"
             },
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "the serial of the user event"
             },
             {
               "name": "edges",
-              "type": "uint"
+              "type": "uint",
+              "summary": "which edge or corner is being dragged"
             }
           ]
         },
@@ -2229,7 +2421,8 @@
           "args": [
             {
               "name": "capabilities",
-              "type": "array"
+              "type": "array",
+              "summary": "array of 32-bit capabilities"
             }
           ],
           "since": 5
@@ -2301,11 +2494,13 @@
             {
               "name": "seat",
               "type": "object",
-              "interface": "wl_seat"
+              "interface": "wl_seat",
+              "summary": "the wl_seat of the user event"
             },
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "the serial of the user event"
             }
           ]
         },
@@ -2319,7 +2514,8 @@
             },
             {
               "name": "token",
-              "type": "uint"
+              "type": "uint",
+              "summary": "reposition request token"
             }
           ],
           "since": 3
@@ -2331,19 +2527,23 @@
           "args": [
             {
               "name": "x",
-              "type": "int"
+              "type": "int",
+              "summary": "x position relative to parent surface window geometry"
             },
             {
               "name": "y",
-              "type": "int"
+              "type": "int",
+              "summary": "y position relative to parent surface window geometry"
             },
             {
               "name": "width",
-              "type": "int"
+              "type": "int",
+              "summary": "window geometry width"
             },
             {
               "name": "height",
-              "type": "int"
+              "type": "int",
+              "summary": "window geometry height"
             }
           ]
         },
@@ -2356,7 +2556,8 @@
           "args": [
             {
               "name": "token",
-              "type": "uint"
+              "type": "uint",
+              "summary": "reposition request token"
             }
           ],
           "since": 3
@@ -2387,12 +2588,14 @@
             {
               "name": "id",
               "type": "new_id",
-              "interface": "wp_viewport"
+              "interface": "wp_viewport",
+              "summary": "the new viewport interface id"
             },
             {
               "name": "surface",
               "type": "object",
-              "interface": "wl_surface"
+              "interface": "wl_surface",
+              "summary": "the surface"
             }
           ]
         }
@@ -2420,19 +2623,23 @@
           "args": [
             {
               "name": "x",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "source rectangle x"
             },
             {
               "name": "y",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "source rectangle y"
             },
             {
               "name": "width",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "source rectangle width"
             },
             {
               "name": "height",
-              "type": "fixed"
+              "type": "fixed",
+              "summary": "source rectangle height"
             }
           ]
         },
@@ -2441,11 +2648,13 @@
           "args": [
             {
               "name": "width",
-              "type": "int"
+              "type": "int",
+              "summary": "surface width"
             },
             {
               "name": "height",
-              "type": "int"
+              "type": "int",
+              "summary": "surface height"
             }
           ]
         }
@@ -2479,7 +2688,8 @@
             {
               "name": "params_id",
               "type": "new_id",
-              "interface": "zwp_linux_buffer_params_v1"
+              "interface": "zwp_linux_buffer_params_v1",
+              "summary": "the new temporary"
             }
           ]
         },
@@ -2517,7 +2727,8 @@
           "args": [
             {
               "name": "format",
-              "type": "uint"
+              "type": "uint",
+              "summary": "DRM_FORMAT code"
             }
           ]
         },
@@ -2526,15 +2737,18 @@
           "args": [
             {
               "name": "format",
-              "type": "uint"
+              "type": "uint",
+              "summary": "DRM_FORMAT code"
             },
             {
               "name": "modifier_hi",
-              "type": "uint"
+              "type": "uint",
+              "summary": "high 32 bits of layout modifier"
             },
             {
               "name": "modifier_lo",
-              "type": "uint"
+              "type": "uint",
+              "summary": "low 32 bits of layout modifier"
             }
           ],
           "since": 3
@@ -2555,27 +2769,33 @@
           "args": [
             {
               "name": "fd",
-              "type": "fd"
+              "type": "fd",
+              "summary": "dmabuf fd"
             },
             {
               "name": "plane_idx",
-              "type": "uint"
+              "type": "uint",
+              "summary": "plane index"
             },
             {
               "name": "offset",
-              "type": "uint"
+              "type": "uint",
+              "summary": "offset in bytes"
             },
             {
               "name": "stride",
-              "type": "uint"
+              "type": "uint",
+              "summary": "stride in bytes"
             },
             {
               "name": "modifier_hi",
-              "type": "uint"
+              "type": "uint",
+              "summary": "high 32 bits of layout modifier"
             },
             {
               "name": "modifier_lo",
-              "type": "uint"
+              "type": "uint",
+              "summary": "low 32 bits of layout modifier"
             }
           ]
         },
@@ -2584,19 +2804,23 @@
           "args": [
             {
               "name": "width",
-              "type": "int"
+              "type": "int",
+              "summary": "base plane width in pixels"
             },
             {
               "name": "height",
-              "type": "int"
+              "type": "int",
+              "summary": "base plane height in pixels"
             },
             {
               "name": "format",
-              "type": "uint"
+              "type": "uint",
+              "summary": "DRM_FORMAT code"
             },
             {
               "name": "flags",
-              "type": "uint"
+              "type": "uint",
+              "summary": "see enum flags"
             }
           ]
         },
@@ -2606,23 +2830,28 @@
             {
               "name": "buffer_id",
               "type": "new_id",
-              "interface": "wl_buffer"
+              "interface": "wl_buffer",
+              "summary": "id for the newly created wl_buffer"
             },
             {
               "name": "width",
-              "type": "int"
+              "type": "int",
+              "summary": "base plane width in pixels"
             },
             {
               "name": "height",
-              "type": "int"
+              "type": "int",
+              "summary": "base plane height in pixels"
             },
             {
               "name": "format",
-              "type": "uint"
+              "type": "uint",
+              "summary": "DRM_FORMAT code"
             },
             {
               "name": "flags",
-              "type": "uint"
+              "type": "uint",
+              "summary": "see enum flags"
             }
           ],
           "since": 2
@@ -2635,7 +2864,8 @@
             {
               "name": "buffer",
               "type": "new_id",
-              "interface": "wl_buffer"
+              "interface": "wl_buffer",
+              "summary": "the newly created wl_buffer"
             }
           ]
         },
@@ -2688,11 +2918,13 @@
           "args": [
             {
               "name": "fd",
-              "type": "fd"
+              "type": "fd",
+              "summary": "table file descriptor"
             },
             {
               "name": "size",
-              "type": "uint"
+              "type": "uint",
+              "summary": "table size, in bytes"
             }
           ]
         },
@@ -2701,7 +2933,8 @@
           "args": [
             {
               "name": "device",
-              "type": "array"
+              "type": "array",
+              "summary": "device dev_t value"
             }
           ]
         },
@@ -2714,7 +2947,8 @@
           "args": [
             {
               "name": "device",
-              "type": "array"
+              "type": "array",
+              "summary": "device dev_t value"
             }
           ]
         },
@@ -2723,7 +2957,8 @@
           "args": [
             {
               "name": "indices",
-              "type": "array"
+              "type": "array",
+              "summary": "array of 16-bit indexes"
             }
           ]
         },
@@ -2732,7 +2967,8 @@
           "args": [
             {
               "name": "flags",
-              "type": "uint"
+              "type": "uint",
+              "summary": "tranche flags"
             }
           ]
         }
@@ -2855,7 +3091,8 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "used to identify the known state"
             }
           ]
         },
@@ -2911,7 +3148,8 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial of the latest known text input state"
             },
             {
               "name": "text",
@@ -2954,7 +3192,8 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial of the latest known text input state"
             },
             {
               "name": "text",
@@ -2993,7 +3232,8 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial of the latest known text input state"
             },
             {
               "name": "time",
@@ -3018,7 +3258,8 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial of the latest known text input state"
             },
             {
               "name": "language",
@@ -3031,7 +3272,8 @@
           "args": [
             {
               "name": "serial",
-              "type": "uint"
+              "type": "uint",
+              "summary": "serial of the latest known text input state"
             },
             {
               "name": "direction",

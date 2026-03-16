@@ -20,6 +20,7 @@ export type WaylandOp = {
         type: WaylandArgType;
         interface?: string;
         allowNull?: boolean;
+        summary?: string;
     }>;
 };
 export type WaylandProtocol = {

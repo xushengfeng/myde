@@ -91,195 +91,289 @@ export enum WaylandEventOpcode {
 
 export type WaylandEventObj = {
     "wl_display.error": {
+        /** object where the error occurred*/
         object_id: number;
+        /** error code*/
         code: number;
+        /** error description*/
         message: string;
     };
     "wl_display.delete_id": {
+        /** deleted object ID*/
         id: number;
     };
     "wl_registry.global": {
+        /** numeric name of the global object*/
         name: number;
+        /** interface implemented by the object*/
         interface: string;
+        /** interface version*/
         version: number;
     };
     "wl_registry.global_remove": {
+        /** numeric name of the global object*/
         name: number;
     };
     "wl_callback.done": {
+        /** request-specific data for the callback*/
         callback_data: number;
     };
     "wl_shm.format": {
+        /** buffer pixel format*/
         format: number;
     };
     "wl_buffer.release": {};
     "wl_data_offer.offer": {
+        /** offered mime type*/
         mime_type: string;
     };
     "wl_data_offer.source_actions": {
+        /** actions offered by the data source*/
         source_actions: number;
     };
     "wl_data_offer.action": {
+        /** action selected by the compositor*/
         dnd_action: number;
     };
     "wl_data_source.target": {
+        /** mime type accepted by the target*/
         mime_type?: string;
     };
     "wl_data_source.send": {
+        /** mime type for the data*/
         mime_type: string;
+        /** file descriptor for the data*/
         fd: number;
     };
     "wl_data_source.cancelled": {};
     "wl_data_source.dnd_drop_performed": {};
     "wl_data_source.dnd_finished": {};
     "wl_data_source.action": {
+        /** action selected by the compositor*/
         dnd_action: number;
     };
     "wl_data_device.data_offer": {
+        /** the new data_offer object*/
         id: WaylandObjectId2<"wl_data_offer">;
     };
     "wl_data_device.enter": {
+        /** serial number of the enter event*/
         serial: number;
+        /** client surface entered*/
         surface: number;
+        /** surface-local x coordinate*/
         x: number;
+        /** surface-local y coordinate*/
         y: number;
+        /** source data_offer object*/
         id?: number;
     };
     "wl_data_device.leave": {};
     "wl_data_device.motion": {
+        /** timestamp with millisecond granularity*/
         time: number;
+        /** surface-local x coordinate*/
         x: number;
+        /** surface-local y coordinate*/
         y: number;
     };
     "wl_data_device.drop": {};
     "wl_data_device.selection": {
+        /** selection data_offer object*/
         id?: number;
     };
     "wl_surface.enter": {
+        /** output entered by the surface*/
         output: number;
     };
     "wl_surface.leave": {
+        /** output left by the surface*/
         output: number;
     };
     "wl_surface.preferred_buffer_scale": {
+        /** preferred scaling factor*/
         factor: number;
     };
     "wl_surface.preferred_buffer_transform": {
+        /** preferred transform*/
         transform: number;
     };
     "wl_seat.capabilities": {
+        /** capabilities of the seat*/
         capabilities: number;
     };
     "wl_seat.name": {
+        /** seat identifier*/
         name: string;
     };
     "wl_pointer.enter": {
+        /** serial number of the enter event*/
         serial: number;
+        /** surface entered by the pointer*/
         surface: number;
+        /** surface-local x coordinate*/
         surface_x: number;
+        /** surface-local y coordinate*/
         surface_y: number;
     };
     "wl_pointer.leave": {
+        /** serial number of the leave event*/
         serial: number;
+        /** surface left by the pointer*/
         surface: number;
     };
     "wl_pointer.motion": {
+        /** timestamp with millisecond granularity*/
         time: number;
+        /** surface-local x coordinate*/
         surface_x: number;
+        /** surface-local y coordinate*/
         surface_y: number;
     };
     "wl_pointer.button": {
+        /** serial number of the button event*/
         serial: number;
+        /** timestamp with millisecond granularity*/
         time: number;
+        /** button that produced the event*/
         button: number;
+        /** physical state of the button*/
         state: number;
     };
     "wl_pointer.axis": {
+        /** timestamp with millisecond granularity*/
         time: number;
+        /** axis type*/
         axis: number;
+        /** length of vector in surface-local coordinate space*/
         value: number;
     };
     "wl_pointer.frame": {};
     "wl_pointer.axis_source": {
+        /** source of the axis event*/
         axis_source: number;
     };
     "wl_pointer.axis_stop": {
+        /** timestamp with millisecond granularity*/
         time: number;
+        /** the axis stopped with this event*/
         axis: number;
     };
     "wl_pointer.axis_discrete": {
+        /** axis type*/
         axis: number;
+        /** number of steps*/
         discrete: number;
     };
     "wl_pointer.axis_value120": {
+        /** axis type*/
         axis: number;
+        /** scroll distance as fraction of 120*/
         value120: number;
     };
     "wl_pointer.axis_relative_direction": {
+        /** axis type*/
         axis: number;
+        /** physical direction relative to axis motion*/
         direction: number;
     };
     "wl_keyboard.keymap": {
+        /** keymap format*/
         format: number;
+        /** keymap file descriptor*/
         fd: number;
+        /** keymap size, in bytes*/
         size: number;
     };
     "wl_keyboard.enter": {
+        /** serial number of the enter event*/
         serial: number;
+        /** surface gaining keyboard focus*/
         surface: number;
+        /** the keys currently logically down*/
         keys: number[];
     };
     "wl_keyboard.leave": {
+        /** serial number of the leave event*/
         serial: number;
+        /** surface that lost keyboard focus*/
         surface: number;
     };
     "wl_keyboard.key": {
+        /** serial number of the key event*/
         serial: number;
+        /** timestamp with millisecond granularity*/
         time: number;
+        /** key that produced the event*/
         key: number;
+        /** physical state of the key*/
         state: number;
     };
     "wl_keyboard.modifiers": {
+        /** serial number of the modifiers event*/
         serial: number;
+        /** depressed modifiers*/
         mods_depressed: number;
+        /** latched modifiers*/
         mods_latched: number;
+        /** locked modifiers*/
         mods_locked: number;
+        /** keyboard layout*/
         group: number;
     };
     "wl_keyboard.repeat_info": {
+        /** the rate of repeating keys in characters per second*/
         rate: number;
+        /** delay in milliseconds since key down until repeating starts*/
         delay: number;
     };
     "wl_output.geometry": {
+        /** x position within the global compositor space*/
         x: number;
+        /** y position within the global compositor space*/
         y: number;
+        /** width in millimeters of the output*/
         physical_width: number;
+        /** height in millimeters of the output*/
         physical_height: number;
+        /** subpixel orientation of the output*/
         subpixel: number;
+        /** textual description of the manufacturer*/
         make: string;
+        /** textual description of the model*/
         model: string;
+        /** additional transformation applied to buffer contents during presentation*/
         transform: number;
     };
     "wl_output.mode": {
+        /** bitfield of mode flags*/
         flags: number;
+        /** width of the mode in hardware units*/
         width: number;
+        /** height of the mode in hardware units*/
         height: number;
+        /** vertical refresh rate in mHz*/
         refresh: number;
     };
     "wl_output.done": {};
     "wl_output.scale": {
+        /** scaling factor of output*/
         factor: number;
     };
     "wl_output.name": {
+        /** output name*/
         name: string;
     };
     "wl_output.description": {
+        /** output description*/
         description: string;
     };
     "xdg_wm_base.ping": {
+        /** pass this to the pong request*/
         serial: number;
     };
     "xdg_surface.configure": {
+        /** serial of the configure event*/
         serial: number;
     };
     "xdg_toplevel.configure": {
@@ -293,46 +387,63 @@ export type WaylandEventObj = {
         height: number;
     };
     "xdg_toplevel.wm_capabilities": {
+        /** array of 32-bit capabilities*/
         capabilities: number[];
     };
     "xdg_popup.configure": {
+        /** x position relative to parent surface window geometry*/
         x: number;
+        /** y position relative to parent surface window geometry*/
         y: number;
+        /** window geometry width*/
         width: number;
+        /** window geometry height*/
         height: number;
     };
     "xdg_popup.popup_done": {};
     "xdg_popup.repositioned": {
+        /** reposition request token*/
         token: number;
     };
     "zwp_linux_dmabuf_v1.format": {
+        /** DRM_FORMAT code*/
         format: number;
     };
     "zwp_linux_dmabuf_v1.modifier": {
+        /** DRM_FORMAT code*/
         format: number;
+        /** high 32 bits of layout modifier*/
         modifier_hi: number;
+        /** low 32 bits of layout modifier*/
         modifier_lo: number;
     };
     "zwp_linux_buffer_params_v1.created": {
+        /** the newly created wl_buffer*/
         buffer: WaylandObjectId2<"wl_buffer">;
     };
     "zwp_linux_buffer_params_v1.failed": {};
     "zwp_linux_dmabuf_feedback_v1.done": {};
     "zwp_linux_dmabuf_feedback_v1.format_table": {
+        /** table file descriptor*/
         fd: number;
+        /** table size, in bytes*/
         size: number;
     };
     "zwp_linux_dmabuf_feedback_v1.main_device": {
+        /** device dev_t value*/
         device: number[];
     };
     "zwp_linux_dmabuf_feedback_v1.tranche_done": {};
     "zwp_linux_dmabuf_feedback_v1.tranche_target_device": {
+        /** device dev_t value*/
         device: number[];
     };
     "zwp_linux_dmabuf_feedback_v1.tranche_formats": {
+        /** array of 16-bit indexes*/
         indices: number[];
     };
     "zwp_linux_dmabuf_feedback_v1.tranche_flags": {
+        /** tranche flags*/
         flags: number;
     };
     "zwp_text_input_v1.enter": {
@@ -346,6 +457,7 @@ export type WaylandEventObj = {
         state: number;
     };
     "zwp_text_input_v1.preedit_string": {
+        /** serial of the latest known text input state*/
         serial: number;
         text: string;
         commit: string;
@@ -359,6 +471,7 @@ export type WaylandEventObj = {
         index: number;
     };
     "zwp_text_input_v1.commit_string": {
+        /** serial of the latest known text input state*/
         serial: number;
         text: string;
     };
@@ -371,6 +484,7 @@ export type WaylandEventObj = {
         length: number;
     };
     "zwp_text_input_v1.keysym": {
+        /** serial of the latest known text input state*/
         serial: number;
         time: number;
         sym: number;
@@ -378,10 +492,12 @@ export type WaylandEventObj = {
         modifiers: number;
     };
     "zwp_text_input_v1.language": {
+        /** serial of the latest known text input state*/
         serial: number;
         language: string;
     };
     "zwp_text_input_v1.text_direction": {
+        /** serial of the latest known text input state*/
         serial: number;
         direction: number;
     };
@@ -389,131 +505,189 @@ export type WaylandEventObj = {
 
 export type WaylandRequestObj = {
     "wl_display.sync": {
+        /** callback object for the sync request*/
         callback: WaylandObjectId2<"wl_callback">;
     };
     "wl_display.get_registry": {
+        /** global registry object*/
         registry: WaylandObjectId2<"wl_registry">;
     };
     "wl_registry.bind": {
+        /** unique numeric name of the object*/
         name: number;
+        /** bounded object*/
         id: WaylandObjectId2<"undefined">;
     };
     "wl_compositor.create_surface": {
+        /** the new surface*/
         id: WaylandObjectId2<"wl_surface">;
     };
     "wl_compositor.create_region": {
+        /** the new region*/
         id: WaylandObjectId2<"wl_region">;
     };
     "wl_shm_pool.create_buffer": {
+        /** buffer to create*/
         id: WaylandObjectId2<"wl_buffer">;
+        /** buffer byte offset within the pool*/
         offset: number;
+        /** buffer width, in pixels*/
         width: number;
+        /** buffer height, in pixels*/
         height: number;
+        /** number of bytes from the beginning of one row to the beginning of the next row*/
         stride: number;
+        /** buffer pixel format*/
         format: number;
     };
     "wl_shm_pool.destroy": {};
     "wl_shm_pool.resize": {
+        /** new size of the pool, in bytes*/
         size: number;
     };
     "wl_shm.create_pool": {
+        /** pool to create*/
         id: WaylandObjectId2<"wl_shm_pool">;
+        /** file descriptor for the pool*/
         fd: number;
+        /** pool size, in bytes*/
         size: number;
     };
     "wl_shm.release": {};
     "wl_buffer.destroy": {};
     "wl_data_offer.accept": {
+        /** serial number of the accept request*/
         serial: number;
+        /** mime type accepted by the client*/
         mime_type?: string;
     };
     "wl_data_offer.receive": {
+        /** mime type desired by receiver*/
         mime_type: string;
+        /** file descriptor for data transfer*/
         fd: number;
     };
     "wl_data_offer.destroy": {};
     "wl_data_offer.finish": {};
     "wl_data_offer.set_actions": {
+        /** actions supported by the destination client*/
         dnd_actions: number;
+        /** action preferred by the destination client*/
         preferred_action: number;
     };
     "wl_data_source.offer": {
+        /** mime type offered by the data source*/
         mime_type: string;
     };
     "wl_data_source.destroy": {};
     "wl_data_source.set_actions": {
+        /** actions supported by the data source*/
         dnd_actions: number;
     };
     "wl_data_device.start_drag": {
+        /** data source for the eventual transfer*/
         source?: number;
+        /** surface where the drag originates*/
         origin: number;
+        /** drag-and-drop icon surface*/
         icon?: number;
+        /** serial number of the implicit grab on the origin*/
         serial: number;
     };
     "wl_data_device.set_selection": {
+        /** data source for the selection*/
         source?: number;
+        /** serial number of the event that triggered this request*/
         serial: number;
     };
     "wl_data_device.release": {};
     "wl_data_device_manager.create_data_source": {
+        /** data source to create*/
         id: WaylandObjectId2<"wl_data_source">;
     };
     "wl_data_device_manager.get_data_device": {
+        /** data device to create*/
         id: WaylandObjectId2<"wl_data_device">;
+        /** seat associated with the data device*/
         seat: number;
     };
     "wl_surface.destroy": {};
     "wl_surface.attach": {
+        /** buffer of surface contents*/
         buffer?: number;
+        /** surface-local x coordinate*/
         x: number;
+        /** surface-local y coordinate*/
         y: number;
     };
     "wl_surface.damage": {
+        /** surface-local x coordinate*/
         x: number;
+        /** surface-local y coordinate*/
         y: number;
+        /** width of damage rectangle*/
         width: number;
+        /** height of damage rectangle*/
         height: number;
     };
     "wl_surface.frame": {
+        /** callback object for the frame request*/
         callback: WaylandObjectId2<"wl_callback">;
     };
     "wl_surface.set_opaque_region": {
+        /** opaque region of the surface*/
         region?: number;
     };
     "wl_surface.set_input_region": {
+        /** input region of the surface*/
         region?: number;
     };
     "wl_surface.commit": {};
     "wl_surface.set_buffer_transform": {
+        /** transform for interpreting buffer contents*/
         transform: number;
     };
     "wl_surface.set_buffer_scale": {
+        /** scale for interpreting buffer contents*/
         scale: number;
     };
     "wl_surface.damage_buffer": {
+        /** buffer-local x coordinate*/
         x: number;
+        /** buffer-local y coordinate*/
         y: number;
+        /** width of damage rectangle*/
         width: number;
+        /** height of damage rectangle*/
         height: number;
     };
     "wl_surface.offset": {
+        /** surface-local x coordinate*/
         x: number;
+        /** surface-local y coordinate*/
         y: number;
     };
     "wl_seat.get_pointer": {
+        /** seat pointer*/
         id: WaylandObjectId2<"wl_pointer">;
     };
     "wl_seat.get_keyboard": {
+        /** seat keyboard*/
         id: WaylandObjectId2<"wl_keyboard">;
     };
     "wl_seat.get_touch": {
+        /** seat touch interface*/
         id: WaylandObjectId2<"wl_touch">;
     };
     "wl_seat.release": {};
     "wl_pointer.set_cursor": {
+        /** serial number of the enter event*/
         serial: number;
+        /** pointer surface*/
         surface?: number;
+        /** surface-local x coordinate*/
         hotspot_x: number;
+        /** surface-local y coordinate*/
         hotspot_y: number;
     };
     "wl_pointer.release": {};
@@ -521,32 +695,47 @@ export type WaylandRequestObj = {
     "wl_output.release": {};
     "wl_region.destroy": {};
     "wl_region.add": {
+        /** region-local x coordinate*/
         x: number;
+        /** region-local y coordinate*/
         y: number;
+        /** rectangle width*/
         width: number;
+        /** rectangle height*/
         height: number;
     };
     "wl_region.subtract": {
+        /** region-local x coordinate*/
         x: number;
+        /** region-local y coordinate*/
         y: number;
+        /** rectangle width*/
         width: number;
+        /** rectangle height*/
         height: number;
     };
     "wl_subcompositor.destroy": {};
     "wl_subcompositor.get_subsurface": {
+        /** the new sub-surface object ID*/
         id: WaylandObjectId2<"wl_subsurface">;
+        /** the surface to be turned into a sub-surface*/
         surface: number;
+        /** the parent surface*/
         parent: number;
     };
     "wl_subsurface.destroy": {};
     "wl_subsurface.set_position": {
+        /** x coordinate in the parent surface*/
         x: number;
+        /** y coordinate in the parent surface*/
         y: number;
     };
     "wl_subsurface.place_above": {
+        /** the reference surface*/
         sibling: number;
     };
     "wl_subsurface.place_below": {
+        /** the reference surface*/
         sibling: number;
     };
     "wl_subsurface.set_sync": {};
@@ -560,38 +749,53 @@ export type WaylandRequestObj = {
         surface: number;
     };
     "xdg_wm_base.pong": {
+        /** serial of the ping event*/
         serial: number;
     };
     "xdg_positioner.destroy": {};
     "xdg_positioner.set_size": {
+        /** width of positioned rectangle*/
         width: number;
+        /** height of positioned rectangle*/
         height: number;
     };
     "xdg_positioner.set_anchor_rect": {
+        /** x position of anchor rectangle*/
         x: number;
+        /** y position of anchor rectangle*/
         y: number;
+        /** width of anchor rectangle*/
         width: number;
+        /** height of anchor rectangle*/
         height: number;
     };
     "xdg_positioner.set_anchor": {
+        /** anchor*/
         anchor: number;
     };
     "xdg_positioner.set_gravity": {
+        /** gravity direction*/
         gravity: number;
     };
     "xdg_positioner.set_constraint_adjustment": {
+        /** bit mask of constraint adjustments*/
         constraint_adjustment: number;
     };
     "xdg_positioner.set_offset": {
+        /** surface position x offset*/
         x: number;
+        /** surface position y offset*/
         y: number;
     };
     "xdg_positioner.set_reactive": {};
     "xdg_positioner.set_parent_size": {
+        /** future window geometry width of parent*/
         parent_width: number;
+        /** future window geometry height of parent*/
         parent_height: number;
     };
     "xdg_positioner.set_parent_configure": {
+        /** serial of parent configure event*/
         serial: number;
     };
     "xdg_surface.destroy": {};
@@ -610,6 +814,7 @@ export type WaylandRequestObj = {
         height: number;
     };
     "xdg_surface.ack_configure": {
+        /** the serial from the configure event*/
         serial: number;
     };
     "xdg_toplevel.destroy": {};
@@ -623,18 +828,27 @@ export type WaylandRequestObj = {
         app_id: string;
     };
     "xdg_toplevel.show_window_menu": {
+        /** the wl_seat of the user event*/
         seat: number;
+        /** the serial of the user event*/
         serial: number;
+        /** the x position to pop up the window menu at*/
         x: number;
+        /** the y position to pop up the window menu at*/
         y: number;
     };
     "xdg_toplevel.move": {
+        /** the wl_seat of the user event*/
         seat: number;
+        /** the serial of the user event*/
         serial: number;
     };
     "xdg_toplevel.resize": {
+        /** the wl_seat of the user event*/
         seat: number;
+        /** the serial of the user event*/
         serial: number;
+        /** which edge or corner is being dragged*/
         edges: number;
     };
     "xdg_toplevel.set_max_size": {
@@ -654,31 +868,43 @@ export type WaylandRequestObj = {
     "xdg_toplevel.set_minimized": {};
     "xdg_popup.destroy": {};
     "xdg_popup.grab": {
+        /** the wl_seat of the user event*/
         seat: number;
+        /** the serial of the user event*/
         serial: number;
     };
     "xdg_popup.reposition": {
         positioner: number;
+        /** reposition request token*/
         token: number;
     };
     "wp_viewporter.destroy": {};
     "wp_viewporter.get_viewport": {
+        /** the new viewport interface id*/
         id: WaylandObjectId2<"wp_viewport">;
+        /** the surface*/
         surface: number;
     };
     "wp_viewport.destroy": {};
     "wp_viewport.set_source": {
+        /** source rectangle x*/
         x: number;
+        /** source rectangle y*/
         y: number;
+        /** source rectangle width*/
         width: number;
+        /** source rectangle height*/
         height: number;
     };
     "wp_viewport.set_destination": {
+        /** surface width*/
         width: number;
+        /** surface height*/
         height: number;
     };
     "zwp_linux_dmabuf_v1.destroy": {};
     "zwp_linux_dmabuf_v1.create_params": {
+        /** the new temporary*/
         params_id: WaylandObjectId2<"zwp_linux_buffer_params_v1">;
     };
     "zwp_linux_dmabuf_v1.get_default_feedback": {
@@ -690,24 +916,39 @@ export type WaylandRequestObj = {
     };
     "zwp_linux_buffer_params_v1.destroy": {};
     "zwp_linux_buffer_params_v1.add": {
+        /** dmabuf fd*/
         fd: number;
+        /** plane index*/
         plane_idx: number;
+        /** offset in bytes*/
         offset: number;
+        /** stride in bytes*/
         stride: number;
+        /** high 32 bits of layout modifier*/
         modifier_hi: number;
+        /** low 32 bits of layout modifier*/
         modifier_lo: number;
     };
     "zwp_linux_buffer_params_v1.create": {
+        /** base plane width in pixels*/
         width: number;
+        /** base plane height in pixels*/
         height: number;
+        /** DRM_FORMAT code*/
         format: number;
+        /** see enum flags*/
         flags: number;
     };
     "zwp_linux_buffer_params_v1.create_immed": {
+        /** id for the newly created wl_buffer*/
         buffer_id: WaylandObjectId2<"wl_buffer">;
+        /** base plane width in pixels*/
         width: number;
+        /** base plane height in pixels*/
         height: number;
+        /** DRM_FORMAT code*/
         format: number;
+        /** see enum flags*/
         flags: number;
     };
     "zwp_linux_dmabuf_feedback_v1.destroy": {};
@@ -740,6 +981,7 @@ export type WaylandRequestObj = {
         language: string;
     };
     "zwp_text_input_v1.commit_state": {
+        /** used to identify the known state*/
         serial: number;
     };
     "zwp_text_input_v1.invoke_action": {

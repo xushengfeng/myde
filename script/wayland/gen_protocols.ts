@@ -127,6 +127,7 @@ supportedProtocols.forEach((proto) => {
                     type: arg.$.type as WaylandArgType,
                     interface: arg.$.interface,
                     ...(arg.$["allow-null"] === "true" && { allowNull: true }),
+                    ...(arg.$.summary && { summary: arg.$.summary }),
                 })),
                 ...(req.$.since && { since: parseInt(req.$.since, 10) }),
             }));
@@ -137,6 +138,7 @@ supportedProtocols.forEach((proto) => {
                     type: arg.$.type as WaylandArgType,
                     interface: arg.$.interface,
                     ...(arg.$["allow-null"] === "true" && { allowNull: true }),
+                    ...(arg.$.summary && { summary: arg.$.summary }),
                 })),
                 ...(evt.$.since && { since: parseInt(evt.$.since, 10) }),
             }));
@@ -184,6 +186,30 @@ waylandTypeLines.push("}");
 
 waylandTypeLines.push("");
 waylandTypeLines.push("export type WaylandEventObj = {");
+
+function argsMap(
+    args: Array<{ name: string; type: WaylandArgType; interface?: string; allowNull?: boolean; summary?: string }>,
+): string {
+    const map: Record<WaylandArgType, string> = {
+        int: "number",
+        uint: "number",
+        string: "string",
+        array: "number[]",
+        fixed: "number",
+        fd: "number",
+        object: "number",
+        new_id: "WaylandObjectId2",
+    };
+    return args
+        .map(
+            (arg) =>
+                `${arg.summary ? `        /** ${arg.summary}*/\n` : ""}        ${arg.name}${arg.allowNull ? "?" : ""}: ${
+                    arg.type === "new_id" ? `${map[arg.type]}<"${arg.interface}">` : map[arg.type] || "any"
+                };`,
+        )
+        .join("\n");
+}
+
 for (const protos of Object.values(allResults)) {
     for (const proto of protos) {
         if (!proto.event) continue;
@@ -193,25 +219,7 @@ for (const protos of Object.values(allResults)) {
                 waylandTypeLines.push(`    ${key}: {};`);
                 continue;
             }
-            const map: Record<WaylandArgType, string> = {
-                int: "number",
-                uint: "number",
-                string: "string",
-                array: "number[]",
-                fixed: "number",
-                fd: "number",
-                object: "number",
-                new_id: "WaylandObjectId2",
-            };
-            const fields = evt.args
-                .map(
-                    (arg) =>
-                        `        ${arg.name}${arg.allowNull ? "?" : ""}: ${
-                            arg.type === "new_id" ? `${map[arg.type]}<"${arg.interface}">` : map[arg.type] || "any"
-                        };`,
-                )
-                .join("\n");
-            waylandTypeLines.push(`    ${key}: {\n${fields}\n    };`);
+            waylandTypeLines.push(`    ${key}: {\n${argsMap(evt.args)}\n    };`);
         }
     }
 }
@@ -228,25 +236,7 @@ for (const protos of Object.values(allResults)) {
                 waylandTypeLines.push(`    ${key}: {};`);
                 continue;
             }
-            const map: Record<WaylandArgType, string> = {
-                int: "number",
-                uint: "number",
-                string: "string",
-                array: "number[]",
-                fixed: "number",
-                fd: "number",
-                object: "number",
-                new_id: "WaylandObjectId2",
-            };
-            const fields = req.args
-                .map(
-                    (arg) =>
-                        `        ${arg.name}${arg.allowNull ? "?" : ""}: ${
-                            arg.type === "new_id" ? `${map[arg.type]}<"${arg.interface}">` : map[arg.type] || "any"
-                        };`,
-                )
-                .join("\n");
-            waylandTypeLines.push(`    ${key}: {\n${fields}\n    };`);
+            waylandTypeLines.push(`    ${key}: {\n${argsMap(req.args)}\n    };`);
         }
     }
 }
