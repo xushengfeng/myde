@@ -69,7 +69,10 @@ function runApp(execPath: string, args: string[] = []) {
         const dataStr = data.toString("utf8");
         const m = dataStr.match(/\{Default Queue\}(.+?)#/)?.[1];
         if (m) {
-            const p = (m as string).replace("->", "").trim();
+            const p = (m as string)
+                .replace("->", "")
+                .replace(/^discarded/, "")
+                .trim();
             if (!server.isProtocolSupported(p)) {
                 console.error(`Unknown protocol in debug output: ${p}`);
             }
