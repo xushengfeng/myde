@@ -54,9 +54,7 @@ type WaylandData = {
         rects: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
     };
     xdg_surface: {
-        surface: WaylandObjectId2<"wl_surface">;
         warpEl: HTMLElement;
-        xdg_role?: WaylandObjectId2<"xdg_toplevel" | "xdg_popup">;
     };
     xdg_positioner: {
         size: { width: number; height: number };
@@ -68,11 +66,6 @@ type WaylandData = {
         reactive: boolean;
         parent_size: { parent_width: number; parent_height: number };
     };
-    xdg_popup: {
-        xdg_surface: WaylandObjectId2<"xdg_surface">;
-        parent_xdg_surface: WaylandObjectId2<"xdg_surface">;
-    };
-    xdg_toplevel: { xdg_surface: WaylandObjectId2<"xdg_surface"> };
     wl_data_source: { offers: string[] };
 };
 
@@ -312,6 +305,100 @@ class wlSubSurfaceData {
     // todo 删除关系
 }
 
+class xdgSurfaceData {
+    wl_surface: wlSurfaceData;
+
+    xdg_surface: Record<
+        WaylandObjectId2<"xdg_surface">,
+        {
+            surface: WaylandObjectId2<"wl_surface">;
+            xdg_role?: WaylandObjectId2<"xdg_toplevel" | "xdg_popup">;
+            parent: WaylandObjectId2<"xdg_surface"> | undefined;
+            children: WaylandObjectId2<"xdg_surface">[];
+        }
+    > = {};
+    xdg_popup = new Map<WaylandObjectId2<"xdg_popup">, WaylandObjectId2<"xdg_surface">>();
+    xdg_toplevel = new Map<WaylandObjectId2<"xdg_toplevel">, WaylandObjectId2<"xdg_surface">>();
+    constructor(wl: wlSurfaceData) {
+        this.wl_surface = wl;
+    }
+
+    addXdgSurface(id: WaylandObjectId2<"xdg_surface">, wlSurface: WaylandObjectId2<"wl_surface">) {
+        this.xdg_surface[id] = { surface: wlSurface, parent: undefined, children: [] };
+    }
+    getXdgSurface(id: WaylandObjectId2<"xdg_surface">) {
+        return this.xdg_surface[id];
+    }
+    getXdgSurfaceByToplevel(id: WaylandObjectId2<"xdg_toplevel">) {
+        return this.xdg_toplevel.get(id);
+    }
+    getXdgSurfaceByPopup(id: WaylandObjectId2<"xdg_popup">) {
+        return this.xdg_popup.get(id);
+    }
+    setRelation(parent: WaylandObjectId2<"xdg_surface">, child: WaylandObjectId2<"xdg_surface">) {
+        this.xdg_surface[child].parent = parent;
+        this.xdg_surface[parent].children.push(child);
+    }
+    rmRelation(parent: WaylandObjectId2<"xdg_surface">, child: WaylandObjectId2<"xdg_surface">) {
+        this.xdg_surface[child].parent = undefined;
+        this.xdg_surface[parent].children = this.xdg_surface[parent].children.filter((c) => c !== child);
+    }
+    setAsToplevel(id: WaylandObjectId2<"xdg_surface">, toplevelId: WaylandObjectId2<"xdg_toplevel">) {
+        this.wl_surface.setWlSurfaceRole(this.getXdgSurface(id).surface, "toplevel");
+        this.xdg_toplevel.set(toplevelId, id);
+        this.xdg_surface[id].xdg_role = toplevelId;
+    }
+    setAsPopup(
+        id: WaylandObjectId2<"xdg_surface">,
+        popupId: WaylandObjectId2<"xdg_popup">,
+        parent: WaylandObjectId2<"xdg_surface">,
+    ) {
+        this.wl_surface.setWlSurfaceRole(this.getXdgSurface(id).surface, "popup");
+        this.xdg_popup.set(popupId, id);
+        this.xdg_surface[id].xdg_role = popupId;
+        this.setRelation(parent, id);
+    }
+    xdgSurfaceDestroyed(xdgSurfaceId: WaylandObjectId2<"xdg_surface">) {
+        delete this.xdg_surface[xdgSurfaceId];
+    }
+    popupDestroyed(popupId: WaylandObjectId2<"xdg_popup">) {
+        const id = this.xdg_popup.get(popupId);
+        if (id === undefined) {
+            return;
+        }
+        const xdgSurface = this.getXdgSurface(id);
+        const parent = xdgSurface.parent;
+        if (parent) {
+            this.rmRelation(parent, id);
+        }
+        this.xdgSurfaceDestroyed(id);
+        this.xdg_popup.delete(popupId);
+    }
+    toplevelDestroyed(toplevelId: WaylandObjectId2<"xdg_toplevel">) {
+        const id = this.xdg_toplevel.get(toplevelId);
+        if (id === undefined) {
+            return;
+        }
+        const xdgSurface = this.getXdgSurface(id);
+        const parent = xdgSurface.parent;
+        if (parent) {
+            this.rmRelation(parent, id);
+        }
+        this.xdgSurfaceDestroyed(id);
+        this.xdg_toplevel.delete(toplevelId);
+    }
+    getChildenDeepOnlyPopup(parent: WaylandObjectId2<"xdg_surface">): WaylandObjectId2<"xdg_surface">[] {
+        const children: WaylandObjectId2<"xdg_surface">[] = [];
+        // todo tree walk
+        children.push(
+            ...this.xdg_surface[parent].children.filter(
+                (c) => this.wl_surface.getWlSurface(this.getXdgSurface(c).surface).role === "popup",
+            ),
+        );
+        return children;
+    }
+}
+
 class WaylandClient {
     logConfig = {
         receive: true,
@@ -346,8 +433,6 @@ class WaylandClient {
         windows: Map<
             WaylandObjectId2<"xdg_toplevel">,
             {
-                xdg_surface: WaylandObjectId2<"xdg_surface">;
-                popups: Set<WaylandObjectId2<"xdg_popup">>;
                 actived: boolean;
                 box: {
                     width: number;
@@ -361,6 +446,7 @@ class WaylandClient {
     private wlSurface = new wlSurfaceData();
     private dataManager = {
         wlSubSurface: new wlSubSurfaceData(this.wlSurface),
+        xdgSurface: new xdgSurfaceData(this.wlSurface),
     };
     // 事件存储
     private events: { [K in keyof WaylandClientEventMap]?: WaylandClientEventMap[K][] } = {};
@@ -915,7 +1001,8 @@ class WaylandClient {
             const xdgSurface = this.getObject(x.args.id);
             const surfaceId = waylandObjectId(x.args.surface, "wl_surface");
             const el = view().style({ position: "relative" });
-            xdgSurface.data = { surface: surfaceId, warpEl: el.el };
+            xdgSurface.data = { warpEl: el.el };
+            this.dataManager.xdgSurface.addXdgSurface(x.args.id, surfaceId);
         });
         isOp("xdg_wm_base.create_positioner", (x) => {
             const thisObj = this.getObject(x.args.id);
@@ -981,15 +1068,12 @@ class WaylandClient {
             });
             this.sendMessageX(x.id, "xdg_surface.configure", { serial: 1 });
             const thisXdgSurface = this.getObject(xid);
-            const surfaceId = thisXdgSurface.data.surface;
+            const surfaceId = this.dataManager.xdgSurface.getXdgSurface(xid).surface;
             const el = pack(thisXdgSurface.data.warpEl);
             const surface = this.getObject(surfaceId);
             el.add(surface.data.canvas);
-            thisXdgSurface.data.xdg_role = toplevelId;
-            this.getObject(toplevelId).data = { xdg_surface: xid };
+            this.dataManager.xdgSurface.setAsToplevel(xid, toplevelId);
             this.obj2.windows.set(toplevelId, {
-                xdg_surface: xid,
-                popups: new Set(),
                 actived: false,
                 box: {
                     width: 0,
@@ -1001,7 +1085,8 @@ class WaylandClient {
         });
         isOp("xdg_surface.set_window_geometry", (x) => {
             const thisXdgSurface = this.getObject(x.id);
-            const surfaceId = thisXdgSurface.data.surface;
+            const thisXdgSurface2 = this.dataManager.xdgSurface.getXdgSurface(x.id);
+            const surfaceId = thisXdgSurface2.surface;
             const surface = this.getObject(surfaceId);
             const canvas = surface.data.canvas;
             const canvasEl = pack(canvas);
@@ -1010,10 +1095,10 @@ class WaylandClient {
                 width: `${x.args.width}px`,
                 height: `${x.args.height}px`,
             });
-            if (thisXdgSurface.data.xdg_role) {
+            if (thisXdgSurface2.xdg_role) {
                 this.emit(
                     "windowResized",
-                    thisXdgSurface.data.xdg_role as WaylandObjectId2<"xdg_toplevel">, // todo check
+                    thisXdgSurface2.xdg_role as WaylandObjectId2<"xdg_toplevel">, // todo check
                     x.args.width,
                     x.args.height,
                 );
@@ -1023,27 +1108,18 @@ class WaylandClient {
             const xid = x.id;
             const popupId = x.args.id;
             const thisXdgSurface = this.getObject(xid);
-            const thisSurfaceId = thisXdgSurface.data.surface;
+            const thisSurfaceId = this.dataManager.xdgSurface.getXdgSurface(xid).surface;
             const thisSurface = this.getObject(thisSurfaceId);
             const parentXdgSurfaceId = waylandObjectId(x.args.parent, "xdg_surface");
             if (!parentXdgSurfaceId) {
                 console.error("No parent for popup");
                 return;
             }
+            const xdgSurfaceM = this.dataManager.xdgSurface;
+            xdgSurfaceM.setAsPopup(xid, popupId, parentXdgSurfaceId);
+
             const parentXdgSurface = this.getObject(parentXdgSurfaceId);
 
-            this.getObject(popupId).data = {
-                xdg_surface: xid,
-                parent_xdg_surface: parentXdgSurfaceId,
-            };
-            thisXdgSurface.data.xdg_role = popupId;
-            // todo 错误处理
-            const win = this.obj2.windows.get(parentXdgSurface.data.xdg_role as WaylandObjectId2<"xdg_toplevel">); // todo check
-            if (win) {
-                win.popups.add(popupId);
-            } else {
-                console.error(`cannt find window by xdg_surface ${parentXdgSurfaceId}`);
-            }
             const thisEl = pack(thisXdgSurface.data.warpEl)
                 .style({ position: "absolute" })
                 .add(thisSurface.data.canvas);
@@ -1112,15 +1188,10 @@ class WaylandClient {
         });
         isOp("xdg_popup.destroy", (x) => {
             const xid = x.id;
-            const xdgSurfaceId = this.getObject(xid).data.xdg_surface;
+            const xdgSurfaceId = this.dataManager.xdgSurface.getXdgSurfaceByPopup(xid);
+            if (xdgSurfaceId === undefined) return;
             this.getObject(xdgSurfaceId).data.warpEl.remove(); // todo 可以外部处理
-            for (const s of this.obj2.windows.values()) {
-                // todo 不用循环而是向上找到对应的window
-                if (s.popups.has(xid)) {
-                    s.popups.delete(xid);
-                    break;
-                }
-            }
+            this.dataManager.xdgSurface.popupDestroyed(xid);
             this.sendMessageX(x.id, "xdg_popup.popup_done", {});
             this.deleteId(x.id);
         });
@@ -1148,7 +1219,8 @@ class WaylandClient {
         });
 
         isOp("xdg_toplevel.destroy", (x) => {
-            const xdgSurfaceId = this.getObject(x.id).data.xdg_surface;
+            const xdgSurfaceId = this.dataManager.xdgSurface.getXdgSurfaceByToplevel(x.id);
+            if (xdgSurfaceId === undefined) return;
             this.obj2.windows.delete(x.id);
             this.deleteId(x.id);
             this.emit("windowClosed", x.id, this.getObject(xdgSurfaceId).data.warpEl);
@@ -1419,11 +1491,15 @@ class WaylandClient {
             height: win.box.height,
             states: s,
         });
-        this.sendMessageImm(win.xdg_surface, "xdg_surface.configure", { serial: 1 });
+        const xdgSurfaceId = this.dataManager.xdgSurface.getXdgSurfaceByToplevel(winid);
+        if (xdgSurfaceId === undefined) return;
+        this.sendMessageImm(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
     }
     win(id: WaylandWinId) {
         const win = this.obj2.windows.get(id);
         if (win === undefined) return undefined;
+        const xdgSurfaceId = this.dataManager.xdgSurface.getXdgSurfaceByToplevel(id);
+        if (xdgSurfaceId === undefined) return undefined;
         const winObj = {
             setWinBoxData: (box: { width: number; height: number }) => {
                 win.box = box;
@@ -1457,7 +1533,7 @@ class WaylandClient {
                         getEnumValue("xdg_toplevel.state", "maximized"),
                     ],
                 });
-                this.sendMessageImm(win.xdg_surface, "xdg_surface.configure", { serial: 1 });
+                this.sendMessageImm(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
             },
             unmaximize: (width: number, height: number) => {
                 win.box.width = width;
@@ -1473,13 +1549,11 @@ class WaylandClient {
             },
             point: {
                 rootWinEl: () => {
-                    const rootSurfaceId = win.xdg_surface;
-                    const rootSurface = this.getObject(rootSurfaceId);
+                    const rootSurface = this.getObject(xdgSurfaceId);
                     return rootSurface.data.warpEl;
                 },
                 inWin: (p: { x: number; y: number }) => {
-                    const rootSurfaceId = win.xdg_surface;
-                    const rootSurface = this.getObject(rootSurfaceId);
+                    const rootSurface = this.getObject(xdgSurfaceId);
                     const rel = rootSurface.data.warpEl;
                     // todo popup
                     if (p.x < 0 || p.x >= rel.offsetWidth || p.y < 0 || p.y >= rel.offsetHeight) return false;
@@ -1500,31 +1574,31 @@ class WaylandClient {
                         right: baseRight,
                     } = winObj.point.rootWinEl().getBoundingClientRect();
                     // todo zindex
-                    for (const p of Array.from(win.popups).toReversed()) {
-                        const popup = this.getObject(p);
-                        const popupSurface = this.getObject(popup.data.xdg_surface);
+                    const xdgM = this.dataManager.xdgSurface;
+                    for (const p of xdgM.getChildenDeepOnlyPopup(xdgSurfaceId).toReversed()) {
+                        const popupSurface = this.getObject(p);
                         const rect = popupSurface.data.warpEl.getBoundingClientRect();
                         const offsetX = rect.left - baseX;
                         const offsetY = rect.top - baseY;
                         const offsetX1 = rect.right - baseX;
                         const offsetY1 = rect.bottom - baseY;
                         if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
-                            console.log(`pointer in popup surface ${popup.data.xdg_surface}`);
-                            inXdgSurface = popup.data.xdg_surface;
+                            console.log(`pointer in popup surface ${p}`);
+                            inXdgSurface = p;
                             reasonSurfaceType = "popup";
                             break;
                         }
                     }
                     if (!inXdgSurface) {
                         if (0 < x && x < baseRight - baseX && 0 < y && y < baseBottom - baseY) {
-                            inXdgSurface = win.xdg_surface;
+                            inXdgSurface = xdgSurfaceId;
                             reasonSurfaceType = "main";
                         } else {
                             return undefined;
                         }
                     }
                     const surfaces: WaylandObjectId2<"wl_surface">[] = [];
-                    const mainSurfaceId = this.getObject(inXdgSurface).data.surface;
+                    const mainSurfaceId = this.dataManager.xdgSurface.getXdgSurface(inXdgSurface).surface;
                     surfaces.push(mainSurfaceId);
                     surfaces.push(...this.dataManager.wlSubSurface.getChildrenDeep(mainSurfaceId));
                     for (const s of surfaces.toReversed()) {
@@ -1653,8 +1727,7 @@ class WaylandClient {
                 },
             },
             getPreview: () => {
-                const rootSurfaceId = win.xdg_surface;
-                const rootSurface = this.getObject(rootSurfaceId).data.surface;
+                const rootSurface = this.dataManager.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
                 const cs = this.getObject(rootSurface).data.canvas;
                 return cs;
             },
@@ -1798,9 +1871,8 @@ class WaylandClient {
                 fs.closeSync(obj.data.fd);
             }
         }
-        for (const win of this.obj2.windows.values()) {
-            const xdgSurface = this.getObject(win.xdg_surface);
-            xdgSurface.data.warpEl.remove();
+        for (const _win of this.obj2.windows.values()) {
+            // todo close win
         }
         this.socket.end();
         this.socket.destroy();
