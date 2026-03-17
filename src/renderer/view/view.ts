@@ -273,6 +273,7 @@ class wlSubSurfaceData {
         this.wl_surface.setWlSurfaceRole(child, "subsurface");
         this.wl_subsurface[subRelationId] = { parent, child, posi: { x: 0, y: 0 } };
         const parentData = this.parentChildren.get(parent) ?? [];
+        parentData.push(subRelationId);
         this.parentChildren.set(parent, parentData);
         this.surface2subsurface.set(child, subRelationId);
     }
