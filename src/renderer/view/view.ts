@@ -47,19 +47,7 @@ type WaylandData = {
         damageList?: { x: number; y: number; width: number; height: number }[];
         damageBufferList?: { x: number; y: number; width: number; height: number }[];
         callback?: WaylandObjectId2<"wl_callback">;
-        children?: {
-            id: WaylandObjectId2<"wl_surface">;
-            posi: {
-                x: number;
-                y: number;
-            };
-        }[]; // 索引大的在上面
-        parentSurface?: WaylandObjectId2<"wl_surface">;
         inputRegion?: WaylandData["wl_region"]["rects"];
-    };
-    wl_subsurface: {
-        parent: WaylandObjectId2<"wl_surface">;
-        child: WaylandObjectId2<"wl_surface">;
     };
     wl_buffer: { fd: number; start: number; end: number; imageData: ImageData };
     wl_region: {
@@ -223,6 +211,107 @@ class WaylandServer {
         return protocol in WaylandProtocols;
     }
 }
+
+class wlSurfaceData {
+    wl_surface: Record<
+        WaylandObjectId2<"wl_surface">,
+        {
+            role: "subsurface" | "toplevel" | "popup" | undefined;
+            size: { w: number; h: number };
+        }
+    > = {};
+
+    addWlSurface(id: WaylandObjectId2<"wl_surface">) {
+        this.wl_surface[id] = { role: undefined, size: { w: 0, h: 0 } };
+    }
+    getWlSurface(id: WaylandObjectId2<"wl_surface">) {
+        return this.wl_surface[id];
+    }
+
+    setWlSurfaceRole(id: WaylandObjectId2<"wl_surface">, role: "subsurface" | "toplevel" | "popup") {
+        const oldRole = this.wl_surface[id].role;
+        if (oldRole !== undefined && oldRole !== role) {
+            // todo error
+        }
+        this.wl_surface[id].role = role;
+    }
+    updateWlSurfaceSize(id: WaylandObjectId2<"wl_surface">, w: number, h: number) {
+        this.wl_surface[id].size = { w, h };
+    }
+}
+
+class wlSubSurfaceData {
+    wl_surface: wlSurfaceData;
+    wl_subsurface: Record<
+        WaylandObjectId2<"wl_subsurface">,
+        {
+            parent: WaylandObjectId2<"wl_surface">;
+            child: WaylandObjectId2<"wl_surface">;
+            posi: { x: number; y: number };
+        }
+    > = {};
+    parentChildren = new Map<WaylandObjectId2<"wl_surface">, WaylandObjectId2<"wl_subsurface">[]>();
+    private surface2subsurface = new Map<WaylandObjectId2<"wl_surface">, WaylandObjectId2<"wl_subsurface">>();
+    constructor(wl: wlSurfaceData) {
+        this.wl_surface = wl;
+    }
+
+    setWlSubSurface(
+        subRelationId: WaylandObjectId2<"wl_subsurface">,
+        parent: WaylandObjectId2<"wl_surface">,
+        child: WaylandObjectId2<"wl_surface">,
+    ) {
+        const childW = this.wl_surface.getWlSurface(child);
+        if (childW.role !== "subsurface" || undefined) {
+            // error
+        }
+        const oldRelationId = this.getSubSurfaceBySurface(child);
+        if (oldRelationId) {
+            // 已经有父子关系了，先删除旧关系
+            const oldRelation = this.wl_subsurface[oldRelationId];
+            // biome-ignore lint/style/noNonNullAssertion: 关系与parentchildren应该是同步的
+            const oldTree = this.parentChildren.get(oldRelation.parent)!;
+            this.parentChildren.set(
+                oldRelation.parent,
+                oldTree.filter((c) => c !== oldRelationId),
+            );
+        }
+
+        this.wl_surface.setWlSurfaceRole(child, "subsurface");
+        this.wl_subsurface[subRelationId] = { parent, child, posi: { x: 0, y: 0 } };
+        const parentData = this.parentChildren.get(parent) ?? [];
+        this.parentChildren.set(parent, parentData);
+        this.surface2subsurface.set(child, subRelationId);
+    }
+    private getSubSurfaceBySurface(child: WaylandObjectId2<"wl_surface">) {
+        return this.surface2subsurface.get(child);
+    }
+    getParentChildren(parent: WaylandObjectId2<"wl_surface">) {
+        const subs = Array.from(this.parentChildren.get(parent) ?? []);
+        return subs.map((s) => this.wl_subsurface[s].child);
+    }
+    setPosition(id: WaylandObjectId2<"wl_subsurface">, x: number, y: number) {
+        const sub = this.wl_subsurface[id];
+        sub.posi.x = x;
+        sub.posi.y = y;
+    }
+    getSubSurface(id: WaylandObjectId2<"wl_subsurface">) {
+        return {
+            parent: this.wl_subsurface[id].parent,
+            surface: this.wl_subsurface[id].child,
+            posi: this.wl_subsurface[id].posi,
+        };
+    }
+    getChildrenDeep(parent: WaylandObjectId2<"wl_surface">) {
+        const surfaces: WaylandObjectId2<"wl_surface">[] = [];
+
+        // todo 遍历树
+        surfaces.push(...this.getParentChildren(parent));
+        return surfaces;
+    }
+    // todo 删除关系
+}
+
 class WaylandClient {
     logConfig = {
         receive: true,
@@ -268,6 +357,10 @@ class WaylandClient {
             }
         >;
         appid: undefined | string;
+    };
+    private wlSurface = new wlSurfaceData();
+    private dataManager = {
+        wlSubSurface: new wlSubSurfaceData(this.wlSurface),
     };
     // 事件存储
     private events: { [K in keyof WaylandClientEventMap]?: WaylandClientEventMap[K][] } = {};
@@ -472,6 +565,7 @@ class WaylandClient {
             canvas.width = 1;
             canvas.height = 1;
             surface.data = { canvas, bufferPointer: 0 };
+            this.wlSurface.addWlSurface(surfaceId);
         });
         isOp("wl_compositor.create_region", (x) => {
             const region = this.getObject(x.args.id);
@@ -622,10 +716,7 @@ class WaylandClient {
             const surfaceId = x.id;
             const surface = this.getObject(surfaceId);
             surface.data.canvas.remove();
-            const parentSurface = this.getObjectOption(surface.data.parentSurface);
-            if (parentSurface) {
-                parentSurface.data.children = parentSurface.data.children?.filter((i) => i.id !== surfaceId);
-            }
+            // todo 相关的如subsurface、xdgsurface等
             this.deleteId(surfaceId);
         });
         isOp("wl_surface.set_input_region", (x) => {
@@ -635,18 +726,13 @@ class WaylandClient {
             surface.data.inputRegion = region?.data.rects;
         });
         isOp("wl_subcompositor.get_subsurface", (x) => {
-            const surfaceRelation = this.getObject(x.args.id);
-            surfaceRelation.data = {
-                parent: waylandObjectId(x.args.parent, "wl_surface"),
-                child: waylandObjectId(x.args.surface, "wl_surface"),
-            };
-
+            this.dataManager.wlSubSurface.setWlSubSurface(
+                x.args.id,
+                waylandObjectId(x.args.parent, "wl_surface"),
+                waylandObjectId(x.args.surface, "wl_surface"),
+            );
             const parent = this.getObject(waylandObjectId(x.args.parent, "wl_surface"));
-            const cs = parent.data.children || [];
-            cs.push({ id: waylandObjectId(x.args.surface, "wl_surface"), posi: { x: 0, y: 0 } });
-            parent.data.children = cs;
             const thisChild = this.getObject(waylandObjectId(x.args.surface, "wl_surface"));
-            thisChild.data.parentSurface = waylandObjectId(x.args.parent, "wl_surface");
             // todo 渲染el可能需要分离
             // biome-ignore lint/style/noNonNullAssertion: 假装有
             parent.data.canvas.parentElement!.appendChild(thisChild.data.canvas);
@@ -655,22 +741,12 @@ class WaylandClient {
             parent.data.canvas.style.anchorName = `--${x.args.parent}`;
         });
         isOp("wl_subsurface.set_position", (x) => {
-            const thisData = this.getObject(x.id);
-            const parent = this.getObject(thisData.data.parent);
-            const cs = parent.data.children;
-            if (!cs) {
-                console.error("No children found");
-                return;
-            }
-            const child = cs.find((c) => c.id === thisData.data.child);
-            if (!child) {
-                console.error("No child found");
-                return;
-            }
-            child.posi = { x: x.args.x, y: x.args.y };
-            const thisChild = this.getObject(thisData.data.child);
-            thisChild.data.canvas.style.left = `calc(anchor(--${thisData.data.parent} left) + ${x.args.x}px)`;
-            thisChild.data.canvas.style.top = `calc(anchor(--${thisData.data.parent} top) + ${x.args.y}px)`;
+            const subsurface = this.dataManager.wlSubSurface.getSubSurface(x.id);
+            const { parent, surface: child } = subsurface;
+            this.dataManager.wlSubSurface.setPosition(x.id, x.args.x, x.args.y);
+            const thisChild = this.getObject(child);
+            thisChild.data.canvas.style.left = `calc(anchor(--${parent} left) + ${x.args.x}px)`;
+            thisChild.data.canvas.style.top = `calc(anchor(--${parent} top) + ${x.args.y}px)`;
         });
 
         isOp("wl_seat.get_pointer", (x) => {
@@ -1450,13 +1526,7 @@ class WaylandClient {
                     const surfaces: WaylandObjectId2<"wl_surface">[] = [];
                     const mainSurfaceId = this.getObject(inXdgSurface).data.surface;
                     surfaces.push(mainSurfaceId);
-                    const mainSurface = this.getObject(mainSurfaceId);
-                    if (mainSurface.data.children) {
-                        // todo 遍历树
-                        for (const c of mainSurface.data.children) {
-                            surfaces.push(c.id);
-                        }
-                    }
+                    surfaces.push(...this.dataManager.wlSubSurface.getChildrenDeep(mainSurfaceId));
                     for (const s of surfaces.toReversed()) {
                         const cs = this.getObject(s).data.canvas;
                         // todo 缓存
