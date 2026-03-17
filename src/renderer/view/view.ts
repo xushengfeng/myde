@@ -283,6 +283,18 @@ class wlSubSurfaceData {
         const subs = Array.from(this.parentChildren.get(parent) ?? []);
         return subs.map((s) => this.wl_subsurface[s].child);
     }
+    getParentChildrenWithRect(parent: WaylandObjectId2<"wl_surface">) {
+        const subs = Array.from(this.parentChildren.get(parent) ?? []);
+        return subs.map((s) => ({
+            id: this.wl_subsurface[s].child,
+            offsetRect: {
+                x: this.wl_subsurface[s].posi.x,
+                y: this.wl_subsurface[s].posi.y,
+                w: this.wl_surface.getWlSurface(this.wl_subsurface[s].child).size.w,
+                h: this.wl_surface.getWlSurface(this.wl_subsurface[s].child).size.h,
+            },
+        }));
+    }
     setPosition(id: WaylandObjectId2<"wl_subsurface">, x: number, y: number) {
         const sub = this.wl_subsurface[id];
         sub.posi.x = x;
@@ -296,10 +308,13 @@ class wlSubSurfaceData {
         };
     }
     getChildrenDeep(parent: WaylandObjectId2<"wl_surface">) {
-        const surfaces: WaylandObjectId2<"wl_surface">[] = [];
+        const surfaces: {
+            id: WaylandObjectId2<"wl_surface">;
+            offsetRect: { x: number; y: number; w: number; h: number };
+        }[] = [];
 
-        // todo 遍历树
-        surfaces.push(...this.getParentChildren(parent));
+        // todo 遍历树，offset相加
+        surfaces.push(...this.getParentChildrenWithRect(parent));
         return surfaces;
     }
     // todo 删除关系
@@ -312,6 +327,8 @@ class xdgSurfaceData {
         WaylandObjectId2<"xdg_surface">,
         {
             surface: WaylandObjectId2<"wl_surface">;
+            winGeo?: { x: number; y: number; w: number; h: number };
+            offset: { x: number; y: number }; // 一般popup的才有
             xdg_role?: WaylandObjectId2<"xdg_toplevel" | "xdg_popup">;
             parent: WaylandObjectId2<"xdg_surface"> | undefined;
             children: WaylandObjectId2<"xdg_surface">[];
@@ -324,10 +341,13 @@ class xdgSurfaceData {
     }
 
     addXdgSurface(id: WaylandObjectId2<"xdg_surface">, wlSurface: WaylandObjectId2<"wl_surface">) {
-        this.xdg_surface[id] = { surface: wlSurface, parent: undefined, children: [] };
+        this.xdg_surface[id] = { surface: wlSurface, parent: undefined, children: [], offset: { x: 0, y: 0 } };
     }
     getXdgSurface(id: WaylandObjectId2<"xdg_surface">) {
         return this.xdg_surface[id];
+    }
+    setXdgSurfaceSize(id: WaylandObjectId2<"xdg_surface">, x: number, y: number, w: number, h: number) {
+        this.xdg_surface[id].winGeo = { x, y, w, h };
     }
     getXdgSurfaceByToplevel(id: WaylandObjectId2<"xdg_toplevel">) {
         return this.xdg_toplevel.get(id);
@@ -343,6 +363,13 @@ class xdgSurfaceData {
         this.xdg_surface[child].parent = undefined;
         this.xdg_surface[parent].children = this.xdg_surface[parent].children.filter((c) => c !== child);
     }
+    getReRect(id: WaylandObjectId2<"xdg_surface">) {
+        const xdgSurface = this.getXdgSurface(id);
+        const mainWlSurface = this.wl_surface.getWlSurface(xdgSurface.surface);
+        const size = xdgSurface.winGeo ?? mainWlSurface.size;
+        // todo subsurface
+        return { w: size.w, h: size.h };
+    }
     setAsToplevel(id: WaylandObjectId2<"xdg_surface">, toplevelId: WaylandObjectId2<"xdg_toplevel">) {
         this.wl_surface.setWlSurfaceRole(this.getXdgSurface(id).surface, "toplevel");
         this.xdg_toplevel.set(toplevelId, id);
@@ -357,6 +384,10 @@ class xdgSurfaceData {
         this.xdg_popup.set(popupId, id);
         this.xdg_surface[id].xdg_role = popupId;
         this.setRelation(parent, id);
+    }
+    setOffset(id: WaylandObjectId2<"xdg_surface">, x: number, y: number) {
+        this.getXdgSurface(id).offset.x = x;
+        this.getXdgSurface(id).offset.y = y;
     }
     xdgSurfaceDestroyed(xdgSurfaceId: WaylandObjectId2<"xdg_surface">) {
         delete this.xdg_surface[xdgSurfaceId];
@@ -387,13 +418,21 @@ class xdgSurfaceData {
         this.xdgSurfaceDestroyed(id);
         this.xdg_toplevel.delete(toplevelId);
     }
-    getChildenDeepOnlyPopup(parent: WaylandObjectId2<"xdg_surface">): WaylandObjectId2<"xdg_surface">[] {
-        const children: WaylandObjectId2<"xdg_surface">[] = [];
+    getChildenDeepOnlyPopup(parent: WaylandObjectId2<"xdg_surface">) {
+        const children: {
+            id: WaylandObjectId2<"xdg_surface">;
+            offset: { x: number; y: number };
+            size: { w: number; h: number };
+        }[] = [];
         // todo tree walk
         children.push(
-            ...this.xdg_surface[parent].children.filter(
-                (c) => this.wl_surface.getWlSurface(this.getXdgSurface(c).surface).role === "popup",
-            ),
+            ...this.xdg_surface[parent].children
+                .filter((c) => this.wl_surface.getWlSurface(this.getXdgSurface(c).surface).role === "popup")
+                .map((i) => ({
+                    id: i,
+                    offset: this.getXdgSurface(i).offset, // todo 合并父偏移
+                    size: this.getReRect(i),
+                })),
         );
         return children;
     }
@@ -721,6 +760,7 @@ class WaylandClient {
                 if (imagedata.width !== canvas.width || imagedata.height !== canvas.height) {
                     canvas.width = imagedata.width;
                     canvas.height = imagedata.height;
+                    this.wlSurface.updateWlSurfaceSize(surfaceId, imagedata.width, imagedata.height);
                     // for (const [id, p] of this.objects) {
                     //     if (p.protocol.name === "xdg_toplevel") {
                     // this.sendMessage(id, 0, {
@@ -1095,6 +1135,7 @@ class WaylandClient {
                 width: `${x.args.width}px`,
                 height: `${x.args.height}px`,
             });
+            this.dataManager.xdgSurface.setXdgSurfaceSize(x.id, x.args.x, x.args.y, x.args.width, x.args.height);
             if (thisXdgSurface2.xdg_role) {
                 this.emit(
                     "windowResized",
@@ -1115,8 +1156,6 @@ class WaylandClient {
                 console.error("No parent for popup");
                 return;
             }
-            const xdgSurfaceM = this.dataManager.xdgSurface;
-            xdgSurfaceM.setAsPopup(xid, popupId, parentXdgSurfaceId);
 
             const parentXdgSurface = this.getObject(parentXdgSurfaceId);
 
@@ -1165,6 +1204,10 @@ class WaylandClient {
             // todo constraint_adjustment
             const nx = anchorPoint.x - popupPoint.x;
             const ny = anchorPoint.y - popupPoint.y;
+
+            const xdgSurfaceM = this.dataManager.xdgSurface;
+            xdgSurfaceM.setAsPopup(xid, popupId, parentXdgSurfaceId);
+            xdgSurfaceM.setOffset(xid, nx, ny);
 
             parentXdgSurface.data.warpEl.appendChild(thisEl.el);
 
@@ -1553,10 +1596,9 @@ class WaylandClient {
                     return rootSurface.data.warpEl;
                 },
                 inWin: (p: { x: number; y: number }) => {
-                    const rootSurface = this.getObject(xdgSurfaceId);
-                    const rel = rootSurface.data.warpEl;
+                    const rel = this.dataManager.xdgSurface.getReRect(xdgSurfaceId);
                     // todo popup
-                    if (p.x < 0 || p.x >= rel.offsetWidth || p.y < 0 || p.y >= rel.offsetHeight) return false;
+                    if (p.x < 0 || p.x >= rel.w || p.y < 0 || p.y >= rel.h) return false;
                     return true; // todo
                 },
                 updatePointerFocus: (p: { x: number; y: number }) => {
@@ -1566,49 +1608,53 @@ class WaylandClient {
                     let ny = y;
                     let canSend = false;
                     let inXdgSurface: WaylandObjectId2<"xdg_surface"> | undefined;
+                    const xdgSurfaceOffset = { x: 0, y: 0 };
                     let reasonSurfaceType: "main" | "popup" | null = null;
-                    const {
-                        x: baseX,
-                        y: baseY,
-                        bottom: baseBottom,
-                        right: baseRight,
-                    } = winObj.point.rootWinEl().getBoundingClientRect();
-                    // todo zindex
                     const xdgM = this.dataManager.xdgSurface;
-                    for (const p of xdgM.getChildenDeepOnlyPopup(xdgSurfaceId).toReversed()) {
-                        const popupSurface = this.getObject(p);
-                        const rect = popupSurface.data.warpEl.getBoundingClientRect();
-                        const offsetX = rect.left - baseX;
-                        const offsetY = rect.top - baseY;
-                        const offsetX1 = rect.right - baseX;
-                        const offsetY1 = rect.bottom - baseY;
+                    for (const { id: p, offset, size } of xdgM.getChildenDeepOnlyPopup(xdgSurfaceId).toReversed()) {
+                        const offsetX = offset.x;
+                        const offsetY = offset.y;
+                        const offsetX1 = offset.x + size.w;
+                        const offsetY1 = offset.y + size.h;
                         if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
                             console.log(`pointer in popup surface ${p}`);
                             inXdgSurface = p;
+                            xdgSurfaceOffset.x = offset.x;
+                            xdgSurfaceOffset.y = offset.y;
                             reasonSurfaceType = "popup";
                             break;
                         }
                     }
                     if (!inXdgSurface) {
-                        if (0 < x && x < baseRight - baseX && 0 < y && y < baseBottom - baseY) {
+                        if (
+                            0 < x &&
+                            x < xdgM.getReRect(xdgSurfaceId).w &&
+                            0 < y &&
+                            y < xdgM.getReRect(xdgSurfaceId).h
+                        ) {
                             inXdgSurface = xdgSurfaceId;
+                            xdgSurfaceOffset.x = 0;
+                            xdgSurfaceOffset.y = 0;
                             reasonSurfaceType = "main";
                         } else {
                             return undefined;
                         }
                     }
-                    const surfaces: WaylandObjectId2<"wl_surface">[] = [];
-                    const mainSurfaceId = this.dataManager.xdgSurface.getXdgSurface(inXdgSurface).surface;
-                    surfaces.push(mainSurfaceId);
+                    const surfaces: {
+                        id: WaylandObjectId2<"wl_surface">;
+                        offsetRect: { x: number; y: number; w: number; h: number };
+                    }[] = [];
+                    const mainSurfaceId = xdgM.getXdgSurface(inXdgSurface).surface;
+                    const rel = xdgM.getReRect(inXdgSurface);
+                    const { winGeo: selfOffset = { x: 0, y: 0 } } = xdgM.getXdgSurface(inXdgSurface);
+                    surfaces.push({ id: mainSurfaceId, offsetRect: { x: 0, y: 0, w: rel.w, h: rel.h } });
                     surfaces.push(...this.dataManager.wlSubSurface.getChildrenDeep(mainSurfaceId));
-                    for (const s of surfaces.toReversed()) {
-                        const cs = this.getObject(s).data.canvas;
-                        // todo 缓存
-                        const rect = cs.getBoundingClientRect();
-                        const offsetX = rect.left - baseX;
-                        const offsetY = rect.top - baseY;
-                        const offsetX1 = rect.right - baseX;
-                        const offsetY1 = rect.bottom - baseY;
+
+                    for (const { id: s, offsetRect } of surfaces.toReversed()) {
+                        const offsetX = offsetRect.x - selfOffset.x + xdgSurfaceOffset.x;
+                        const offsetY = offsetRect.y - selfOffset.y + xdgSurfaceOffset.y;
+                        const offsetX1 = offsetRect.x + offsetRect.w - selfOffset.x + xdgSurfaceOffset.x;
+                        const offsetY1 = offsetRect.y + offsetRect.h - selfOffset.y + xdgSurfaceOffset.y;
                         if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
                             console.log(`pointer in surface ${s}`);
                             nx = x - offsetX;
@@ -1660,6 +1706,7 @@ class WaylandClient {
                 },
                 sendPointerEvent: (type: "move" | "down" | "up", p: PointerEvent) => {
                     if (!this.obj2.pointer) return;
+                    // px py已经相对主xdg surface了
                     const pos = winObj.point.updatePointerFocus({ x: p.x, y: p.y });
                     if (!pos) return;
                     const { x: nx, y: ny } = pos;
