@@ -586,7 +586,10 @@ class WaylandClient {
 
     private getObject<T extends WaylandInterfaces>(id: WaylandObjectId2<T>): WaylandObjectX<T> {
         const obj = this.objects.get(id);
-        if (!obj) throw new Error(`Wayland object not found: ${id}`);
+        if (!obj) {
+            this.postError("wl_display", this.displayId, "invalid_object", `Object id ${id} does not exist`);
+            throw new Error(`Wayland object not found: ${id}`);
+        }
         return obj as WaylandObjectX<T>;
     }
     private getObjectOption<T extends WaylandInterfaces>(
@@ -1513,6 +1516,20 @@ class WaylandClient {
     private deleteId(id: WaylandObjectId) {
         this.sendMessageX(this.displayId, "wl_display.delete_id", { id });
         this.objects.delete(id);
+    }
+    private postError<t extends WaylandInterfaces>(
+        interface_: t,
+        id: WaylandObjectId2<t>,
+        // @ts-expect-error
+        errorCode: WaylandEnumObj[`${t}.error`],
+        message: string = `${interface_} ${errorCode} error`,
+    ) {
+        this.sendMessageX(this.displayId, "wl_display.error", {
+            object_id: id,
+            // @ts-expect-error
+            code: getEnumValue(`${interface_}.error`, errorCode),
+            message,
+        });
     }
 
     getAppid() {
