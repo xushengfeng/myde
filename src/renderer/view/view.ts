@@ -205,6 +205,17 @@ class WaylandServer {
     }
 }
 
+class WaylandSurfaceRoleError extends Error {}
+
+function tryX<t>(f: () => t): [Error, null] | [null, t] {
+    try {
+        const r = f();
+        return [null, r];
+    } catch (e) {
+        return [e as Error, null];
+    }
+}
+
 class wlSurfaceData {
     wl_surface: Record<
         WaylandObjectId2<"wl_surface">,
@@ -224,7 +235,7 @@ class wlSurfaceData {
     setWlSurfaceRole(id: WaylandObjectId2<"wl_surface">, role: "subsurface" | "toplevel" | "popup") {
         const oldRole = this.wl_surface[id].role;
         if (oldRole !== undefined && oldRole !== role) {
-            // todo error
+            throw new WaylandSurfaceRoleError();
         }
         this.wl_surface[id].role = role;
     }
@@ -254,9 +265,19 @@ class wlSubSurfaceData {
         parent: WaylandObjectId2<"wl_surface">,
         child: WaylandObjectId2<"wl_surface">,
     ) {
-        const childW = this.wl_surface.getWlSurface(child);
-        if (childW.role !== "subsurface" || undefined) {
-            // error
+        const [roleerror] = tryX(() => {
+            this.wl_surface.setWlSurfaceRole(child, "subsurface");
+        });
+        if (roleerror instanceof WaylandSurfaceRoleError) {
+            return "bad_surface";
+        }
+        if (parent === child) {
+            return "bad_parent";
+        }
+        for (const c of this.getChildrenDeep(child)) {
+            if (c.id === parent) {
+                return "bad_parent";
+            }
         }
         const oldRelationId = this.getSubSurfaceBySurface(child);
         if (oldRelationId) {
@@ -270,12 +291,12 @@ class wlSubSurfaceData {
             );
         }
 
-        this.wl_surface.setWlSurfaceRole(child, "subsurface");
         this.wl_subsurface[subRelationId] = { parent, child, posi: { x: 0, y: 0 } };
         const parentData = this.parentChildren.get(parent) ?? [];
         parentData.push(subRelationId);
         this.parentChildren.set(parent, parentData);
         this.surface2subsurface.set(child, subRelationId);
+        return true;
     }
     private getSubSurfaceBySurface(child: WaylandObjectId2<"wl_surface">) {
         return this.surface2subsurface.get(child);
@@ -856,11 +877,18 @@ class WaylandClient {
             surface.data.inputRegion = region?.data.rects;
         });
         isOp("wl_subcompositor.get_subsurface", (x) => {
-            this.dataManager.wlSubSurface.setWlSubSurface(
+            const r = this.dataManager.wlSubSurface.setWlSubSurface(
                 x.args.id,
                 waylandObjectId(x.args.parent, "wl_surface"),
                 waylandObjectId(x.args.surface, "wl_surface"),
             );
+
+            if (r === "bad_surface")
+                this.postError("wl_subcompositor", x.id, "bad_surface", "Surface already has a role");
+            else if (r === "bad_parent")
+                this.postError("wl_subcompositor", x.id, "bad_parent", "Parent cannot be itself");
+            if (r !== true) return;
+
             const parent = this.getObject(waylandObjectId(x.args.parent, "wl_surface"));
             const thisChild = this.getObject(waylandObjectId(x.args.surface, "wl_surface"));
             // todo 渲染el可能需要分离
