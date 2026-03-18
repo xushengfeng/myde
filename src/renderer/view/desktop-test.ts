@@ -2,6 +2,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 
 import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
+import { renderToolsHtmlEl } from "./render_tools_el";
 import { myde } from "../desktop-api";
 
 import { button, image, pack, txt, view, initDKH, input, addStyle } from "dkh-ui";
@@ -12,7 +13,9 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
         for (const [winId, _win] of client.getWindows()) {
             const xwin = client.win(winId);
             if (!xwin) continue;
-            const rect = xwin.point.rootWinEl().getBoundingClientRect();
+            const winel = render.getXdgSurfaceEle(xwin.point.renderId());
+            if (!winel) continue;
+            const rect = winel.getBoundingClientRect();
             const nx = p.x - rect.left;
             const ny = p.y - rect.top;
             const inWin = xwin.point.inWin({ x: nx, y: ny });
@@ -40,7 +43,9 @@ function sendScrollEvent(p: WheelEvent) {
         for (const [winId, _win] of client.getWindows()) {
             const xwin = client.win(winId);
             if (!xwin) continue;
-            const rootEl = xwin.point.rootWinEl();
+            const winel = render.getXdgSurfaceEle(xwin.point.renderId());
+            if (!winel) continue;
+            const rootEl = winel;
             const rect = rootEl.getBoundingClientRect();
             const nx = p.x - rect.left;
             const ny = p.y - rect.top;
@@ -98,7 +103,21 @@ function runApp(execPath: string, args: string[] = []) {
         .addInto();
 }
 
-const serverX = myde.MSysApi.server({ dev: true });
+const render = new renderToolsHtmlEl();
+
+render.on({
+    onToplevelCreate: (_wid, el) => {
+        body.add(el);
+    },
+    onToplevelRemove: (_wid, el) => {
+        el.remove();
+    },
+});
+
+const serverX = myde.MSysApi.server({
+    dev: true,
+    render: render,
+});
 const server = serverX.server;
 
 server.on("newClient", (client, clientId) => {
@@ -106,20 +125,19 @@ server.on("newClient", (client, clientId) => {
     client.onSync("windowBound", () => {
         return { width: window.innerWidth, height: window.innerHeight };
     });
-    client.on("windowCreated", (windowId, el) => {
+    client.on("windowCreated", (windowId) => {
         console.log(`Client ${clientId} created window ${windowId}`);
-        body.add(el);
         client.win(windowId)?.focus();
     });
-    client.on("windowClosed", (windowId, el) => {
+    client.on("windowClosed", (windowId) => {
         console.log(`Client ${clientId} deleted window ${windowId}`);
-        el.remove();
     });
     client.on("windowMaximized", (windowId) => {
         const xwin = client.win(windowId);
         if (!xwin) return;
 
-        const winEl = xwin.point.rootWinEl();
+        const winEl = render.getXdgSurfaceEle(xwin.point.renderId());
+        if (!winEl) return;
         const width = window.innerWidth;
         const height = window.innerHeight;
         pack(winEl).style({

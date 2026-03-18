@@ -3,7 +3,7 @@ import { addClass, button, ele, type ElType, image, pack, setProperty, view } fr
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/renderer/desktop-api";
 import { txt } from "dkh-ui";
 
-const { MSysApi, MRootDir, MInputMap } = window.myde;
+const { MSysApi, MRootDir, MInputMap, MUtils } = window.myde;
 
 type View = {
     ox: number;
@@ -421,7 +421,8 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
         for (const [winId, _win] of client.getWindows()) {
             const xwin = client.win(winId);
             if (!xwin) continue;
-            const rect = xwin.point.rootWinEl().getBoundingClientRect();
+            const rect = render.getXdgSurfaceEle(xwin.point.renderId())?.getBoundingClientRect();
+            if (!rect) continue;
             const nx = p.x - rect.left;
             const ny = p.y - rect.top;
             const inWin = xwin.point.inWin({ x: nx, y: ny });
@@ -450,7 +451,8 @@ function sendScrollEvent(p: WheelEvent) {
         for (const [winId, _win] of client.getWindows()) {
             const xwin = client.win(winId);
             if (!xwin) continue;
-            const rootEl = xwin.point.rootWinEl();
+            const rootEl = render.getXdgSurfaceEle(xwin.point.renderId());
+            if (!rootEl) continue;
             const rect = rootEl.getBoundingClientRect();
             const nx = p.x - rect.left;
             const ny = p.y - rect.top;
@@ -477,7 +479,13 @@ function fitRect(rect: { w: number; h: number }, maxW: number, maxH: number) {
 // @ts-expect-error
 window.dy = () => dyj电源键.fire();
 
-const server = MSysApi.server();
+const render = new MUtils.renderToolsHtmlEl();
+render.on({
+    onToplevelRemove: (_, el) => {
+        el.remove();
+    },
+});
+const server = MSysApi.server({ render });
 
 server.server.on("newClient", (client, clientId) => {
     client.setLogConfig({ receive: [], send: [] });
@@ -485,28 +493,29 @@ server.server.on("newClient", (client, clientId) => {
         const rect = windowEl.el.getBoundingClientRect();
         return { width: rect.width, height: rect.height };
     });
-    client.on("windowCreated", (windowId, el) => {
-        console.log(`Client ${clientId} created window ${windowId}`);
+    client.on("windowCreated", (windowId, renderId) => {
+        console.log(`Client ${clientId} created window ${windowId}`, renderId);
         const v = viewData.newView();
         const wid = ViewData.winId(clientId, windowId);
         viewData.moveWinToView(wid, v);
         viewData.bindWinidClientid(wid, clientId, windowId);
-        addWindow(v, el);
+        // biome-ignore lint/style/noNonNullAssertion: 刚刚创建的，一定有
+        addWindow(v, render.getXdgSurfaceEle(renderId)!);
         viewData.focusWin(wid);
         client.win(windowId)?.setWinBoxData({ width: 800, height: 600 });
         client.win(windowId)?.focus();
     });
-    client.on("windowClosed", (windowId, el) => {
+    client.on("windowClosed", (windowId) => {
         console.log(`Client ${clientId} deleted window ${windowId}`);
         const winid = ViewData.winId(clientId, windowId);
         viewData.closeWin(winid);
-        el.remove();
     });
     client.on("windowStartMove", (windowId) => {
         const xwin = client.win(windowId);
         if (!xwin) return;
 
-        const winEl = xwin.point.rootWinEl();
+        const winEl = render.getXdgSurfaceEle(xwin.point.renderId());
+        if (!winEl) return;
         const rect = winEl.getBoundingClientRect();
 
         // todo track point
@@ -519,6 +528,7 @@ server.server.on("newClient", (client, clientId) => {
         function onPointerMove() {
             const newLeft = Math.round(mousePos.x - startX + origLeft);
             const newTop = Math.round(mousePos.y - startY + origTop);
+            if (!winEl) return;
             winEl.style.left = `${newLeft}px`;
             winEl.style.top = `${newTop}px`;
         }
@@ -541,7 +551,8 @@ server.server.on("newClient", (client, clientId) => {
         const xwin = client.win(windowId);
         if (!xwin) return;
 
-        const winEl = xwin.point.rootWinEl();
+        const winEl = render.getXdgSurfaceEle(xwin.point.renderId());
+        if (!winEl) return;
         const width = windowEl.el.offsetWidth;
         const height = windowEl.el.offsetHeight;
         pack(winEl).style({
@@ -556,7 +567,8 @@ server.server.on("newClient", (client, clientId) => {
         const xwin = client.win(windowId);
         if (!xwin) return;
 
-        const winEl = xwin.point.rootWinEl();
+        const winEl = render.getXdgSurfaceEle(xwin.point.renderId());
+        if (!winEl) return;
         const width = 800;
         const height = 600;
         pack(winEl).style({

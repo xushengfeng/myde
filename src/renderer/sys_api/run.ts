@@ -1,11 +1,12 @@
 const child_process = require("node:child_process") as typeof import("node:child_process");
 
+import type { renderTools } from "../view/render_tools";
 import { WaylandServer } from "../view/view";
 import { getEnv } from "./env";
 
-export function server(op?: { dev?: boolean }) {
+export function server(op: { dev?: boolean; render: renderTools }) {
     const env = getEnv();
-    const server = new WaylandServer({ socketDir: env.XDG_RUNTIME_DIR || "/tmp" });
+    const server = new WaylandServer({ socketDir: env.XDG_RUNTIME_DIR || "/tmp", render: op.render });
     const user = env.USER || "root";
     const uid = child_process.execSync(`id -u ${user}`).toString().trim();
     const gid = child_process.execSync(`id -g ${user}`).toString().trim();
