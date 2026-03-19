@@ -1,7 +1,7 @@
 import { RemoteRender } from "./remote-render";
 import { RemoteServer } from "./server";
 
-import "../../src/renderer/desktop-api";
+import type {} from "../../src/renderer/desktop-api";
 
 const { MSysApi } = window.myde;
 

@@ -9,6 +9,7 @@ export class RemoteServer {
     private port: number;
     private onInputEvent: ((event: any) => void) | null = null;
     private onRunApp: ((command: string) => void) | null = null;
+    private onNewClient: ((ws: WebSocketType) => void) | null = null;
 
     constructor(port: number = 8080) {
         this.port = port;
@@ -20,6 +21,11 @@ export class RemoteServer {
     private setupWebSocket() {
         this.wss.on("connection", (ws: WebSocketType) => {
             console.log("New WebSocket connection");
+
+            // 发送完整状态给新客户端
+            if (this.onNewClient) {
+                this.onNewClient(ws);
+            }
 
             ws.on("message", (message: Buffer) => {
                 try {
@@ -63,6 +69,10 @@ export class RemoteServer {
 
     public setRunAppHandler(handler: (command: string) => void) {
         this.onRunApp = handler;
+    }
+
+    public setOnNewClient(handler: (ws: WebSocketType) => void) {
+        this.onNewClient = handler;
     }
 
     public broadcast(message: any) {
