@@ -22,14 +22,16 @@ export class renderToolsHtmlEl implements renderTools {
         this.canvasMap.set(id, { warpEl: warpEl, canvas: canvasEl });
     }
     renderCanvas(canvas: OffscreenCanvas, id: string) {
-        const el = this.canvasMap.get(id)?.canvas;
-        if (el && el instanceof HTMLCanvasElement) {
+        const el = this.canvasMap.get(id)?.canvas.el;
+        if (el) {
             el.width = canvas.width;
             el.height = canvas.height;
             const ctx = el.getContext("2d");
             if (ctx) {
                 ctx.drawImage(canvas, 0, 0);
             }
+        } else {
+            console.error("Canvas element not found for id:", id, this.canvasMap);
         }
     }
     destroyCanvas(id: string): void {
