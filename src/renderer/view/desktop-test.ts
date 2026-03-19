@@ -106,11 +106,11 @@ function runApp(execPath: string, args: string[] = []) {
 const render = new renderToolsHtmlEl();
 
 render.on({
-    onToplevelCreate: (_wid, el) => {
-        body.add(el);
+    onToplevelCreate: (wid) => {
+        body.add(render.getXdgSurfaceEle(wid));
     },
-    onToplevelRemove: (_wid, el) => {
-        el.remove();
+    onToplevelRemove: (wid) => {
+        render.getXdgSurfaceEle(wid)?.remove();
     },
 });
 

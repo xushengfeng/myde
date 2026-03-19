@@ -80,7 +80,7 @@ export class renderToolsHtmlEl implements renderTools {
         const el = this.xdgElMap.get(id);
         if (el) {
             if (type === "toplevel" && this._on.onToplevelRemove) {
-                this._on.onToplevelRemove?.(id, el.warpEl.el);
+                this._on.onToplevelRemove?.(id);
             } else {
                 el.warpEl.remove();
             }
@@ -106,7 +106,7 @@ export class renderToolsHtmlEl implements renderTools {
             console.error("error");
             return;
         }
-        this._on.onToplevelCreate?.(id, el.warpEl.el);
+        this._on.onToplevelCreate?.(id);
     }
     addPopupToXdgSurface(popupId: string, toplevelId: string) {
         const popup = this.xdgElMap.get(popupId);

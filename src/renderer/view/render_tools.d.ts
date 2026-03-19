@@ -1,6 +1,6 @@
 export type renderToolsOn = {
-    onToplevelCreate?: (wid: string, el: HTMLElement) => void;
-    onToplevelRemove?: (wid: string, el: HTMLElement) => void;
+    onToplevelCreate?: (wid: string) => void;
+    onToplevelRemove?: (wid: string) => void;
 };
 
 export interface renderTools {
