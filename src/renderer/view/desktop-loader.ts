@@ -38,13 +38,16 @@ addStyle({
 });
 
 window.myde = myde;
-// @ts-expect-error
-delete window.require;
-// @ts-expect-error
-delete window.module;
-delete window.exports;
 
 const urlParams = new URLSearchParams(window.location.search);
+const nodeModule = urlParams.get("nodeModule");
+if (!nodeModule) {
+    // @ts-expect-error
+    delete window.require;
+    // @ts-expect-error
+    delete window.module;
+    delete window.exports;
+}
 const desktopPath = urlParams.get("desktop");
 if (desktopPath) {
     loadDesktop(desktopPath);

@@ -10,7 +10,8 @@
         "dev": "electron-vite --ignoreConfigWarning dev",
         "build": "electron-vite --ignoreConfigWarning build",
         "pkgRebuild": "electron-rebuild",
-        "desktop": "cd desktop && npm run build && cd .. && export desktop='desktop' && electron-vite --ignoreConfigWarning preview"
+        "desktop": "cd desktop && npm run build && cd .. && export desktop='desktop' && electron-vite --ignoreConfigWarning preview",
+        "remote": "cd remote && npm run build && cd .. && export desktop='remote' && export nodeModule='on' && electron-vite --ignoreConfigWarning preview"
     },
     "author": {
         "name": "xsf",

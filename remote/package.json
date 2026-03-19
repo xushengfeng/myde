@@ -1,0 +1,19 @@
+{
+    "name": "myde_remote_desktop",
+    "main": "dist/server.js",
+    "type": "module",
+    "scripts": {
+        "build": "esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/server.js --external:dkh-ui --external:../../src/renderer/desktop-api",
+        "build:frontend": "cd frontend && pnpm install && pnpm run build",
+        "build:all": "pnpm run build && pnpm run build:frontend"
+    },
+    "dependencies": {
+        "ws": "^8.19.0"
+    },
+    "devDependencies": {
+        "@types/ws": "^8.5.8",
+        "esbuild": "^0.27.4",
+        "typescript": "^5.9.2",
+        "vite": "^7.1.7"
+    }
+}

@@ -1,0 +1,13 @@
+{
+    "name": "myde_remote_frontend",
+    "version": "0.0.1",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.2",
+        "vite": "^7.1.7"
+    }
+}

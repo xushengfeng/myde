@@ -75,7 +75,12 @@ async function createWin() {
         }
         log("加载桌面", desktop_path);
         rendererPath(main_window.webContents, "main.html", {
-            query: { userData: app.getPath("userData"), env: JSON.stringify(process.env), desktop: desktop_path },
+            query: {
+                userData: app.getPath("userData"),
+                env: JSON.stringify(process.env),
+                desktop: desktop_path,
+                ...(process.env.nodeModule ? { nodeModule: "on" } : {}),
+            },
         });
     } else
         rendererPath(main_window.webContents, "test.html", {
