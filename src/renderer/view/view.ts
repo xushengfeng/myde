@@ -256,6 +256,9 @@ class wlSurfaceData {
     updateWlSurfaceSize(id: WaylandObjectId2<"wl_surface">, w: number, h: number) {
         this.wl_surface[id].size = { w, h };
     }
+    setWlSurfaceOffset(id: WaylandObjectId2<"wl_surface">, x: number, y: number) {
+        this.render.setBufferOffset(this.idScope(id), x, y);
+    }
 }
 
 class wlSubSurfaceData {
@@ -782,6 +785,10 @@ class WaylandClient {
             const imageData = buffer.data.imageData;
             if (surface.data.bufferPointer === 0) surface.data.buffer = { id: bufferId, data: imageData };
             else surface.data.buffer2 = { id: bufferId, data: imageData };
+
+            if (x.args.x !== 0 || x.args.y !== 0) {
+                this.postError("wl_surface", x.id, "invalid_offset", "Buffer offset must be (0,0)");
+            }
         });
         isOp("wl_surface.damage", (x) => {
             const surface = this.getObject(x.id);
@@ -917,6 +924,9 @@ class WaylandClient {
             console.error("re", x.args);
             const region = this.getObjectOption(waylandObjectId(x.args.region, "wl_region"));
             surface.data.inputRegion = region?.data.rects;
+        });
+        isOp("wl_surface.offset", (x) => {
+            this.wlSurface.setWlSurfaceOffset(x.id, x.args.x, x.args.y);
         });
         isOp("wl_subcompositor.get_subsurface", (x) => {
             const r = this.dataManager.wlSubSurface.setWlSubSurface(

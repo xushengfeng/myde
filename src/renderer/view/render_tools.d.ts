@@ -11,6 +11,7 @@ export interface renderTools {
     destroyCanvas(id: string): void;
     setCanvasAnchor(id: string, parentId: string): void;
     setCanvasOffset(id: string, x: number, y: number): void;
+    setBufferOffset(id: string, x: number, y: number): void;
     createXdgSurfaceEle(id: string, canvasId: string): void;
     getXdgSurfaceEle(id: string): unknown;
     destroyXdgSurfaceEle(id: string, type: "toplevel" | "popup"): void;

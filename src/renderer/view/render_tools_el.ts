@@ -17,8 +17,8 @@ export class renderToolsHtmlEl implements renderTools {
         return (id: unknown) => `${baseId}-${String(id)}`;
     }
     bindCanvas(id: string) {
-        const canvasEl = ele("canvas").attr({ id: id });
-        const warpEl = view().add(canvasEl);
+        const canvasEl = ele("canvas").attr({ id: id }).style({ position: "absolute" });
+        const warpEl = view().add(canvasEl).style({ position: "absolute" });
         this.canvasMap.set(id, { warpEl: warpEl, canvas: canvasEl });
     }
     renderCanvas(canvas: OffscreenCanvas, id: string) {
@@ -45,10 +45,6 @@ export class renderToolsHtmlEl implements renderTools {
             return;
         }
         parent.warpEl.add(thisChild.warpEl);
-        // @ts-expect-error
-        parent.canvas.style({ anchorName: `--${parentId}` });
-        // @ts-expect-error
-        thisChild.warpEl.style({ position: "absolute", positionAnchor: `--${parentId}` });
     }
     setCanvasOffset(id: string, x: number, y: number) {
         const thisChild = this.canvasMap.get(id);
@@ -57,7 +53,15 @@ export class renderToolsHtmlEl implements renderTools {
             return;
         }
 
-        thisChild.warpEl.style({ left: `calc(anchor(left) + ${x}px)`, top: `calc(anchor(top) + ${y}px)` });
+        thisChild.warpEl.style({ left: `${x}px`, top: `${y}px` });
+    }
+    setBufferOffset(id: string, x: number, y: number): void {
+        const canvas = this.canvasMap.get(id);
+        if (!canvas) {
+            console.error("error");
+            return;
+        }
+        canvas.canvas.style({ left: `${x}px`, top: `${y}px` });
     }
     createXdgSurfaceEle(id: string, canvasId: string) {
         const canvasEl = this.canvasMap.get(canvasId);
