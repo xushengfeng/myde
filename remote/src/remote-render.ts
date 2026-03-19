@@ -28,7 +28,7 @@ export class RemoteRender implements renderTools {
     private canvasMap = new Map<string, CanvasState>();
     private surfaceMap = new Map<string, SurfaceState>();
     private popupMap = new Map<string, PopupState>();
-    private toplevels = new Set<string>();
+    private toplevels = new Map<string, { surfaceId: string }>();
     private _on: renderToolsOn = {};
     private idGen = 0;
     private server: RemoteServer;
@@ -36,9 +36,14 @@ export class RemoteRender implements renderTools {
     constructor(server: RemoteServer) {
         this.server = server;
 
-        // 设置新客户端连接时的状态恢复
-        server.setOnNewClient((ws) => {
-            this.sendFullState(ws);
+        server.setOnNewClient((ws, toplevelId) => {
+            if (toplevelId) {
+                // render客户端，发送该toplevel的状态
+                this.sendStateForToplevel(ws, toplevelId);
+            } else {
+                // launcher客户端，发送toplevel列表
+                this.sendToplevelList(ws);
+            }
         });
     }
 
@@ -61,10 +66,8 @@ export class RemoteRender implements renderTools {
         }
         this.canvasMap.set(id, { canvas, context, width: 1, height: 1 });
 
-        this.server.broadcast({
-            type: "bindCanvas",
-            canvasId: id,
-        });
+        // 广播给所有客户端
+        this.server.broadcast({ type: "bindCanvas", canvasId: id });
     }
 
     renderCanvas(canvas: OffscreenCanvas, id: string) {
@@ -81,24 +84,24 @@ export class RemoteRender implements renderTools {
         canvasData.context.clearRect(0, 0, canvas.width, canvas.height);
         canvasData.context.drawImage(canvas, 0, 0);
 
-        this.sendCanvasData(id, canvasData.canvas);
+        this.sendCanvasData(id, canvasData);
     }
 
-    private sendCanvasData(canvasId: string, canvas: OffscreenCanvas, ws?: any) {
-        const context = canvas.getContext("2d");
+    private sendCanvasData(canvasId: string, canvasData: CanvasState, ws?: any) {
+        const context = canvasData.canvas.getContext("2d");
         if (!context) return;
 
-        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+        const imageData = context.getImageData(0, 0, canvasData.canvas.width, canvasData.canvas.height);
         const message = {
             type: "canvas",
             canvasId,
-            width: canvas.width,
-            height: canvas.height,
+            width: canvasData.canvas.width,
+            height: canvasData.canvas.height,
             data: Array.from(imageData.data),
         };
 
         if (ws) {
-            ws.send(JSON.stringify(message));
+            this.server.sendTo(ws, message);
         } else {
             this.server.broadcast(message);
         }
@@ -106,37 +109,19 @@ export class RemoteRender implements renderTools {
 
     destroyCanvas(id: string): void {
         this.canvasMap.delete(id);
-
-        this.server.broadcast({
-            type: "destroyCanvas",
-            canvasId: id,
-        });
+        this.server.broadcast({ type: "destroyCanvas", canvasId: id });
     }
 
     setCanvasAnchor(id: string, parentId: string) {
-        this.server.broadcast({
-            type: "setCanvasAnchor",
-            canvasId: id,
-            parentId,
-        });
+        this.server.broadcast({ type: "setCanvasAnchor", canvasId: id, parentId });
     }
 
     setCanvasOffset(id: string, x: number, y: number) {
-        this.server.broadcast({
-            type: "setCanvasOffset",
-            canvasId: id,
-            x,
-            y,
-        });
+        this.server.broadcast({ type: "setCanvasOffset", canvasId: id, x, y });
     }
 
     setBufferOffset(id: string, x: number, y: number): void {
-        this.server.broadcast({
-            type: "setBufferOffset",
-            canvasId: id,
-            x,
-            y,
-        });
+        this.server.broadcast({ type: "setBufferOffset", canvasId: id, x, y });
     }
 
     createXdgSurfaceEle(id: string, canvasId: string) {
@@ -149,11 +134,7 @@ export class RemoteRender implements renderTools {
             offsetY: 0,
         });
 
-        this.server.broadcast({
-            type: "createXdgSurfaceEle",
-            surfaceId: id,
-            canvasId,
-        });
+        this.server.broadcast({ type: "createXdgSurfaceEle", surfaceId: id, canvasId });
     }
 
     getXdgSurfaceEle(id: string) {
@@ -165,6 +146,14 @@ export class RemoteRender implements renderTools {
     destroyXdgSurfaceEle(id: string, type: "toplevel" | "popup"): void {
         const surface = this.surfaceMap.get(id);
         if (surface) {
+            if (type === "toplevel") {
+                if (this._on.onToplevelRemove) {
+                    this._on.onToplevelRemove(id);
+                }
+                this.toplevels.delete(id);
+                this.sendToplevelListToAll();
+            }
+
             this.server.broadcast({
                 type: "destroyXdgSurfaceEle",
                 surfaceId: id,
@@ -172,9 +161,7 @@ export class RemoteRender implements renderTools {
             });
 
             this.surfaceMap.delete(id);
-            this.toplevels.delete(id);
 
-            // 清理关联的 popup
             for (const [popupId, popup] of this.popupMap) {
                 if (popup.parentId === id) {
                     this.popupMap.delete(popupId);
@@ -206,32 +193,21 @@ export class RemoteRender implements renderTools {
         const surface = this.surfaceMap.get(id);
         if (surface) {
             surface.isToplevel = true;
-            this.toplevels.add(id);
+            this.toplevels.set(id, { surfaceId: id });
 
             if (this._on.onToplevelCreate) {
                 this._on.onToplevelCreate(id);
             }
+
+            this.sendToplevelListToAll();
         }
 
-        this.server.broadcast({
-            type: "asToplevel",
-            surfaceId: id,
-        });
+        this.server.broadcast({ type: "asToplevel", surfaceId: id });
     }
 
     addPopupToXdgSurface(popupId: string, toplevelId: string) {
-        this.popupMap.set(popupId, {
-            popupId,
-            parentId: toplevelId,
-            x: 0,
-            y: 0,
-        });
-
-        this.server.broadcast({
-            type: "addPopupToXdgSurface",
-            popupId,
-            toplevelId,
-        });
+        this.popupMap.set(popupId, { popupId, parentId: toplevelId, x: 0, y: 0 });
+        this.server.broadcast({ type: "addPopupToXdgSurface", popupId, toplevelId });
     }
 
     setPopupPosi(popupId: string, x: number, y: number) {
@@ -240,78 +216,80 @@ export class RemoteRender implements renderTools {
             popup.x = x;
             popup.y = y;
         }
-
-        this.server.broadcast({
-            type: "setPopupPosi",
-            popupId,
-            x,
-            y,
-        });
+        this.server.broadcast({ type: "setPopupPosi", popupId, x, y });
     }
 
-    // 获取所有 toplevel 的渲染 ID
-    public getToplevelIds(): string[] {
-        return Array.from(this.toplevels);
+    public getToplevels(): Array<{ id: string; surfaceId: string }> {
+        return Array.from(this.toplevels.entries()).map(([id, { surfaceId }]) => ({ id, surfaceId }));
     }
 
-    // 发送完整状态到新连接的客户端
-    private sendFullState(ws: any) {
-        console.log("Sending full state to new client");
+    private sendToplevelList(ws: any) {
+        const list = this.getToplevels();
+        this.server.sendTo(ws, { type: "toplevelList", toplevels: list });
+    }
 
-        // 发送所有 canvas
-        for (const [id, state] of this.canvasMap) {
-            ws.send(JSON.stringify({ type: "bindCanvas", canvasId: id }));
-            if (state.width > 0 && state.height > 0) {
-                this.sendCanvasData(id, state.canvas, ws);
-            }
+    private sendToplevelListToAll() {
+        const list = this.getToplevels();
+        this.server.broadcast({ type: "toplevelList", toplevels: list });
+    }
+
+    private sendStateForToplevel(ws: any, toplevelId: string) {
+        console.log(`Sending state for toplevel ${toplevelId}`);
+
+        // 找到toplevel对应的surface
+        const toplevel = this.toplevels.get(toplevelId);
+        if (!toplevel) {
+            console.log(`Toplevel ${toplevelId} not found`);
+            return;
         }
 
-        // 发送所有 surface
+        // 发送该toplevel相关的所有状态
         for (const [id, state] of this.surfaceMap) {
-            ws.send(
-                JSON.stringify({
+            if (id === toplevelId) {
+                this.server.sendTo(ws, { type: "bindCanvas", canvasId: state.canvasId });
+
+                const canvasState = this.canvasMap.get(state.canvasId);
+                if (canvasState && canvasState.width > 0 && canvasState.height > 0) {
+                    this.sendCanvasData(state.canvasId, canvasState, ws);
+                }
+
+                this.server.sendTo(ws, {
                     type: "createXdgSurfaceEle",
                     surfaceId: id,
                     canvasId: state.canvasId,
-                }),
-            );
+                });
 
-            if (state.isToplevel) {
-                ws.send(JSON.stringify({ type: "asToplevel", surfaceId: id }));
-            }
+                if (state.isToplevel) {
+                    this.server.sendTo(ws, { type: "asToplevel", surfaceId: id });
+                }
 
-            if (state.width > 0 && state.height > 0) {
-                ws.send(
-                    JSON.stringify({
+                if (state.width > 0 && state.height > 0) {
+                    this.server.sendTo(ws, {
                         type: "setXdgSurfaceGeo",
                         surfaceId: id,
                         width: state.width,
                         height: state.height,
                         offsetX: state.offsetX,
                         offsetY: state.offsetY,
-                    }),
-                );
+                    });
+                }
             }
         }
 
-        // 发送所有 popup
         for (const [id, state] of this.popupMap) {
-            ws.send(
-                JSON.stringify({
+            if (state.parentId === toplevelId) {
+                this.server.sendTo(ws, {
                     type: "addPopupToXdgSurface",
                     popupId: state.popupId,
-                    toplevelId: state.parentId,
-                }),
-            );
-
-            ws.send(
-                JSON.stringify({
+                    toplevelId,
+                });
+                this.server.sendTo(ws, {
                     type: "setPopupPosi",
                     popupId: state.popupId,
                     x: state.x,
                     y: state.y,
-                }),
-            );
+                });
+            }
         }
     }
 }

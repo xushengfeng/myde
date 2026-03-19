@@ -14,109 +14,145 @@
         body {
             width: 100vw;
             height: 100vh;
-            overflow: hidden;
-            background: #1a1a1a;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
         
-        #desktop {
-            width: 100%;
-            height: 100%;
-            position: relative;
+        /* Launcher styles */
+        .launcher {
+            background: #1a1a1a;
+            color: #fff;
+            padding: 20px;
         }
         
-        #controls {
-            position: fixed;
-            top: 10px;
-            left: 10px;
-            background: rgba(255, 255, 255, 0.95);
-            padding: 12px;
+        .launcher h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
+        }
+        
+        .launcher #controls {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 16px;
             border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-            z-index: 1000;
-            min-width: 250px;
+            margin-bottom: 20px;
         }
         
-        #controls h3 {
-            margin: 0 0 10px 0;
-            font-size: 14px;
-            color: #333;
-        }
-        
-        button {
-            padding: 6px 12px;
-            margin: 4px 2px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            background: white;
-            cursor: pointer;
-            font-size: 12px;
-            transition: all 0.2s;
-        }
-        
-        button:hover {
-            background: #f0f0f0;
-            border-color: #ccc;
-        }
-        
-        button:active {
-            transform: scale(0.98);
-        }
-        
-        #status {
-            margin-top: 8px;
-            padding: 6px;
-            background: #f5f5f5;
-            border-radius: 4px;
-            font-size: 11px;
-            color: #666;
-        }
-        
-        #status.connected {
-            background: #e8f5e9;
-            color: #2e7d32;
-        }
-        
-        #status.disconnected {
-            background: #ffebee;
-            color: #c62828;
-        }
-        
-        #app-launcher {
-            margin-top: 10px;
-            padding-top: 10px;
-            border-top: 1px solid #eee;
-        }
-        
-        #app-launcher label {
+        .launcher label {
             display: block;
-            font-size: 11px;
-            color: #666;
-            margin-bottom: 4px;
-        }
-        
-        #app-command {
-            width: 100%;
-            padding: 6px 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
             font-size: 12px;
+            color: #999;
             margin-bottom: 6px;
         }
         
-        #app-command:focus {
+        .launcher input {
+            width: 300px;
+            padding: 8px 12px;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background: #2a2a2a;
+            color: #fff;
+            font-size: 14px;
+            margin-right: 8px;
+        }
+        
+        .launcher input:focus {
             outline: none;
             border-color: #2196F3;
         }
         
-        .canvas-container {
-            position: absolute;
-            border: 2px solid transparent;
-            transition: border-color 0.2s;
+        .launcher button {
+            padding: 8px 16px;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background: #2a2a2a;
+            color: #fff;
+            cursor: pointer;
+            font-size: 14px;
         }
         
-        .canvas-container.selected {
-            border-color: #2196F3;
+        .launcher button:hover {
+            background: #3a3a3a;
+        }
+        
+        .launcher #status {
+            margin-left: 12px;
+            font-size: 12px;
+        }
+        
+        .launcher #status.connected { color: #4caf50; }
+        .launcher #status.disconnected { color: #f44336; }
+        
+        .launcher h2 {
+            font-size: 18px;
+            margin-bottom: 12px;
+        }
+        
+        #toplevel-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        
+        .toplevel-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 12px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            min-width: 150px;
+        }
+        
+        .toplevel-item:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .toplevel-item .id {
+            font-size: 12px;
+            color: #999;
+            word-break: break-all;
+        }
+        
+        .toplevel-item .open-btn {
+            margin-top: 8px;
+            font-size: 12px;
+            padding: 4px 8px;
+        }
+        
+        /* Render styles */
+        .render {
+            background: #000;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        .render #desktop {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            background: #111;
+        }
+        
+        .render #status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 1000;
+        }
+        
+        .render #status.connected {
+            background: rgba(76, 175, 80, 0.8);
+            color: #fff;
+        }
+        
+        .render #status.disconnected {
+            background: rgba(244, 67, 54, 0.8);
+            color: #fff;
+        }
+        
+        .canvas-container {
+            position: absolute;
         }
         
         .canvas-container canvas {
@@ -125,20 +161,31 @@
     </style>
 </head>
 <body>
-    <div id="controls">
-        <h3>Remote Desktop</h3>
-        <button id="connect">Connect</button>
-        <button id="disconnect">Disconnect</button>
-        <button id="refresh">Refresh</button>
-        <div id="status" class="disconnected">Disconnected</div>
-        <div id="app-launcher">
+    <!-- Launcher template -->
+    <div id="launcher-view" class="launcher" style="display: none;">
+        <h1>MyDE Remote Desktop</h1>
+        
+        <div id="controls">
             <label for="app-command">Launch Application</label>
-            <input type="text" id="app-command" placeholder="e.g. weston-terminal">
-            <button id="run-app">Run</button>
+            <div style="display: flex; align-items: center;">
+                <input type="text" id="app-command" placeholder="e.g. weston-terminal">
+                <button id="run-app">Run</button>
+                <span id="status" class="disconnected">Disconnected</span>
+            </div>
+        </div>
+        
+        <h2>Running Windows</h2>
+        <div id="toplevel-list">
+            <div style="color: #666; font-size: 14px;">No windows</div>
         </div>
     </div>
-    <div id="desktop"></div>
     
-    <script type="module" src="/main.js"></script>
+    <!-- Render template -->
+    <div id="render-view" class="render" style="display: none;">
+        <div id="status" class="disconnected">Disconnected</div>
+        <div id="desktop"></div>
+    </div>
+    
+    <script type="module" src="/index.js"></script>
 </body>
 </html>
