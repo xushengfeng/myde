@@ -12,9 +12,9 @@
 ```
 remote/
 ├── src/                    # 服务器代码
-│   ├── index.ts            # 主入口，创建wayland和WebSocket服务器
+│   ├── index.ts            # 主入口，wayland服务器和输入处理
 │   ├── server.ts           # WebSocket服务器，支持客户端类型区分
-│   └── remote-render.ts    # 远程渲染器，支持状态缓存和toplevel过滤
+│   └── remote-render.ts    # 远程渲染器，支持状态缓存
 ├── frontend/               # 前端代码（独立vite项目）
 │   ├── src/
 │   │   ├── index.html      # 统一入口页面
@@ -51,8 +51,16 @@ pnpm run remote
 
 - **启动器**: 启动应用、查看运行中的窗口列表
 - **渲染器**: 每个 toplevel 一个标签页，独立渲染
-- **状态缓存**: 渲染器缓存所有窗口状态，新客户端连接时自动恢复
-- **输入事件转发**: 支持鼠标和键盘输入
+- **状态缓存**: 渲染器连接时自动恢复状态
+- **输入事件转发**: 支持鼠标、键盘和滚轮输入
+
+## 输入处理
+
+- **鼠标事件**: pointermove, pointerdown, pointerup
+- **键盘事件**: keydown, keyup（所有客户端共享）
+- **滚轮事件**: wheel（水平和垂直滚动）
+
+输入事件会根据 toplevelId 转发到对应的窗口。
 
 ## 消息类型
 

@@ -416,7 +416,7 @@ class RemoteDesktop {
         }
     }
 
-    private sendInputEvent(event: any) {
+    sendInputEvent(event: any) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify({ type: "inputEvent", event }));
         }
@@ -432,7 +432,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const desktop = document.getElementById("desktop");
         if (desktop) {
             desktop.addEventListener("pointerdown", (e) => {
-                (app as any).sendInputEvent?.({
+                app.sendInputEvent({
                     type: "pointerdown",
                     x: e.clientX,
                     y: e.clientY,
@@ -441,7 +441,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
 
             desktop.addEventListener("pointerup", (e) => {
-                (app as any).sendInputEvent?.({
+                app.sendInputEvent({
                     type: "pointerup",
                     x: e.clientX,
                     y: e.clientY,
@@ -450,7 +450,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
 
             desktop.addEventListener("pointermove", (e) => {
-                (app as any).sendInputEvent?.({
+                app.sendInputEvent({
                     type: "pointermove",
                     x: e.clientX,
                     y: e.clientY,
@@ -458,7 +458,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
 
             desktop.addEventListener("wheel", (e) => {
-                (app as any).sendInputEvent?.({
+                app.sendInputEvent({
                     type: "wheel",
                     deltaX: e.deltaX,
                     deltaY: e.deltaY,
@@ -466,7 +466,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
 
             document.addEventListener("keydown", (e) => {
-                (app as any).sendInputEvent?.({
+                app.sendInputEvent({
                     type: "keydown",
                     code: e.code,
                     key: e.key,
@@ -474,7 +474,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
 
             document.addEventListener("keyup", (e) => {
-                (app as any).sendInputEvent?.({
+                app.sendInputEvent({
                     type: "keyup",
                     code: e.code,
                     key: e.key,
