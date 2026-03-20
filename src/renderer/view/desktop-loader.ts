@@ -1,5 +1,6 @@
 const fs = require("node:fs") as typeof import("node:fs");
 
+import { vfs } from "../sys_api/fs";
 import { myde } from "../desktop-api";
 
 import { addStyle, initDKH, pack } from "dkh-ui";
@@ -11,7 +12,7 @@ function loadDesktop(p: string) {
         console.error("Desktop package.json not found:", packagePath);
         return;
     }
-    myde.MRootDir = dirPath;
+    myde.MSysApi.fs = new vfs(dirPath);
     const packageData = fs.readFileSync(packagePath, "utf-8");
     const packageJson = JSON.parse(packageData);
     const mainPath = `${dirPath}/${packageJson.main || "index.js"}`;

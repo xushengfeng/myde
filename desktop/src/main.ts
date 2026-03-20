@@ -3,7 +3,8 @@ import { addClass, button, ele, type ElType, image, pack, setProperty, view } fr
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/renderer/desktop-api";
 import { txt } from "dkh-ui";
 
-const { MSysApi, MRootDir, MInputMap, MUtils } = window.myde;
+const { MSysApi, MInputMap, MUtils } = window.myde;
+const fs = MSysApi.fs;
 
 type View = {
     ox: number;
@@ -481,8 +482,11 @@ window.dy = () => dyj电源键.fire();
 
 const render = new MUtils.renderToolsHtmlEl();
 render.on({
-    onToplevelRemove: (_, el) => {
-        el.remove();
+    onToplevelRemove: (wid) => {
+        const el = render.getXdgSurfaceEle(wid);
+        if (el) {
+            el.remove();
+        }
     },
 });
 const server = MSysApi.server({ render });
@@ -589,7 +593,7 @@ server.server.on("clientClose", (client, clientId) => {
 
 const mainEl = view().style({ width: "100vw", height: "100vh" }).addInto();
 
-const bg = image(`${MRootDir}/assets/wallpaper/1.svg`, "wallpaper").style({
+const bg = image(fs.readFileAsDataURLSync("/assets/wallpaper/1.svg"), "wallpaper").style({
     width: "100%",
     height: "100%",
     objectFit: "cover",
@@ -801,18 +805,20 @@ tools.registerTool("apps", (_tipEl, a) => {
 
         if (browserApp) {
             const iconPath =
-                (await MSysApi.getDesktopIcon(browserApp.icon, iconConfig)) || `${MRootDir}/assets/icons/browser.png`;
+                (await MSysApi.getDesktopIcon(browserApp.icon, iconConfig)) ||
+                fs.readFileAsDataURLSync("/assets/icons/browser.png");
             appLauncher(iconPath, browserApp.name, browserApp.exec).addInto(appsEl);
         }
         if (fileManagerApp) {
             const iconPath =
                 (await MSysApi.getDesktopIcon(fileManagerApp.icon, iconConfig)) ||
-                `${MRootDir}/assets/icons/file-manager.png`;
+                fs.readFileAsDataURLSync("/assets/icons/file-manager.png");
             appLauncher(iconPath, fileManagerApp.name, fileManagerApp.exec).addInto(appsEl);
         }
         if (terminalApp) {
             const iconPath =
-                (await MSysApi.getDesktopIcon(terminalApp.icon, iconConfig)) || `${MRootDir}/assets/icons/terminal.png`;
+                (await MSysApi.getDesktopIcon(terminalApp.icon, iconConfig)) ||
+                fs.readFileAsDataURLSync("/assets/icons/terminal.png");
             appLauncher(iconPath, terminalApp.name, terminalApp.exec).addInto(appsEl);
         }
     });

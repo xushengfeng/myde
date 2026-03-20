@@ -159,6 +159,32 @@ render.on({
 const el = render.getXdgSurfaceEle(renderId);
 ```
 
+### vfs
+
+只读虚拟文件系统，基于插件根目录，防止路径遍历：
+
+```typescript
+const fs = new MUtils.vfs(MRootDir);
+
+// 读取文件
+const text = await fs.readTextFile("config.json");
+const data = await fs.readFile("data.bin"); // ArrayBuffer
+const dataUrl = await fs.readFileAsDataURL("icon.png");
+const blob = await fs.readFileAsBlob("image.png");
+
+// 目录
+const files = await fs.readdir("assets");
+const entries = await fs.readdirWithTypes("assets");
+
+// 检查
+const exists = await fs.exists("file.txt");
+const isFile = await fs.isFile("file.txt");
+const isDir = await fs.isDirectory("dir");
+const stat = await fs.stat("file.txt"); // { size, mtime, isFile, isDirectory }
+```
+
+所有方法都有同步版本（如 `readTextFileSync`）。
+
 ---
 
 ## MInputMap
