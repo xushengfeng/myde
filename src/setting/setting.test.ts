@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setting } from "./setting";
+import { setting, SettingJson } from "./setting";
 
 describe("setting", () => {
     let tmpDir: string;
@@ -157,7 +157,7 @@ describe("setting", () => {
             fs.writeFileSync(testPath, JSON.stringify({ version: "1.0", count: 5, namespace: {} }));
 
             type MainSetting = { count: number };
-            const transform = (data: Record<string, unknown>, from: string, to: string) => {
+            const transform = (data: SettingJson<Record<string, unknown>>, from: string, to: string) => {
                 if (from === "1.0" && to === "2.0") {
                     return { ...data, count: (data.count as number) * 10 };
                 }
@@ -175,7 +175,7 @@ describe("setting", () => {
             fs.writeFileSync(testPath, JSON.stringify({ version: "1.0", value: "old", namespace: {} }));
 
             type MainSetting = { value: string };
-            const transform = (data: Record<string, unknown>, from: string, to: string) => {
+            const transform = (data: SettingJson<Record<string, unknown>>, from: string, to: string) => {
                 if (from === "1.0" && to === "2.0") {
                     return { ...data, value: `${data.value}_v2` };
                 }
@@ -197,7 +197,7 @@ describe("setting", () => {
             fs.writeFileSync(testPath, JSON.stringify({ version: "1.0", oldName: "data", namespace: {} }));
 
             type MainSetting = { newName: string };
-            const transform = (data: Record<string, unknown>, from: string, to: string) => {
+            const transform = (data: SettingJson<Record<string, unknown>>, from: string, to: string) => {
                 if (from === "1.0" && to === "2.0") {
                     const { oldName, ...rest } = data;
                     return { ...rest, newName: oldName };

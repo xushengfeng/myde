@@ -5,7 +5,7 @@ import { getEnv } from "./sys_api/env";
 import { vfs } from "./sys_api/fs";
 import { server } from "./sys_api/run";
 import type { setting } from "./setting/setting";
-import { nowConfig } from "./setting/config";
+import type { nowConfig } from "./setting/config";
 
 export const myde = {
     MSysApi: {

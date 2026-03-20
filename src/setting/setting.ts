@@ -6,16 +6,24 @@ type SettingJson<t extends Record<string, unknown>> = t & {
     namespace: { [namespace: string]: { [key: string]: unknown } };
 };
 
+export type { SettingJson };
+
+export type settingTransform = (
+    oldSetting: SettingJson<Record<string, unknown>>,
+    versionA: string,
+    versionB: string,
+) => SettingJson<Record<string, unknown>>;
+
 export class setting<mainSetting extends Record<string, unknown>> {
     private version: string;
     private filePath: string;
     private defaultSetting: mainSetting;
-    private globalTransform: (oldSetting, versionA: string, versionB: string) => unknown;
+    private globalTransform: settingTransform;
 
     constructor(op: {
         version: string;
         filePath: string;
-        transform: (oldSetting, versionA: string, versionB: string) => unknown;
+        transform: settingTransform;
         defaultSetting: mainSetting;
     }) {
         this.version = op.version;
