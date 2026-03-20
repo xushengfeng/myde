@@ -6,7 +6,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const chPath = path.resolve(__dirname, "input-event-codes.h");
-const outputTypesPath = path.resolve(__dirname, "../../src/renderer/input_codes/types.ts");
+const outputTypesPath = path.resolve(__dirname, "../../src/input_codes/types.ts");
 
 const codeMap = new Map<string, number>();
 

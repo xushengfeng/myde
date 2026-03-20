@@ -1,6 +1,6 @@
 import { addClass, button, ele, type ElType, image, pack, setProperty, view } from "dkh-ui";
 
-import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/renderer/desktop-api";
+import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/desktop-api";
 import { txt } from "dkh-ui";
 
 const { MSysApi, MInputMap, MUtils } = window.myde;

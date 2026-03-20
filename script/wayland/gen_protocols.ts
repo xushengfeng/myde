@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as xml2js from "xml2js";
 import { fileURLToPath } from "node:url";
-import type { WaylandProtocol, WaylandArgType } from "../../src/renderer/wayland/wayland-binary.ts";
+import type { WaylandProtocol, WaylandArgType } from "../../src/wayland/wayland-binary.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -87,8 +87,8 @@ const supportedProtocols: Array<{
 
 // 支持遍历 supportedProtocols，按 name 读取对应 xml 文件并处理
 const xmlDir = path.resolve(__dirname, "xml");
-const outputPath = path.resolve(__dirname, "../../src/renderer/wayland/protocols.json");
-const outputTypesPath = path.resolve(__dirname, "../../src/renderer/wayland/wayland-types.ts");
+const outputPath = path.resolve(__dirname, "../../src/wayland/protocols.json");
+const outputTypesPath = path.resolve(__dirname, "../../src/wayland/wayland-types.ts");
 
 // 先读取已有 JSON 内容
 const allResults: Record<string, WaylandProtocol[]> = {};

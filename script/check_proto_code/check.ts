@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { WaylandProtocol } from "../../src/renderer/wayland/wayland-binary";
+import type { WaylandProtocol } from "../../src/wayland/wayland-binary";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const protoCode = fs.readFileSync(path.join(__dirname, "../../src/renderer/view/view.ts"), "utf8");
+const protoCode = fs.readFileSync(path.join(__dirname, "../../src/view/view.ts"), "utf8");
 
 const WaylandProtocolsx = JSON.parse(
-    fs.readFileSync(path.join(__dirname, "../../src/renderer/wayland/protocols.json"), "utf8"),
+    fs.readFileSync(path.join(__dirname, "../../src/wayland/protocols.json"), "utf8"),
 ) as Record<string, WaylandProtocol[]>;
 
 const all = new Set<string>();

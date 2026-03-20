@@ -1,7 +1,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 
-import { vfs } from "../sys_api/fs";
-import { myde } from "../desktop-api";
+import { vfs } from "../../sys_api/fs";
+import { myde } from "../../desktop-api";
 
 import { addStyle, initDKH, pack } from "dkh-ui";
 

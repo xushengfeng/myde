@@ -1,12 +1,12 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 
-import { getDesktopEntries, getDesktopIcon } from "../sys_api/application";
-import { renderToolsHtmlEl } from "./render_tools_el";
-import { myde } from "../desktop-api";
+import { getDesktopEntries, getDesktopIcon } from "../../sys_api/application";
+import { renderToolsHtmlEl } from "../../view/render_tools_el";
+import { myde } from "../../desktop-api";
 
 import { button, image, pack, txt, view, initDKH, input, addStyle } from "dkh-ui";
-import type { WaylandClient } from "./view";
+import type { WaylandClient } from "../../view/view";
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
     for (const [_id, client] of server.clients) {
@@ -336,7 +336,6 @@ view("y")
 view()
     .add([
         txt("ime"),
-        // @ts-expect-error
         input().on("input", (e: InputEvent, el) => {
             for (const client of server.clients.values()) {
                 client.keyboard.sendText(el.gv, e.isComposing);
