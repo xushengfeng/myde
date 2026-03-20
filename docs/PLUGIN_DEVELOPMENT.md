@@ -131,8 +131,10 @@ const apps = await MSysApi.getDesktopEntries();
 // 获取应用信息
 const app = await MSysApi.getDesktopEntry("firefox");
 
-// 获取图标路径
-const iconPath = await MSysApi.getDesktopIcon("firefox", { theme: "breeze" });
+// 获取图标 (返回 blob URL，带缓存)
+const iconUrl = await MSysApi.getDesktopIcon("firefox", { theme: "breeze" });
+// iconUrl: "blob:http://localhost/xxxx"
+img.src = iconUrl;
 
 // 获取环境变量
 const env = MSysApi.getEnv();
