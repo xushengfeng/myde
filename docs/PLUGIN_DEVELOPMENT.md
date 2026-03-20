@@ -46,26 +46,29 @@ runApp("weston-terminal");
 npx tsc src/index.ts --outDir dist --module esnext --target esnext
 
 # 在主项目中启动
-cd /path/to/myde
 export desktop='my-desktop'
 npm run start
 ```
 
 ---
 
+## 背景介绍
+
+通过electron运行桌面。
+
+实际类似开发传统浏览器单页页面，可以使用浏览器的所有api，但是不需要提供html页面，而是操控已经存在的页面。
+
+尽管运行在electron中，但是考虑到安全屏蔽了nodejs相关的系统操作api，统一由`myde`提供。
+
+在这个框架中，提供了界面窗口渲染和内部的管理，插件需要把提供的数据添加到网页，按需创建壁纸、启动器等，把鼠标键盘等事件发送到框架内。
+
+---
+
 ## 加载机制
 
-`desktop-loader.ts` 读取插件目录的 `package.json`，获取 `main` 字段，动态加载脚本：
+启动器读取插件目录的 `package.json`，获取 `main` 字段，动态加载脚本。
 
-```
-http://localhost/?desktop=/path/to/my-desktop
-```
-
-加载流程：
-
-1. 读取 `{desktop}/package.json`
-2. 获取 `main` 字段（默认 `dist/index.js`）
-3. 读取脚本内容并执行
+不要使用动态加载机制，而是一起打包，建议使用vite。如果加载资源，可以使用`MSysApi.fs`，可以读取插件文件夹下的所有文件。
 
 ---
 
@@ -77,39 +80,12 @@ http://localhost/?desktop=/path/to/my-desktop
 const { MSysApi, MRootDir, MInputMap, MUtils } = window.myde;
 ```
 
-| 对象        | 说明           |
-| ----------- | -------------- |
-| `MSysApi`   | 系统 API       |
-| `MRootDir`  | 插件根目录路径 |
-| `MInputMap` | 键盘映射       |
-| `MUtils`    | 工具函数       |
-
----
-
-## MRootDir
-
-插件根目录的绝对路径，用于加载资源文件：
-
-```typescript
-const { MRootDir } = window.myde;
-
-// 加载图片
-const img = new Image();
-img.src = `${MRootDir}/assets/icon.png`;
-
-// 加载配置
-const config = await fetch(`${MRootDir}/config.json`).then((r) => r.json());
-```
-
-目录结构：
-
-```
-my-desktop/
-├── src/index.ts
-├── dist/index.js
-├── assets/wallpaper.png
-└── package.json        # main: "dist/index.js"
-```
+| 对象        | 说明     |
+| ----------- | -------- |
+| `MSysApi`   | 系统 API |
+| `MSetting`  | 设置     |
+| `MInputMap` | 键盘映射 |
+| `MUtils`    | 工具函数 |
 
 ---
 
@@ -143,32 +119,12 @@ const env = MSysApi.getEnv();
 // { HOME, USER, LANG, XDG_RUNTIME_DIR, ... }
 ```
 
----
-
-## MUtils
-
-### renderToolsHtmlEl
-
-内置的 DOM 渲染器：
-
-```typescript
-const render = new MUtils.renderToolsHtmlEl();
-
-render.on({
-    onToplevelCreate: (wid, el) => document.body.appendChild(el),
-    onToplevelRemove: (wid, el) => el.remove(),
-});
-
-// 获取窗口元素
-const el = render.getXdgSurfaceEle(renderId);
-```
-
-### vfs
+### fs
 
 只读虚拟文件系统，基于插件根目录，防止路径遍历：
 
 ```typescript
-const fs = new MUtils.vfs(MRootDir);
+const fs = new MSysApi.fs(MRootDir);
 
 // 读取文件
 const text = await fs.readTextFile("config.json");
@@ -191,12 +147,40 @@ const stat = await fs.stat("file.txt"); // { size, mtime, isFile, isDirectory }
 
 ---
 
+## MUtils
+
+### renderToolsHtmlEl
+
+内置的 DOM 渲染器：
+
+```typescript
+const render = new MUtils.renderToolsHtmlEl();
+
+render.on({
+    onToplevelCreate: (wid, el) => document.body.appendChild(el),
+    onToplevelRemove: (wid, el) => el.remove(),
+});
+
+// 获取窗口元素
+const el = render.getXdgSurfaceEle(renderId);
+```
+
+---
+
 ## MInputMap
 
 ```typescript
 // 浏览器键盘码 -> Linux 键码
 const keyCode = MInputMap.mapKeyCode("KeyA");
 ```
+
+---
+
+## MSetting
+
+提供设置读写，这个设置可以由启动器共享，意味着换桌面插件后还可以保留，比如壁纸等。桌面还可以创建读写命名空间，也就是自定义设置。
+
+自带类型约束和默认配置。
 
 ---
 
@@ -314,6 +298,20 @@ runApp("chrome", [], xServerNum);
 ```
 
 ---
+
+## 开发提示
+
+使用不了`require`，应该使用打包器打包成一个js文件。如果有复杂计算任务，使用 woker+wasm，如果需要其他系统 api，需要修改引擎，请提交 issuse 或 pr。
+
+不建议使用网络加载外部内容。
+
+避免复杂循环导致页面卡死，必要时添加`await scheduler.yield()`。
+
+不使用 css 的`cursor`属性，需要自己实现光标
+
+不使用 title 属性，或者借助 title 实现自己的 tooltip
+
+--
 
 ## 参考
 
