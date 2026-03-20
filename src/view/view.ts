@@ -1747,7 +1747,7 @@ class WaylandClient {
                     if (!canSend) return undefined;
                     return { x: nx, y: ny };
                 },
-                sendPointerEvent: (type: "move" | "down" | "up", p: PointerEvent) => {
+                sendPointerEvent: (type: "move" | "down" | "up", p: { x: number; y: number; button: number }) => {
                     if (!this.obj2.pointer) return;
                     // px py已经相对主xdg surface了
                     const pos = winObj.point.updatePointerFocus({ x: p.x, y: p.y });
@@ -1794,7 +1794,7 @@ class WaylandClient {
                         this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
                     }
                 },
-                sendScrollEvent: (op: { p: WheelEvent }) => {
+                sendScrollEvent: (op: { p: { deltaX: number; deltaY: number; deltaZ: number } }) => {
                     const { p } = op;
                     if (!this.obj2.pointer) return;
                     // todo region
