@@ -386,7 +386,7 @@ function jump2Win(winid: MWinId) {
     viewData.focusWin(winid);
 }
 
-function appLauncher(iconPath: string, name: string, exec: string) {
+function appLauncher(iconPath: () => Promise<string>, name: string, exec: string) {
     const p = appIcon(iconPath, name);
     p.on("click", () => {
         console.log("exec", exec);
@@ -395,7 +395,7 @@ function appLauncher(iconPath: string, name: string, exec: string) {
     return p;
 }
 
-function appIcon(iconPath: string, name: string) {
+function appIcon(iconPath: () => Promise<string>, name: string) {
     const p = view().style({
         width: "48px",
         height: "48px",
@@ -405,14 +405,16 @@ function appIcon(iconPath: string, name: string) {
         background: "#ffffff",
         flexShrink: 0,
     });
-    if (iconPath)
-        image(iconPath, name)
-            .style({
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-            })
-            .addInto(p);
+    iconPath().then((iconPath) => {
+        if (iconPath)
+            image(iconPath, name)
+                .style({
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                })
+                .addInto(p);
+    });
     return p;
 }
 
@@ -736,6 +738,7 @@ tools.registerTool("startMenuFullScreen", () => {
                 }
             });
             for (const app of await MSysApi.getDesktopEntries()) {
+                await scheduler.yield();
                 const appEl = view("y")
                     .style({
                         width: "80px",
@@ -745,15 +748,16 @@ tools.registerTool("startMenuFullScreen", () => {
                     })
                     .addInto(menu);
                 const iconView = view().addInto(appEl);
-                MSysApi.getDesktopIcon(app.icon, iconConfig).then((_iconPath) => {
-                    const iconPath = _iconPath || "";
-                    iconView.add(
-                        appLauncher(iconPath, app.name, app.exec).style({
-                            width: "40px",
-                            height: "40px",
-                        }),
-                    );
-                });
+                iconView.add(
+                    appLauncher(
+                        async () => (await MSysApi.getDesktopIcon(app.icon, iconConfig)) || "",
+                        app.name,
+                        app.exec,
+                    ).style({
+                        width: "40px",
+                        height: "40px",
+                    }),
+                );
                 appEl.add(
                     txt(app.nameLocal).style({
                         fontSize: "12px",
@@ -804,22 +808,31 @@ tools.registerTool("apps", (_tipEl, a) => {
             apps.find((app) => app.name === "org.gnome.Terminal") || apps.find((app) => app.name === "Konsole");
 
         if (browserApp) {
-            const iconPath =
-                (await MSysApi.getDesktopIcon(browserApp.icon, iconConfig)) ||
-                fs.readFileAsDataURLSync("/assets/icons/browser.png");
-            appLauncher(iconPath, browserApp.name, browserApp.exec).addInto(appsEl);
+            appLauncher(
+                async () =>
+                    (await MSysApi.getDesktopIcon(browserApp.icon, iconConfig)) ||
+                    fs.readFileAsDataURLSync("/assets/icons/browser.png"),
+                browserApp.name,
+                browserApp.exec,
+            ).addInto(appsEl);
         }
         if (fileManagerApp) {
-            const iconPath =
-                (await MSysApi.getDesktopIcon(fileManagerApp.icon, iconConfig)) ||
-                fs.readFileAsDataURLSync("/assets/icons/file-manager.png");
-            appLauncher(iconPath, fileManagerApp.name, fileManagerApp.exec).addInto(appsEl);
+            appLauncher(
+                async () =>
+                    (await MSysApi.getDesktopIcon(fileManagerApp.icon, iconConfig)) ||
+                    fs.readFileAsDataURLSync("/assets/icons/file-manager.png"),
+                fileManagerApp.name,
+                fileManagerApp.exec,
+            ).addInto(appsEl);
         }
         if (terminalApp) {
-            const iconPath =
-                (await MSysApi.getDesktopIcon(terminalApp.icon, iconConfig)) ||
-                fs.readFileAsDataURLSync("/assets/icons/terminal.png");
-            appLauncher(iconPath, terminalApp.name, terminalApp.exec).addInto(appsEl);
+            appLauncher(
+                async () =>
+                    (await MSysApi.getDesktopIcon(terminalApp.icon, iconConfig)) ||
+                    fs.readFileAsDataURLSync("/assets/icons/terminal.png"),
+                terminalApp.name,
+                terminalApp.exec,
+            ).addInto(appsEl);
         }
     });
     const nowApps = new Map<string, { iconEl: ElType<HTMLElement>; clients: Set<WaylandClient> }>();
@@ -832,7 +845,7 @@ tools.registerTool("apps", (_tipEl, a) => {
             return;
         }
         const desk = await MSysApi.getDesktopEntry(appid);
-        const iconPath = (await MSysApi.getDesktopIcon(desk?.icon || "", iconConfig)) || "";
+        const iconPath = async () => (await MSysApi.getDesktopIcon(desk?.icon || "", iconConfig)) || "";
         const appEl = appIcon(iconPath, desk?.name || appid);
         appsEl.add(appEl);
         nowApps.set(appid, { iconEl: appEl, clients: new Set([c]) });
@@ -1095,3 +1108,11 @@ const mouseEl = view().addInto().style({
     transform: "translate(-50%, -50%)",
     zIndex: 9999,
 });
+
+MSysApi.getDesktopEntries().then((e) => {
+    for (const x of e) {
+        MSysApi.getDesktopIcon(x.icon, {
+            theme: "breeze",
+        });
+    }
+}); // 预加载

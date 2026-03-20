@@ -202,6 +202,7 @@ async function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<st
             } else {
                 const todo = [{ dir, depth: 0 }];
                 while (todo.length > 0) {
+                    await scheduler.yield();
                     // biome-ignore lint/style/noNonNullAssertion: checked above
                     const currentDirX = todo.shift()!;
                     if (currentDirX.depth > 3) break;
