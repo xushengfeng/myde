@@ -3,7 +3,7 @@ const path = require("node:path") as typeof import("node:path");
 
 import { getDesktopEntries, getDesktopIcon } from "../../sys_api/application";
 import { renderToolsHtmlEl } from "../../view/render_tools_el";
-import { myde } from "../../desktop-api";
+import { _myde as myde } from "../../desktop-api";
 
 import { button, image, pack, txt, view, initDKH, input, addStyle } from "dkh-ui";
 import type { WaylandClient } from "../../view/view";

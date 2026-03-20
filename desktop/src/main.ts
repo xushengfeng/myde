@@ -3,7 +3,7 @@ import { addClass, button, ele, type ElType, image, pack, setProperty, view } fr
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/desktop-api";
 import { txt } from "dkh-ui";
 
-const { MSysApi, MInputMap, MUtils, MSetting } = window.myde;
+const { MSysApi, MInputMap, MUtils, MSetting } = myde;
 const fs = MSysApi.fs;
 
 type View = {

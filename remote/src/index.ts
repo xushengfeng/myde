@@ -1,8 +1,8 @@
-import type {} from "../../src/renderer/desktop-api";
+import type {} from "../../src/desktop-api";
 import { RemoteRender } from "./remote-render";
 import { RemoteServer } from "./server";
 
-const { MSysApi, MInputMap } = window.myde;
+const { MSysApi, MInputMap } = myde;
 
 class RemoteDesktop {
     private render: RemoteRender;

@@ -1,7 +1,7 @@
 const fs = require("node:fs") as typeof import("node:fs");
 
 import { addStyle, initDKH, pack } from "dkh-ui";
-import { myde } from "../../desktop-api";
+import { _myde } from "../../desktop-api";
 import type { nowConfig } from "../../setting/config";
 import { setting } from "../../setting/setting";
 import { vfs } from "../../sys_api/fs";
@@ -47,7 +47,7 @@ addStyle({
     },
 });
 
-window.myde = myde;
+global.myde = _myde;
 
 const urlParams = new URLSearchParams(window.location.search);
 const nodeModule = urlParams.get("nodeModule");

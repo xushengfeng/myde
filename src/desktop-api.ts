@@ -7,7 +7,7 @@ import { server } from "./sys_api/run";
 import type { setting } from "./setting/setting";
 import type { nowConfig } from "./setting/config";
 
-export const myde = {
+export const _myde = {
     MSysApi: {
         getDesktopEntry,
         getDesktopEntries,
@@ -25,13 +25,11 @@ export const myde = {
     },
     MSetting: undefined as unknown as setting<nowConfig>,
 };
-export type DesktopApi = typeof myde;
+export type DesktopApi = typeof _myde;
 export type { DesktopIconConfig } from "./sys_api/application";
 
 declare global {
-    interface Window {
-        myde: DesktopApi;
-    }
+    var myde: DesktopApi;
 }
 
 export type { renderTools } from "./view/render_tools";

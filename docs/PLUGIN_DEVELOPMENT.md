@@ -22,7 +22,9 @@ mkdir src dist
 ### 3. 编写 src/index.ts
 
 ```typescript
-const { MSysApi, MUtils } = window.myde;
+import type {} from "../../src/desktop-api";
+
+const { MSysApi, MUtils } = myde; // myde 在引入上面类型后就可用了
 
 const render = new MUtils.renderToolsHtmlEl();
 render.on({
@@ -72,12 +74,12 @@ npm run start
 
 ---
 
-## window.myde
+## myde 全局变量
 
-插件通过 `window.myde` 访问系统 API：
+插件通过 `myde` 访问系统 API：
 
 ```typescript
-const { MSysApi, MRootDir, MInputMap, MUtils } = window.myde;
+const { MSysApi, MRootDir, MInputMap, MUtils } = myde;
 ```
 
 | 对象        | 说明     |
