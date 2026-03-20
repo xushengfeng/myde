@@ -7,6 +7,8 @@ interface CanvasData {
     parentId?: string;
     x?: number;
     y?: number;
+    offsetX?: number;
+    offsetY?: number;
     surfaceId?: string;
     surfaceType?: string;
     popupId?: string;
@@ -172,7 +174,9 @@ class RemoteDesktop {
                 case "createXdgSurfaceEle":
                     if (this.mode === "render" && message.surfaceId && message.canvasId) {
                         const desktop = document.getElementById("desktop");
-                        if (!desktop?.innerHTML) this.createXdgSurface(message.surfaceId, message.canvasId);
+                        if (!desktop?.innerHTML)
+                            // 渲染好的界面不需要添加其他窗口了
+                            this.createXdgSurface(message.surfaceId, message.canvasId);
                     }
                     break;
 
@@ -182,10 +186,16 @@ class RemoteDesktop {
                         message.surfaceId &&
                         message.width &&
                         message.height &&
-                        message.x !== undefined &&
-                        message.y !== undefined
+                        message.offsetX !== undefined &&
+                        message.offsetY !== undefined
                     ) {
-                        this.setXdgSurfaceGeo(message.surfaceId, message.width, message.height, message.x, message.y);
+                        this.setXdgSurfaceGeo(
+                            message.surfaceId,
+                            message.width,
+                            message.height,
+                            message.offsetX,
+                            message.offsetY,
+                        );
                     }
                     break;
 
@@ -394,8 +404,11 @@ class RemoteDesktop {
         if (surface) {
             surface.style.width = `${width}px`;
             surface.style.height = `${height}px`;
-            surface.style.left = `${offsetX}px`;
-            surface.style.top = `${offsetY}px`;
+            const canvas = surface.querySelector("canvas");
+            if (canvas) {
+                canvas.style.left = `-${offsetX}px`;
+                canvas.style.top = `-${offsetY}px`;
+            }
         }
     }
 
