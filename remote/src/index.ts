@@ -30,6 +30,11 @@ class RemoteDesktop {
             this.handleInputEvent(event, toplevelId);
         });
 
+        // 设置关闭窗口处理器
+        this.remoteServer.setCloseWindowHandler((toplevelId: string) => {
+            this.closeWindow(toplevelId);
+        });
+
         // 启动WebSocket服务器
         this.remoteServer.start();
 
@@ -165,6 +170,21 @@ class RemoteDesktop {
         const keyCode = MInputMap.mapKeyCode(code);
         for (const [_id, client] of this.server.server.clients) {
             client.keyboard.sendKey(keyCode, state);
+        }
+    }
+
+    private closeWindow(toplevelId: string) {
+        for (const [_id, client] of this.server.server.clients) {
+            for (const [winId, _win] of client.getWindows()) {
+                const xwin = client.win(winId);
+                if (!xwin) continue;
+
+                const renderId = xwin.point.renderId();
+                if (renderId === toplevelId) {
+                    xwin.close();
+                    return;
+                }
+            }
         }
     }
 }

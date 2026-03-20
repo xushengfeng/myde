@@ -17,6 +17,7 @@ export class RemoteServer {
     private onInputEvent: ((event: any, toplevelId: string | null) => void) | null = null;
     private onRunApp: ((command: string) => void) | null = null;
     private onNewClient: ((ws: WebSocketType, toplevelId: string | null) => void) | null = null;
+    private onCloseWindow: ((toplevelId: string) => void) | null = null;
 
     constructor(port: number = 8080) {
         this.port = port;
@@ -75,6 +76,13 @@ export class RemoteServer {
                     this.onRunApp(data.command);
                 }
                 break;
+
+            case "closeWindow":
+                if (data.toplevelId && this.onCloseWindow) {
+                    console.log("Close window:", data.toplevelId);
+                    this.onCloseWindow(data.toplevelId);
+                }
+                break;
         }
     }
 
@@ -88,6 +96,10 @@ export class RemoteServer {
 
     public setOnNewClient(handler: (ws: WebSocketType, toplevelId: string | null) => void) {
         this.onNewClient = handler;
+    }
+
+    public setCloseWindowHandler(handler: (toplevelId: string) => void) {
+        this.onCloseWindow = handler;
     }
 
     // 广播消息，可指定toplevelId过滤

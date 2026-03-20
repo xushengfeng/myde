@@ -259,7 +259,10 @@ class RemoteDesktop {
             item.className = "toplevel-item";
             item.innerHTML = `
                 <div class="id">${toplevelId}</div>
-                <button class="open-btn">Open in new tab</button>
+                <div style="display: flex; gap: 4px;">
+                    <button class="open-btn">Open in new tab</button>
+                    <button class="close-btn">Close</button>
+                </div>
             `;
 
             const openBtn = item.querySelector(".open-btn");
@@ -267,6 +270,14 @@ class RemoteDesktop {
                 openBtn.addEventListener("click", (e) => {
                     e.stopPropagation();
                     this.openToplevel(toplevelId);
+                });
+            }
+
+            const closeBtn = item.querySelector(".close-btn");
+            if (closeBtn) {
+                closeBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    this.closeToplevel(toplevelId);
                 });
             }
 
@@ -281,6 +292,12 @@ class RemoteDesktop {
     private openToplevel(toplevelId: string) {
         const url = `/?toplevelId=${encodeURIComponent(toplevelId)}`;
         window.open(url, "_blank");
+    }
+
+    private closeToplevel(toplevelId: string) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "closeWindow", toplevelId }));
+        }
     }
 
     private runApp(command: string) {
