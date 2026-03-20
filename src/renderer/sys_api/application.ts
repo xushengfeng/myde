@@ -1,4 +1,6 @@
+import type { FSWatcher } from "node:fs";
 const fs = require("node:fs/promises") as typeof import("node:fs/promises");
+const fsSync = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const os = require("node:os") as typeof import("node:os");
 
@@ -9,20 +11,24 @@ const appPaths = [
     "/usr/local/share/applications/",
     path.join(os.homedir() || "", ".local/share/applications/"),
 ];
-async function getDesktopEntry(appId: string, lans: string[] = []) {
-    return _getDesktopEntry(appId, appPaths, lans);
-}
+
+type DesktopEntry = {
+    name: string;
+    nameLocal: string;
+    comment: string;
+    commentLocal: string;
+    icon: string;
+    exec: string;
+    rawDesktopPath: string;
+};
+
+// 桌面应用列表缓存
+let entriesCache: DesktopEntry[] | null = null;
+let entriesCacheLans: string[] = [];
+let watchers: FSWatcher[] = [];
+let isWatching = false;
 
 async function _getDesktopEntry(appId: string, dirs: string[], lans: string[] = []) {
-    type T = {
-        name: string;
-        nameLocal: string;
-        comment: string;
-        commentLocal: string;
-        icon: string;
-        exec: string;
-        rawDesktopPath: string;
-    };
     const desktopFile = `${appId}.desktop`;
     for (const dir of dirs) {
         const filePath = path.join(dir, desktopFile);
@@ -35,7 +41,7 @@ async function _getDesktopEntry(appId: string, dirs: string[], lans: string[] = 
             const name = entry[lans.map((i) => `Name[${i}]`).find((l) => l in entry) || "Name"];
             const comment = entry[lans.map((i) => `Comment[${i}]`).find((l) => l in entry) || "Comment"] || "";
             if (exec) {
-                const pureExec = (exec as string).replace(/%.?/g, ""); // 去掉参数
+                const pureExec = (exec as string).replace(/%.?/g, "");
                 return {
                     name: entry.Name || "",
                     nameLocal: name,
@@ -44,7 +50,7 @@ async function _getDesktopEntry(appId: string, dirs: string[], lans: string[] = 
                     icon: entry.Icon || "",
                     exec: pureExec.trim(),
                     rawDesktopPath: filePath,
-                } as T;
+                } as DesktopEntry;
             }
         } catch {
             /* skip error */
@@ -53,22 +59,13 @@ async function _getDesktopEntry(appId: string, dirs: string[], lans: string[] = 
     return undefined;
 }
 
-async function getDesktopEntries(lans: string[] = []) {
-    const entries: Array<{
-        name: string;
-        nameLocal: string;
-        comment: string;
-        commentLocal: string;
-        icon: string;
-        exec: string;
-        rawDesktopPath: string;
-    }> = [];
+async function _loadDesktopEntries(lans: string[] = []): Promise<DesktopEntry[]> {
+    const entries: DesktopEntry[] = [];
     for (const dir of appPaths) {
         let files: string[] = [];
         try {
             files = (await fs.readdir(dir)).filter((f) => f.endsWith(".desktop"));
-        } catch (e) {
-            console.error(`Error reading directory ${dir}:`, e);
+        } catch {
             continue;
         }
         for (const file of files) {
@@ -78,6 +75,55 @@ async function getDesktopEntries(lans: string[] = []) {
         }
     }
     return entries;
+}
+
+function startWatching() {
+    if (isWatching) return;
+    isWatching = true;
+
+    for (const dir of appPaths) {
+        try {
+            const watcher = fsSync.watch(dir, { persistent: false }, () => {
+                entriesCache = null;
+            });
+            watcher.on("error", () => {});
+            watchers.push(watcher);
+        } catch {
+            /* directory may not exist */
+        }
+    }
+}
+
+function stopWatching() {
+    for (const watcher of watchers) {
+        watcher.close();
+    }
+    watchers = [];
+    isWatching = false;
+}
+
+async function getDesktopEntries(lans: string[] = []): Promise<DesktopEntry[]> {
+    // 启动监听（首次调用时）
+    startWatching();
+
+    // 检查缓存是否有效（语言参数相同）
+    if (entriesCache && JSON.stringify(entriesCacheLans) === JSON.stringify(lans)) {
+        return entriesCache;
+    }
+
+    entriesCache = await _loadDesktopEntries(lans);
+    entriesCacheLans = lans;
+    return entriesCache;
+}
+
+// 强制刷新缓存
+async function refreshDesktopEntries(lans: string[] = []): Promise<DesktopEntry[]> {
+    entriesCache = null;
+    return getDesktopEntries(lans);
+}
+
+async function getDesktopEntry(appId: string, lans: string[] = []) {
+    return _getDesktopEntry(appId, appPaths, lans);
 }
 
 export type DesktopIconConfig = {
@@ -156,6 +202,7 @@ async function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<st
             } else {
                 const todo = [{ dir, depth: 0 }];
                 while (todo.length > 0) {
+                    // biome-ignore lint/style/noNonNullAssertion: checked above
                     const currentDirX = todo.shift()!;
                     if (currentDirX.depth > 3) break;
                     const currentDir = currentDirX.dir;
@@ -261,3 +308,5 @@ async function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<st
 export { getDesktopEntry };
 export { getDesktopEntries };
 export { getDesktopIcon };
+export { refreshDesktopEntries };
+export { stopWatching };

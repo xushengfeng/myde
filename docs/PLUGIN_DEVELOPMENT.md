@@ -124,16 +124,18 @@ const { server, runApp } = MSysApi.server({ render });
 ### 应用管理
 
 ```typescript
-// 获取桌面应用列表
+// 获取桌面应用列表（带缓存，自动监听目录变化）
 const apps = await MSysApi.getDesktopEntries();
 // [{ name, nameLocal, exec, icon }]
 
-// 获取应用信息
+// 强制刷新缓存
+const apps = await MSysApi.refreshDesktopEntries();
+
+// 获取单个应用信息
 const app = await MSysApi.getDesktopEntry("firefox");
 
 // 获取图标 (返回 blob URL，带缓存)
 const iconUrl = await MSysApi.getDesktopIcon("firefox", { theme: "breeze" });
-// iconUrl: "blob:http://localhost/xxxx"
 img.src = iconUrl;
 
 // 获取环境变量

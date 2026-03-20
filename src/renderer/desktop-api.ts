@@ -1,6 +1,6 @@
 import { renderToolsHtmlEl } from "../renderer/view/render_tools_el";
 import { mapKeyCode } from "./input_map/web2x";
-import { getDesktopEntries, getDesktopEntry, getDesktopIcon } from "./sys_api/application";
+import { getDesktopEntries, getDesktopEntry, getDesktopIcon, refreshDesktopEntries } from "./sys_api/application";
 import { getEnv } from "./sys_api/env";
 import { vfs } from "./sys_api/fs";
 import { server } from "./sys_api/run";
@@ -10,6 +10,7 @@ export const myde = {
         getDesktopEntry,
         getDesktopEntries,
         getDesktopIcon,
+        refreshDesktopEntries,
         getEnv,
         server,
         fs: new vfs("/"),
