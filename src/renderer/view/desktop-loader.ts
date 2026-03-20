@@ -1,9 +1,10 @@
 const fs = require("node:fs") as typeof import("node:fs");
 
-import { vfs } from "../../sys_api/fs";
-import { myde } from "../../desktop-api";
-
 import { addStyle, initDKH, pack } from "dkh-ui";
+import { myde } from "../../desktop-api";
+import type { nowConfig } from "../../setting/config";
+import { setting } from "../../setting/setting";
+import { vfs } from "../../sys_api/fs";
 
 function loadDesktop(p: string) {
     const dirPath = p.replace(/\/$/, "");
@@ -13,6 +14,14 @@ function loadDesktop(p: string) {
         return;
     }
     myde.MSysApi.fs = new vfs(dirPath);
+    myde.MSetting = new setting<nowConfig>({
+        version: "0.0.1",
+        filePath: `${urlParams.get("userData")}/setting.json`,
+        transform: (data, _versionA, _versionB) => {
+            return data;
+        },
+        defaultSetting: { version: "0.0.1", "icon.theme": "breeze" },
+    });
     const packageData = fs.readFileSync(packagePath, "utf-8");
     const packageJson = JSON.parse(packageData);
     const mainPath = `${dirPath}/${packageJson.main || "index.js"}`;

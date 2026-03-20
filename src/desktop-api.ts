@@ -4,6 +4,8 @@ import { getDesktopEntries, getDesktopEntry, getDesktopIcon, refreshDesktopEntri
 import { getEnv } from "./sys_api/env";
 import { vfs } from "./sys_api/fs";
 import { server } from "./sys_api/run";
+import type { setting } from "./setting/setting";
+import { nowConfig } from "./setting/config";
 
 export const myde = {
     MSysApi: {
@@ -21,6 +23,7 @@ export const myde = {
     MUtils: {
         renderToolsHtmlEl,
     },
+    MSetting: undefined as unknown as setting<nowConfig>,
 };
 export type DesktopApi = typeof myde;
 export type { DesktopIconConfig } from "./sys_api/application";

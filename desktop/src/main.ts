@@ -3,7 +3,7 @@ import { addClass, button, ele, type ElType, image, pack, setProperty, view } fr
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/desktop-api";
 import { txt } from "dkh-ui";
 
-const { MSysApi, MInputMap, MUtils } = window.myde;
+const { MSysApi, MInputMap, MUtils, MSetting } = window.myde;
 const fs = MSysApi.fs;
 
 type View = {
@@ -479,6 +479,11 @@ function fitRect(rect: { w: number; h: number }, maxW: number, maxH: number) {
     return { w: Math.floor(w2), h: h2 };
 }
 
+const setting = MSetting.init({
+    version: "0.0.1",
+    defaultNsSetting: {},
+});
+
 // @ts-expect-error
 window.dy = () => dyj电源键.fire();
 
@@ -708,7 +713,7 @@ tools.registerTool("showAllView", () => {
 
 tools.registerTool("startMenuFullScreen", () => {
     const iconConfig: DesktopIconConfig = {
-        theme: "breeze",
+        theme: setting.get("icon.theme"),
     };
     const startMenuBtn = view()
         .style({
@@ -792,7 +797,7 @@ tools.registerTool("apps", (_tipEl, a) => {
     const tipEl = pack(_tipEl);
 
     const iconConfig: DesktopIconConfig = {
-        theme: "breeze",
+        theme: setting.get("icon.theme"),
     };
 
     MSysApi.getDesktopEntries().then(async (apps) => {
@@ -1112,7 +1117,7 @@ const mouseEl = view().addInto().style({
 MSysApi.getDesktopEntries().then((e) => {
     for (const x of e) {
         MSysApi.getDesktopIcon(x.icon, {
-            theme: "breeze",
+            theme: setting.get("icon.theme"),
         });
     }
 }); // 预加载
