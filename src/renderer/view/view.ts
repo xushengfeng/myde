@@ -785,10 +785,6 @@ class WaylandClient {
             const imageData = buffer.data.imageData;
             if (surface.data.bufferPointer === 0) surface.data.buffer = { id: bufferId, data: imageData };
             else surface.data.buffer2 = { id: bufferId, data: imageData };
-
-            if (x.args.x !== 0 || x.args.y !== 0) {
-                this.postError("wl_surface", x.id, "invalid_offset", "Buffer offset must be (0,0)");
-            }
         });
         isOp("wl_surface.damage", (x) => {
             const surface = this.getObject(x.id);
