@@ -6,6 +6,7 @@ import { vfs } from "./sys_api/fs";
 import { server } from "./sys_api/run";
 import type { setting } from "./setting/setting";
 import type { nowConfig } from "./setting/config";
+import { setPowerState } from "./sys_api/power";
 
 export const _myde = {
     MSysApi: {
@@ -16,6 +17,7 @@ export const _myde = {
         getEnv,
         server,
         fs: new vfs("/"),
+        power: setPowerState,
     },
     MInputMap: {
         mapKeyCode,
