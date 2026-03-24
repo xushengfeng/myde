@@ -15,11 +15,17 @@ export class WaylandDecoder {
         this.fdIndex = 0;
     }
 
-    readHeader(): { objectId: WaylandObjectId; opcode: number; length: number } {
+    readHeader(): { objectId: WaylandObjectId; opcode: number; length: number } | undefined {
         this.messageStartOffset = this.offset;
+        if (this.offset + 8 > this.view.byteLength) {
+            return undefined;
+        }
         const objectId = this.view.getUint32(this.offset, true) as WaylandObjectId;
         const opcode = this.view.getUint16(this.offset + 4, true);
         const length = this.view.getUint16(this.offset + 6, true);
+        if (this.offset + length > this.view.byteLength) {
+            return undefined;
+        }
         this.offset += 8;
         this.currentLength = length;
         return { objectId, opcode, length };
@@ -90,7 +96,7 @@ export class WaylandDecoder {
     }
 
     // todo 剩余的是接口名称和版本号，目前还没有用到
-    final(): Uint8Array {
+    final(): { data: Uint8Array; fds: number[] } {
         const msgLength = this.currentLength;
         const targetOffset = this.messageStartOffset + msgLength;
         const remainingLength = targetOffset - this.offset;
@@ -102,6 +108,6 @@ export class WaylandDecoder {
             remainingBuffer = new Uint8Array(0);
         }
         this.offset = targetOffset;
-        return remainingBuffer;
+        return { data: remainingBuffer, fds: this.fds.slice(this.fdIndex) };
     }
 }

@@ -513,6 +513,7 @@ class WaylandClient {
 
     readonly id: string;
     private socket: USocket;
+    private decodeRestCache: { data: Uint8Array; fds: number[] } = { data: new Uint8Array(0), fds: [] };
     private opa = this.newOp();
     private displayId = waylandObjectId(1, "wl_display");
     private objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
@@ -1378,26 +1379,41 @@ class WaylandClient {
     }
 
     private handleClientMessage(data: Buffer, fds: number[] = []) {
+        const newData = new Uint8Array(data.buffer.byteLength + this.decodeRestCache.data.byteLength);
+        newData.set(this.decodeRestCache.data, 0);
+        newData.set(new Uint8Array(data.buffer), this.decodeRestCache.data.byteLength);
+        const newFds = [...this.decodeRestCache.fds, ...fds];
+        this.decodeRestCache.data = new Uint8Array(0);
+        this.decodeRestCache.fds = [];
         // 解析并处理客户端消息
-        const decoder = new WaylandDecoder(data.buffer, fds);
+        const decoder = new WaylandDecoder(newData.buffer, newFds);
 
-        this.receiveLog(`Parsed data from client ${this.id}:`, data.buffer, fds);
+        this.receiveLog(`Parsed data from client ${this.id}:`, newData.buffer, newFds);
         this.toSend = [];
         while (decoder.getRemainingBytes() > 0) {
             const header = decoder.readHeader();
+            if (!header) {
+                console.log(
+                    `there are ${decoder.getRemainingBytes()} bytes remaining but cannot read header, cache them for next time`,
+                );
+
+                const rest = decoder.final();
+
+                this.decodeRestCache.data = rest.data;
+                this.decodeRestCache.fds = rest.fds;
+                return;
+            }
             const _x = getX(this.objects, "request", header.objectId, header.opcode);
             if (!_x) {
-                console.warn(`Unknown objectId/opcode: ${header.objectId}/${header.opcode}`, data.buffer);
+                console.warn(`Unknown objectId/opcode: ${header.objectId}/${header.opcode}`, newData.buffer);
                 return;
             }
             const args = parseArgs(decoder, _x.op.args);
-            const rest = decoder.final();
             this.receiveLog(
                 `Parsed args for ${_x.proto.name}#${header.objectId}.${_x.op.name}:`,
                 args,
                 Object.fromEntries(_x.op.args.filter((a) => a.interface).map((i) => [i.name, i.interface])),
             );
-            if (rest.length) console.log("rest", rest);
 
             for (const v of Object.values(_x.op.args)) {
                 if (v.type === WaylandArgType.NEW_ID) {
