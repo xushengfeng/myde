@@ -336,6 +336,7 @@ view("y")
 view()
     .add([
         txt("ime"),
+        // @ts-expect-error
         input().on("input", (e: InputEvent, el) => {
             for (const client of server.clients.values()) {
                 client.keyboard.sendText(el.gv, e.isComposing);

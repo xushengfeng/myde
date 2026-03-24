@@ -3,5 +3,4 @@ ignoredBuiltDependencies:
 
 onlyBuiltDependencies:
   - '@biomejs/biome'
-  - '@xushengfeng/usocket'
   - electron

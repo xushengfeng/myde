@@ -1,9 +1,8 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 
-const usocket = require("@xushengfeng/usocket") as typeof import("@xushengfeng/usocket");
-
-import type { UServer, USocket } from "@xushengfeng/usocket";
+const usocket = require("myde-unix-socket") as typeof import("myde-unix-socket");
+import type { UServer, USocket } from "myde-unix-socket";
 
 import {
     WaylandArgType,
@@ -591,9 +590,8 @@ class WaylandClient {
             wlSubSurface: new wlSubSurfaceData(this.wlSurface),
             xdgSurface: new xdgSurfaceData(this.wlSurface),
         };
-        socket.on("readable", () => {
-            const x = socket.read(undefined, null);
-            if (x?.data) this.handleClientMessage(x.data, x.fds);
+        socket.on("data", (data, fds) => {
+            this.handleClientMessage(data, fds);
         });
 
         socket.on("close", () => {

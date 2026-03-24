@@ -9,7 +9,6 @@
         "start": "electron-vite --ignoreConfigWarning preview",
         "dev": "electron-vite --ignoreConfigWarning dev",
         "build": "electron-vite --ignoreConfigWarning build",
-        "pkgRebuild": "electron-rebuild",
         "desktop": "cd desktop && npm run build && cd .. && export desktop='desktop' && electron-vite --ignoreConfigWarning preview",
         "remote": "cd remote && npm run build && cd .. && export desktop='remote' && export nodeModule='on' && electron-vite --ignoreConfigWarning preview"
     },
@@ -20,14 +19,13 @@
     "homepage": "https://github.com/xushengfeng/myde/",
     "license": "AGPL-3.0-only",
     "dependencies": {
-        "@xushengfeng/usocket": "^1.1.1",
         "dkh-ui": "^0.14.2",
         "ini": "^5.0.0",
+        "myde-unix-socket": "^0.2.1",
         "xml2js": "^0.6.2"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.2.4",
-        "@electron/rebuild": "^4.0.2",
         "@types/ini": "^4.1.1",
         "@types/xml2js": "^0.4.14",
         "electron": "^39.0.0",
