@@ -21,6 +21,7 @@
     "dependencies": {
         "dkh-ui": "^0.14.2",
         "ini": "^5.0.0",
+        "myde-dbus": "^0.1.1",
         "myde-unix-socket": "^0.2.1",
         "xml2js": "^0.6.2"
     },
