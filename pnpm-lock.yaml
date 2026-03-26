@@ -15,8 +15,8 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0
       myde-dbus:
-        specifier: ^0.1.1
-        version: 0.1.1
+        specifier: ^0.2.0
+        version: 0.2.0
       myde-unix-socket:
         specifier: ^0.2.1
         version: 0.2.1
@@ -1449,8 +1449,8 @@ packages:
   ms@2.1.2:
     resolution: {integrity: sha512-sGkPx+VjMtmA6MX27oA4FBFELFCZZ4S4XqeGOXCv68tT+jb3vk/RyaKWP0PTKyWtmLSM0b+adUTEvbs1PEaH2w==}
 
-  myde-dbus@0.1.1:
-    resolution: {integrity: sha512-qPBYiKMf4p+1G+8h8tWbiDB1nWATKUwQ52PNORwv9kjkTCVvgiZlN16BU1z8pon9vg1pku0zYKdHymA7ax28ng==}
+  myde-dbus@0.2.0:
+    resolution: {integrity: sha512-V63NuUO93SvgkpHW9834hwXovHYvTsX+AjVw+dTwvxk0FgBk/xwABV388kbKRfyvmw7CGNvdXyyC4WHJiT1MVg==}
 
   myde-unix-socket@0.2.1:
     resolution: {integrity: sha512-z6QNKO7UiXMFrg2/Y04X9UU7wN8PNvOhHx24QQlg08r2uppxQIyo9If5PJ5Cy/VJXOaO19zXQg8taac2qCRS2w==}
@@ -3422,7 +3422,7 @@ snapshots:
 
   ms@2.1.2: {}
 
-  myde-dbus@0.1.1: {}
+  myde-dbus@0.2.0: {}
 
   myde-unix-socket@0.2.1: {}
 
