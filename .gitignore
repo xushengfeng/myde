@@ -6,3 +6,4 @@ script/xcb/x.xkb
 test/offical/wayland
 dist
 build
+**/test/**.pcap
