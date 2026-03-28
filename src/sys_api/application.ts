@@ -19,7 +19,7 @@ type DesktopEntry = {
     commentLocal: string;
     icon: string;
     exec: string;
-    rawDesktopPath: string;
+    desktopFile: string;
 };
 
 // 桌面应用列表缓存
@@ -49,7 +49,7 @@ async function _getDesktopEntry(appId: string, dirs: string[], lans: string[] = 
                     commentLocal: comment,
                     icon: entry.Icon || "",
                     exec: pureExec.trim(),
-                    rawDesktopPath: filePath,
+                    desktopFile: appId,
                 } as DesktopEntry;
             }
         } catch {
