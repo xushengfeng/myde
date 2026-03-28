@@ -43,8 +43,8 @@ importers:
         specifier: ^4.0.1
         version: 4.0.1(vite@7.1.7(@types/node@24.12.0))
       typescript:
-        specifier: ^5.9.2
-        version: 5.9.2
+        specifier: ^6.0.2
+        version: 6.0.2
       vite:
         specifier: ^7.1.7
         version: 7.1.7(@types/node@24.12.0)
@@ -1784,8 +1784,8 @@ packages:
     engines: {node: '>=4.2.0'}
     hasBin: true
 
-  typescript@5.9.2:
-    resolution: {integrity: sha512-CWBzXQrc/qOkhidw1OzBTQuYRbfyxDXJMVJ1XNwUHGROVmuaeiEm3OslpZ1RV96d7SKKjZKrSJu3+t/xlw3R9A==}
+  typescript@6.0.2:
+    resolution: {integrity: sha512-bGdAIrZ0wiGDo5l8c++HWtbaNCWTS4UTv7RaTH/ThVIgjkveJt83m74bBHMJkuCbslY8ixgLBVZJIOiQlQTjfQ==}
     engines: {node: '>=14.17'}
     hasBin: true
 
@@ -3786,7 +3786,7 @@ snapshots:
 
   typescript@4.9.5: {}
 
-  typescript@5.9.2: {}
+  typescript@6.0.2: {}
 
   undici-types@5.26.5: {}
 
