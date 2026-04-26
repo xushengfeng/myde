@@ -364,7 +364,20 @@ class wlSubSurfaceData {
         surfaces.push(...this.getParentChildrenWithRect(parent));
         return surfaces;
     }
-    // todo 删除关系
+    destroySubSurface(id: WaylandObjectId2<"wl_subsurface">) {
+        const relation = this.wl_subsurface[id];
+        const parent = relation.parent;
+        const child = relation.child;
+        const parentData = this.parentChildren.get(parent);
+        if (parentData) {
+            this.parentChildren.set(
+                parent,
+                parentData.filter((c) => c !== id),
+            );
+        }
+        this.surface2subsurface.delete(child);
+        delete this.wl_subsurface[id];
+    }
 }
 
 class xdgSurfaceData {
@@ -938,6 +951,9 @@ class WaylandClient {
         });
         isOp("wl_subsurface.set_position", (x) => {
             this.dataManager.wlSubSurface.setPosition(x.id, x.args.x, x.args.y);
+        });
+        isOp("wl_subsurface.destroy", (x) => {
+            this.dataManager.wlSubSurface.destroySubSurface(x.id);
         });
 
         isOp("wl_seat.get_pointer", (x) => {
