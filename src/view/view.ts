@@ -909,10 +909,10 @@ class WaylandClient {
                 surface.data.bufferPointer = surface.data.bufferPointer === 0 ? 1 : 0;
                 const x = surface.data.callback;
                 if (x) {
+                    this.sendMessageImm(x, "wl_callback.done", { callback_data: Date.now() });
                     this.sendMessageImm(this.displayId, "wl_display.delete_id", {
                         id: x,
                     });
-                    this.sendMessageImm(x, "wl_callback.done", { callback_data: Date.now() });
                     this.objects.delete(x);
                     surface.data.callback = undefined;
                 }
