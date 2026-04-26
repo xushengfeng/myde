@@ -35,6 +35,10 @@ export class renderToolsHtmlEl implements renderTools {
         }
     }
     destroyCanvas(id: string): void {
+        const canvasInfo = this.canvasMap.get(id);
+        if (canvasInfo) {
+            canvasInfo.warpEl.remove();
+        }
         this.canvasMap.delete(id);
     }
     setCanvasAnchor(id: string, parentId: string) {
