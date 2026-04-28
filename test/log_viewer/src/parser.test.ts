@@ -89,13 +89,13 @@ describe('parseLog', () => {
     expect(objects.has('wl_compositor')).toBe(true)
   })
 
-  it('wl_callback#3 killed by delete_id', () => {
+  it('delete_id does NOT kill object (only ID reuse or destroy does)', () => {
     const { instances } = parseLog(sample)
     const cb3 = instances.find(i => i.type === 'wl_callback' && i.id === 3)
     expect(cb3).toBeDefined()
-    expect(cb3!.alive).toBe(false)
-    expect(cb3!.birthLine).toBe(1)
-    expect(cb3!.deathLine).toBe(2)
+    // delete_id alone does not end lifecycle
+    expect(cb3!.alive).toBe(true)
+    expect(cb3!.deathLine).toBeNull()
   })
 
   it('destroy kills object', () => {
@@ -130,7 +130,7 @@ describe('parseLog', () => {
     expect(instances).toHaveLength(0)
   })
 
-  it('handles ID reuse: delete_id then new id with same number', () => {
+  it('handles ID reuse: new id with same number kills old instance', () => {
     const log = [
       '[ 100.000] {Default Queue}  -> wl_display#1.get_registry(new id wl_registry#2)',
       '[ 100.001] {Default Queue}  -> wl_display#1.sync(new id wl_callback#3)',
@@ -142,10 +142,49 @@ describe('parseLog', () => {
     const cb3 = instances.filter(i => i.type === 'wl_callback' && i.id === 3)
     const seat3 = instances.filter(i => i.type === 'wl_seat' && i.id === 3)
     expect(cb3).toHaveLength(1)
+    // killed by ID reuse (new id #3), not by delete_id
     expect(cb3[0].alive).toBe(false)
+    expect(cb3[0].deathLine).toBe(3)
     expect(seat3).toHaveLength(1)
     expect(seat3[0].alive).toBe(true)
     expect(cb3[0].uid).not.toBe(seat3[0].uid)
+  })
+
+  it('ID reuse without delete_id also kills old instance', () => {
+    const log = [
+      '[ 100.000] {Default Queue}  -> wl_display#1.get_registry(new id wl_registry#2)',
+      '[ 100.001] {Default Queue}  -> wl_display#1.sync(new id wl_callback#3)',
+      '[ 100.002] {Default Queue}  -> wl_registry#2.bind(1, "wl_seat", 10, new id [unknown]#3)',
+    ].join('\n')
+
+    const { instances } = parseLog(log)
+    const cb3 = instances.filter(i => i.type === 'wl_callback' && i.id === 3)
+    const seat3 = instances.filter(i => i.type === 'wl_seat' && i.id === 3)
+    expect(cb3).toHaveLength(1)
+    expect(cb3[0].alive).toBe(false)
+    expect(cb3[0].deathLine).toBe(2)
+    expect(seat3).toHaveLength(1)
+    expect(seat3[0].alive).toBe(true)
+  })
+
+  it('new id with same type and ID creates new instance (kills old)', () => {
+    const log = [
+      '[ 100.000] {Default Queue}  -> wl_display#1.sync(new id wl_callback#3)',
+      '[ 100.001] {Default Queue} wl_callback#3.done(100)',
+      '[ 100.002] {Default Queue}  -> wl_display#1.sync(new id wl_callback#3)',
+      '[ 100.003] {Default Queue} wl_callback#3.done(200)',
+    ].join('\n')
+
+    const { instances } = parseLog(log)
+    const all3 = instances.filter(i => i.type === 'wl_callback' && i.id === 3)
+    expect(all3).toHaveLength(2)
+    // First instance killed at line 2 (new id reuses same ID)
+    expect(all3[0].alive).toBe(false)
+    expect(all3[0].deathLine).toBe(2)
+    // Second instance still alive
+    expect(all3[1].alive).toBe(true)
+    expect(all3[1].birthLine).toBe(2)
+    expect(all3[0].uid).not.toBe(all3[1].uid)
   })
 
   it('resolves [unknown] type from registry bind args', () => {

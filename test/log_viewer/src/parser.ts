@@ -75,12 +75,14 @@ export function parseLog(text: string): ParseResult {
   const instances: ObjInstance[] = [];
   const active = new Map<number, number>(); // numericId -> uid
 
-  function ensureInst(type: string, id: number, lineIdx: number, parentUid: number): ObjInstance {
+  function ensureInst(type: string, id: number, lineIdx: number, parentUid: number, forceNew = false): ObjInstance {
     const cur = active.get(id);
     if (cur !== undefined) {
       const inst = instances[cur];
-      if (inst && inst.alive && inst.type === type) return inst;
       if (inst && inst.alive) {
+        // Same type, alive, and NOT a forced new creation → reuse existing
+        if (inst.type === type && !forceNew) return inst;
+        // Different type or forced new → kill old instance (ID reuse)
         inst.alive = false;
         inst.deathLine = lineIdx;
       }
@@ -141,7 +143,7 @@ export function parseLog(text: string): ParseResult {
           const resolved = resolveUnknownType(method, args);
           if (resolved) nType = resolved;
         }
-        const nInst = ensureInst(nType, parseInt(nm[2]), i, targetInst.uid);
+        const nInst = ensureInst(nType, parseInt(nm[2]), i, targetInst.uid, true);
         newIds.push({ type: nType, id: parseInt(nm[2]), uid: nInst.uid, start: nm.index, end: nm.index + nm[0].length });
       }
 
@@ -159,7 +161,8 @@ export function parseLog(text: string): ParseResult {
         const delId = parseInt(args);
         if (!isNaN(delId)) {
           deleteIdUid = uidForId(delId);
-          killInst(delId, i);
+          // delete_id is a destructor signal, NOT a lifecycle end.
+          // Object lifecycle ends only when ID is reused or destroy() is called.
         }
       }
 
