@@ -80,6 +80,27 @@ html, body {
   margin-left: auto;
 }
 
+.top-bar .nav-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 1px 6px;
+  line-height: 1;
+}
+
+.top-bar .nav-btn:hover:not(.disabled) {
+  border-color: var(--blue);
+  color: var(--text);
+}
+
+.top-bar .nav-btn.disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 .main-area {
   display: flex;
   flex: 1;

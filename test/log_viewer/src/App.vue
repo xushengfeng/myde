@@ -18,6 +18,12 @@ const objFilter = ref('')
 const onlySelected = ref(false)
 const hideDead = ref(false)
 
+const history = ref<number[]>([])
+const historyIdx = ref(-1)
+
+const canBack = computed(() => historyIdx.value > 0)
+const canForward = computed(() => historyIdx.value < history.value.length - 1)
+
 const totalInstances = computed(() => instances.value.length)
 
 function doParse(text: string) {
@@ -27,6 +33,8 @@ function doParse(text: string) {
   instances.value = result.instances
   selectedUid.value = -1
   highlightLine.value = -1
+  history.value = []
+  historyIdx.value = -1
 }
 
 function parseInput() {
@@ -54,16 +62,36 @@ function loadSample() {
     .catch(() => alert('Could not load log.txt'))
 }
 
-function selectObj(uid: number) {
-  if (selectedUid.value === uid) {
-    selectedUid.value = -1
-    return
-  }
+function applySelection(uid: number) {
   selectedUid.value = uid
   const inst = instances.value[uid]
   if (inst) {
     highlightLine.value = inst.birthLine
   }
+}
+
+function selectObj(uid: number) {
+  if (selectedUid.value === uid) {
+    selectedUid.value = -1
+    return
+  }
+  // Truncate forward history, push new entry
+  history.value = history.value.slice(0, historyIdx.value + 1)
+  history.value.push(uid)
+  historyIdx.value = history.value.length - 1
+  applySelection(uid)
+}
+
+function goBack() {
+  if (!canBack.value) return
+  historyIdx.value--
+  applySelection(history.value[historyIdx.value])
+}
+
+function goForward() {
+  if (!canForward.value) return
+  historyIdx.value++
+  applySelection(history.value[historyIdx.value])
 }
 
 function clearSelection() {
@@ -91,6 +119,9 @@ function selectObjFromPopup(uid: number) {
     <label @click="loadSample">Load Sample</label>
     <div class="sep"></div>
     <label @click="showObjPanel = !showObjPanel">Objects</label>
+    <div class="sep"></div>
+    <button class="nav-btn" :class="{ disabled: !canBack }" @click="goBack" title="Back">&#9664;</button>
+    <button class="nav-btn" :class="{ disabled: !canForward }" @click="goForward" title="Forward">&#9654;</button>
     <div class="stats" v-if="parsedLines.length">
       {{ parsedLines.length }} lines &middot; {{ objects.size }} types &middot; {{ totalInstances }} instances
     </div>
@@ -120,7 +151,6 @@ function selectObjFromPopup(uid: number) {
     />
   </div>
 
-  <!-- Object panel popup -->
   <div class="obj-popup-overlay" v-if="showObjPanel" @click.self="showObjPanel = false">
     <ObjectPanel
       :objects="objects"
