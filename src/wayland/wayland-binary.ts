@@ -22,6 +22,7 @@ export type WaylandOp = {
         allowNull?: boolean;
         summary?: string;
     }>;
+    isDestructor?: boolean;
 };
 export type WaylandProtocol = {
     name: string;

@@ -138,7 +138,8 @@
               "type": "uint",
               "summary": "request-specific data for the callback"
             }
-          ]
+          ],
+          "isDestructor": true
         }
       ],
       "enum": []
@@ -215,7 +216,8 @@
         },
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "resize",
@@ -259,7 +261,8 @@
         {
           "name": "release",
           "args": [],
-          "since": 2
+          "since": 2,
+          "isDestructor": true
         }
       ],
       "event": [
@@ -419,7 +422,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         }
       ],
       "event": [
@@ -467,7 +471,8 @@
         },
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "finish",
@@ -553,7 +558,8 @@
         },
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "set_actions",
@@ -684,7 +690,8 @@
         {
           "name": "release",
           "args": [],
-          "since": 2
+          "since": 2,
+          "isDestructor": true
         }
       ],
       "event": [
@@ -836,7 +843,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "attach",
@@ -1088,7 +1096,8 @@
         {
           "name": "release",
           "args": [],
-          "since": 5
+          "since": 5,
+          "isDestructor": true
         }
       ],
       "event": [
@@ -1166,7 +1175,8 @@
         {
           "name": "release",
           "args": [],
-          "since": 3
+          "since": 3,
+          "isDestructor": true
         }
       ],
       "event": [
@@ -1404,7 +1414,8 @@
         {
           "name": "release",
           "args": [],
-          "since": 3
+          "since": 3,
+          "isDestructor": true
         }
       ],
       "event": [
@@ -1562,7 +1573,8 @@
         {
           "name": "release",
           "args": [],
-          "since": 3
+          "since": 3,
+          "isDestructor": true
         }
       ],
       "event": [
@@ -1716,7 +1728,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "add",
@@ -1778,7 +1791,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "get_subsurface",
@@ -1821,7 +1835,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "set_position",
@@ -1887,7 +1902,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "create_positioner",
@@ -1958,7 +1974,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "set_size",
@@ -2135,7 +2152,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "get_toplevel",
@@ -2232,7 +2250,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "set_parent",
@@ -2486,7 +2505,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "grab",
@@ -2580,7 +2600,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "get_viewport",
@@ -2616,7 +2637,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "set_source",
@@ -2680,7 +2702,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "create_params",
@@ -2762,7 +2785,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         },
         {
           "name": "add",
@@ -2905,7 +2929,8 @@
       "request": [
         {
           "name": "destroy",
-          "args": []
+          "args": [],
+          "isDestructor": true
         }
       ],
       "event": [

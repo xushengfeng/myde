@@ -786,9 +786,6 @@ class WaylandClient {
                 imageData: imageData,
             };
         });
-        isOp("wl_shm_pool.destroy", (x) => {
-            this.deleteId(x.id);
-        });
         isOp("wl_surface.attach", (x) => {
             const surface = this.getObject(x.id);
             const bufferId = waylandObjectId(x.args.buffer, "wl_buffer");
@@ -913,7 +910,6 @@ class WaylandClient {
                     this.sendMessageImm(this.displayId, "wl_display.delete_id", {
                         id: x,
                     });
-                    this.objects.delete(x);
                     surface.data.callback = undefined;
                 }
             });
@@ -925,7 +921,6 @@ class WaylandClient {
             surface.data.canvas.height = 1;
             this.wlSurface.destroyWlSurface(surfaceId);
             // todo 相关的如subsurface、xdgsurface等
-            this.deleteId(surfaceId);
         });
         isOp("wl_surface.set_input_region", (x) => {
             const surface = this.getObject(x.id);
@@ -985,9 +980,6 @@ class WaylandClient {
             const region = this.getObject(x.id);
             region.data.rects.push({ ...x.args, type: "-" });
         });
-        isOp("wl_region.destroy", (x) => {
-            this.deleteId(x.id);
-        });
         isOp("wl_data_device_manager.create_data_source", (x) => {
             const src = this.getObject(x.args.id);
             src.data = { offers: [] };
@@ -1036,9 +1028,6 @@ class WaylandClient {
 
             this.obj2.pendingPaste = { offerId, fd, mime, timeout };
             this.emit("paste");
-        });
-        isOp("wl_data_source.destroy", (x) => {
-            this.objects.delete(x.id);
         });
         isOp("wl_data_device.set_selection", (x) => {
             const srcId = waylandObjectId(x.args.source, "wl_data_source");
@@ -1167,9 +1156,6 @@ class WaylandClient {
             const pData = this.getObject(x.id).data;
             pData.reactive = true;
         });
-        isOp("xdg_positioner.destroy", (x) => {
-            this.deleteId(x.id);
-        });
         isOp("xdg_surface.get_toplevel", (x) => {
             const xid = x.id;
             const toplevelId = x.args.id;
@@ -1273,16 +1259,12 @@ class WaylandClient {
             });
             this.sendMessageX(x.id, "xdg_surface.configure", { serial: 0 });
         });
-        isOp("xdg_surface.destroy", (x) => {
-            this.deleteId(x.id);
-        });
         isOp("xdg_popup.destroy", (x) => {
             const xid = x.id;
             const xdgSurfaceId = this.dataManager.xdgSurface.getXdgSurfaceByPopup(xid);
             if (xdgSurfaceId === undefined) return;
             this.dataManager.xdgSurface.popupDestroyed(xid);
             this.sendMessageX(x.id, "xdg_popup.popup_done", {});
-            this.deleteId(x.id);
         });
         isOp("xdg_toplevel.set_app_id", (x) => {
             if (!this.obj2.appid) {
@@ -1312,7 +1294,6 @@ class WaylandClient {
             if (xdgSurfaceId === undefined) return;
             this.obj2.windows.delete(x.id);
             this.dataManager.xdgSurface.toplevelDestroyed(x.id);
-            this.deleteId(x.id);
             this.emit("windowClosed", x.id);
         });
 
@@ -1458,7 +1439,11 @@ class WaylandClient {
             const x = { proto: _x.proto, op: _x.op, args, id: header.objectId };
             const useOp = this.opa.isOp(x);
 
-            if (!useOp) {
+            if (x.op.isDestructor) {
+                this.deleteObj(x.id);
+            }
+
+            if (!useOp && !x.op.isDestructor) {
                 console.warn("No matching operation found", `${x.proto.name}.${x.op.name}`, x);
             }
         }
@@ -1516,6 +1501,10 @@ class WaylandClient {
             }
         }
 
+        if (op.isDestructor) {
+            this.objects.delete(objectId);
+        }
+
         const fds: number[] = [];
 
         const encoder = new WaylandEncoder();
@@ -1571,7 +1560,7 @@ class WaylandClient {
             fds: fds || [],
         });
     }
-    private deleteId(id: WaylandObjectId) {
+    private deleteObj(id: WaylandObjectId) {
         this.sendMessageX(this.displayId, "wl_display.delete_id", { id });
         this.objects.delete(id);
     }

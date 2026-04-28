@@ -130,6 +130,7 @@ supportedProtocols.forEach((proto) => {
                     ...(arg.$.summary && { summary: arg.$.summary }),
                 })),
                 ...(req.$.since && { since: parseInt(req.$.since, 10) }),
+                ...(req.$.type === "destructor" && { isDestructor: true }),
             }));
             const event = (iface.event || []).map((evt: any) => ({
                 name: evt.$.name,
@@ -141,6 +142,7 @@ supportedProtocols.forEach((proto) => {
                     ...(arg.$.summary && { summary: arg.$.summary }),
                 })),
                 ...(evt.$.since && { since: parseInt(evt.$.since, 10) }),
+                ...(evt.$.type === "destructor" && { isDestructor: true }),
             }));
             const enums = (iface.enum || []).map((enm: any) => ({
                 name: enm.$.name,
