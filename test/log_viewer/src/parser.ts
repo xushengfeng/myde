@@ -49,7 +49,7 @@ export interface ParseResult {
   instances: ObjInstance[]
 }
 
-const WL_LINE_RE = /^\[\s*([\d.]+)\]\s*\{([^}]+)\}\s*(discarded\s+)?(->)?\s*(\S+#\d+)\.(\w+)\((.*)\)\s*$/;
+const WL_LINE_RE = /^\[\s*([\d.]+)\]\s*(?:\{([^}]*)\}\s*)?(discarded\s+)?(->)?\s*(\S+#\d+)\.(\w+)\((.*)\)\s*$/;
 const NON_WL_RE = /^(\([^)]+\)\s*:\s*.+)$/;
 
 export function escHtml(s: string): string {
@@ -125,7 +125,8 @@ export function parseLog(text: string): ParseResult {
 
     const m = raw.match(WL_LINE_RE);
     if (m) {
-      const [, ts, queue, discardedStr, arrow, objRef, method, args] = m;
+      const [, ts, queueRaw, discardedStr, arrow, objRef, method, args] = m;
+      const queue = queueRaw ?? '';
       const isReq = arrow === '->';
       const dotPos = objRef.indexOf('#');
       const objType = objRef.substring(0, dotPos);

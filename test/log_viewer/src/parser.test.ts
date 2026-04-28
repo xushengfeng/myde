@@ -167,6 +167,19 @@ describe('parseLog', () => {
     expect(seat3[0].alive).toBe(true)
   })
 
+  it('handles lines without queue name', () => {
+    const log = '[ 767011.584]  -> wl_surface#46.frame(new id wl_callback#105)'
+    const { lines, instances } = parseLog(log)
+    expect(lines).toHaveLength(1)
+    expect(lines[0].objType).toBe('wl_surface')
+    expect(lines[0].objId).toBe(46)
+    expect(lines[0].method).toBe('frame')
+    expect(lines[0].queue).toBe('')
+    expect(lines[0].isReq).toBe(true)
+    const cb = instances.find(i => i.type === 'wl_callback' && i.id === 105)
+    expect(cb).toBeDefined()
+  })
+
   it('new id with same type and ID creates new instance (kills old)', () => {
     const log = [
       '[ 100.000] {Default Queue}  -> wl_display#1.sync(new id wl_callback#3)',
