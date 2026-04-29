@@ -5,6 +5,8 @@ import { _myde } from "../../desktop-api";
 import type { nowConfig } from "../../setting/config";
 import { setting } from "../../setting/setting";
 import { vfs } from "../../sys_api/fs";
+import { SConnect } from "../../remote_connect/sconnect";
+import { PeerjsAdapter } from "../../remote_connect/peerjs_adapter";
 
 function loadDesktop(p: string) {
     const dirPath = p.replace(/\/$/, "");
@@ -22,6 +24,7 @@ function loadDesktop(p: string) {
         },
         defaultSetting: { version: "0.0.1", "icon.theme": "breeze" },
     });
+    myde.MConnect = new SConnect(new PeerjsAdapter());
     const packageData = fs.readFileSync(packagePath, "utf-8");
     const packageJson = JSON.parse(packageData);
     const mainPath = `${dirPath}/${packageJson.main || "index.js"}`;

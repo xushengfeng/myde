@@ -7,6 +7,7 @@ import { server } from "./sys_api/run";
 import type { setting } from "./setting/setting";
 import type { nowConfig } from "./setting/config";
 import { setPowerState } from "./sys_api/power";
+import type { SConnect } from "./remote_connect/sconnect";
 
 export const _myde = {
     MSysApi: {
@@ -26,6 +27,7 @@ export const _myde = {
         renderToolsHtmlEl,
     },
     MSetting: undefined as unknown as setting<nowConfig>,
+    MConnect: undefined as unknown as SConnect,
 };
 export type DesktopApi = typeof _myde;
 export type { DesktopIconConfig } from "./sys_api/application";
