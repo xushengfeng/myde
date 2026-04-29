@@ -1,0 +1,28 @@
+{
+    "compilerOptions": {
+        "target": "ES2020",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "declaration": true,
+        "emitDeclarationOnly": true,
+        "outDir": "./dist",
+        "rootDir": ".",
+        "strict": false,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true,
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "lib": ["ESNext", "DOM"],
+        "types": ["node"]
+    },
+    "include": [
+        "*.ts"
+    ],
+    "exclude": [
+        "*.test.ts",
+        "vite.config.ts",
+        "dist",
+        "node_modules"
+    ]
+}

@@ -1,0 +1,57 @@
+{
+    "name": "@myde/remote-connect",
+    "version": "0.0.1",
+    "description": "Secure remote connection module with PAKE pairing and Noise IK handshake",
+    "type": "module",
+    "main": "./dist/sconnect.js",
+    "types": "./dist/sconnect.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/sconnect.d.ts",
+            "import": "./dist/sconnect.js"
+        },
+        "./sconnect": {
+            "types": "./dist/sconnect.d.ts",
+            "import": "./dist/sconnect.js"
+        },
+        "./peerjs_adapter": {
+            "types": "./dist/peerjs_adapter.d.ts",
+            "import": "./dist/peerjs_adapter.js"
+        },
+        "./loopback_adapter": {
+            "types": "./dist/loopback_adapter.d.ts",
+            "import": "./dist/loopback_adapter.js"
+        },
+        "./types": {
+            "types": "./sconnect_type.d.ts",
+            "import": "./sconnect_type.d.ts"
+        }
+    },
+    "files": [
+        "dist",
+        "sconnect_type.d.ts"
+    ],
+    "scripts": {
+        "build": "vite build && npm run build:types",
+        "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "noise-handshake": "^4.2.0",
+        "spake2": "^1.0.2"
+    },
+    "peerDependencies": {
+        "peerjs": "^1.5.5"
+    },
+    "peerDependenciesMeta": {
+        "peerjs": {
+            "optional": true
+        }
+    },
+    "license": "AGPL-3.0-only",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/xushengfeng/myde/",
+        "directory": "src/remote_connect"
+    }
+}
