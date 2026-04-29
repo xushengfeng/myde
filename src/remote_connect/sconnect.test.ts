@@ -157,6 +157,7 @@ describe("SConnect", () => {
             const receivedMessages: string[] = [];
             channelB.on("message", (msg) => receivedMessages.push(msg));
 
+            const pinA = channelA.updatePIN();
             const pairingA = channelA.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
@@ -167,7 +168,7 @@ describe("SConnect", () => {
             });
 
             pairingA.inputOtherPin(pairingB.pin);
-            pairingB.inputOtherPin(pairingA.pin);
+            pairingB.inputOtherPin(pinA);
 
             await Promise.all([pairingA.waitForPairing(), pairingB.waitForPairing()]);
 

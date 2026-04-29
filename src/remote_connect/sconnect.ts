@@ -31,6 +31,7 @@ export class SConnect implements SecureChannel {
     private noise: Noise | null = null;
     private sendCipher: Cipher | null = null;
     private receiveCipher: Cipher | null = null;
+    private PIN = "";
     private isReady = false;
     private eventHandlers: Map<string, Set<(...args: unknown[]) => void>> = new Map();
     private rawMessageHandler: (data: Uint8Array) => void;
@@ -114,6 +115,11 @@ export class SConnect implements SecureChannel {
         }
     }
 
+    updatePIN() {
+        this.PIN = this.generatePin();
+        return this.PIN;
+    }
+
     pairInit(credential: CredentialPublicInfo): {
         pin: string;
         inputOtherPin: (pin: string) => void;
@@ -123,7 +129,7 @@ export class SConnect implements SecureChannel {
             throw new Error("Call init() first");
         }
 
-        const pin = this.generatePin();
+        const pin = this.PIN || this.updatePIN();
         let resolvePairing: (credential: Credential) => void;
         let rejectPairing: (error: Error) => void;
         let pinAttempts = 0;
