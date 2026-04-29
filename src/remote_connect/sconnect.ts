@@ -8,34 +8,7 @@ import type {
 } from "./sconnect_type";
 import Noise from "noise-handshake";
 import Cipher from "noise-handshake/cipher";
-const { spake2 } = require("spake2") as {
-    spake2: (options?: Record<string, unknown>) => Spake2Instance;
-};
-
-interface Spake2Instance {
-    startClient: (
-        clientIdentity: string,
-        serverIdentity: string,
-        password: string,
-        salt: string,
-    ) => Promise<Spake2State>;
-    startServer: (clientIdentity: string, serverIdentity: string, verifier: unknown) => Promise<Spake2State>;
-    computeVerifier: (
-        password: string,
-        salt: string,
-        clientIdentity: string,
-        serverIdentity: string,
-    ) => Promise<unknown>;
-}
-
-interface Spake2State {
-    getMessage: () => Uint8Array;
-    finish: (incomingMessage: Uint8Array) => Spake2SharedSecret;
-}
-
-interface Spake2SharedSecret {
-    toBuffer: () => Buffer;
-}
+import { spake2 } from "./spake/index";
 
 interface KeyPair {
     publicKey: Uint8Array;
@@ -308,14 +281,14 @@ export class SConnect implements SecureChannel {
                 reject(new Error("Pairing timeout"));
             }, this.options.handshakeTimeout);
 
-            const messageHandler = (data: Uint8Array) => {
+            const messageHandler = async (data: Uint8Array) => {
                 try {
                     // 解析: 2字节SPAKE2长度 + SPAKE2消息 + 对方公钥
                     const spakeLen = new DataView(data.buffer, data.byteOffset).getUint16(0);
                     const spakeMsg = data.subarray(2, 2 + spakeLen);
                     const remotePublicKey = data.subarray(2 + spakeLen);
 
-                    const sharedSecret = clientState.finish(Buffer.from(spakeMsg) as any);
+                    const sharedSecret = await clientState.finish(Buffer.from(spakeMsg) as any);
 
                     clearTimeout(timeout);
                     this.signalAdapter.onMessage(this.rawMessageHandler);
@@ -364,7 +337,7 @@ export class SConnect implements SecureChannel {
                 reject(new Error("Pairing timeout"));
             }, this.options.handshakeTimeout);
 
-            const messageHandler = (data: Uint8Array) => {
+            const messageHandler = async (data: Uint8Array) => {
                 try {
                     // 解析: 2字节SPAKE2长度 + SPAKE2消息 + 对方公钥
                     const spakeLen = new DataView(data.buffer, data.byteOffset).getUint16(0);
@@ -380,7 +353,7 @@ export class SConnect implements SecureChannel {
                     msgWithKey.set(myPublicKey, 2 + serverMsg.length);
                     this.signalAdapter.send(msgWithKey);
 
-                    const sharedSecret = serverState.finish(Buffer.from(spakeMsg) as any);
+                    const sharedSecret = await serverState.finish(Buffer.from(spakeMsg) as any);
 
                     clearTimeout(timeout);
                     this.signalAdapter.onMessage(this.rawMessageHandler);
@@ -542,7 +515,7 @@ export class SConnect implements SecureChannel {
 
     // ================= 加密初始化 =================
 
-    private initializeEncryption(sharedSecret: Buffer): void {
+    private initializeEncryption(sharedSecret: Uint8Array): void {
         const secretArray = new Uint8Array(sharedSecret);
         const key = new Uint8Array(32);
         key.set(secretArray.subarray(0, Math.min(16, secretArray.length)), 0);
