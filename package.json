@@ -23,6 +23,10 @@
         "ini": "^5.0.0",
         "myde-dbus": "^0.2.0",
         "myde-unix-socket": "^0.2.1",
+        "noise-handshake": "^4.2.0",
+        "noise-protocol": "^3.0.2",
+        "peerjs": "^1.5.5",
+        "spake2": "^1.0.2",
         "xml2js": "^0.6.2"
     },
     "devDependencies": {

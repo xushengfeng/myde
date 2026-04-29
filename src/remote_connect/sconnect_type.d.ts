@@ -3,8 +3,15 @@
  *
  * 设计原则：
  * - 通道本身无状态，不持有任何长期凭证。
+ * - 双方id由上层注入，通道仅负责使用这些id进行握手和加密通信。如果某个设备有多个连接，实际上就有多个id
  * - 所有凭证的存储、加载、更新均由外部通过返回值/回调管理。
- * - 支持“临时会话”模式（应用层不保存返回的 Credential 即可）。
+ * - 支持"临时会话"模式（应用层不保存返回的 Credential 即可）。
+ *
+ * 使用流程：
+ * init -> 拥有对方id
+ * 身份信任通道：tryConnect
+ * 不信任通道：tryConnect -> 失败 -> pairInit获取Credential -> tryConnect
+ * 不信任通道临时与持久：只要有一方没有保存Credential，连接即为临时会话，断开即失效。
  *
  * 概念：
  * - UUID：每个设备一个，作为长期身份标识。
@@ -12,12 +19,17 @@
  * - PIN 码：6位数字，用户手动传递，用于初次配对时的 PAKE 握手验证。
  */
 export declare class SecureChannel {
-    /**
-     * 构造一个新的安全通道实例。
-     * @param signalAdapter 信令适配器（由上层注入，如 PeerJS DataConnection）
-     * @param options 可选配置
-     */
     constructor(signalAdapter: SignalingAdapter, options?: ChannelOptions);
+
+    /**
+     * 初始化通道，设置本设备身份。
+     * 必须在 tryConnect 或 pairInit 之前调用。
+     *
+     * @param myDeviceId 本设备 UUID
+     * @param keyPair 可选的长期密钥对，不提供则自动生成
+     * @returns 本设备的公钥（用于注册或交换）
+     */
+    init(myDeviceId: string, keyPair?: { publicKey: Uint8Array; privateKey: Uint8Array }): Promise<Uint8Array>;
 
     /**
      * 主动断开连接并清理会话密钥。
@@ -25,7 +37,7 @@ export declare class SecureChannel {
      */
     disconnect(): void;
 
-    // ================= 重连（免密） =================
+    // ================= 连接 =================
 
     /**
      * 尝试使用已保存的凭证建立安全连接。
@@ -33,32 +45,24 @@ export declare class SecureChannel {
      * 应用层应从本地安全存储中读取此前保存的 `Credential`，调用此方法。
      * 内部将使用该凭证与对方执行基于长期密钥的握手（如 Noise IK）。
      *
-     * @param credential 我方为此设备保存的完整凭证（包含私钥）
      * @returns 若成功，返回 `{ success: true, credential }`，其中 credential 可能更新了 lastConnected；
      *          若失败（凭证失效、对方无记录等），返回 `{ success: false }`，需重新走配对流程。
      */
-    tryConnect(credential: Credential): Promise<ConnectResult>;
+    tryConnect(credential: CredentialPublicInfo | Credential): Promise<ConnectResult>;
 
     // ================= 初次配对（需用户传递 PIN） =================
 
     /**
-     * 【发起方】开始配对：生成随机 PIN 并立即返回，同时内部开始等待对方连接。
-     *
-     * 调用此方法后，应立即将返回的 `pin` 展示给用户，并随后调用 `waitForPairing()` 等待配对完成。
-     *
-     * @returns 包含展示给用户的 PIN 和等待配对完成的 Promise 函数。
+     * 在需要身份验证的信道中进行配对，通过 PIN，完成基于 PAKE 的握手，只需要一方输入 PIN。
      */
-    pairAsInitiator(): { pin: string; waitForPairing: () => Promise<Credential> };
-
-    /**
-     * 【接收方】使用对方提供的 PIN 完成配对。
-     *
-     * @param pin 用户从发起方获取并输入的 6 位数字 PIN
-     * @returns 完成配对后的凭证，应用层应安全保存以备后续 `tryConnect` 使用。
-     * @throws {InvalidPINFormatError} PIN 格式不正确
-     * @throws {PairingFailedError} PIN 错误或遭受中间人攻击
-     */
-    pairAsReceiver(pin: string): Promise<Credential>;
+    pairInit(credential: CredentialPublicInfo): {
+        /** 展示给用户的 6 位数字 PIN，需要用户输入到另一端 */
+        pin: string;
+        /** 用户输入对方的 PIN */
+        inputOtherPin: (pin: string) => void;
+        /** 等待配对完成 */
+        waitForPairing: () => Promise<Credential>;
+    };
 
     // ================= 数据收发（安全通道建立后） =================
 
@@ -109,12 +113,6 @@ export declare class SecureChannel {
      * 仅在通道处于 `ready` 状态时可调用。
      */
     rotateCredential(): Promise<void>;
-
-    /**
-     * 获取当前连接的远程设备信息（来自握手阶段交换的元数据）。
-     * 若通道未建立，返回 `null`。
-     */
-    getRemoteDeviceInfo(): RemoteDeviceInfo | null;
 }
 
 // ================= 相关类型定义 =================
@@ -122,15 +120,38 @@ export declare class SecureChannel {
 /**
  * 信令适配器接口：由上层实现，用于在双方之间传递握手消息。
  * 例如：基于 PeerJS DataConnection、WebSocket 等。
+ *
+ * 类型逻辑：
+ * - trustIdentity=true：外部已验证身份（如物理信道），算法上不验证，不加密，supportNativeEncryption 固定为 false
+ * - trustIdentity=false：需要内部 PAKE 验证，验证后可选加密
  */
-interface SignalingAdapter {
-    /** 发送原始二进制数据到对方 */
+type SignalingAdapter = TrustedSignalingAdapter | UntrustedSignalingAdapter;
+
+/** 受信任的信令适配器（物理信道等），外部已验证身份，不加密 */
+interface TrustedSignalingAdapter {
+    trustIdentity: true;
+    /** 受信任信道不使用加密，固定为 false */
+    supportNativeEncryption: false;
+    init(myId: string): Promise<void>;
+    connect(id: string): Promise<void>;
     send(data: Uint8Array): Promise<void>;
-    /** 注册消息接收回调 */
+    close(): void;
     onMessage: (handler: (data: Uint8Array) => void) => void;
-    /** 注册连接关闭回调 */
     onClose: (handler: () => void) => void;
-    /** 注册错误回调 */
+    onError: (handler: (err: Error) => void) => void;
+}
+
+/** 不受信任的信令适配器（网络信道等），需要内部 PAKE 验证，可选加密 */
+interface UntrustedSignalingAdapter {
+    trustIdentity: false;
+    /** PAKE 验证后是否启用应用层加密（如 Noise） */
+    supportNativeEncryption: boolean;
+    init(myId: string): Promise<void>;
+    connect(id: string): Promise<void>;
+    send(data: Uint8Array): Promise<void>;
+    close(): void;
+    onMessage: (handler: (data: Uint8Array) => void) => void;
+    onClose: (handler: () => void) => void;
     onError: (handler: (err: Error) => void) => void;
 }
 
@@ -142,22 +163,29 @@ interface ChannelOptions {
     maxPinAttempts?: number;
 }
 
+interface CredentialPublicInfo {
+    /** 我方设备 UUID */
+    myDeviceId: string;
+    /** 我方可读名称（可选） */
+    myDisplayName?: string;
+    /** 对方设备 UUID */
+    remoteDeviceId: string;
+    /** 对方可读名称（可选） */
+    remoteDisplayName?: string;
+}
+
 /**
  * 配对后生成的完整凭证。
  * 应用层负责安全存储（例如存入系统 Keychain 或 Web Crypto 不可提取密钥）。
  * 私钥部分（myPrivateKey）绝不应离开本地设备。
  */
-interface Credential {
-    /** 我方设备 UUID */
-    myDeviceId: string;
+interface Credential extends CredentialPublicInfo {
     /** 我方长期私钥（格式取决于底层实现，可能为 CryptoKey 或 Uint8Array） */
     myPrivateKey: CryptoKey | Uint8Array;
-    /** 对方设备 UUID */
-    remoteDeviceId: string;
-    /** 对方长期公钥 */
+    /** 我方长期公钥（用于对方验证我方身份） */
+    myPublicKey: Uint8Array;
+    /** 对方长期公钥（用于验证对方身份） */
     remotePublicKey: Uint8Array;
-    /** 对方可读名称（可选） */
-    remoteDisplayName?: string;
     /** 凭证创建时间戳（毫秒） */
     createdAt: number;
     /** 上次成功连接时间戳（毫秒），用于 UI 排序 */
@@ -175,15 +203,12 @@ interface ConnectFailed {
     success: false;
 }
 
-type ConnectResult = ConnectSuccess | ConnectFailed;
-
-/** 当前连接的远程设备实时信息 */
-interface RemoteDeviceInfo {
-    deviceId: string;
-    displayName?: string;
-    /** 本次连接是否为重连（而非初次 PIN 配对） */
-    isReconnect: boolean;
+interface ConnectNeedsPairing {
+    success: false;
+    reason: "NEEDS_PAIRING";
 }
+
+type ConnectResult = ConnectSuccess | ConnectFailed | ConnectNeedsPairing;
 
 // ================= 错误类型 =================
 
