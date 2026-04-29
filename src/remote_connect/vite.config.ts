@@ -12,14 +12,7 @@ export default defineConfig({
             formats: ["es"],
         },
         rollupOptions: {
-            external: [
-                "noise-handshake",
-                "noise-handshake/cipher",
-                "spake2",
-                "peerjs",
-                "node:module",
-                "node:crypto",
-            ],
+            external: ["peerjs"],
             output: {
                 entryFileNames: "[name].js",
                 chunkFileNames: "[name]-[hash].js",
