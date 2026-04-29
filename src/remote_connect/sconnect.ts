@@ -9,6 +9,7 @@ import type {
 import Noise from "noise-handshake";
 import Cipher from "noise-handshake/cipher";
 import { spake2 } from "./spake/index";
+import { uint8ArrayToHex } from "./spake/utils";
 
 interface KeyPair {
     publicKey: Uint8Array;
@@ -187,7 +188,7 @@ export class SConnect implements SecureChannel {
         if (!this.sendCipher) {
             await this.signalAdapter.send(data);
         } else {
-            const encrypted = this.sendCipher.encrypt(Buffer.from(data));
+            const encrypted = this.sendCipher.encrypt(data as any);
             await this.signalAdapter.send(new Uint8Array(encrypted));
         }
     }
@@ -202,7 +203,7 @@ export class SConnect implements SecureChannel {
         if (!this.sendCipher) {
             await this.signalAdapter.send(buffer);
         } else {
-            const encrypted = this.sendCipher.encrypt(Buffer.from(buffer));
+            const encrypted = this.sendCipher.encrypt(buffer as any);
             await this.signalAdapter.send(new Uint8Array(encrypted));
         }
     }
@@ -294,7 +295,7 @@ export class SConnect implements SecureChannel {
                     const spakeMsg = data.subarray(2, 2 + spakeLen);
                     const remotePublicKey = data.subarray(2 + spakeLen);
 
-                    const sharedSecret = await clientState.finish(Buffer.from(spakeMsg) as any);
+                    const sharedSecret = await clientState.finish(spakeMsg);
 
                     clearTimeout(timeout);
                     this.signalAdapter.onMessage(this.rawMessageHandler);
@@ -359,7 +360,7 @@ export class SConnect implements SecureChannel {
                     msgWithKey.set(myPublicKey, 2 + serverMsg.length);
                     this.signalAdapter.send(msgWithKey);
 
-                    const sharedSecret = await serverState.finish(Buffer.from(spakeMsg) as any);
+                    const sharedSecret = await serverState.finish(spakeMsg);
 
                     clearTimeout(timeout);
                     this.signalAdapter.onMessage(this.rawMessageHandler);
@@ -399,20 +400,20 @@ export class SConnect implements SecureChannel {
             const keyPair = this.myKeyPair;
             if (!keyPair) throw new Error("No key pair");
             const myKeyPair = {
-                publicKey: Buffer.from(keyPair.publicKey),
-                secretKey: Buffer.from(keyPair.privateKey),
+                publicKey: keyPair.publicKey as any,
+                secretKey: keyPair.privateKey as any,
             };
             this.noise = new Noise("IK", true, myKeyPair);
 
-            const prologue = Buffer.alloc(0);
-            const remoteStaticKey = Buffer.from(credential.remotePublicKey);
+            const prologue = new Uint8Array(0) as any;
+            const remoteStaticKey = credential.remotePublicKey as any;
             this.noise.initialise(prologue, remoteStaticKey);
 
             const handshakeMessage = this.noise.send();
             await this.signalAdapter.send(new Uint8Array(handshakeMessage));
 
             const response = await this.waitForHandshakeResponse();
-            this.noise.recv(Buffer.from(response));
+            this.noise.recv(response as any);
 
             if (this.noise.complete) {
                 if (!this.signalAdapter.supportNativeEncryption) {
@@ -469,16 +470,16 @@ export class SConnect implements SecureChannel {
                         const keyPair = this.myKeyPair;
                         if (!keyPair) throw new Error("No key pair");
                         const myKeyPair = {
-                            publicKey: Buffer.from(keyPair.publicKey),
-                            secretKey: Buffer.from(keyPair.privateKey),
+                            publicKey: keyPair.publicKey as any,
+                            secretKey: keyPair.privateKey as any,
                         };
                         this.noise = new Noise("IK", false, myKeyPair);
 
-                        const prologue = Buffer.alloc(0);
+                        const prologue = new Uint8Array(0) as any;
                         this.noise.initialise(prologue);
 
                         // 接收发起方的消息
-                        this.noise.recv(Buffer.from(data));
+                        this.noise.recv(data as any);
 
                         // 发送响应
                         const responseMsg = this.noise.send();
@@ -544,7 +545,7 @@ export class SConnect implements SecureChannel {
             this.dispatchMessage(data);
         } else {
             try {
-                const decrypted = this.receiveCipher.decrypt(Buffer.from(data));
+                const decrypted = this.receiveCipher.decrypt(data as any);
                 this.dispatchMessage(new Uint8Array(decrypted));
             } catch {
                 this.emit("binary", new Uint8Array(data).buffer as ArrayBuffer);

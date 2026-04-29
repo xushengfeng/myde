@@ -5,6 +5,13 @@
 
 import BN from "bn.js";
 import { ec as EC } from "elliptic";
+import {
+    uint8ArrayToHex,
+    hexToUint8Array,
+    stringToUint8Array,
+    uint8ArrayEquals,
+    concatUint8Array,
+} from "./utils";
 
 // ==================== 椭圆曲线定义 ====================
 
@@ -42,7 +49,7 @@ class EllipticCurve {
     }
 
     decodePoint(buf: string | Uint8Array): any {
-        const hex = typeof buf === "string" ? buf : Buffer.from(buf).toString("hex");
+        const hex = typeof buf === "string" ? buf : uint8ArrayToHex(buf);
         if (this.name === "ed25519") {
             const b = new BN(hex, 16, "le");
             return this.ec.pointFromY(
@@ -180,7 +187,7 @@ function randomInteger(l: BN, r: BN): BN {
     const range = r.sub(l);
     const size = Math.ceil(range.sub(new BN(1)).toString(16).length / 2);
     const randomData = randomBytes(size + 8);
-    const v = new BN(Buffer.from(randomData).toString("hex"), 16);
+    const v = new BN(uint8ArrayToHex(randomData), 16);
     return v.mod(range).add(l);
 }
 
@@ -304,7 +311,7 @@ class SharedSecret {
 
     async verify(incomingConfirmation: Uint8Array): Promise<void> {
         const mac = await this.cipherSuite.mac(this.transcript, this.KcB);
-        if (Buffer.from(mac).toString("hex") !== Buffer.from(incomingConfirmation).toString("hex")) {
+        if (!uint8ArrayEquals(mac, incomingConfirmation)) {
             throw new Error("invalid confirmation");
         }
     }
@@ -502,7 +509,7 @@ export class SPAKE2 {
         const { p } = cipherSuite.curve;
 
         const y = randomInteger(new BN("0", 10), p);
-        const w = new BN(Buffer.from(verifier).toString("hex"), 16);
+        const w = new BN(uint8ArrayToHex(verifier), 16);
 
         return new ServerState({
             clientIdentity,
@@ -534,7 +541,7 @@ export class SPAKE2 {
             options.mhf || { n: 1024, r: 8, p: 16 },
         );
 
-        return new BN(Buffer.from(verifier).toString("hex"), 16).mod(p);
+        return new BN(uint8ArrayToHex(verifier), 16).mod(p);
     }
 }
 
