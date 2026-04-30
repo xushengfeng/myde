@@ -1,5 +1,6 @@
 import type {
     ChannelOptions,
+    ConnectRequest,
     ConnectResult,
     Credential,
     CredentialPublicInfo,
@@ -10,12 +11,17 @@ import type {
 import Noise from "noise-handshake";
 import Cipher from "noise-handshake/cipher";
 import { spake2 } from "./spake/index";
-import { uint8ArrayToHex } from "./spake/utils";
 
 interface KeyPair {
     publicKey: Uint8Array;
     privateKey: Uint8Array;
 }
+
+// 协议消息类型常量
+const MSG_PAIR_REQUEST = 0x01;
+const MSG_CONNECT_REQUEST = 0x03;
+const MSG_CONNECT_ACCEPT = 0x04;
+const MSG_CONNECT_REJECT = 0x05;
 
 type SecureChannelEvents = {
     ready: () => void;
@@ -24,6 +30,7 @@ type SecureChannelEvents = {
     disconnect: () => void;
     error: (err: Error) => void;
     pairRequest: (request: PairRequest) => void;
+    connectRequest: (request: ConnectRequest) => void;
     credentialRotated: (updatedCredential: Credential) => void;
     credentialInvalidated: (remoteDeviceId: string) => void;
 };
@@ -37,7 +44,6 @@ export class SConnect implements SecureChannel {
     private PIN = "";
     private isReady = false;
     private eventHandlers: Map<string, Set<(...args: unknown[]) => void>> = new Map();
-    private rawMessageHandler: (data: Uint8Array) => void;
 
     // 设备身份
     private myDeviceId = "";
@@ -50,19 +56,11 @@ export class SConnect implements SecureChannel {
             maxPinAttempts: options?.maxPinAttempts ?? 5,
         };
 
-        this.rawMessageHandler = (data) => this.handleRawMessage(data);
-        this.signalAdapter.onMessage(this.rawMessageHandler);
+        this.signalAdapter.onMessage((data) => this.handleRawMessage(data));
         this.signalAdapter.onClose(() => this.handleDisconnect());
         this.signalAdapter.onError((err) => this.emit("error", err));
-
-        // 设置配对请求监听（接收方使用）
-        this.setupPairRequestListener();
     }
 
-    /**
-     * 初始化通道，设置本设备身份。
-     * 必须在 tryConnect 或 pairInit 之前调用。
-     */
     async init(myDeviceId: string, keyPair?: KeyPair): Promise<Uint8Array> {
         this.myDeviceId = myDeviceId;
         await this.signalAdapter.init(myDeviceId);
@@ -85,35 +83,15 @@ export class SConnect implements SecureChannel {
             await this.signalAdapter.connect(credential.remoteDeviceId);
 
             if (this.signalAdapter.trustIdentity) {
-                // 受信任信道：外部已验证身份，直接明文通信
                 this.isReady = true;
                 this.emit("ready");
-                return {
-                    success: true,
-                    credential: {
-                        ...credential,
-                        myPrivateKey: "myPrivateKey" in credential ? credential.myPrivateKey : new Uint8Array(),
-                        myPublicKey: this.myKeyPair?.publicKey ?? new Uint8Array(),
-                        remotePublicKey:
-                            "remotePublicKey" in credential ? credential.remotePublicKey : new Uint8Array(),
-                        createdAt: "createdAt" in credential ? credential.createdAt : Date.now(),
-                        lastConnected: Date.now(),
-                    },
-                };
+                return { success: true, credential: this.buildCredential(credential) };
             }
 
-            // 不受信任信道：需要验证
             if ("myPrivateKey" in credential && credential.myPrivateKey) {
-                // 有 Credential，使用 Noise IK 握手
-                // 根据设备 ID 决定角色：小的作为发起方，大的作为响应方
-                const isInitiator = this.myDeviceId < credential.remoteDeviceId;
-                if (isInitiator) {
-                    return await this.performIKInitiator(credential as Credential);
-                }
-                return await this.performIKResponder(credential as Credential);
+                return await this.sendConnectRequest(credential as Credential);
             }
 
-            // 无 Credential，需要配对
             return { success: false, reason: "NEEDS_PAIRING" };
         } catch (error) {
             console.error("tryConnect failed:", error);
@@ -121,15 +99,11 @@ export class SConnect implements SecureChannel {
         }
     }
 
-    updatePIN() {
+    updatePIN(): string {
         this.PIN = this.generatePin();
         return this.PIN;
     }
 
-    /**
-     * 发起方调用：发起配对请求
-     * 生成 PIN 显示给用户，等待对方输入 PIN 完成配对
-     */
     pairInit(credential: CredentialPublicInfo): {
         pin: string;
         inputOtherPin: (pin: string) => void;
@@ -139,21 +113,19 @@ export class SConnect implements SecureChannel {
             throw new Error("Call init() first");
         }
 
-        // 优先使用缓存的 PIN，没有则生成新的
         const pin = this.PIN || this.updatePIN();
         let resolvePairing: (credential: Credential) => void;
         let rejectPairing: (error: Error) => void;
         let pinAttempts = 0;
         let pairingStarted = false;
-        let responderSetup = false;
 
         const pairingPromise = new Promise<Credential>((resolve, reject) => {
             resolvePairing = resolve;
             rejectPairing = reject;
         });
 
-        // 发送配对请求到对方
-        this.sendPairRequest(credential, pin).catch(rejectPairing);
+        // 立即设置为响应方
+        this.setupPAKEResponder(credential, pin).then(resolvePairing).catch(rejectPairing);
 
         const inputOtherPin = (remotePin: string) => {
             if (pairingStarted) return;
@@ -171,91 +143,13 @@ export class SConnect implements SecureChannel {
                 return;
             }
 
-            // 作为客户端发起 PAKE 交换
             this.performPAKEClient(credential, remotePin).then(resolvePairing).catch(rejectPairing);
         };
 
-        const waitForPairing = () => {
-            // 如果还没有调用 inputOtherPin，则设置为响应方
-            if (!pairingStarted && !responderSetup) {
-                responderSetup = true;
-                this.setupPAKEResponder(credential, pin).then(resolvePairing).catch(rejectPairing);
-            }
-            return pairingPromise;
-        };
+        // 发送配对请求
+        this.sendPairRequest(credential).catch(rejectPairing);
 
-        return {
-            pin,
-            inputOtherPin,
-            waitForPairing,
-        };
-    }
-
-    /**
-     * 发送配对请求到对方
-     */
-    private async sendPairRequest(credential: CredentialPublicInfo, pin: string): Promise<void> {
-        await this.signalAdapter.connect(credential.remoteDeviceId);
-
-        // 发送配对请求消息：类型(1) + 我方设备ID长度(2) + 我方设备ID
-        const myIdBytes = new TextEncoder().encode(this.myDeviceId);
-        const message = new Uint8Array(1 + 2 + myIdBytes.length);
-        message[0] = 0x01; // 配对请求类型
-        new DataView(message.buffer).setUint16(1, myIdBytes.length);
-        message.set(myIdBytes, 3);
-
-        // 使用 adapter 的 sendPairRequest 方法
-        if ("sendPairRequest" in this.signalAdapter) {
-            await (this.signalAdapter as any).sendPairRequest(credential.remoteDeviceId, message);
-        } else {
-            await this.signalAdapter.send(message);
-        }
-    }
-
-    /**
-     * 设置配对请求监听器（接收方使用）
-     */
-    private setupPairRequestListener(): void {
-        if (!("onPairRequest" in this.signalAdapter)) {
-            return;
-        }
-
-        (this.signalAdapter as any).onPairRequest((remoteDeviceId: string, message: Uint8Array) => {
-            // 解析配对请求
-            if (message[0] !== 0x01) return; // 不是配对请求
-
-            const senderIdLength = new DataView(message.buffer, message.byteOffset).getUint16(1);
-            const senderId = new TextDecoder().decode(message.subarray(3, 3 + senderIdLength));
-
-            // 创建 PairRequest 对象
-            const pairRequest: PairRequest = {
-                remoteDeviceId: senderId,
-                inputPin: (pin: string): Promise<Credential> => {
-                    return new Promise((resolve, reject) => {
-                        if (!this.validatePin(pin)) {
-                            reject(new Error("Invalid PIN format"));
-                            return;
-                        }
-
-                        const credential: CredentialPublicInfo = {
-                            myDeviceId: this.myDeviceId,
-                            remoteDeviceId: senderId,
-                        };
-
-                        // 作为客户端发起 PAKE 交换
-                        this.performPAKEClient(credential, pin).then(resolve).catch(reject);
-                    });
-                },
-                reject: () => {
-                    // 发送拒绝消息
-                    const rejectMsg = new Uint8Array([0x02]);
-                    this.signalAdapter.send(rejectMsg);
-                },
-            };
-
-            // 触发 pairRequest 事件
-            this.emit("pairRequest", pairRequest);
-        });
+        return { pin, inputOtherPin, waitForPairing: () => pairingPromise };
     }
 
     disconnect(): void {
@@ -281,11 +175,11 @@ export class SConnect implements SecureChannel {
 
         const data = new TextEncoder().encode(payload);
 
-        if (!this.sendCipher) {
-            await this.signalAdapter.send(data);
-        } else {
+        if (this.sendCipher) {
             const encrypted = this.sendCipher.encrypt(data as any);
             await this.signalAdapter.send(new Uint8Array(encrypted));
+        } else {
+            await this.signalAdapter.send(data);
         }
     }
 
@@ -296,11 +190,11 @@ export class SConnect implements SecureChannel {
 
         const buffer = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
 
-        if (!this.sendCipher) {
-            await this.signalAdapter.send(buffer);
-        } else {
+        if (this.sendCipher) {
             const encrypted = this.sendCipher.encrypt(buffer as any);
             await this.signalAdapter.send(new Uint8Array(encrypted));
+        } else {
+            await this.signalAdapter.send(buffer);
         }
     }
 
@@ -340,11 +234,194 @@ export class SConnect implements SecureChannel {
         }
     }
 
+    // ================= 消息处理 =================
+
+    private handleRawMessage(data: Uint8Array): void {
+        // 只有在未就绪时才检查协议消息
+        if (!this.isReady && data[0] < 0x20) {
+            this.handleProtocolMessage(data);
+            return;
+        }
+
+        // 应用数据
+        if (!this.isReady) {
+            return;
+        }
+
+        this.handleAppData(data);
+    }
+
+    private handleProtocolMessage(data: Uint8Array): void {
+        const type = data[0];
+        const payload = data.subarray(1);
+
+        switch (type) {
+            case MSG_PAIR_REQUEST:
+                this.handlePairRequest(payload);
+                break;
+            case MSG_CONNECT_REQUEST:
+                this.handleConnectRequest(payload);
+                break;
+            case MSG_CONNECT_ACCEPT:
+                // 连接接受由 tryConnect 的回调处理
+                break;
+            case MSG_CONNECT_REJECT:
+                // 连接拒绝由 tryConnect 的回调处理
+                break;
+            default:
+                // 可能是 PAKE 或 Noise 数据，由专门的处理器处理
+                break;
+        }
+    }
+
+    private handleAppData(data: Uint8Array): void {
+        let decryptedData = data;
+
+        if (this.receiveCipher) {
+            try {
+                decryptedData = new Uint8Array(this.receiveCipher.decrypt(data as any));
+            } catch {
+                this.emit("binary", data.buffer as ArrayBuffer);
+                return;
+            }
+        }
+
+        const text = new TextDecoder().decode(decryptedData);
+        try {
+            const parsed = JSON.parse(text);
+            if (parsed.type === "credential_rotation") {
+                this.emit("credentialRotated", {
+                    remotePublicKey: new Uint8Array(parsed.publicKey),
+                } as Credential);
+                return;
+            }
+        } catch {
+            // Not JSON
+        }
+
+        // 检查是否为文本
+        const reencoded = new TextEncoder().encode(text);
+        const isText =
+            reencoded.length === decryptedData.length &&
+            !decryptedData.some((b) => b < 32 && b !== 10 && b !== 13 && b !== 9);
+        if (isText) {
+            this.emit("message", text);
+        } else {
+            this.emit("binary", decryptedData.buffer as ArrayBuffer);
+        }
+    }
+
+    // ================= 配对请求处理 =================
+
+    private handlePairRequest(payload: Uint8Array): void {
+        const senderIdLength = new DataView(payload.buffer, payload.byteOffset).getUint16(0);
+        const senderId = new TextDecoder().decode(payload.subarray(2, 2 + senderIdLength));
+
+        const request: PairRequest = {
+            remoteDeviceId: senderId,
+            inputPin: (pin: string): Promise<Credential> => {
+                return new Promise((resolve, reject) => {
+                    if (!this.validatePin(pin)) {
+                        reject(new Error("Invalid PIN format"));
+                        return;
+                    }
+
+                    const credential: CredentialPublicInfo = {
+                        myDeviceId: this.myDeviceId,
+                        remoteDeviceId: senderId,
+                    };
+
+                    this.performPAKEClient(credential, pin).then(resolve).catch(reject);
+                });
+            },
+            reject: () => {
+                // 拒绝配对
+            },
+        };
+
+        this.emit("pairRequest", request);
+    }
+
+    private async sendPairRequest(credential: CredentialPublicInfo): Promise<void> {
+        await this.signalAdapter.connect(credential.remoteDeviceId);
+
+        const myIdBytes = new TextEncoder().encode(this.myDeviceId);
+        const message = new Uint8Array(1 + 2 + myIdBytes.length);
+        message[0] = MSG_PAIR_REQUEST;
+        new DataView(message.buffer).setUint16(1, myIdBytes.length);
+        message.set(myIdBytes, 3);
+
+        await this.signalAdapter.send(message);
+    }
+
+    // ================= 连接请求处理 =================
+
+    private handleConnectRequest(payload: Uint8Array): void {
+        const senderIdLength = new DataView(payload.buffer, payload.byteOffset).getUint16(0);
+        const senderId = new TextDecoder().decode(payload.subarray(2, 2 + senderIdLength));
+
+        const request: ConnectRequest = {
+            remoteDeviceId: senderId,
+            accept: (credential: Credential): Promise<ConnectResult> => {
+                return new Promise((resolve, reject) => {
+                    // 发送接受响应
+                    const acceptMsg = new Uint8Array([MSG_CONNECT_ACCEPT]);
+                    this.signalAdapter.send(acceptMsg);
+
+                    // 作为响应方进行 Noise IK 握手
+                    this.performIKResponder(credential).then(resolve).catch(reject);
+                });
+            },
+            reject: () => {
+                const rejectMsg = new Uint8Array([MSG_CONNECT_REJECT]);
+                this.signalAdapter.send(rejectMsg);
+            },
+        };
+
+        this.emit("connectRequest", request);
+    }
+
+    private async sendConnectRequest(credential: Credential): Promise<ConnectResult> {
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                this.restoreMessageHandler();
+                reject(new Error("Connect request timeout"));
+            }, this.options.handshakeTimeout);
+
+            // 设置消息处理器等待响应
+            const messageHandler = (data: Uint8Array) => {
+                if (data[0] === MSG_CONNECT_ACCEPT) {
+                    clearTimeout(timeout);
+                    this.restoreMessageHandler();
+
+                    // 开始 Noise IK 握手
+                    this.performIKInitiator(credential).then(resolve).catch(reject);
+                } else if (data[0] === MSG_CONNECT_REJECT) {
+                    clearTimeout(timeout);
+                    this.restoreMessageHandler();
+                    resolve({ success: false });
+                }
+            };
+
+            this.signalAdapter.onMessage(messageHandler);
+
+            // 发送连接请求
+            const myIdBytes = new TextEncoder().encode(this.myDeviceId);
+            const message = new Uint8Array(1 + 2 + myIdBytes.length);
+            message[0] = MSG_CONNECT_REQUEST;
+            new DataView(message.buffer).setUint16(1, myIdBytes.length);
+            message.set(myIdBytes, 3);
+
+            this.signalAdapter.send(message).catch((err) => {
+                clearTimeout(timeout);
+                this.restoreMessageHandler();
+                reject(err);
+            });
+        });
+    }
+
     // ================= PAKE 配对 =================
 
-    /**
-     * 设置 PAKE 响应方（服务器）- 等待对方发起配对
-     */
     private async setupPAKEResponder(credential: CredentialPublicInfo, myPin: string): Promise<Credential> {
         await this.signalAdapter.connect(credential.remoteDeviceId);
 
@@ -353,7 +430,6 @@ export class SConnect implements SecureChannel {
             kdf: { AAD: "sconnect-pairing" },
         });
 
-        // 服务器需要 verifier，使用自己的 PIN 计算
         const verifier = await spake.computeVerifier(
             myPin,
             credential.myDeviceId + credential.remoteDeviceId,
@@ -375,19 +451,19 @@ export class SConnect implements SecureChannel {
                     const spakeMsg = data.subarray(2, 2 + spakeLen);
                     const remotePublicKey = data.subarray(2 + spakeLen);
 
-                    // 发送: 2字节SPAKE2长度 + SPAKE2消息 + 我方公钥
+                    // 发送响应
                     const serverMsg = serverState.getMessage();
                     const myPublicKey = this.myKeyPair?.publicKey ?? new Uint8Array();
-                    const msgWithKey = new Uint8Array(2 + serverMsg.length + myPublicKey.length);
-                    new DataView(msgWithKey.buffer).setUint16(0, serverMsg.length);
-                    msgWithKey.set(serverMsg, 2);
-                    msgWithKey.set(myPublicKey, 2 + serverMsg.length);
-                    await this.signalAdapter.send(msgWithKey);
+                    const response = new Uint8Array(2 + serverMsg.length + myPublicKey.length);
+                    new DataView(response.buffer).setUint16(0, serverMsg.length);
+                    response.set(serverMsg, 2);
+                    response.set(myPublicKey, 2 + serverMsg.length);
+                    this.signalAdapter.send(response);
 
                     const sharedSecret = await serverState.finish(spakeMsg);
 
                     clearTimeout(timeout);
-                    this.signalAdapter.onMessage(this.rawMessageHandler);
+                    this.restoreMessageHandler();
 
                     this.initializeEncryption(sharedSecret.toBuffer());
 
@@ -413,9 +489,6 @@ export class SConnect implements SecureChannel {
         });
     }
 
-    /**
-     * 作为 PAKE 客户端发起配对
-     */
     private async performPAKEClient(credential: CredentialPublicInfo, remotePin: string): Promise<Credential> {
         await this.signalAdapter.connect(credential.remoteDeviceId);
 
@@ -424,7 +497,6 @@ export class SConnect implements SecureChannel {
             kdf: { AAD: "sconnect-pairing" },
         });
 
-        // 客户端使用对方的 PIN
         const clientState = await spake.startClient(
             credential.remoteDeviceId,
             credential.myDeviceId,
@@ -432,14 +504,14 @@ export class SConnect implements SecureChannel {
             credential.remoteDeviceId + credential.myDeviceId,
         );
 
-        // 发送: SPAKE2 消息 + 我方公钥
+        // 发送: 2字节SPAKE2长度 + SPAKE2消息 + 我方公钥
         const clientMsg = clientState.getMessage();
         const myPublicKey = this.myKeyPair?.publicKey ?? new Uint8Array();
-        const msgWithKey = new Uint8Array(2 + clientMsg.length + myPublicKey.length);
-        new DataView(msgWithKey.buffer).setUint16(0, clientMsg.length);
-        msgWithKey.set(clientMsg, 2);
-        msgWithKey.set(myPublicKey, 2 + clientMsg.length);
-        await this.signalAdapter.send(msgWithKey);
+        const message = new Uint8Array(2 + clientMsg.length + myPublicKey.length);
+        new DataView(message.buffer).setUint16(0, clientMsg.length);
+        message.set(clientMsg, 2);
+        message.set(myPublicKey, 2 + clientMsg.length);
+        await this.signalAdapter.send(message);
 
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
@@ -456,7 +528,7 @@ export class SConnect implements SecureChannel {
                     const sharedSecret = await clientState.finish(spakeMsg);
 
                     clearTimeout(timeout);
-                    this.signalAdapter.onMessage(this.rawMessageHandler);
+                    this.restoreMessageHandler();
 
                     this.initializeEncryption(sharedSecret.toBuffer());
 
@@ -484,12 +556,8 @@ export class SConnect implements SecureChannel {
 
     // ================= Noise IK 握手 =================
 
-    /**
-     * 作为发起方进行 Noise IK 握手
-     */
     private async performIKInitiator(credential: Credential): Promise<ConnectResult> {
         try {
-            // IK 模式需要：自己的静态密钥对 + 对方的静态公钥
             const keyPair = this.myKeyPair;
             if (!keyPair) throw new Error("No key pair");
             const myKeyPair = {
@@ -505,7 +573,7 @@ export class SConnect implements SecureChannel {
             const handshakeMessage = this.noise.send();
             await this.signalAdapter.send(new Uint8Array(handshakeMessage));
 
-            const response = await this.waitForHandshakeResponse();
+            const response = await this.waitForNoiseResponse();
             this.noise.recv(response as any);
 
             if (this.noise.complete) {
@@ -531,7 +599,62 @@ export class SConnect implements SecureChannel {
         }
     }
 
-    private waitForHandshakeResponse(): Promise<Uint8Array> {
+    private async performIKResponder(credential: Credential): Promise<ConnectResult> {
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error("Handshake timeout"));
+            }, this.options.handshakeTimeout);
+
+            const messageHandler = (data: Uint8Array) => {
+                try {
+                    const keyPair = this.myKeyPair;
+                    if (!keyPair) throw new Error("No key pair");
+                    const myKeyPair = {
+                        publicKey: keyPair.publicKey as any,
+                        secretKey: keyPair.privateKey as any,
+                    };
+                    this.noise = new Noise("IK", false, myKeyPair);
+
+                    const prologue = new Uint8Array(0) as any;
+                    this.noise.initialise(prologue);
+
+                    this.noise.recv(data as any);
+
+                    const responseMsg = this.noise.send();
+                    this.signalAdapter.send(new Uint8Array(responseMsg));
+
+                    if (this.noise.complete) {
+                        if (!this.signalAdapter.supportNativeEncryption) {
+                            this.sendCipher = new Cipher(this.noise.tx as any);
+                            this.receiveCipher = new Cipher(this.noise.rx as any);
+                        }
+                        this.isReady = true;
+
+                        clearTimeout(timeout);
+                        this.restoreMessageHandler();
+
+                        const updatedCredential: Credential = {
+                            ...credential,
+                            lastConnected: Date.now(),
+                        };
+
+                        this.emit("ready");
+                        resolve({ success: true, credential: updatedCredential });
+                    } else {
+                        clearTimeout(timeout);
+                        resolve({ success: false });
+                    }
+                } catch (err) {
+                    clearTimeout(timeout);
+                    reject(err);
+                }
+            };
+
+            this.signalAdapter.onMessage(messageHandler);
+        });
+    }
+
+    private waitForNoiseResponse(): Promise<Uint8Array> {
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 reject(new Error("Handshake timeout"));
@@ -539,7 +662,7 @@ export class SConnect implements SecureChannel {
 
             const handler = (data: Uint8Array) => {
                 clearTimeout(timeout);
-                this.signalAdapter.onMessage(this.rawMessageHandler);
+                this.restoreMessageHandler();
                 resolve(data);
             };
 
@@ -547,73 +670,11 @@ export class SConnect implements SecureChannel {
         });
     }
 
-    /**
-     * 作为响应方进行 Noise IK 握手
-     */
-    private async performIKResponder(credential: Credential): Promise<ConnectResult> {
-        try {
-            return new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    reject(new Error("Handshake timeout"));
-                }, this.options.handshakeTimeout);
+    // ================= 工具方法 =================
 
-                const messageHandler = (data: Uint8Array) => {
-                    try {
-                        // IK 模式需要：自己的静态密钥对
-                        const keyPair = this.myKeyPair;
-                        if (!keyPair) throw new Error("No key pair");
-                        const myKeyPair = {
-                            publicKey: keyPair.publicKey as any,
-                            secretKey: keyPair.privateKey as any,
-                        };
-                        this.noise = new Noise("IK", false, myKeyPair);
-
-                        const prologue = new Uint8Array(0) as any;
-                        this.noise.initialise(prologue);
-
-                        // 接收发起方的消息
-                        this.noise.recv(data as any);
-
-                        // 发送响应
-                        const responseMsg = this.noise.send();
-                        this.signalAdapter.send(new Uint8Array(responseMsg));
-
-                        if (this.noise.complete) {
-                            if (!this.signalAdapter.supportNativeEncryption) {
-                                this.sendCipher = new Cipher(this.noise.tx as any);
-                                this.receiveCipher = new Cipher(this.noise.rx as any);
-                            }
-                            this.isReady = true;
-
-                            clearTimeout(timeout);
-                            this.signalAdapter.onMessage(this.rawMessageHandler);
-
-                            const updatedCredential: Credential = {
-                                ...credential,
-                                lastConnected: Date.now(),
-                            };
-
-                            this.emit("ready");
-                            resolve({ success: true, credential: updatedCredential });
-                        } else {
-                            clearTimeout(timeout);
-                            resolve({ success: false });
-                        }
-                    } catch (err) {
-                        clearTimeout(timeout);
-                        reject(err);
-                    }
-                };
-
-                this.signalAdapter.onMessage(messageHandler);
-            });
-        } catch (error) {
-            console.error("IK responder handshake failed:", error);
-            return { success: false };
-        }
+    private restoreMessageHandler(): void {
+        this.signalAdapter.onMessage((data) => this.handleRawMessage(data));
     }
-
-    // ================= 加密初始化 =================
 
     private initializeEncryption(sharedSecret: Uint8Array): void {
         const secretArray = new Uint8Array(sharedSecret);
@@ -627,47 +688,15 @@ export class SConnect implements SecureChannel {
         }
     }
 
-    // ================= 消息处理 =================
-
-    private handleRawMessage(data: Uint8Array): void {
-        if (!this.isReady) {
-            return;
-        }
-
-        if (!this.receiveCipher) {
-            this.dispatchMessage(data);
-        } else {
-            try {
-                const decrypted = this.receiveCipher.decrypt(data as any);
-                this.dispatchMessage(new Uint8Array(decrypted));
-            } catch {
-                this.emit("binary", new Uint8Array(data).buffer as ArrayBuffer);
-            }
-        }
-    }
-
-    private dispatchMessage(data: Uint8Array): void {
-        const text = new TextDecoder().decode(data);
-        try {
-            const parsed = JSON.parse(text);
-            if (parsed.type === "credential_rotation") {
-                // 通知应用层对方公钥已更新
-                this.emit("credentialRotated", {
-                    remotePublicKey: new Uint8Array(parsed.publicKey),
-                } as Credential);
-                return;
-            }
-        } catch {
-            // Not JSON
-        }
-
-        const reencoded = new TextEncoder().encode(text);
-        const isText = reencoded.length === data.length && !data.some((b) => b < 32 && b !== 10 && b !== 13 && b !== 9);
-        if (isText) {
-            this.emit("message", text);
-        } else {
-            this.emit("binary", new Uint8Array(data).buffer as ArrayBuffer);
-        }
+    private buildCredential(credential: CredentialPublicInfo | Credential): Credential {
+        return {
+            ...credential,
+            myPrivateKey: "myPrivateKey" in credential ? credential.myPrivateKey : new Uint8Array(),
+            myPublicKey: this.myKeyPair?.publicKey ?? new Uint8Array(),
+            remotePublicKey: "remotePublicKey" in credential ? credential.remotePublicKey : new Uint8Array(),
+            createdAt: "createdAt" in credential ? credential.createdAt : Date.now(),
+            lastConnected: Date.now(),
+        };
     }
 
     private handleDisconnect(): void {
@@ -699,7 +728,6 @@ export class SConnect implements SecureChannel {
     }
 
     private async generateKeyPair(): Promise<KeyPair> {
-        // Noise IK 使用 X25519 密钥交换
         const keyPair = await crypto.subtle.generateKey({ name: "X25519" } as AlgorithmIdentifier, true, [
             "deriveBits",
         ]);
@@ -707,7 +735,6 @@ export class SConnect implements SecureChannel {
         const publicKeyBuffer = await crypto.subtle.exportKey("raw", (keyPair as CryptoKeyPair).publicKey);
         const privateKeyBuffer = await crypto.subtle.exportKey("pkcs8", (keyPair as CryptoKeyPair).privateKey);
 
-        // X25519 私钥在 PKCS8 中是 48 字节，需要提取后 32 字节
         const privateKeyRaw = new Uint8Array(privateKeyBuffer).subarray(16);
 
         return {

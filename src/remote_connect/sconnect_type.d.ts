@@ -103,6 +103,11 @@ export declare class SecureChannel {
      */
     on(event: "pairRequest", callback: (request: PairRequest) => void): void;
     /**
+     * 收到连接请求事件（接收方监听，用于 Credential 重连）。
+     * 回调参数包含发起方信息，以及 accept/reject 函数。
+     */
+    on(event: "connectRequest", callback: (request: ConnectRequest) => void): void;
+    /**
      * 凭证轮换事件（己方或对方主动发起）。
      * 应用层应使用 `updatedCredential` 覆盖本地存储的旧凭证。
      */
@@ -151,8 +156,6 @@ interface TrustedSignalingAdapter {
     onMessage: (handler: (data: Uint8Array) => void) => void;
     onClose: (handler: () => void) => void;
     onError: (handler: (err: Error) => void) => void;
-    /** 注册配对请求回调（接收方使用） */
-    onPairRequest: (handler: (remoteDeviceId: string, message: Uint8Array) => void) => void;
 }
 
 /** 不受信任的信令适配器（网络信道等），需要内部 PAKE 验证，可选加密 */
@@ -167,8 +170,6 @@ interface UntrustedSignalingAdapter {
     onMessage: (handler: (data: Uint8Array) => void) => void;
     onClose: (handler: () => void) => void;
     onError: (handler: (err: Error) => void) => void;
-    /** 注册配对请求回调（接收方使用） */
-    onPairRequest: (handler: (remoteDeviceId: string, message: Uint8Array) => void) => void;
 }
 
 /** 配对请求信息（接收方通过 pairRequest 事件获取） */
@@ -180,6 +181,18 @@ interface PairRequest {
     /** 输入对方的 PIN 完成配对 */
     inputPin: (pin: string) => Promise<Credential>;
     /** 拒绝配对请求 */
+    reject: () => void;
+}
+
+/** 连接请求信息（接收方通过 connectRequest 事件获取，用于 Credential 重连） */
+interface ConnectRequest {
+    /** 发起方的设备 ID */
+    remoteDeviceId: string;
+    /** 发起方的显示名称（可选） */
+    remoteDisplayName?: string;
+    /** 接受连接请求，传入本地保存的关于对方的 Credential */
+    accept: (credential: Credential) => Promise<ConnectResult>;
+    /** 拒绝连接请求 */
     reject: () => void;
 }
 

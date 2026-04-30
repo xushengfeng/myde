@@ -3,7 +3,6 @@ import type { TrustedSignalingAdapter, UntrustedSignalingAdapter } from "./sconn
 type MessageHandler = (data: Uint8Array) => void;
 type CloseHandler = () => void;
 type ErrorHandler = (err: Error) => void;
-type PairRequestHandler = (remoteDeviceId: string, message: Uint8Array) => void;
 
 /**
  * 受信任的本地回环信令适配器，用于测试。
@@ -16,7 +15,6 @@ export class LoopbackAdapter implements TrustedSignalingAdapter {
     private peer: LoopbackAdapter | null = null;
     private messageHandler: MessageHandler | null = null;
     private closeHandler: CloseHandler | null = null;
-    private pairRequestHandler: PairRequestHandler | null = null;
 
     static createPair(): [LoopbackAdapter, LoopbackAdapter] {
         const a = new LoopbackAdapter();
@@ -40,19 +38,6 @@ export class LoopbackAdapter implements TrustedSignalingAdapter {
         }
     }
 
-    /**
-     * 发送配对请求到对方（触发对方的 pairRequestHandler）
-     */
-    async sendPairRequest(remoteDeviceId: string, data: Uint8Array): Promise<void> {
-        if (!this.peer) {
-            throw new Error("No peer connected");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        if (this.peer.pairRequestHandler) {
-            this.peer.pairRequestHandler(remoteDeviceId, new Uint8Array(data));
-        }
-    }
-
     close(): void {
         if (this.peer?.closeHandler) {
             this.peer.closeHandler();
@@ -69,10 +54,6 @@ export class LoopbackAdapter implements TrustedSignalingAdapter {
     }
 
     onError(_handler: ErrorHandler): void {}
-
-    onPairRequest(handler: PairRequestHandler): void {
-        this.pairRequestHandler = handler;
-    }
 }
 
 /**
@@ -86,7 +67,6 @@ export class UntrustedLoopbackAdapter implements UntrustedSignalingAdapter {
     private peer: UntrustedLoopbackAdapter | null = null;
     private messageHandler: MessageHandler | null = null;
     private closeHandler: CloseHandler | null = null;
-    private pairRequestHandler: PairRequestHandler | null = null;
 
     constructor(supportNativeEncryption = true) {
         this.supportNativeEncryption = supportNativeEncryption;
@@ -114,19 +94,6 @@ export class UntrustedLoopbackAdapter implements UntrustedSignalingAdapter {
         }
     }
 
-    /**
-     * 发送配对请求到对方（触发对方的 pairRequestHandler）
-     */
-    async sendPairRequest(remoteDeviceId: string, data: Uint8Array): Promise<void> {
-        if (!this.peer) {
-            throw new Error("No peer connected");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        if (this.peer.pairRequestHandler) {
-            this.peer.pairRequestHandler(remoteDeviceId, new Uint8Array(data));
-        }
-    }
-
     close(): void {
         if (this.peer?.closeHandler) {
             this.peer.closeHandler();
@@ -143,8 +110,4 @@ export class UntrustedLoopbackAdapter implements UntrustedSignalingAdapter {
     }
 
     onError(_handler: ErrorHandler): void {}
-
-    onPairRequest(handler: PairRequestHandler): void {
-        this.pairRequestHandler = handler;
-    }
 }

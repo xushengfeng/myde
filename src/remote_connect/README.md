@@ -98,31 +98,30 @@ await channelA.send("Secure message");
 ### 3. 使用凭证重连
 
 ```typescript
-// 保存凭证（实际应用中应安全存储）
-localStorage.setItem("credential", JSON.stringify(credentialA));
+// ===== 发起方 A =====
+// A 有 B 的 Credential（之前配对获得的）
+const credentialOfB = loadCredential("device-b");
+const result = await channelA.tryConnect(credentialOfB);
+if (result.success) {
+    console.log("连接成功");
+}
 
-// 重连时加载凭证
-const savedCredential = JSON.parse(localStorage.getItem("credential"));
-
-// 创建新的通道
-const [newAdapterA, newAdapterB] = UntrustedLoopbackAdapter.createPair();
-const newChannelA = new SConnect(newAdapterA);
-const newChannelB = new SConnect(newAdapterB);
-
-// 使用保存的密钥初始化
-await newChannelA.init("device-a", {
-    privateKey: savedCredential.myPrivateKey,
-    publicKey: savedCredential.myPublicKey,
+// ===== 接收方 B =====
+channelB.on("connectRequest", async (request) => {
+    console.log(`${request.remoteDeviceId} 请求连接`);
+    
+    // 从本地存储加载 B 保存的关于 A 的 Credential
+    const credentialOfA = loadCredential(request.remoteDeviceId);
+    
+    if (credentialOfA) {
+        // 使用保存的 Credential 接受连接
+        const result = await request.accept(credentialOfA);
+        console.log("连接成功", result);
+    } else {
+        // 没有保存的凭证，拒绝
+        request.reject();
+    }
 });
-
-await newChannelB.init("device-b", {
-    privateKey: savedCredentialB.myPrivateKey,
-    publicKey: savedCredentialB.myPublicKey,
-});
-
-// 使用凭证重连
-const result = await newChannelA.tryConnect(savedCredential);
-// 成功后可继续通信
 ```
 
 ## API 参考
@@ -160,6 +159,7 @@ class SConnect implements SecureChannel {
     on(event: "disconnect", callback: () => void): void;
     on(event: "error", callback: (err: Error) => void): void;
     on(event: "pairRequest", callback: (request: PairRequest) => void): void;
+    on(event: "connectRequest", callback: (request: ConnectRequest) => void): void;
     on(event: "credentialRotated", callback: (credential: Credential) => void): void;
     on(event: "credentialInvalidated", callback: (remoteDeviceId: string) => void): void;
 
@@ -182,6 +182,22 @@ interface PairRequest {
     /** 输入对方的 PIN 完成配对 */
     inputPin: (pin: string) => Promise<Credential>;
     /** 拒绝配对请求 */
+    reject: () => void;
+}
+```
+
+### ConnectRequest
+
+```typescript
+interface ConnectRequest {
+    /** 发起方的设备 ID */
+    remoteDeviceId: string;
+    /** 发起方的显示名称（可选） */
+    remoteDisplayName?: string;
+    
+    /** 接受连接请求，传入本地保存的关于对方的 Credential */
+    accept: (credential: Credential) => Promise<ConnectResult>;
+    /** 拒绝连接请求 */
     reject: () => void;
 }
 ```
@@ -321,9 +337,13 @@ adapter.onPairRequest((remoteDeviceId, message) => {
 受信任信道:
   tryConnect -> 直接连接
 
-不受信任信道:
-  tryConnect -> 无凭证 -> pairInit (发起方) / pairRequest 事件 (接收方) -> PAKE 配对 -> 获取 Credential
-  tryConnect -> 有凭证 -> Noise IK 握手 -> 重连
+不受信任信道（首次配对）:
+  发起方: pairInit -> 生成 PIN -> 等待
+  接收方: pairRequest 事件 -> inputPin -> PAKE 握手 -> Credential
+
+不受信任信道（凭证重连）:
+  发起方: tryConnect(credential) -> 发送连接请求 -> 等待
+  接收方: connectRequest 事件 -> accept(credential) -> Noise IK 握手
 ```
 
 ### 加密策略

@@ -398,7 +398,8 @@ describe("SConnect", () => {
     });
 
     describe("不受信任信道 - Credential 重连", () => {
-        it("有 Credential 时 IK 握手成功应返回 success=true", async () => {
+        it("有 Credential 时 tryConnect 应触发 connectRequest 事件", async () => {
+            // 第一次配对
             const [adapterA1, adapterB1] = UntrustedLoopbackAdapter.createPair();
             const channelA1 = new SConnect(adapterA1, { handshakeTimeout: 10000 });
             const channelB1 = new SConnect(adapterB1, { handshakeTimeout: 10000 });
@@ -445,13 +446,170 @@ describe("SConnect", () => {
                 publicKey: credentialB.myPublicKey,
             });
 
-            const resultBPromise = channelB2.tryConnect(credentialB);
-            await new Promise((r) => setTimeout(r, 10));
-            const resultA = await channelA2.tryConnect(credentialA);
-            const resultB = await resultBPromise;
+            // B 监听连接请求
+            const connectRequestPromise = new Promise<ConnectRequest>((resolve) => {
+                channelB2.on("connectRequest", (request) => {
+                    resolve(request);
+                });
+            });
+
+            // A 发起连接
+            const resultAPromise = channelA2.tryConnect(credentialA);
+
+            // 等待 B 收到连接请求
+            const connectRequest = await connectRequestPromise;
+            expect(connectRequest.remoteDeviceId).toBe("device-a");
+
+            // B 接受连接
+            const resultBPromise = connectRequest.accept(credentialB);
+
+            const [resultA, resultB] = await Promise.all([resultAPromise, resultBPromise]);
 
             expect(resultA.success).toBe(true);
             expect(resultB.success).toBe(true);
+
+            channelA2.disconnect();
+            channelB2.disconnect();
+        });
+
+        it("B 可以拒绝连接请求", async () => {
+            // 第一次配对
+            const [adapterA1, adapterB1] = UntrustedLoopbackAdapter.createPair();
+            const channelA1 = new SConnect(adapterA1, { handshakeTimeout: 10000 });
+            const channelB1 = new SConnect(adapterB1, { handshakeTimeout: 10000 });
+
+            await channelA1.init("device-a");
+            await channelB1.init("device-b");
+
+            // B 监听配对请求
+            const pairRequestPromise = new Promise<PairRequest>((resolve) => {
+                channelB1.on("pairRequest", (request) => {
+                    resolve(request);
+                });
+            });
+
+            // A 发起配对
+            const pairingA = channelA1.pairInit({
+                myDeviceId: "device-a",
+                remoteDeviceId: "device-b",
+            });
+
+            const pairRequest = await pairRequestPromise;
+            const credentialBPromise = pairRequest.inputPin(pairingA.pin);
+            const credentialAPromise = pairingA.waitForPairing();
+
+            const [credentialA, credentialB] = await Promise.all([credentialAPromise, credentialBPromise]);
+
+            channelA1.disconnect();
+            channelB1.disconnect();
+
+            // 第二次重连 - B 拒绝
+            const [adapterA2, adapterB2] = UntrustedLoopbackAdapter.createPair();
+            const channelA2 = new SConnect(adapterA2, { handshakeTimeout: 2000 });
+            const channelB2 = new SConnect(adapterB2, { handshakeTimeout: 2000 });
+
+            await channelA2.init("device-a", {
+                privateKey: credentialA.myPrivateKey as Uint8Array,
+                publicKey: credentialA.myPublicKey,
+            });
+            await channelB2.init("device-b", {
+                privateKey: credentialB.myPrivateKey as Uint8Array,
+                publicKey: credentialB.myPublicKey,
+            });
+
+            // B 监听连接请求并拒绝
+            const connectRequestPromise = new Promise<ConnectRequest>((resolve) => {
+                channelB2.on("connectRequest", (request) => {
+                    resolve(request);
+                });
+            });
+
+            // A 发起连接
+            const resultAPromise = channelA2.tryConnect(credentialA);
+
+            // 等待 B 收到连接请求
+            const connectRequest = await connectRequestPromise;
+
+            // B 拒绝连接
+            connectRequest.reject();
+
+            // A 应该收到失败结果
+            const resultA = await resultAPromise;
+            expect(resultA.success).toBe(false);
+
+            channelA2.disconnect();
+            channelB2.disconnect();
+        });
+
+        it("重连后应能收发消息", async () => {
+            // 第一次配对
+            const [adapterA1, adapterB1] = UntrustedLoopbackAdapter.createPair();
+            const channelA1 = new SConnect(adapterA1, { handshakeTimeout: 10000 });
+            const channelB1 = new SConnect(adapterB1, { handshakeTimeout: 10000 });
+
+            await channelA1.init("device-a");
+            await channelB1.init("device-b");
+
+            // B 监听配对请求
+            const pairRequestPromise = new Promise<PairRequest>((resolve) => {
+                channelB1.on("pairRequest", (request) => {
+                    resolve(request);
+                });
+            });
+
+            // A 发起配对
+            const pairingA = channelA1.pairInit({
+                myDeviceId: "device-a",
+                remoteDeviceId: "device-b",
+            });
+
+            const pairRequest = await pairRequestPromise;
+            const credentialBPromise = pairRequest.inputPin(pairingA.pin);
+            const credentialAPromise = pairingA.waitForPairing();
+
+            const [credentialA, credentialB] = await Promise.all([credentialAPromise, credentialBPromise]);
+
+            channelA1.disconnect();
+            channelB1.disconnect();
+
+            // 第二次重连
+            const [adapterA2, adapterB2] = UntrustedLoopbackAdapter.createPair();
+            const channelA2 = new SConnect(adapterA2, { handshakeTimeout: 10000 });
+            const channelB2 = new SConnect(adapterB2, { handshakeTimeout: 10000 });
+
+            await channelA2.init("device-a", {
+                privateKey: credentialA.myPrivateKey as Uint8Array,
+                publicKey: credentialA.myPublicKey,
+            });
+            await channelB2.init("device-b", {
+                privateKey: credentialB.myPrivateKey as Uint8Array,
+                publicKey: credentialB.myPublicKey,
+            });
+
+            const receivedMessages: string[] = [];
+            channelB2.on("message", (msg) => receivedMessages.push(msg));
+
+            // B 监听连接请求
+            const connectRequestPromise = new Promise<ConnectRequest>((resolve) => {
+                channelB2.on("connectRequest", (request) => {
+                    resolve(request);
+                });
+            });
+
+            // A 发起连接
+            const resultAPromise = channelA2.tryConnect(credentialA);
+
+            // B 接受连接
+            const connectRequest = await connectRequestPromise;
+            const resultBPromise = connectRequest.accept(credentialB);
+
+            await Promise.all([resultAPromise, resultBPromise]);
+
+            // 重连后应该能收发消息
+            await channelA2.send("hello after reconnect");
+            await new Promise((r) => setTimeout(r, 100));
+
+            expect(receivedMessages).toContain("hello after reconnect");
 
             channelA2.disconnect();
             channelB2.disconnect();
