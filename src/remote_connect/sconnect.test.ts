@@ -146,7 +146,7 @@ describe("SConnect", () => {
             adapterB.close();
         });
 
-        it("PAKE 配对后应能收发消息", async () => {
+        it("PAKE 配对后应能收发消息（单边输入 PIN）", async () => {
             const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair();
             const channelA = new SConnect(adapterA, { handshakeTimeout: 10000 });
             const channelB = new SConnect(adapterB, { handshakeTimeout: 10000 });
@@ -157,7 +157,7 @@ describe("SConnect", () => {
             const receivedMessages: string[] = [];
             channelB.on("message", (msg) => receivedMessages.push(msg));
 
-            const pinA = channelA.updatePIN();
+            // 双方都调用 pairInit
             const pairingA = channelA.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
@@ -167,9 +167,10 @@ describe("SConnect", () => {
                 remoteDeviceId: "device-a",
             });
 
+            // 只有 device-a 输入 device-b 的 PIN（单边输入）
             pairingA.inputOtherPin(pairingB.pin);
-            pairingB.inputOtherPin(pinA);
 
+            // 双方都等待配对完成
             await Promise.all([pairingA.waitForPairing(), pairingB.waitForPairing()]);
 
             await channelA.send("encrypted hello");
@@ -205,8 +206,8 @@ describe("SConnect", () => {
                 remoteDeviceId: "device-a",
             });
 
+            // 只有 device-a 输入 PIN
             pairingA.inputOtherPin(pairingB.pin);
-            pairingB.inputOtherPin(pairingA.pin);
 
             await Promise.all([pairingA.waitForPairing(), pairingB.waitForPairing()]);
 
@@ -248,8 +249,8 @@ describe("SConnect", () => {
                 remoteDeviceId: "device-a",
             });
 
+            // 只有 device-a 输入 PIN
             pairingA.inputOtherPin(pairingB.pin);
-            pairingB.inputOtherPin(pairingA.pin);
 
             await Promise.all([pairingA.waitForPairing(), pairingB.waitForPairing()]);
 
@@ -285,8 +286,8 @@ describe("SConnect", () => {
                 remoteDeviceId: "device-a",
             });
 
+            // 只有 device-a 输入 PIN
             pairingA.inputOtherPin(pairingB.pin);
-            pairingB.inputOtherPin(pairingA.pin);
 
             const credentialA = await pairingA.waitForPairing();
             const credentialB = await pairingB.waitForPairing();

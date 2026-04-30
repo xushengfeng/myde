@@ -53,6 +53,13 @@ export declare class SecureChannel {
     // ================= 初次配对（需用户传递 PIN） =================
 
     /**
+     * 预生成 PIN，可在 pairInit 之前调用以提前展示给用户。
+     * 重复调用会重新生成 PIN。
+     * @returns 6 位数字 PIN
+     */
+    updatePIN(): string;
+
+    /**
      * 在需要身份验证的信道中进行配对，通过 PIN，完成基于 PAKE 的握手，只需要一方输入 PIN。
      */
     pairInit(credential: CredentialPublicInfo): {

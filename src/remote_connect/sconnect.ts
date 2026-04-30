@@ -130,17 +130,27 @@ export class SConnect implements SecureChannel {
             throw new Error("Call init() first");
         }
 
+        // 优先使用缓存的 PIN，没有则生成新的
         const pin = this.PIN || this.updatePIN();
         let resolvePairing: (credential: Credential) => void;
         let rejectPairing: (error: Error) => void;
         let pinAttempts = 0;
+        let pairingStarted = false;
 
         const pairingPromise = new Promise<Credential>((resolve, reject) => {
             resolvePairing = resolve;
             rejectPairing = reject;
         });
 
+        // 设置服务器端等待（响应方）
+        this.setupPAKEResponder(credential, pin)
+            .then(resolvePairing)
+            .catch(rejectPairing);
+
         const inputOtherPin = (remotePin: string) => {
+            if (pairingStarted) return;
+            pairingStarted = true;
+
             pinAttempts++;
             if (pinAttempts > this.options.maxPinAttempts) {
                 rejectPairing(new Error("Maximum PIN attempts exceeded"));
@@ -149,10 +159,12 @@ export class SConnect implements SecureChannel {
 
             if (!this.validatePin(remotePin)) {
                 this.emit("error", new Error("Invalid PIN format"));
+                rejectPairing(new Error("Invalid PIN format"));
                 return;
             }
 
-            this.performPAKEExchange(credential, pin, remotePin).then(resolvePairing).catch(rejectPairing);
+            // 作为客户端发起 PAKE 交换
+            this.performPAKEClient(credential, remotePin).then(resolvePairing).catch(rejectPairing);
         };
 
         return {
@@ -246,42 +258,33 @@ export class SConnect implements SecureChannel {
 
     // ================= PAKE 配对 =================
 
-    private async performPAKEExchange(
+    /**
+     * 设置 PAKE 响应方（服务器）- 等待对方发起配对
+     */
+    private async setupPAKEResponder(
         credential: CredentialPublicInfo,
         myPin: string,
-        remotePin: string,
     ): Promise<Credential> {
         await this.signalAdapter.connect(credential.remoteDeviceId);
 
-        const isClient = credential.myDeviceId < credential.remoteDeviceId;
-
-        if (isClient) {
-            return this.pakeClient(credential, myPin);
-        }
-        return this.pakeServer(credential, remotePin);
-    }
-
-    private async pakeClient(credential: CredentialPublicInfo, myPin: string): Promise<Credential> {
         const spake = spake2({
             mhf: { n: 1024, r: 8, p: 16 },
             kdf: { AAD: "sconnect-pairing" },
         });
 
-        const clientState = await spake.startClient(
-            credential.myDeviceId,
-            credential.remoteDeviceId,
+        // 服务器需要 verifier，使用自己的 PIN 计算
+        const verifier = await spake.computeVerifier(
             myPin,
             credential.myDeviceId + credential.remoteDeviceId,
+            credential.myDeviceId,
+            credential.remoteDeviceId,
         );
 
-        // 发送: SPAKE2 消息 + 我方公钥
-        const clientMsg = clientState.getMessage();
-        const myPublicKey = this.myKeyPair?.publicKey ?? new Uint8Array();
-        const msgWithKey = new Uint8Array(2 + clientMsg.length + myPublicKey.length);
-        new DataView(msgWithKey.buffer).setUint16(0, clientMsg.length);
-        msgWithKey.set(clientMsg, 2);
-        msgWithKey.set(myPublicKey, 2 + clientMsg.length);
-        await this.signalAdapter.send(msgWithKey);
+        const serverState = await spake.startServer(
+            credential.myDeviceId,
+            credential.remoteDeviceId,
+            verifier,
+        );
 
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
@@ -295,7 +298,16 @@ export class SConnect implements SecureChannel {
                     const spakeMsg = data.subarray(2, 2 + spakeLen);
                     const remotePublicKey = data.subarray(2 + spakeLen);
 
-                    const sharedSecret = await clientState.finish(spakeMsg);
+                    // 发送: 2字节SPAKE2长度 + SPAKE2消息 + 我方公钥
+                    const serverMsg = serverState.getMessage();
+                    const myPublicKey = this.myKeyPair?.publicKey ?? new Uint8Array();
+                    const msgWithKey = new Uint8Array(2 + serverMsg.length + myPublicKey.length);
+                    new DataView(msgWithKey.buffer).setUint16(0, serverMsg.length);
+                    msgWithKey.set(serverMsg, 2);
+                    msgWithKey.set(myPublicKey, 2 + serverMsg.length);
+                    await this.signalAdapter.send(msgWithKey);
+
+                    const sharedSecret = await serverState.finish(spakeMsg);
 
                     clearTimeout(timeout);
                     this.signalAdapter.onMessage(this.rawMessageHandler);
@@ -324,20 +336,36 @@ export class SConnect implements SecureChannel {
         });
     }
 
-    private async pakeServer(credential: CredentialPublicInfo, remotePin: string): Promise<Credential> {
+    /**
+     * 作为 PAKE 客户端发起配对
+     */
+    private async performPAKEClient(
+        credential: CredentialPublicInfo,
+        remotePin: string,
+    ): Promise<Credential> {
+        await this.signalAdapter.connect(credential.remoteDeviceId);
+
         const spake = spake2({
             mhf: { n: 1024, r: 8, p: 16 },
             kdf: { AAD: "sconnect-pairing" },
         });
 
-        const verifier = await spake.computeVerifier(
-            remotePin,
-            credential.remoteDeviceId + credential.myDeviceId,
+        // 客户端使用对方的 PIN
+        const clientState = await spake.startClient(
             credential.remoteDeviceId,
             credential.myDeviceId,
+            remotePin,
+            credential.remoteDeviceId + credential.myDeviceId,
         );
 
-        const serverState = await spake.startServer(credential.remoteDeviceId, credential.myDeviceId, verifier);
+        // 发送: SPAKE2 消息 + 我方公钥
+        const clientMsg = clientState.getMessage();
+        const myPublicKey = this.myKeyPair?.publicKey ?? new Uint8Array();
+        const msgWithKey = new Uint8Array(2 + clientMsg.length + myPublicKey.length);
+        new DataView(msgWithKey.buffer).setUint16(0, clientMsg.length);
+        msgWithKey.set(clientMsg, 2);
+        msgWithKey.set(myPublicKey, 2 + clientMsg.length);
+        await this.signalAdapter.send(msgWithKey);
 
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
@@ -351,16 +379,7 @@ export class SConnect implements SecureChannel {
                     const spakeMsg = data.subarray(2, 2 + spakeLen);
                     const remotePublicKey = data.subarray(2 + spakeLen);
 
-                    // 发送: 2字节SPAKE2长度 + SPAKE2消息 + 我方公钥
-                    const serverMsg = serverState.getMessage();
-                    const myPublicKey = this.myKeyPair?.publicKey ?? new Uint8Array();
-                    const msgWithKey = new Uint8Array(2 + serverMsg.length + myPublicKey.length);
-                    new DataView(msgWithKey.buffer).setUint16(0, serverMsg.length);
-                    msgWithKey.set(serverMsg, 2);
-                    msgWithKey.set(myPublicKey, 2 + serverMsg.length);
-                    this.signalAdapter.send(msgWithKey);
-
-                    const sharedSecret = await serverState.finish(spakeMsg);
+                    const sharedSecret = await clientState.finish(spakeMsg);
 
                     clearTimeout(timeout);
                     this.signalAdapter.onMessage(this.rawMessageHandler);

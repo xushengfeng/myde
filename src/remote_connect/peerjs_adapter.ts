@@ -54,6 +54,10 @@ export class PeerjsAdapter implements UntrustedSignalingAdapter {
             throw new Error("PeerJS not initialized. Call init() first.");
         }
 
+        if (this.connection) {
+            return;
+        }
+
         return new Promise((resolve, reject) => {
             const peer = this.peer;
             if (!peer) {
@@ -103,10 +107,6 @@ export class PeerjsAdapter implements UntrustedSignalingAdapter {
         if (this.connection) {
             this.connection.close();
             this.connection = null;
-        }
-        if (this.peer) {
-            this.peer.destroy();
-            this.peer = null;
         }
     }
 
