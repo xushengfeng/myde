@@ -20,6 +20,7 @@
     "homepage": "https://github.com/xushengfeng/myde/",
     "license": "AGPL-3.0-only",
     "dependencies": {
+        "b4a": "^1.8.0",
         "dkh-ui": "^0.14.2",
         "ini": "^5.0.0",
         "myde-dbus": "^0.2.0",

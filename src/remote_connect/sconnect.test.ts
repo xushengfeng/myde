@@ -1,18 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { SConnect } from "./sconnect";
 import { LoopbackAdapter, UntrustedLoopbackAdapter } from "./loopback_adapter";
-import type { PairRequest } from "./sconnect_type";
+import type { ConnectRequest, PairRequest } from "./sconnect_type";
 
-function waitForEvent<T>(
-    emitter: { on: (event: string, cb: (arg: T) => void) => void },
-    event: string,
+function waitForEvent<T extends any[], E extends string>(
+    emitter: { on: (event: E, cb: (...args: T) => void) => void },
+    event: E,
     timeout = 5000,
 ): Promise<T> {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`Timeout waiting for ${event}`)), timeout);
-        emitter.on(event, (arg: T) => {
+        emitter.on(event, (...args: T) => {
             clearTimeout(timer);
-            resolve(arg);
+            resolve(args);
         });
     });
 }
@@ -118,7 +118,7 @@ describe("SConnect", () => {
             await new Promise((r) => setTimeout(r, 50));
 
             expect(rawSentData).not.toBeNull();
-            expect(new TextDecoder().decode(rawSentData)).toBe(testMessage);
+            expect(new TextDecoder().decode(rawSentData!)).toBe(testMessage);
             expect(receivedMessages).toContain(testMessage);
 
             channelA.disconnect();
@@ -139,6 +139,7 @@ describe("SConnect", () => {
             });
             expect(result.success).toBe(false);
             if (!result.success) {
+                // @ts-ignore
                 expect(result.reason).toBe("NEEDS_PAIRING");
             }
 
@@ -299,7 +300,7 @@ describe("SConnect", () => {
             await new Promise((r) => setTimeout(r, 100));
 
             expect(rawSentData).not.toBeNull();
-            expect(new TextDecoder().decode(rawSentData)).not.toBe(testMessage);
+            expect(new TextDecoder().decode(rawSentData!)).not.toBe(testMessage);
 
             channelA.disconnect();
             channelB.disconnect();
@@ -347,7 +348,7 @@ describe("SConnect", () => {
             await new Promise((r) => setTimeout(r, 100));
 
             expect(rawSentData).not.toBeNull();
-            expect(new TextDecoder().decode(rawSentData)).toBe(testMessage);
+            expect(new TextDecoder().decode(rawSentData!)).toBe(testMessage);
             expect(receivedMessages).toContain(testMessage);
 
             channelA.disconnect();
@@ -625,6 +626,7 @@ describe("SConnect", () => {
             await channelA.init("device-a");
             await channelB.init("device-b");
 
+            // @ts-ignore
             const readyPromise = waitForEvent(channelA, "ready");
 
             await Promise.all([
@@ -640,6 +642,7 @@ describe("SConnect", () => {
 
             await readyPromise;
 
+            // @ts-ignore
             const disconnectPromise = waitForEvent(channelB, "disconnect");
             channelA.disconnect();
             await disconnectPromise;

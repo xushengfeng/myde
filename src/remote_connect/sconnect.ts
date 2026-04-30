@@ -8,9 +8,16 @@ import type {
     SecureChannel,
     SignalingAdapter,
 } from "./sconnect_type";
-import Noise from "noise-handshake";
-import Cipher from "noise-handshake/cipher";
 import { spake2 } from "./spake/index";
+import {
+    createNoise,
+    initialiseNoise,
+    sendNoise,
+    recvNoise,
+    destroyNoise,
+    createCipher,
+    type NoiseState,
+} from "./noise_utils";
 
 interface KeyPair {
     publicKey: Uint8Array;
@@ -38,9 +45,9 @@ type SecureChannelEvents = {
 export class SConnect implements SecureChannel {
     private signalAdapter: SignalingAdapter;
     private options: Required<ChannelOptions>;
-    private noise: Noise | null = null;
-    private sendCipher: Cipher | null = null;
-    private receiveCipher: Cipher | null = null;
+    private noise: NoiseState | null = null;
+    private sendCipher: ReturnType<typeof createCipher> | null = null;
+    private receiveCipher: ReturnType<typeof createCipher> | null = null;
     private PIN = "";
     private isReady = false;
     private eventHandlers: Map<string, Set<(...args: unknown[]) => void>> = new Map();
@@ -158,9 +165,7 @@ export class SConnect implements SecureChannel {
         this.receiveCipher = null;
 
         if (this.noise) {
-            if (typeof this.noise.destroy === "function") {
-                this.noise.destroy();
-            }
+            destroyNoise(this.noise);
             this.noise = null;
         }
 
@@ -176,8 +181,8 @@ export class SConnect implements SecureChannel {
         const data = new TextEncoder().encode(payload);
 
         if (this.sendCipher) {
-            const encrypted = this.sendCipher.encrypt(data as any);
-            await this.signalAdapter.send(new Uint8Array(encrypted));
+            const encrypted = this.sendCipher.encrypt(data);
+            await this.signalAdapter.send(encrypted);
         } else {
             await this.signalAdapter.send(data);
         }
@@ -191,8 +196,8 @@ export class SConnect implements SecureChannel {
         const buffer = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
 
         if (this.sendCipher) {
-            const encrypted = this.sendCipher.encrypt(buffer as any);
-            await this.signalAdapter.send(new Uint8Array(encrypted));
+            const encrypted = this.sendCipher.encrypt(buffer);
+            await this.signalAdapter.send(encrypted);
         } else {
             await this.signalAdapter.send(buffer);
         }
@@ -279,7 +284,7 @@ export class SConnect implements SecureChannel {
 
         if (this.receiveCipher) {
             try {
-                decryptedData = new Uint8Array(this.receiveCipher.decrypt(data as any));
+                decryptedData = this.receiveCipher.decrypt(data);
             } catch {
                 this.emit("binary", data.buffer as ArrayBuffer);
                 return;
@@ -560,26 +565,22 @@ export class SConnect implements SecureChannel {
         try {
             const keyPair = this.myKeyPair;
             if (!keyPair) throw new Error("No key pair");
-            const myKeyPair = {
-                publicKey: keyPair.publicKey as any,
-                secretKey: keyPair.privateKey as any,
-            };
-            this.noise = new Noise("IK", true, myKeyPair);
 
-            const prologue = new Uint8Array(0) as any;
-            const remoteStaticKey = credential.remotePublicKey as any;
-            this.noise.initialise(prologue, remoteStaticKey);
+            this.noise = createNoise("IK", true, keyPair);
 
-            const handshakeMessage = this.noise.send();
-            await this.signalAdapter.send(new Uint8Array(handshakeMessage));
+            const prologue = new Uint8Array(0);
+            initialiseNoise(this.noise, prologue, credential.remotePublicKey);
+
+            const handshakeMessage = sendNoise(this.noise);
+            await this.signalAdapter.send(handshakeMessage);
 
             const response = await this.waitForNoiseResponse();
-            this.noise.recv(response as any);
+            recvNoise(this.noise, response);
 
             if (this.noise.complete) {
                 if (!this.signalAdapter.supportNativeEncryption) {
-                    this.sendCipher = new Cipher(this.noise.tx as any);
-                    this.receiveCipher = new Cipher(this.noise.rx as any);
+                    this.sendCipher = createCipher(this.noise.tx);
+                    this.receiveCipher = createCipher(this.noise.rx);
                 }
                 this.isReady = true;
 
@@ -609,24 +610,21 @@ export class SConnect implements SecureChannel {
                 try {
                     const keyPair = this.myKeyPair;
                     if (!keyPair) throw new Error("No key pair");
-                    const myKeyPair = {
-                        publicKey: keyPair.publicKey as any,
-                        secretKey: keyPair.privateKey as any,
-                    };
-                    this.noise = new Noise("IK", false, myKeyPair);
 
-                    const prologue = new Uint8Array(0) as any;
-                    this.noise.initialise(prologue);
+                    this.noise = createNoise("IK", false, keyPair);
 
-                    this.noise.recv(data as any);
+                    const prologue = new Uint8Array(0);
+                    initialiseNoise(this.noise, prologue);
 
-                    const responseMsg = this.noise.send();
-                    this.signalAdapter.send(new Uint8Array(responseMsg));
+                    recvNoise(this.noise, data);
+
+                    const responseMsg = sendNoise(this.noise);
+                    this.signalAdapter.send(responseMsg);
 
                     if (this.noise.complete) {
                         if (!this.signalAdapter.supportNativeEncryption) {
-                            this.sendCipher = new Cipher(this.noise.tx as any);
-                            this.receiveCipher = new Cipher(this.noise.rx as any);
+                            this.sendCipher = createCipher(this.noise.tx);
+                            this.receiveCipher = createCipher(this.noise.rx);
                         }
                         this.isReady = true;
 
@@ -683,8 +681,8 @@ export class SConnect implements SecureChannel {
         key.set(secretArray.subarray(0, Math.min(16, secretArray.length)), 16);
 
         if (!this.signalAdapter.supportNativeEncryption) {
-            this.sendCipher = new Cipher(key as any);
-            this.receiveCipher = new Cipher(key as any);
+            this.sendCipher = createCipher(key);
+            this.receiveCipher = createCipher(key);
         }
     }
 
