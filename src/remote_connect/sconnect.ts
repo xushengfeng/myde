@@ -136,16 +136,12 @@ export class SConnect implements SecureChannel {
         let rejectPairing: (error: Error) => void;
         let pinAttempts = 0;
         let pairingStarted = false;
+        let responderSetup = false;
 
         const pairingPromise = new Promise<Credential>((resolve, reject) => {
             resolvePairing = resolve;
             rejectPairing = reject;
         });
-
-        // 设置服务器端等待（响应方）
-        this.setupPAKEResponder(credential, pin)
-            .then(resolvePairing)
-            .catch(rejectPairing);
 
         const inputOtherPin = (remotePin: string) => {
             if (pairingStarted) return;
@@ -164,13 +160,26 @@ export class SConnect implements SecureChannel {
             }
 
             // 作为客户端发起 PAKE 交换
-            this.performPAKEClient(credential, remotePin).then(resolvePairing).catch(rejectPairing);
+            this.performPAKEClient(credential, remotePin)
+                .then(resolvePairing)
+                .catch(rejectPairing);
+        };
+
+        const waitForPairing = () => {
+            // 如果还没有调用 inputOtherPin，则设置为响应方
+            if (!pairingStarted && !responderSetup) {
+                responderSetup = true;
+                this.setupPAKEResponder(credential, pin)
+                    .then(resolvePairing)
+                    .catch(rejectPairing);
+            }
+            return pairingPromise;
         };
 
         return {
             pin,
             inputOtherPin,
-            waitForPairing: () => pairingPromise,
+            waitForPairing,
         };
     }
 

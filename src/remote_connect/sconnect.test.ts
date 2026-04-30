@@ -182,6 +182,55 @@ describe("SConnect", () => {
             channelB.disconnect();
         });
 
+        it("PAKE 配对：B 先等待再由 A 输入 PIN", async () => {
+            const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair();
+            const channelA = new SConnect(adapterA, { handshakeTimeout: 10000 });
+            const channelB = new SConnect(adapterB, { handshakeTimeout: 10000 });
+
+            await channelA.init("device-a");
+            await channelB.init("device-b");
+
+            const receivedMessages: string[] = [];
+            channelB.on("message", (msg) => receivedMessages.push(msg));
+
+            // 双方都调用 pairInit
+            const pairingA = channelA.pairInit({
+                myDeviceId: "device-a",
+                remoteDeviceId: "device-b",
+            });
+            const pairingB = channelB.pairInit({
+                myDeviceId: "device-b",
+                remoteDeviceId: "device-a",
+            });
+
+            // B 先开始等待（设置为响应方）
+            const promiseB = pairingB.waitForPairing();
+
+            // 等一下让 B 设置好响应方
+            await new Promise((r) => setTimeout(r, 50));
+
+            // A 输入 B 的 PIN（A 作为发起方）
+            pairingA.inputOtherPin(pairingB.pin);
+
+            // A 也开始等待
+            const promiseA = pairingA.waitForPairing();
+
+            // 双方都应该完成配对
+            const [credentialA, credentialB] = await Promise.all([promiseA, promiseB]);
+
+            expect(credentialA).toBeDefined();
+            expect(credentialB).toBeDefined();
+
+            // 配对后应该能收发消息
+            await channelA.send("hello after pairing");
+            await new Promise((r) => setTimeout(r, 100));
+
+            expect(receivedMessages).toContain("hello after pairing");
+
+            channelA.disconnect();
+            channelB.disconnect();
+        });
+
         it("supportNativeEncryption=false 时消息应被加密", async () => {
             const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair(false);
             const channelA = new SConnect(adapterA, { handshakeTimeout: 10000 });
@@ -286,11 +335,17 @@ describe("SConnect", () => {
                 remoteDeviceId: "device-a",
             });
 
-            // 只有 device-a 输入 PIN
+            // B 先开始等待（设置为响应方）
+            const promiseB = pairingB.waitForPairing();
+            await new Promise((r) => setTimeout(r, 50));
+
+            // A 输入 B 的 PIN（A 作为发起方）
             pairingA.inputOtherPin(pairingB.pin);
 
-            const credentialA = await pairingA.waitForPairing();
-            const credentialB = await pairingB.waitForPairing();
+            const [credentialA, credentialB] = await Promise.all([
+                pairingA.waitForPairing(),
+                promiseB,
+            ]);
 
             // 验证 Credential 包含公钥
             expect(credentialA.myPublicKey).toBeInstanceOf(Uint8Array);
