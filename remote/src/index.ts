@@ -1,56 +1,73 @@
 import type {} from "../../src/desktop-api";
 import { RemoteRender } from "./remote-render";
-import { RemoteServer } from "./server";
+import { PeerManager, createConnectionUI } from "./server";
 
-const { MSysApi, MInputMap } = myde;
+const { MSysApi, MInputMap, MConnect, MSetting } = myde;
+
+const nSetting = MSetting.init<{
+    "remote.myId": string;
+    "remote.peers": {
+        id: string;
+        lastConnected: number;
+        type: "launcher" | "render";
+    }[];
+}>({
+    version: "0.0.1",
+    defaultNsSetting: {
+        "remote.myId": "",
+        "remote.peers": [],
+    },
+});
+
+const myId = nSetting.nget("remote.myId") || crypto.randomUUID();
+nSetting.nset("remote.myId", myId);
 
 class RemoteDesktop {
     private render: RemoteRender;
     private server: ReturnType<typeof MSysApi.server>;
-    private remoteServer: RemoteServer;
-    private currentToplevelId: string | null = null;
+    private peerManager: PeerManager;
 
     constructor() {
-        // 创建WebSocket服务器
-        this.remoteServer = new RemoteServer(8080);
-
-        // 创建远程渲染器
-        this.render = new RemoteRender(this.remoteServer);
-
-        // 创建wayland服务器
+        this.peerManager = new PeerManager(myId);
+        this.render = new RemoteRender(this.peerManager);
         this.server = MSysApi.server({ render: this.render });
 
-        // 设置启动应用处理器
-        this.remoteServer.setRunAppHandler((command: string) => {
-            this.server.runApp(command);
+        this.peerManager.setOnConnect((peerId, pin) => {
+            console.log(`Peer ${peerId} connecting, PIN: ${pin}`);
         });
 
-        // 设置输入事件处理器
-        this.remoteServer.setInputHandler((event: any, toplevelId: string | null) => {
-            this.handleInputEvent(event, toplevelId);
+        this.peerManager.setOnMessage((peerId, data) => {
+            this.handleMessage(peerId, data);
         });
 
-        // 设置关闭窗口处理器
-        this.remoteServer.setCloseWindowHandler((toplevelId: string) => {
-            this.closeWindow(toplevelId);
+        this.peerManager.setOnDisconnect((peerId) => {
+            console.log(`Peer ${peerId} disconnected`);
+            const peers = nSetting.nget("remote.peers") || [];
+            const idx = peers.findIndex((p) => p.id === peerId);
+            if (idx !== -1) {
+                peers[idx].lastConnected = Date.now();
+                nSetting.nset("remote.peers", peers);
+            }
         });
 
-        // 启动WebSocket服务器
-        this.remoteServer.start();
+        this.peerManager.start().then(() => {
+            console.log(`Remote desktop ready, ID: ${myId}`, this.peerManager.getMyPin());
+            createConnectionUI(this.peerManager);
+        });
 
         this.setupServerEvents();
     }
 
     private setupServerEvents() {
         this.server.server.on("newClient", (client, clientId) => {
-            console.log(`New client connected: ${clientId}`);
+            console.log(`New wayland client: ${clientId}`);
 
             client.onSync("windowBound", () => {
                 return { width: 1920, height: 1080 };
             });
 
             client.on("windowCreated", (windowId, renderId) => {
-                console.log(`Client ${clientId} created window ${windowId}`, renderId);
+                console.log(`Client ${clientId} created window ${windowId}`);
                 client.win(windowId)?.focus();
             });
 
@@ -61,16 +78,69 @@ class RemoteDesktop {
             client.on("windowMaximized", (windowId) => {
                 const xwin = client.win(windowId);
                 if (!xwin) return;
-
-                const width = 1920;
-                const height = 1080;
-                xwin.maximize(width, height);
+                xwin.maximize(1920, 1080);
             });
         });
 
         this.server.server.on("clientClose", (_, clientId) => {
-            console.log(`Client ${clientId} disconnected`);
+            console.log(`Wayland client ${clientId} disconnected`);
         });
+    }
+
+    private handleMessage(peerId: string, data: string) {
+        try {
+            const msg = JSON.parse(data);
+            const peer = this.peerManager.getPeer(peerId);
+            if (!peer) return;
+
+            switch (msg.type) {
+                case "inputEvent":
+                    this.handleInputEvent(msg.event, msg.event.toplevelId || null);
+                    break;
+
+                case "runApp":
+                    if (msg.command) {
+                        this.server.runApp(msg.command);
+                    }
+                    break;
+
+                case "closeWindow":
+                    if (msg.toplevelId) {
+                        this.closeWindow(msg.toplevelId);
+                    }
+                    break;
+
+                case "register":
+                    if (peer.type === "launcher") {
+                        this.render.sendToplevelListToPeer(peerId);
+                    } else if (peer.toplevelId) {
+                        this.render.sendStateForToplevel(peerId, peer.toplevelId);
+                    }
+
+                    const peers = nSetting.nget("remote.peers") || [];
+                    const existing = peers.findIndex((p) => p.id === peerId);
+                    const record = {
+                        id: peerId,
+                        lastConnected: Date.now(),
+                        type: peer.type,
+                    };
+                    if (existing !== -1) {
+                        peers[existing] = record;
+                    } else {
+                        peers.push(record);
+                    }
+                    nSetting.nset("remote.peers", peers);
+                    break;
+
+                case "requestToplevelState":
+                    if (msg.toplevelId) {
+                        this.render.sendStateForToplevel(peerId, msg.toplevelId);
+                    }
+                    break;
+            }
+        } catch (error) {
+            console.error("Error handling message:", error);
+        }
     }
 
     private handleInputEvent(event: any, toplevelId: string | null) {
@@ -108,14 +178,11 @@ class RemoteDesktop {
 
                 const renderId = xwin.point.renderId();
 
-                // 如果指定了toplevelId，只处理匹配的窗口
                 if (toplevelId && renderId !== toplevelId) continue;
 
-                // 检查鼠标是否在窗口内（简化处理，假设窗口从0,0开始）
                 const inWin = xwin.point.inWin({ x: p.x, y: p.y });
                 if (!inWin) continue;
 
-                // 发送指针事件
                 xwin.point.sendPointerEvent(
                     type,
                     new PointerEvent(`pointer${type}`, {
@@ -125,11 +192,9 @@ class RemoteDesktop {
                     }),
                 );
 
-                // 处理焦点
                 if (type === "down") {
                     xwin.focus();
                     client.offerTo();
-                    // 模糊其他窗口
                     for (const [otherWinId, _otherWin] of client.getWindows()) {
                         if (otherWinId !== winId) {
                             client.win(otherWinId)?.blur();
@@ -150,10 +215,8 @@ class RemoteDesktop {
 
                 const renderId = xwin.point.renderId();
 
-                // 如果指定了toplevelId，只处理匹配的窗口
                 if (toplevelId && renderId !== toplevelId) continue;
 
-                // 假设鼠标在窗口内（简化处理）
                 xwin.point.sendScrollEvent({
                     p: new WheelEvent("wheel", {
                         deltaX: p.deltaX,
@@ -189,5 +252,4 @@ class RemoteDesktop {
     }
 }
 
-// 初始化远程桌面
 new RemoteDesktop();

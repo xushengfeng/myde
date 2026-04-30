@@ -1,156 +1,287 @@
-const { createServer } = require("http") as typeof import("http");
-const { WebSocket, WebSocketServer } = require("ws") as typeof import("ws");
+import { SConnect } from "../../src/remote_connect/sconnect";
+import { PeerjsAdapter } from "../../src/remote_connect/peerjs_adapter";
 
-type WebSocketType = import("ws").WebSocket;
+type MessageHandler = (peerId: string, data: string) => void;
+type DisconnectHandler = (peerId: string) => void;
+type ConnectHandler = (peerId: string, pin: string) => void;
 
-interface ClientInfo {
-    ws: WebSocketType;
+export interface PeerInfo {
+    id: string;
+    connect: SConnect;
     type: "launcher" | "render";
     toplevelId: string | null;
 }
 
-export class RemoteServer {
-    private wss: InstanceType<typeof WebSocketServer>;
-    private server: ReturnType<typeof createServer>;
-    private port: number;
-    private clients = new Map<WebSocketType, ClientInfo>();
-    private onInputEvent: ((event: any, toplevelId: string | null) => void) | null = null;
-    private onRunApp: ((command: string) => void) | null = null;
-    private onNewClient: ((ws: WebSocketType, toplevelId: string | null) => void) | null = null;
-    private onCloseWindow: ((toplevelId: string) => void) | null = null;
+class NoPeerAdapter {
+    trustIdentity = false as const;
+    supportNativeEncryption = true;
+    private conn: any;
+    private messageHandler: ((data: Uint8Array) => void) | null = null;
 
-    constructor(port: number = 8080) {
-        this.port = port;
-        this.server = createServer();
-        this.wss = new WebSocketServer({ server: this.server });
-        this.setupWebSocket();
+    constructor(conn: any) {
+        this.conn = conn;
+        this.conn.on("data", (d: any) => {
+            let bytes: Uint8Array | null = null;
+            if (d instanceof Uint8Array) bytes = d;
+            else if (d instanceof ArrayBuffer) bytes = new Uint8Array(d);
+            else if (typeof d === "string") bytes = new TextEncoder().encode(d);
+
+            if (this.messageHandler) this.messageHandler(bytes);
+        });
     }
 
-    private setupWebSocket() {
-        this.wss.on("connection", (ws: WebSocketType) => {
-            // 默认为launcher
-            const clientInfo: ClientInfo = { ws, type: "launcher", toplevelId: null };
-            this.clients.set(ws, clientInfo);
-            console.log("New WebSocket connection");
+    async init(_myId: string) {}
+    async connect() {}
+    async send(data: Uint8Array) {
+        this.conn.send(data);
+    }
+    close() {
+        this.conn.close();
+    }
+    onMessage(handler: (data: Uint8Array) => void) {
+        this.messageHandler = handler;
+    }
+    onClose(handler: () => void) {
+        this.conn.on("close", handler);
+    }
+    onError(handler: (err: Error) => void) {
+        this.conn.on("error", (e: any) => handler(new Error(String(e))));
+    }
+}
 
-            ws.on("message", (message: Buffer) => {
+export class PeerManager {
+    private peers = new Map<string, PeerInfo>();
+    private adapter: PeerjsAdapter | null = null;
+    private serverId: string;
+    private myPin = "";
+
+    private onMessageHandler: MessageHandler | null = null;
+    private onDisconnectHandler: DisconnectHandler | null = null;
+    private onConnectHandler: ConnectHandler | null = null;
+
+    constructor(serverId: string) {
+        this.serverId = serverId;
+    }
+
+    async start() {
+        this.adapter = new PeerjsAdapter({ debug: 1 });
+        const connect = new SConnect(this.adapter);
+        await connect.init(this.serverId);
+
+        const peer = (this.adapter as any).peer;
+        peer.on("connection", (conn: any) => {
+            conn.on("open", () => {
+                this.handleIncomingConnection(conn);
+            });
+        });
+
+        this.myPin = connect.updatePIN();
+    }
+
+    private async handleIncomingConnection(conn: any) {
+        const remotePeerId = conn.peer;
+        if (this.peers.has(remotePeerId)) return;
+
+        console.log(`[server] incoming connection from ${remotePeerId}`);
+
+        const adapter = new NoPeerAdapter(conn);
+        const connect = new SConnect(adapter);
+        await connect.init(this.serverId);
+
+        const pairing = connect.pairInit({
+            myDeviceId: this.serverId,
+            remoteDeviceId: remotePeerId,
+        });
+
+        this.myPin = pairing.pin;
+        if (this.onConnectHandler) {
+            this.onConnectHandler(remotePeerId, this.myPin);
+        }
+
+        try {
+            await pairing.waitForPairing();
+            console.log(`[server] pairing with ${remotePeerId} succeeded`);
+        } catch (err) {
+            console.error(`[server] pairing with ${remotePeerId} failed:`, err);
+            return;
+        }
+
+        const peerInfo: PeerInfo = {
+            id: remotePeerId,
+            connect,
+            type: "launcher",
+            toplevelId: null,
+        };
+        this.peers.set(remotePeerId, peerInfo);
+
+        connect.on("message", (payload: string) => {
+            try {
+                const msg = JSON.parse(payload);
+                if (msg.type === "register") {
+                    peerInfo.type = msg.clientType || "launcher";
+                    peerInfo.toplevelId = msg.toplevelId || null;
+                }
+            } catch {}
+            if (this.onMessageHandler) {
                 try {
-                    const data = JSON.parse(message.toString());
-                    this.handleWebSocketMessage(ws, data, clientInfo);
-                } catch (error) {
-                    console.error("Error parsing WebSocket message:", error);
+                    this.onMessageHandler(remotePeerId, payload);
+                } catch (err) {
+                    console.error("[server] onMessageHandler threw:", err);
                 }
-            });
+            }
+        });
 
-            ws.on("close", () => {
-                this.clients.delete(ws);
-                console.log("WebSocket connection closed");
-            });
+        connect.on("disconnect", () => {
+            this.peers.delete(remotePeerId);
+            if (this.onDisconnectHandler) {
+                this.onDisconnectHandler(remotePeerId);
+            }
+        });
+
+        connect.on("error", (err: Error) => {
+            console.error(`Peer ${remotePeerId} error:`, err);
         });
     }
 
-    private handleWebSocketMessage(ws: WebSocketType, data: any, clientInfo: ClientInfo) {
-        switch (data.type) {
-            case "register":
-                // 客户端注册自己的类型和toplevelId
-                clientInfo.type = data.clientType || "launcher";
-                clientInfo.toplevelId = data.toplevelId || null;
-                console.log(
-                    `Client registered as ${clientInfo.type}${clientInfo.toplevelId ? ` for toplevel ${clientInfo.toplevelId}` : ""}`,
-                );
+    getMyPin(): string {
+        return this.myPin;
+    }
 
-                if (this.onNewClient) {
-                    this.onNewClient(ws, clientInfo.toplevelId);
-                }
-                break;
+    getServerId(): string {
+        return this.serverId;
+    }
 
-            case "inputEvent":
-                if (this.onInputEvent) {
-                    this.onInputEvent(data.event, clientInfo.toplevelId);
-                }
-                break;
+    getPeer(id: string): PeerInfo | undefined {
+        return this.peers.get(id);
+    }
 
-            case "runApp":
-                if (data.command && this.onRunApp) {
-                    console.log("Run app:", data.command);
-                    this.onRunApp(data.command);
-                }
-                break;
+    getAllPeers(): PeerInfo[] {
+        return Array.from(this.peers.values());
+    }
 
-            case "closeWindow":
-                if (data.toplevelId && this.onCloseWindow) {
-                    console.log("Close window:", data.toplevelId);
-                    this.onCloseWindow(data.toplevelId);
-                }
-                break;
+    sendMessage(peerId: string, message: any): void {
+        const peer = this.peers.get(peerId);
+        if (peer) {
+            peer.connect.send(JSON.stringify(message)).catch(() => {});
         }
     }
 
-    public setInputHandler(handler: (event: any, toplevelId: string | null) => void) {
-        this.onInputEvent = handler;
-    }
-
-    public setRunAppHandler(handler: (command: string) => void) {
-        this.onRunApp = handler;
-    }
-
-    public setOnNewClient(handler: (ws: WebSocketType, toplevelId: string | null) => void) {
-        this.onNewClient = handler;
-    }
-
-    public setCloseWindowHandler(handler: (toplevelId: string) => void) {
-        this.onCloseWindow = handler;
-    }
-
-    // 广播消息，可指定toplevelId过滤
-    public broadcast(message: any, toplevelId?: string | null) {
+    broadcast(message: any, toplevelId?: string | null): void {
         const msgStr = JSON.stringify(message);
-
-        this.clients.forEach((client, ws) => {
-            if (ws.readyState !== WebSocket.OPEN) return;
-
-            // launcher接收所有消息
-            if (client.type === "launcher") {
-                ws.send(msgStr);
-                return;
-            }
-
-            // render只接收自己的toplevel消息
-            if (client.type === "render") {
-                if (toplevelId && client.toplevelId === toplevelId) {
-                    ws.send(msgStr);
-                } else if (!toplevelId) {
-                    ws.send(msgStr);
+        for (const [_id, peer] of this.peers) {
+            if (peer.type === "launcher") {
+                peer.connect.send(msgStr).catch(() => {});
+            } else if (peer.type === "render") {
+                if (!toplevelId || peer.toplevelId === toplevelId) {
+                    peer.connect.send(msgStr).catch(() => {});
                 }
             }
-        });
-    }
-
-    // 发送消息给特定客户端
-    public sendTo(ws: WebSocketType, message: any) {
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify(message));
         }
     }
 
-    // 获取所有launcher客户端
-    public getLauncherClients(): WebSocketType[] {
-        const result: WebSocketType[] = [];
-        this.clients.forEach((client, ws) => {
-            if (client.type === "launcher") {
-                result.push(ws);
-            }
-        });
-        return result;
+    setOnMessage(handler: MessageHandler) {
+        this.onMessageHandler = handler;
     }
 
-    public start() {
-        this.server.listen(this.port, () => {
-            console.log(`WebSocket server running on ws://localhost:${this.port}`);
+    setOnDisconnect(handler: DisconnectHandler) {
+        this.onDisconnectHandler = handler;
+    }
+
+    setOnConnect(handler: ConnectHandler) {
+        this.onConnectHandler = handler;
+    }
+
+    destroy() {
+        for (const [_id, peer] of this.peers) {
+            peer.connect.disconnect();
+        }
+        this.peers.clear();
+        if (this.adapter) {
+            this.adapter.close();
+            this.adapter = null;
+        }
+    }
+}
+
+export function createConnectionUI(manager: PeerManager) {
+    const style = document.createElement("style");
+    style.textContent = `
+        .conn-panel {
+            position: fixed;
+            bottom: 16px;
+            right: 16px;
+            background: #1e1e1e;
+            color: #ccc;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 14px 18px;
+            font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            z-index: 99999;
+            min-width: 260px;
+            box-shadow: 0 4px 20px rgba(0,0,0,.5);
+        }
+        .conn-panel h3 { margin: 0 0 8px; font-size: 14px; color: #fff; }
+        .conn-panel .row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+        .conn-panel .label { color: #888; }
+        .conn-panel .val { color: #4caf50; font-family: monospace; user-select: all; }
+        .conn-panel .peers-section { margin-top: 10px; border-top: 1px solid #333; padding-top: 8px; }
+        .conn-panel .peer-item { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 12px; }
+        .conn-panel .peer-id { font-family: monospace; color: #aaa; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+        .conn-panel .peer-type { margin: 0 8px; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+        .conn-panel .peer-type.launcher { background: #1b5e20; color: #a5d6a7; }
+        .conn-panel .peer-type.render { background: #0d47a1; color: #90caf9; }
+        .conn-panel .disconnect-btn { background: none; border: 1px solid #555; color: #ef5350; border-radius: 3px; padding: 1px 6px; cursor: pointer; font-size: 11px; }
+        .conn-panel .disconnect-btn:hover { background: #b71c1c22; }
+        .conn-panel .empty { color: #555; font-size: 12px; }
+    `;
+    document.head.appendChild(style);
+
+    const panel = document.createElement("div");
+    panel.className = "conn-panel";
+    document.body.appendChild(panel);
+
+    function render() {
+        const peers = manager.getAllPeers();
+        let peersHtml = '<div class="empty">No connected peers</div>';
+        if (peers.length > 0) {
+            peersHtml = peers
+                .map(
+                    (p) => `
+                <div class="peer-item">
+                    <span class="peer-id" title="${p.id}">${p.id.slice(0, 12)}…</span>
+                    <span class="peer-type ${p.type}">${p.type}</span>
+                    <button class="disconnect-btn" data-id="${p.id}">×</button>
+                </div>`,
+                )
+                .join("");
+        }
+
+        panel.innerHTML = `
+            <h3>Connection</h3>
+            <div class="row"><span class="label">Server ID</span><span class="val">${manager.getServerId()}</span></div>
+            <div class="row"><span class="label">PIN</span><span class="val">${manager.getMyPin() || "…"}</span></div>
+            <div class="peers-section">
+                <div class="row"><span class="label">Peers (${peers.length})</span></div>
+                ${peersHtml}
+            </div>
+        `;
+
+        panel.querySelectorAll(".disconnect-btn").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                const id = (btn as HTMLElement).dataset.id;
+                if (id) {
+                    const peer = manager.getPeer(id);
+                    if (peer) peer.connect.disconnect();
+                }
+            });
         });
     }
 
-    public stop() {
-        this.server.close();
-    }
+    manager.setOnConnect((peerId, pin) => {
+        render();
+    });
+    manager.setOnDisconnect(() => {
+        render();
+    });
+    render();
 }

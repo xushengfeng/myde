@@ -1,4 +1,17 @@
-interface CanvasData {
+import { SConnect } from "../../../src/remote_connect";
+import { PeerjsAdapter } from "../../../src/remote_connect/peerjs_adapter";
+
+class ReusingPeerjsAdapter extends PeerjsAdapter {
+    private connecting = false;
+    async connect(id: string): Promise<void> {
+        if ((this as any).connection && !this.connecting) return;
+        this.connecting = true;
+        await super.connect(id);
+        this.connecting = false;
+    }
+}
+
+interface ServerMsg {
     type: string;
     canvasId?: string;
     width?: number;
@@ -16,500 +29,345 @@ interface CanvasData {
     toplevels?: Array<{ id: string; surfaceId: string }>;
 }
 
-class RemoteDesktop {
-    private ws: WebSocket | null = null;
+function getOrCreateDeviceId(): string {
+    let id = localStorage.getItem("myde-remote-device-id");
+    if (!id) { id = crypto.randomUUID(); localStorage.setItem("myde-remote-device-id", id); }
+    return id;
+}
+
+class App {
+    private connect: SConnect;
+    private myDeviceId: string;
+    private myPin = "";
+    private connected = false;
+    private focusedToplevelId: string | null = null;
+
     private canvasMap = new Map<string, HTMLCanvasElement>();
-    private toplevels = new Set<string>();
-    private mode: "launcher" | "render" = "launcher";
-    private toplevelId: string | null = null;
+    private surfaceMap = new Map<string, { el: HTMLElement; toplevelId: string | null }>();
+    private toplevelEls = new Map<string, HTMLElement>();
 
     constructor() {
-        // 从URL判断模式
-        const urlParams = new URLSearchParams(window.location.search);
-        this.toplevelId = urlParams.get("toplevelId");
-
-        if (this.toplevelId) {
-            this.mode = "render";
-            document.title = `Render: ${this.toplevelId}`;
-            this.showView("render");
-        } else {
-            this.mode = "launcher";
-            document.title = "MyDE Remote Desktop - Launcher";
-            this.showView("launcher");
-            this.setupLauncherEvents();
-        }
-
-        this.connect();
+        this.myDeviceId = getOrCreateDeviceId();
+        this.connect = new SConnect(new ReusingPeerjsAdapter());
+        this.buildUI();
+        this.initConnect();
+        this.setupGlobalKeys();
     }
 
-    private showView(mode: "launcher" | "render") {
-        const launcherView = document.getElementById("launcher-view");
-        const renderView = document.getElementById("render-view");
+    // ==================== UI ====================
 
-        if (mode === "launcher") {
-            if (launcherView) launcherView.style.display = "block";
-            if (renderView) renderView.style.display = "none";
-        } else {
-            if (launcherView) launcherView.style.display = "none";
-            if (renderView) renderView.style.display = "block";
-        }
-    }
+    private buildUI() {
+        const style = document.createElement("style");
+        style.textContent = `
+            * { margin:0; padding:0; box-sizing:border-box; }
+            body { background:#111; color:#ccc; font:13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; overflow-x:hidden; }
+            #conn { background:#1a1a1a; padding:16px; border-bottom:1px solid #333; }
+            #conn.collapsed { padding:6px 16px; }
+            #conn-head { display:flex; align-items:center; gap:12px; cursor:pointer; }
+            #conn-head h2 { font-size:15px; flex:1; }
+            #conn-body { margin-top:12px; display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; }
+            #conn.collapsed #conn-body { display:none; }
+            .f { display:flex; flex-direction:column; gap:3px; }
+            .f label { font-size:11px; color:#888; }
+            .f input { padding:6px 10px; border:1px solid #444; border-radius:4px; background:#2a2a2a; color:#fff; font-size:13px; font-family:monospace; }
+            .f input:focus { outline:none; border-color:#2196F3; }
+            .f input.pin { width:100px; }
+            .id-row { display:flex; gap:20px; }
+            .id-row .v { font-family:monospace; color:#4caf50; user-select:all; }
+            .id-row label { font-size:11px; color:#888; }
+            button { padding:6px 14px; border:1px solid #444; border-radius:4px; background:#2a2a2a; color:#fff; cursor:pointer; font-size:13px; }
+            button:hover { background:#3a3a3a; }
+            #status { font-size:12px; padding:3px 8px; border-radius:4px; }
+            #status.on { background:rgba(76,175,80,.25); color:#4caf50; }
+            #status.off { background:rgba(244,67,54,.2); color:#f44336; }
+            #wins { display:flex; flex-wrap:wrap; gap:8px; padding:12px; align-items:flex-start; }
+            .tile { background:#000; border:1px solid #333; border-radius:6px; overflow:hidden; flex:0 0 auto; }
+            .tile.active { border-color:#2196F3; }
+            .tile .bar { background:#1e1e1e; padding:3px 8px; font-size:11px; color:#aaa; display:flex; justify-content:space-between; align-items:center; }
+            .tile .bar button { padding:0 5px; font-size:11px; background:none; border:1px solid #555; color:#ef5350; }
+            .tile .carea { position:relative; overflow:hidden; }
+            .tile .carea canvas { display:block; position:absolute; }
+        `;
+        document.head.appendChild(style);
 
-    private connect() {
-        const wsUrl = `ws://${location.hostname}:8080`;
-        this.ws = new WebSocket(wsUrl);
-        this.ws.binaryType = "arraybuffer";
-
-        this.ws.onopen = () => {
-            console.log("WebSocket connected");
-            this.updateStatus("Connected", true);
-
-            // 注册客户端类型
-            this.ws?.send(
-                JSON.stringify({
-                    type: "register",
-                    clientType: this.mode,
-                    toplevelId: this.toplevelId,
-                }),
-            );
-        };
-
-        this.ws.onmessage = (event) => {
-            this.handleMessage(event.data);
-        };
-
-        this.ws.onclose = () => {
-            console.log("WebSocket disconnected");
-            this.updateStatus("Disconnected", false);
-            setTimeout(() => this.connect(), 3000);
-        };
-
-        this.ws.onerror = (error) => {
-            console.error("WebSocket error:", error);
-            this.updateStatus("Error", false);
-        };
-    }
-
-    private updateStatus(status: string, connected: boolean) {
-        const statusElement = document.querySelector(`#${this.mode}-view #status`);
-        if (statusElement) {
-            statusElement.textContent = status;
-            statusElement.className = connected ? "connected" : "disconnected";
-        }
-    }
-
-    private handleMessage(data: any) {
-        try {
-            const message: CanvasData = JSON.parse(data);
-
-            switch (message.type) {
-                // Launcher messages
-                case "toplevelList":
-                    if (this.mode === "launcher" && message.toplevels) {
-                        this.updateToplevelList(message.toplevels);
-                    }
-                    break;
-
-                case "asToplevel":
-                    if (this.mode === "launcher" && message.toplevelId) {
-                        this.addToplevel(message.toplevelId);
-                    }
-                    break;
-
-                case "destroyXdgSurfaceEle":
-                    if (this.mode === "launcher" && message.surfaceType === "toplevel") {
-                        this.removeToplevel(message.surfaceId || "");
-                    } else if (this.mode === "render" && message.surfaceId) {
-                        this.destroyXdgSurface(message.surfaceId);
-                    }
-                    break;
-
-                // Render messages
-                case "bindCanvas":
-                    if (this.mode === "render" && message.canvasId) {
-                        this.createCanvas(message.canvasId);
-                    }
-                    break;
-
-                case "canvas":
-                    if (this.mode === "render" && message.canvasId && message.width && message.height && message.data) {
-                        this.updateCanvas(message.canvasId, message.width, message.height, message.data);
-                    }
-                    break;
-
-                case "destroyCanvas":
-                    if (this.mode === "render" && message.canvasId) {
-                        this.destroyCanvas(message.canvasId);
-                    }
-                    break;
-
-                case "setCanvasAnchor":
-                    if (this.mode === "render" && message.canvasId && message.parentId) {
-                        this.setCanvasAnchor(message.canvasId, message.parentId);
-                    }
-                    break;
-
-                case "setCanvasOffset":
-                    if (
-                        this.mode === "render" &&
-                        message.canvasId &&
-                        message.x !== undefined &&
-                        message.y !== undefined
-                    ) {
-                        this.setCanvasOffset(message.canvasId, message.x, message.y);
-                    }
-                    break;
-
-                case "setBufferOffset":
-                    if (
-                        this.mode === "render" &&
-                        message.canvasId &&
-                        message.x !== undefined &&
-                        message.y !== undefined
-                    ) {
-                        this.setBufferOffset(message.canvasId, message.x, message.y);
-                    }
-                    break;
-
-                case "createXdgSurfaceEle":
-                    if (this.mode === "render" && message.surfaceId && message.canvasId) {
-                        const desktop = document.getElementById("desktop");
-                        if (!desktop?.innerHTML)
-                            // 渲染好的界面不需要添加其他窗口了
-                            this.createXdgSurface(message.surfaceId, message.canvasId);
-                    }
-                    break;
-
-                case "setXdgSurfaceGeo":
-                    if (
-                        this.mode === "render" &&
-                        message.surfaceId &&
-                        message.width &&
-                        message.height &&
-                        message.offsetX !== undefined &&
-                        message.offsetY !== undefined
-                    ) {
-                        this.setXdgSurfaceGeo(
-                            message.surfaceId,
-                            message.width,
-                            message.height,
-                            message.offsetX,
-                            message.offsetY,
-                        );
-                    }
-                    break;
-
-                case "addPopupToXdgSurface":
-                    if (this.mode === "render" && message.popupId && message.toplevelId) {
-                        this.addPopupToXdgSurface(message.popupId, message.toplevelId);
-                    }
-                    break;
-
-                case "setPopupPosi":
-                    if (
-                        this.mode === "render" &&
-                        message.popupId &&
-                        message.x !== undefined &&
-                        message.y !== undefined
-                    ) {
-                        this.setPopupPosi(message.popupId, message.x, message.y);
-                    }
-                    break;
-            }
-        } catch (error) {
-            console.error("Error parsing message:", error);
-        }
-    }
-
-    // Launcher methods
-    private updateToplevelList(toplevels: Array<{ id: string; surfaceId: string }>) {
-        this.toplevels.clear();
-        for (const t of toplevels) {
-            this.toplevels.add(t.id);
-        }
-        this.renderToplevelList();
-    }
-
-    private addToplevel(toplevelId: string) {
-        if (!this.toplevels.has(toplevelId)) {
-            this.toplevels.add(toplevelId);
-            this.renderToplevelList();
-        }
-    }
-
-    private removeToplevel(toplevelId: string) {
-        if (this.toplevels.has(toplevelId)) {
-            this.toplevels.delete(toplevelId);
-            this.renderToplevelList();
-        }
-    }
-
-    private renderToplevelList() {
-        const container = document.getElementById("toplevel-list");
-        if (!container) return;
-
-        if (this.toplevels.size === 0) {
-            container.innerHTML = '<div style="color: #666; font-size: 14px;">No windows</div>';
-            return;
-        }
-
-        container.innerHTML = "";
-        for (const toplevelId of this.toplevels) {
-            const item = document.createElement("div");
-            item.className = "toplevel-item";
-            item.innerHTML = `
-                <div class="id">${toplevelId}</div>
-                <div style="display: flex; gap: 4px;">
-                    <button class="open-btn">Open in new tab</button>
-                    <button class="close-btn">Close</button>
+        document.body.innerHTML = `
+            <div id="conn">
+                <div id="conn-head"><h2>MyDE Remote</h2><span id="status" class="off">Disconnected</span></div>
+                <div id="conn-body">
+                    <div class="id-row">
+                        <div><label>My ID</label><div class="v" id="my-id">...</div></div>
+                        <div><label>PIN</label><div class="v" id="my-pin">...</div></div>
+                    </div>
+                    <div class="f"><label>Remote ID</label><input id="rid" placeholder="server device ID"></div>
+                    <div class="f"><label>Remote PIN</label><input id="rpin" class="pin" placeholder="6-digit" maxlength="6"></div>
+                    <button id="cbtn">Connect</button>
+                    <div class="f"><label>Run App</label><div style="display:flex;gap:6px"><input id="cmd" placeholder="e.g. weston-terminal"><button id="rbtn">Run</button></div></div>
                 </div>
-            `;
+            </div>
+            <div id="wins"></div>
+        `;
 
-            const openBtn = item.querySelector(".open-btn");
-            if (openBtn) {
-                openBtn.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    this.openToplevel(toplevelId);
-                });
+        const ridInput = document.getElementById("rid") as HTMLInputElement;
+        ridInput.value = localStorage.getItem("myde-remote-id") || "";
+
+        document.getElementById("conn-head")!.onclick = () => {
+            if (this.connected) document.getElementById("conn")!.classList.toggle("collapsed");
+        };
+        const go = () => {
+            const id = (document.getElementById("rid") as HTMLInputElement).value.trim();
+            const pin = (document.getElementById("rpin") as HTMLInputElement).value.trim();
+            if (id && pin) {
+                localStorage.setItem("myde-remote-id", id);
+                this.connectToServer(id, pin);
             }
+        };
+        document.getElementById("cbtn")!.onclick = go;
+        document.getElementById("rpin")!.onkeydown = (e) => { if (e.key === "Enter") go(); };
+        const run = () => {
+            const inp = document.getElementById("cmd") as HTMLInputElement;
+            if (inp.value.trim()) { this.connect.send(JSON.stringify({ type: "runApp", command: inp.value.trim() })); inp.value = ""; }
+        };
+        document.getElementById("rbtn")!.onclick = run;
+        document.getElementById("cmd")!.onkeydown = (e) => { if (e.key === "Enter") run(); };
+    }
 
-            const closeBtn = item.querySelector(".close-btn");
-            if (closeBtn) {
-                closeBtn.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    this.closeToplevel(toplevelId);
-                });
-            }
+    private setStatus(s: string, ok: boolean) {
+        const el = document.getElementById("status")!;
+        el.textContent = s; el.className = ok ? "on" : "off";
+    }
 
-            item.addEventListener("click", () => {
-                this.openToplevel(toplevelId);
-            });
+    // ==================== Connect ====================
 
-            container.appendChild(item);
+    private async initConnect() {
+        await this.connect.init(this.myDeviceId);
+        this.myPin = this.connect.updatePIN();
+        document.getElementById("my-id")!.textContent = this.myDeviceId;
+        document.getElementById("my-pin")!.textContent = this.myPin;
+    }
+
+    private async connectToServer(remoteId: string, remotePin: string) {
+        const p = this.connect.pairInit({ myDeviceId: this.myDeviceId, remoteDeviceId: remoteId });
+        this.myPin = p.pin;
+        document.getElementById("my-pin")!.textContent = this.myPin;
+        p.inputOtherPin(remotePin);
+        try {
+            await p.waitForPairing();
+            this.connected = true;
+            this.setStatus("Connected", true);
+            document.getElementById("conn")!.classList.add("collapsed");
+            this.onConnected();
+        } catch (err) {
+            console.error("pairing failed:", err);
+            this.setStatus("Pairing Failed", false);
         }
     }
 
-    private openToplevel(toplevelId: string) {
-        const url = `/?toplevelId=${encodeURIComponent(toplevelId)}`;
-        window.open(url, "_blank");
-    }
+    private onConnected() {
+        this.connect.send(JSON.stringify({ type: "register", clientType: "launcher" }));
+        this.connect.on("message", (s: string) => this.onServerMsg(s));
+        this.connect.on("disconnect", () => {
+            this.connected = false;
+            this.setStatus("Disconnected", false);
+            document.getElementById("conn")!.classList.remove("collapsed");
+            setTimeout(() => {
+                const id = (document.getElementById("rid") as HTMLInputElement).value;
+                const pin = (document.getElementById("rpin") as HTMLInputElement).value;
+                if (id && pin) this.connectToServer(id, pin);
+            }, 3000);
+        });
+        this.connect.on("error", (e) => { console.error(e); this.setStatus("Error", false); });
 
-    private closeToplevel(toplevelId: string) {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: "closeWindow", toplevelId }));
+        // 重连恢复：为已有窗口请求状态
+        for (const tid of this.toplevelEls.keys()) {
+            this.connect.send(JSON.stringify({ type: "requestToplevelState", toplevelId: tid }));
         }
     }
 
-    private runApp(command: string) {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: "runApp", command }));
-        }
-    }
+    // ==================== Server messages ====================
 
-    private setupLauncherEvents() {
-        const runAppButton = document.getElementById("run-app");
-        const appCommandInput = document.getElementById("app-command") as HTMLInputElement;
-
-        if (runAppButton && appCommandInput) {
-            runAppButton.addEventListener("click", () => {
-                const command = appCommandInput.value.trim();
-                if (command) {
-                    this.runApp(command);
-                    appCommandInput.value = "";
-                }
-            });
-
-            appCommandInput.addEventListener("keydown", (e) => {
-                if (e.key === "Enter") {
-                    const command = appCommandInput.value.trim();
-                    if (command) {
-                        this.runApp(command);
-                        appCommandInput.value = "";
+    private onServerMsg(raw: string) {
+        try {
+            const m: ServerMsg = JSON.parse(raw);
+            switch (m.type) {
+                case "toplevelList":
+                    if (m.toplevels) {
+                        const ids = new Set(m.toplevels.map((t) => t.id));
+                        for (const id of this.toplevelEls.keys()) if (!ids.has(id)) this.removeToplevel(id);
+                        for (const t of m.toplevels) this.ensureToplevel(t.id);
                     }
-                }
-            });
-        }
-    }
-
-    // Render methods
-    private createCanvas(canvasId: string) {
-        if (this.canvasMap.has(canvasId)) return;
-
-        const canvas = document.createElement("canvas");
-        canvas.id = canvasId;
-        canvas.style.position = "absolute";
-        this.canvasMap.set(canvasId, canvas);
-    }
-
-    private updateCanvas(canvasId: string, width: number, height: number, data: number[]) {
-        if (width <= 0 || height <= 0 || !data || data.length === 0) return;
-
-        let canvas = this.canvasMap.get(canvasId);
-        if (!canvas || !canvas.isConnected) {
-            this.createCanvas(canvasId);
-            canvas = this.canvasMap.get(canvasId);
-        }
-
-        if (!canvas) return;
-
-        canvas.width = width;
-        canvas.height = height;
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        const imageData = new ImageData(new Uint8ClampedArray(data), width, height);
-        ctx.putImageData(imageData, 0, 0);
-    }
-
-    private destroyCanvas(canvasId: string) {
-        const canvas = this.canvasMap.get(canvasId);
-        if (canvas) {
-            canvas.remove();
-            this.canvasMap.delete(canvasId);
-        }
-    }
-
-    private setCanvasAnchor(canvasId: string, parentId: string) {
-        const canvas = this.canvasMap.get(canvasId);
-        const parent = this.canvasMap.get(parentId);
-        if (canvas && parent) {
-            parent.parentElement?.appendChild(canvas);
-        }
-    }
-
-    private setCanvasOffset(canvasId: string, x: number, y: number) {
-        const canvas = this.canvasMap.get(canvasId);
-        if (canvas) {
-            canvas.style.left = `${x}px`;
-            canvas.style.top = `${y}px`;
-        }
-    }
-
-    private setBufferOffset(canvasId: string, x: number, y: number) {
-        const canvas = this.canvasMap.get(canvasId);
-        if (canvas) {
-            canvas.style.left = `${x}px`;
-            canvas.style.top = `${y}px`;
-        }
-    }
-
-    private createXdgSurface(surfaceId: string, canvasId: string) {
-        const canvas = this.canvasMap.get(canvasId);
-        if (!canvas) return;
-
-        const surface = document.createElement("div");
-        surface.id = surfaceId;
-        surface.className = "canvas-container";
-        surface.appendChild(canvas);
-
-        const desktop = document.getElementById("desktop");
-        if (desktop) {
-            desktop.appendChild(surface);
-        }
-    }
-
-    private destroyXdgSurface(surfaceId: string) {
-        const surface = document.getElementById(surfaceId);
-        if (surface) {
-            surface.remove();
-        }
-    }
-
-    private setXdgSurfaceGeo(surfaceId: string, width: number, height: number, offsetX: number, offsetY: number) {
-        const surface = document.getElementById(surfaceId);
-        if (surface) {
-            surface.style.width = `${width}px`;
-            surface.style.height = `${height}px`;
-            const canvas = surface.querySelector("canvas");
-            if (canvas) {
-                canvas.style.left = `-${offsetX}px`;
-                canvas.style.top = `-${offsetY}px`;
+                    break;
+                case "asToplevel":
+                    if (m.surfaceId) this.ensureToplevel(m.surfaceId);
+                    break;
+                case "destroyXdgSurfaceEle":
+                    if (m.surfaceId) { this.destroySurface(m.surfaceId); this.removeToplevel(m.surfaceId); }
+                    break;
+                case "bindCanvas":
+                    if (m.canvasId) this.createCanvas(m.canvasId, m.toplevelId);
+                    break;
+                case "canvas":
+                    if (m.canvasId && m.width && m.height && m.data) this.updateCanvas(m.canvasId, m.width, m.height, m.data);
+                    break;
+                case "destroyCanvas":
+                    if (m.canvasId) this.destroyCanvas(m.canvasId);
+                    break;
+                case "setCanvasAnchor":
+                    if (m.canvasId && m.parentId) this.setCanvasAnchor(m.canvasId, m.parentId);
+                    break;
+                case "setCanvasOffset":
+                case "setBufferOffset":
+                    if (m.canvasId && m.x !== undefined && m.y !== undefined) this.setCanvasOffset(m.canvasId, m.x, m.y);
+                    break;
+                case "createXdgSurfaceEle":
+                    if (m.surfaceId && m.canvasId) this.createSurface(m.surfaceId, m.canvasId, m.toplevelId);
+                    break;
+                case "setXdgSurfaceGeo":
+                    if (m.surfaceId && m.width && m.height && m.offsetX !== undefined && m.offsetY !== undefined)
+                        this.setSurfaceGeo(m.surfaceId, m.width, m.height, m.offsetX, m.offsetY);
+                    break;
+                case "addPopupToXdgSurface":
+                    if (m.popupId && m.toplevelId) this.addPopup(m.popupId, m.toplevelId);
+                    break;
+                case "setPopupPosi":
+                    if (m.popupId && m.x !== undefined && m.y !== undefined) this.setPopupPosi(m.popupId, m.x, m.y);
+                    break;
             }
+        } catch {}
+    }
+
+    // ==================== Toplevel ====================
+
+    private ensureToplevel(tid: string) {
+        if (this.toplevelEls.has(tid)) return;
+        const tile = document.createElement("div");
+        tile.className = "tile";
+        tile.innerHTML = `<div class="bar"><span>${tid.slice(0, 12)}…</span><button>×</button></div><div class="carea"></div>`;
+        tile.querySelector("button")!.onclick = () => this.connect.send(JSON.stringify({ type: "closeWindow", toplevelId: tid }));
+        tile.onpointerdown = () => {
+            this.focusedToplevelId = tid;
+            for (const [id, t] of this.toplevelEls) t.classList.toggle("active", id === tid);
+        };
+        this.setupTileInput(tile.querySelector(".carea") as HTMLElement, tid);
+        this.toplevelEls.set(tid, tile);
+        document.getElementById("wins")!.appendChild(tile);
+
+        if (this.connected) {
+            this.connect.send(JSON.stringify({ type: "requestToplevelState", toplevelId: tid }));
         }
     }
 
-    private addPopupToXdgSurface(popupId: string, toplevelId: string) {
-        const popup = document.getElementById(popupId);
-        const toplevel = document.getElementById(toplevelId);
-        if (popup && toplevel) {
-            toplevel.appendChild(popup);
+    private removeToplevel(tid: string) {
+        const el = this.toplevelEls.get(tid);
+        if (el) { el.remove(); this.toplevelEls.delete(tid); }
+        if (this.focusedToplevelId === tid) this.focusedToplevelId = null;
+    }
+
+    private area(tid?: string | null): HTMLElement | null {
+        if (!tid) return null;
+        const t = this.toplevelEls.get(tid);
+        return t ? (t.querySelector(".carea") as HTMLElement) : null;
+    }
+
+    // ==================== Canvas / Surface ====================
+
+    private createCanvas(cid: string, tid?: string) {
+        if (this.canvasMap.has(cid)) return;
+        const c = document.createElement("canvas");
+        c.style.position = "absolute";
+        this.canvasMap.set(cid, c);
+        this.area(tid)?.appendChild(c);
+    }
+
+    private updateCanvas(cid: string, w: number, h: number, data: number[]) {
+        if (w <= 0 || h <= 0 || !data?.length) return;
+        const c = this.canvasMap.get(cid);
+        if (!c?.isConnected) return;
+        c.width = w; c.height = h;
+        const ctx = c.getContext("2d");
+        if (ctx) ctx.putImageData(new ImageData(new Uint8ClampedArray(data), w, h), 0, 0);
+    }
+
+    private destroyCanvas(cid: string) {
+        const c = this.canvasMap.get(cid);
+        if (c) { c.remove(); this.canvasMap.delete(cid); }
+    }
+
+    private setCanvasAnchor(cid: string, pid: string) {
+        const c = this.canvasMap.get(cid), p = this.canvasMap.get(pid);
+        if (c && p) p.parentElement?.appendChild(c);
+    }
+
+    private setCanvasOffset(cid: string, x: number, y: number) {
+        const c = this.canvasMap.get(cid);
+        if (c) { c.style.left = `${x}px`; c.style.top = `${y}px`; }
+    }
+
+    private createSurface(sid: string, cid: string, tid?: string) {
+        const canvas = this.canvasMap.get(cid);
+        const el = document.createElement("div");
+        el.style.position = "absolute";
+        if (canvas) el.appendChild(canvas);
+        this.surfaceMap.set(sid, { el, toplevelId: tid || null });
+        this.area(tid)?.appendChild(el);
+    }
+
+    private destroySurface(sid: string) {
+        const s = this.surfaceMap.get(sid);
+        if (s) { s.el.remove(); this.surfaceMap.delete(sid); }
+    }
+
+    private setSurfaceGeo(sid: string, w: number, h: number, ox: number, oy: number) {
+        const s = this.surfaceMap.get(sid);
+        if (!s) return;
+        s.el.style.width = `${w}px`;
+        s.el.style.height = `${h}px`;
+        const c = s.el.querySelector("canvas");
+        if (c) { c.style.left = `-${ox}px`; c.style.top = `-${oy}px`; }
+        if (s.toplevelId) {
+            const a = this.area(s.toplevelId);
+            if (a) { a.style.width = `${w}px`; a.style.height = `${h}px`; }
         }
     }
 
-    private setPopupPosi(popupId: string, x: number, y: number) {
-        const popup = document.getElementById(popupId);
-        if (popup) {
-            popup.style.position = "absolute";
-            popup.style.left = `${x}px`;
-            popup.style.top = `${y}px`;
-        }
+    private addPopup(pid: string, tid: string) {
+        const el = document.createElement("div");
+        el.style.position = "absolute";
+        el.id = pid;
+        this.area(tid)?.appendChild(el);
     }
 
-    sendInputEvent(event: any) {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: "inputEvent", event }));
-        }
+    private setPopupPosi(pid: string, x: number, y: number) {
+        const el = document.getElementById(pid);
+        if (el) { el.style.left = `${x}px`; el.style.top = `${y}px`; }
+    }
+
+    // ==================== Input ====================
+
+    private setupTileInput(area: HTMLElement, tid: string) {
+        const send = (ev: any) => {
+            ev.toplevelId = tid;
+            this.connect.send(JSON.stringify({ type: "inputEvent", event: ev }));
+        };
+        const rel = (e: PointerEvent | WheelEvent) => {
+            const r = area.getBoundingClientRect();
+            return { x: e.clientX - r.left, y: e.clientY - r.top };
+        };
+        area.addEventListener("pointerdown", (e) => { e.preventDefault(); const p = rel(e); send({ type: "pointerdown", x: p.x, y: p.y, button: (e as PointerEvent).button }); });
+        area.addEventListener("pointerup", (e) => { const p = rel(e); send({ type: "pointerup", x: p.x, y: p.y, button: (e as PointerEvent).button }); });
+        area.addEventListener("pointermove", (e) => { const p = rel(e); send({ type: "pointermove", x: p.x, y: p.y }); });
+        area.addEventListener("wheel", (e) => { e.preventDefault(); send({ type: "wheel", deltaX: (e as WheelEvent).deltaX, deltaY: (e as WheelEvent).deltaY }); }, { passive: false });
+    }
+
+    private setupGlobalKeys() {
+        document.addEventListener("keydown", (e) => {
+            if (!this.connected || !this.focusedToplevelId) return;
+            this.connect.send(JSON.stringify({ type: "inputEvent", event: { type: "keydown", code: e.code, key: e.key, toplevelId: this.focusedToplevelId } }));
+        });
+        document.addEventListener("keyup", (e) => {
+            if (!this.connected || !this.focusedToplevelId) return;
+            this.connect.send(JSON.stringify({ type: "inputEvent", event: { type: "keyup", code: e.code, key: e.key, toplevelId: this.focusedToplevelId } }));
+        });
     }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-    const app = new RemoteDesktop();
-
-    // 如果是render模式，设置输入事件监听
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get("toplevelId")) {
-        const desktop = document.getElementById("desktop");
-        if (desktop) {
-            desktop.addEventListener("pointerdown", (e) => {
-                app.sendInputEvent({
-                    type: "pointerdown",
-                    x: e.clientX,
-                    y: e.clientY,
-                    button: e.button,
-                });
-            });
-
-            desktop.addEventListener("pointerup", (e) => {
-                app.sendInputEvent({
-                    type: "pointerup",
-                    x: e.clientX,
-                    y: e.clientY,
-                    button: e.button,
-                });
-            });
-
-            desktop.addEventListener("pointermove", (e) => {
-                app.sendInputEvent({
-                    type: "pointermove",
-                    x: e.clientX,
-                    y: e.clientY,
-                });
-            });
-
-            desktop.addEventListener("wheel", (e) => {
-                app.sendInputEvent({
-                    type: "wheel",
-                    deltaX: e.deltaX,
-                    deltaY: e.deltaY,
-                });
-            });
-
-            document.addEventListener("keydown", (e) => {
-                app.sendInputEvent({
-                    type: "keydown",
-                    code: e.code,
-                    key: e.key,
-                });
-            });
-
-            document.addEventListener("keyup", (e) => {
-                app.sendInputEvent({
-                    type: "keyup",
-                    code: e.code,
-                    key: e.key,
-                });
-            });
-        }
-    }
-});
+document.addEventListener("DOMContentLoaded", () => new App());
