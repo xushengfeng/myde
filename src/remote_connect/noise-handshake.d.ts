@@ -17,12 +17,7 @@ declare module "noise-handshake" {
     }
 
     export default class Noise {
-        constructor(
-            pattern: string,
-            initiator: boolean,
-            staticKeypair?: KeyPair,
-            opts?: Record<string, unknown>,
-        );
+        constructor(pattern: string, initiator: boolean, staticKeypair?: KeyPair, opts?: Record<string, unknown>);
         tx: Buffer;
         rx: Buffer;
         rs: Buffer;

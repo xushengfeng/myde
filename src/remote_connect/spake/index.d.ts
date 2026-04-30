@@ -27,11 +27,15 @@ interface CipherSuite {
     hash: (content: Uint8Array) => Promise<Uint8Array>;
     kdf: (salt: Uint8Array, ikm: Uint8Array, info: string) => Promise<Uint8Array>;
     mac: (content: Uint8Array, secret: Uint8Array) => Promise<Uint8Array>;
-    mhf: (passphrase: Uint8Array, salt: Uint8Array, options: {
-        n: number;
-        r: number;
-        p: number;
-    }) => Promise<Uint8Array>;
+    mhf: (
+        passphrase: Uint8Array,
+        salt: Uint8Array,
+        options: {
+            n: number;
+            r: number;
+            p: number;
+        },
+    ) => Promise<Uint8Array>;
 }
 interface SPAKE2Options {
     suite?: string;
@@ -53,7 +57,11 @@ declare class SharedSecret {
     protected options: SPAKE2Options;
     protected cipherSuite: CipherSuite;
     protected transcript: Uint8Array;
-    constructor({ options, transcript, cipherSuite, }: {
+    constructor({
+        options,
+        transcript,
+        cipherSuite,
+    }: {
         options: SPAKE2Options;
         transcript: Uint8Array;
         cipherSuite: CipherSuite;
@@ -71,7 +79,14 @@ declare class ClientState {
     private x;
     private w;
     private T;
-    constructor({ clientIdentity, serverIdentity, w, x, options, cipherSuite, }: {
+    constructor({
+        clientIdentity,
+        serverIdentity,
+        w,
+        x,
+        options,
+        cipherSuite,
+    }: {
         clientIdentity: string;
         serverIdentity: string;
         w: BN;
@@ -90,7 +105,14 @@ declare class ServerState {
     private y;
     private w;
     private S;
-    constructor({ clientIdentity, serverIdentity, w, y, options, cipherSuite, }: {
+    constructor({
+        clientIdentity,
+        serverIdentity,
+        w,
+        y,
+        options,
+        cipherSuite,
+    }: {
         clientIdentity: string;
         serverIdentity: string;
         w: BN;
@@ -107,7 +129,12 @@ export declare class SPAKE2 {
     constructor(options?: SPAKE2Options);
     startClient(clientIdentity: string, serverIdentity: string, password: string, salt: string): Promise<ClientState>;
     startServer(clientIdentity: string, serverIdentity: string, verifier: Uint8Array): Promise<ServerState>;
-    computeVerifier(password: string, salt: string, clientIdentity: string, serverIdentity: string): Promise<Uint8Array>;
+    computeVerifier(
+        password: string,
+        salt: string,
+        clientIdentity: string,
+        serverIdentity: string,
+    ): Promise<Uint8Array>;
     private _computeW;
 }
 export declare function spake2(options?: SPAKE2Options): SPAKE2;

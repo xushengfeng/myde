@@ -63,28 +63,33 @@ const channelB = new SConnect(adapterB, { handshakeTimeout: 10000 });
 await channelA.init("device-a");
 await channelB.init("device-b");
 
-// 双方开始配对
-const pairingA = channelA.pairInit({
+// ===== 接收方 B：监听配对请求 =====
+channelB.on("pairRequest", async (request) => {
+    console.log(`${request.remoteDeviceId} 请求配对`);
+    
+    // 用户输入对方显示的 PIN
+    const pin = await getUserInput("请输入对方显示的 PIN:");
+    
+    // 接受配对
+    const credential = await request.inputPin(pin);
+    console.log("B 配对成功", credential);
+    
+    // 或者拒绝配对
+    // request.reject();
+});
+
+// ===== 发起方 A：发起配对 =====
+const pairing = channelA.pairInit({
     myDeviceId: "device-a",
     remoteDeviceId: "device-b",
 });
 
-const pairingB = channelB.pairInit({
-    myDeviceId: "device-b",
-    remoteDeviceId: "device-a",
-});
-
 // 显示 PIN 给用户
-console.log("Device A PIN:", pairingA.pin);
-console.log("Device B PIN:", pairingB.pin);
+console.log("请将此 PIN 告诉对方:", pairing.pin);
 
-// 用户输入对方的 PIN
-pairingA.inputOtherPin(pairingB.pin);
-pairingB.inputOtherPin(pairingA.pin);
-
-// 等待配对完成
-const credentialA = await pairingA.waitForPairing();
-const credentialB = await pairingB.waitForPairing();
+// 等待对方输入 PIN 完成配对
+const credentialA = await pairing.waitForPairing();
+console.log("A 配对成功", credentialA);
 
 // 现在可以安全通信
 await channelA.send("Secure message");
@@ -134,10 +139,10 @@ class SConnect implements SecureChannel {
     // 尝试连接
     tryConnect(credential: CredentialPublicInfo | Credential): Promise<ConnectResult>;
 
-    // PIN 配对
+    // 发起方调用：发起配对请求
     pairInit(credential: CredentialPublicInfo): {
-        pin: string;
-        inputOtherPin: (pin: string) => void;
+        pin: string;                           // 显示给用户的 PIN
+        inputOtherPin: (pin: string) => void;  // 可选：也可输入对方的 PIN
         waitForPairing: () => Promise<Credential>;
     };
 
@@ -154,6 +159,7 @@ class SConnect implements SecureChannel {
     on(event: "binary", callback: (data: ArrayBuffer) => void): void;
     on(event: "disconnect", callback: () => void): void;
     on(event: "error", callback: (err: Error) => void): void;
+    on(event: "pairRequest", callback: (request: PairRequest) => void): void;
     on(event: "credentialRotated", callback: (credential: Credential) => void): void;
     on(event: "credentialInvalidated", callback: (remoteDeviceId: string) => void): void;
 
@@ -161,6 +167,22 @@ class SConnect implements SecureChannel {
 
     // 凭证轮换
     rotateCredential(): Promise<void>;
+}
+```
+
+### PairRequest
+
+```typescript
+interface PairRequest {
+    /** 发起方的设备 ID */
+    remoteDeviceId: string;
+    /** 发起方的显示名称（可选） */
+    remoteDisplayName?: string;
+    
+    /** 输入对方的 PIN 完成配对 */
+    inputPin: (pin: string) => Promise<Credential>;
+    /** 拒绝配对请求 */
+    reject: () => void;
 }
 ```
 
@@ -187,6 +209,7 @@ interface TrustedSignalingAdapter {
     onMessage: (handler: (data: Uint8Array) => void) => void;
     onClose: (handler: () => void) => void;
     onError: (handler: (err: Error) => void) => void;
+    onPairRequest: (handler: (remoteDeviceId: string, message: Uint8Array) => void) => void;
 }
 
 // 不受信任适配器
@@ -194,6 +217,7 @@ interface UntrustedSignalingAdapter {
     trustIdentity: false;
     supportNativeEncryption: boolean;
     // ... 其他方法相同
+    onPairRequest: (handler: (remoteDeviceId: string, message: Uint8Array) => void) => void;
 }
 ```
 
@@ -237,12 +261,26 @@ const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair(
 import { PeerjsAdapter } from "@myde/remote-connect/peerjs_adapter";
 
 const adapter = new PeerjsAdapter(
-    { debug: 0 }, // PeerJS 选项
-    true, // 是否支持原生加密
+    { debug: 0 },           // PeerJS 选项
+    true                    // 是否支持原生加密（WebRTC DTLS）
 );
 
 await adapter.init("my-device-id");
 await adapter.connect("remote-device-id");
+```
+
+**配对请求支持：**
+
+PeerjsAdapter 支持通过 `sendPairRequest` 方法发送配对请求，接收方通过 `onPairRequest` 监听：
+
+```typescript
+// 发送配对请求
+await adapter.sendPairRequest("remote-device-id", requestData);
+
+// 监听配对请求
+adapter.onPairRequest((remoteDeviceId, message) => {
+    console.log(`${remoteDeviceId} 请求配对`);
+});
 ```
 
 ## 安全模型
@@ -254,6 +292,29 @@ await adapter.connect("remote-device-id");
 | 受信任   | true          | 直接明文通信，不加密     |
 | 不受信任 | false         | 需要 PAKE 配对，可选加密 |
 
+### 配对流程
+
+```
+发起方 A                                    接收方 B
+    │                                          │
+    │  1. A 知道 B 的 ID                        │
+    │                                          │
+    ├─ 2. channelA.pairInit(B_ID) ────────────►│
+    │     - 生成 PIN 显示给用户                  │
+    │     - 发送配对请求到 B                     │
+    │                                          │
+    │◄────── Adapter 通知 B ──────────────────┤
+    │         "A 请求配对"                       │
+    │         回调提供 inputPin / reject         │
+    │                                          │
+    │                              3. 用户输入 PIN │
+    │                                 调用 inputPin │
+    │                                          │
+    │  4. PAKE 握手完成                          │
+    │     双方获得 Credential                    │
+    │                                          │
+```
+
 ### 连接流程
 
 ```
@@ -261,7 +322,7 @@ await adapter.connect("remote-device-id");
   tryConnect -> 直接连接
 
 不受信任信道:
-  tryConnect -> 无凭证 -> pairInit -> PAKE 配对 -> 获取 Credential
+  tryConnect -> 无凭证 -> pairInit (发起方) / pairRequest 事件 (接收方) -> PAKE 配对 -> 获取 Credential
   tryConnect -> 有凭证 -> Noise IK 握手 -> 重连
 ```
 

@@ -3,6 +3,7 @@ import type {
     ConnectResult,
     Credential,
     CredentialPublicInfo,
+    PairRequest,
     SecureChannel,
     SignalingAdapter,
 } from "./sconnect_type";
@@ -22,6 +23,7 @@ type SecureChannelEvents = {
     binary: (data: ArrayBuffer) => void;
     disconnect: () => void;
     error: (err: Error) => void;
+    pairRequest: (request: PairRequest) => void;
     credentialRotated: (updatedCredential: Credential) => void;
     credentialInvalidated: (remoteDeviceId: string) => void;
 };
@@ -52,6 +54,9 @@ export class SConnect implements SecureChannel {
         this.signalAdapter.onMessage(this.rawMessageHandler);
         this.signalAdapter.onClose(() => this.handleDisconnect());
         this.signalAdapter.onError((err) => this.emit("error", err));
+
+        // 设置配对请求监听（接收方使用）
+        this.setupPairRequestListener();
     }
 
     /**
@@ -121,6 +126,10 @@ export class SConnect implements SecureChannel {
         return this.PIN;
     }
 
+    /**
+     * 发起方调用：发起配对请求
+     * 生成 PIN 显示给用户，等待对方输入 PIN 完成配对
+     */
     pairInit(credential: CredentialPublicInfo): {
         pin: string;
         inputOtherPin: (pin: string) => void;
@@ -143,6 +152,9 @@ export class SConnect implements SecureChannel {
             rejectPairing = reject;
         });
 
+        // 发送配对请求到对方
+        this.sendPairRequest(credential, pin).catch(rejectPairing);
+
         const inputOtherPin = (remotePin: string) => {
             if (pairingStarted) return;
             pairingStarted = true;
@@ -160,18 +172,14 @@ export class SConnect implements SecureChannel {
             }
 
             // 作为客户端发起 PAKE 交换
-            this.performPAKEClient(credential, remotePin)
-                .then(resolvePairing)
-                .catch(rejectPairing);
+            this.performPAKEClient(credential, remotePin).then(resolvePairing).catch(rejectPairing);
         };
 
         const waitForPairing = () => {
             // 如果还没有调用 inputOtherPin，则设置为响应方
             if (!pairingStarted && !responderSetup) {
                 responderSetup = true;
-                this.setupPAKEResponder(credential, pin)
-                    .then(resolvePairing)
-                    .catch(rejectPairing);
+                this.setupPAKEResponder(credential, pin).then(resolvePairing).catch(rejectPairing);
             }
             return pairingPromise;
         };
@@ -181,6 +189,73 @@ export class SConnect implements SecureChannel {
             inputOtherPin,
             waitForPairing,
         };
+    }
+
+    /**
+     * 发送配对请求到对方
+     */
+    private async sendPairRequest(credential: CredentialPublicInfo, pin: string): Promise<void> {
+        await this.signalAdapter.connect(credential.remoteDeviceId);
+
+        // 发送配对请求消息：类型(1) + 我方设备ID长度(2) + 我方设备ID
+        const myIdBytes = new TextEncoder().encode(this.myDeviceId);
+        const message = new Uint8Array(1 + 2 + myIdBytes.length);
+        message[0] = 0x01; // 配对请求类型
+        new DataView(message.buffer).setUint16(1, myIdBytes.length);
+        message.set(myIdBytes, 3);
+
+        // 使用 adapter 的 sendPairRequest 方法
+        if ("sendPairRequest" in this.signalAdapter) {
+            await (this.signalAdapter as any).sendPairRequest(credential.remoteDeviceId, message);
+        } else {
+            await this.signalAdapter.send(message);
+        }
+    }
+
+    /**
+     * 设置配对请求监听器（接收方使用）
+     */
+    private setupPairRequestListener(): void {
+        if (!("onPairRequest" in this.signalAdapter)) {
+            return;
+        }
+
+        (this.signalAdapter as any).onPairRequest((remoteDeviceId: string, message: Uint8Array) => {
+            // 解析配对请求
+            if (message[0] !== 0x01) return; // 不是配对请求
+
+            const senderIdLength = new DataView(message.buffer, message.byteOffset).getUint16(1);
+            const senderId = new TextDecoder().decode(message.subarray(3, 3 + senderIdLength));
+
+            // 创建 PairRequest 对象
+            const pairRequest: PairRequest = {
+                remoteDeviceId: senderId,
+                inputPin: (pin: string): Promise<Credential> => {
+                    return new Promise((resolve, reject) => {
+                        if (!this.validatePin(pin)) {
+                            reject(new Error("Invalid PIN format"));
+                            return;
+                        }
+
+                        const credential: CredentialPublicInfo = {
+                            myDeviceId: this.myDeviceId,
+                            remoteDeviceId: senderId,
+                        };
+
+                        // 作为客户端发起 PAKE 交换
+                        this.performPAKEClient(credential, pin).then(resolve).catch(reject);
+                    });
+                },
+                reject: () => {
+                    // 发送拒绝消息
+                    const rejectMsg = new Uint8Array([0x02]);
+                    this.signalAdapter.send(rejectMsg);
+                },
+            };
+
+            // 触发 pairRequest 事件
+            this.emit("pairRequest", pairRequest);
+        });
     }
 
     disconnect(): void {
@@ -270,10 +345,7 @@ export class SConnect implements SecureChannel {
     /**
      * 设置 PAKE 响应方（服务器）- 等待对方发起配对
      */
-    private async setupPAKEResponder(
-        credential: CredentialPublicInfo,
-        myPin: string,
-    ): Promise<Credential> {
+    private async setupPAKEResponder(credential: CredentialPublicInfo, myPin: string): Promise<Credential> {
         await this.signalAdapter.connect(credential.remoteDeviceId);
 
         const spake = spake2({
@@ -289,11 +361,7 @@ export class SConnect implements SecureChannel {
             credential.remoteDeviceId,
         );
 
-        const serverState = await spake.startServer(
-            credential.myDeviceId,
-            credential.remoteDeviceId,
-            verifier,
-        );
+        const serverState = await spake.startServer(credential.myDeviceId, credential.remoteDeviceId, verifier);
 
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
@@ -348,10 +416,7 @@ export class SConnect implements SecureChannel {
     /**
      * 作为 PAKE 客户端发起配对
      */
-    private async performPAKEClient(
-        credential: CredentialPublicInfo,
-        remotePin: string,
-    ): Promise<Credential> {
+    private async performPAKEClient(credential: CredentialPublicInfo, remotePin: string): Promise<Credential> {
         await this.signalAdapter.connect(credential.remoteDeviceId);
 
         const spake = spake2({

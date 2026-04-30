@@ -98,6 +98,11 @@ export declare class SecureChannel {
     on(event: "disconnect", callback: () => void): void;
     on(event: "error", callback: (err: SecureChannelError) => void): void;
     /**
+     * 收到配对请求事件（接收方监听）。
+     * 回调参数包含发起方信息，以及 inputPin/reject 函数。
+     */
+    on(event: "pairRequest", callback: (request: PairRequest) => void): void;
+    /**
      * 凭证轮换事件（己方或对方主动发起）。
      * 应用层应使用 `updatedCredential` 覆盖本地存储的旧凭证。
      */
@@ -146,6 +151,8 @@ interface TrustedSignalingAdapter {
     onMessage: (handler: (data: Uint8Array) => void) => void;
     onClose: (handler: () => void) => void;
     onError: (handler: (err: Error) => void) => void;
+    /** 注册配对请求回调（接收方使用） */
+    onPairRequest: (handler: (remoteDeviceId: string, message: Uint8Array) => void) => void;
 }
 
 /** 不受信任的信令适配器（网络信道等），需要内部 PAKE 验证，可选加密 */
@@ -160,6 +167,20 @@ interface UntrustedSignalingAdapter {
     onMessage: (handler: (data: Uint8Array) => void) => void;
     onClose: (handler: () => void) => void;
     onError: (handler: (err: Error) => void) => void;
+    /** 注册配对请求回调（接收方使用） */
+    onPairRequest: (handler: (remoteDeviceId: string, message: Uint8Array) => void) => void;
+}
+
+/** 配对请求信息（接收方通过 pairRequest 事件获取） */
+interface PairRequest {
+    /** 发起方的设备 ID */
+    remoteDeviceId: string;
+    /** 发起方的显示名称（可选） */
+    remoteDisplayName?: string;
+    /** 输入对方的 PIN 完成配对 */
+    inputPin: (pin: string) => Promise<Credential>;
+    /** 拒绝配对请求 */
+    reject: () => void;
 }
 
 /** 通道配置选项 */

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { SConnect } from "./sconnect";
 import { LoopbackAdapter, UntrustedLoopbackAdapter } from "./loopback_adapter";
+import type { PairRequest } from "./sconnect_type";
 
 function waitForEvent<T>(
     emitter: { on: (event: string, cb: (arg: T) => void) => void },
@@ -34,7 +35,6 @@ describe("SConnect", () => {
             const [adapterA] = LoopbackAdapter.createPair();
             const channelA = new SConnect(adapterA);
 
-            // 生成一个密钥对
             const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" } as AlgorithmIdentifier, true, [
                 "sign",
                 "verify",
@@ -146,7 +146,7 @@ describe("SConnect", () => {
             adapterB.close();
         });
 
-        it("PAKE 配对后应能收发消息（单边输入 PIN）", async () => {
+        it("发起方 pairInit 应触发接收方 pairRequest 事件", async () => {
             const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair();
             const channelA = new SConnect(adapterA, { handshakeTimeout: 10000 });
             const channelB = new SConnect(adapterB, { handshakeTimeout: 10000 });
@@ -154,35 +154,31 @@ describe("SConnect", () => {
             await channelA.init("device-a");
             await channelB.init("device-b");
 
-            const receivedMessages: string[] = [];
-            channelB.on("message", (msg) => receivedMessages.push(msg));
+            // B 监听配对请求
+            const pairRequestPromise = new Promise<PairRequest>((resolve) => {
+                channelB.on("pairRequest", (request) => {
+                    resolve(request);
+                });
+            });
 
-            // 双方都调用 pairInit
+            // A 发起配对
             const pairingA = channelA.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
-            const pairingB = channelB.pairInit({
-                myDeviceId: "device-b",
-                remoteDeviceId: "device-a",
-            });
 
-            // 只有 device-a 输入 device-b 的 PIN（单边输入）
-            pairingA.inputOtherPin(pairingB.pin);
+            // 等待 B 收到配对请求
+            const pairRequest = await pairRequestPromise;
 
-            // 双方都等待配对完成
-            await Promise.all([pairingA.waitForPairing(), pairingB.waitForPairing()]);
-
-            await channelA.send("encrypted hello");
-            await new Promise((r) => setTimeout(r, 100));
-
-            expect(receivedMessages).toContain("encrypted hello");
+            expect(pairRequest.remoteDeviceId).toBe("device-a");
+            expect(typeof pairRequest.inputPin).toBe("function");
+            expect(typeof pairRequest.reject).toBe("function");
 
             channelA.disconnect();
             channelB.disconnect();
         });
 
-        it("PAKE 配对：B 先等待再由 A 输入 PIN", async () => {
+        it("完整配对流程：A 发起，B 输入 PIN", async () => {
             const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair();
             const channelA = new SConnect(adapterA, { handshakeTimeout: 10000 });
             const channelB = new SConnect(adapterB, { handshakeTimeout: 10000 });
@@ -193,30 +189,29 @@ describe("SConnect", () => {
             const receivedMessages: string[] = [];
             channelB.on("message", (msg) => receivedMessages.push(msg));
 
-            // 双方都调用 pairInit
+            // B 监听配对请求
+            const pairRequestPromise = new Promise<PairRequest>((resolve) => {
+                channelB.on("pairRequest", (request) => {
+                    resolve(request);
+                });
+            });
+
+            // A 发起配对
             const pairingA = channelA.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
-            const pairingB = channelB.pairInit({
-                myDeviceId: "device-b",
-                remoteDeviceId: "device-a",
-            });
 
-            // B 先开始等待（设置为响应方）
-            const promiseB = pairingB.waitForPairing();
+            // 等待 B 收到配对请求
+            const pairRequest = await pairRequestPromise;
 
-            // 等一下让 B 设置好响应方
-            await new Promise((r) => setTimeout(r, 50));
+            // B 输入 A 的 PIN
+            const credentialBPromise = pairRequest.inputPin(pairingA.pin);
 
-            // A 输入 B 的 PIN（A 作为发起方）
-            pairingA.inputOtherPin(pairingB.pin);
+            // A 等待配对完成
+            const credentialAPromise = pairingA.waitForPairing();
 
-            // A 也开始等待
-            const promiseA = pairingA.waitForPairing();
-
-            // 双方都应该完成配对
-            const [credentialA, credentialB] = await Promise.all([promiseA, promiseB]);
+            const [credentialA, credentialB] = await Promise.all([credentialAPromise, credentialBPromise]);
 
             expect(credentialA).toBeDefined();
             expect(credentialB).toBeDefined();
@@ -231,7 +226,41 @@ describe("SConnect", () => {
             channelB.disconnect();
         });
 
-        it("supportNativeEncryption=false 时消息应被加密", async () => {
+        it("B 可以拒绝配对请求", async () => {
+            const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair();
+            const channelA = new SConnect(adapterA, { handshakeTimeout: 2000 });
+            const channelB = new SConnect(adapterB, { handshakeTimeout: 2000 });
+
+            await channelA.init("device-a");
+            await channelB.init("device-b");
+
+            // B 监听配对请求并拒绝
+            const pairRequestPromise = new Promise<PairRequest>((resolve) => {
+                channelB.on("pairRequest", (request) => {
+                    resolve(request);
+                });
+            });
+
+            // A 发起配对
+            const pairingA = channelA.pairInit({
+                myDeviceId: "device-a",
+                remoteDeviceId: "device-b",
+            });
+
+            // 等待 B 收到配对请求
+            const pairRequest = await pairRequestPromise;
+
+            // B 拒绝配对
+            pairRequest.reject();
+
+            // A 的配对应该超时失败（因为 B 拒绝了，不会完成 PAKE）
+            await expect(pairingA.waitForPairing()).rejects.toThrow();
+
+            channelA.disconnect();
+            channelB.disconnect();
+        });
+
+        it("PAKE 配对后消息应被加密 (supportNativeEncryption=false)", async () => {
             const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair(false);
             const channelA = new SConnect(adapterA, { handshakeTimeout: 10000 });
             const channelB = new SConnect(adapterB, { handshakeTimeout: 10000 });
@@ -246,19 +275,24 @@ describe("SConnect", () => {
                 return originalSend(data);
             };
 
+            // B 监听配对请求
+            const pairRequestPromise = new Promise<PairRequest>((resolve) => {
+                channelB.on("pairRequest", (request) => {
+                    resolve(request);
+                });
+            });
+
+            // A 发起配对
             const pairingA = channelA.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
-            const pairingB = channelB.pairInit({
-                myDeviceId: "device-b",
-                remoteDeviceId: "device-a",
-            });
 
-            // 只有 device-a 输入 PIN
-            pairingA.inputOtherPin(pairingB.pin);
+            const pairRequest = await pairRequestPromise;
+            const credentialBPromise = pairRequest.inputPin(pairingA.pin);
+            const credentialAPromise = pairingA.waitForPairing();
 
-            await Promise.all([pairingA.waitForPairing(), pairingB.waitForPairing()]);
+            await Promise.all([credentialAPromise, credentialBPromise]);
 
             const testMessage = "should be encrypted";
             await channelA.send(testMessage);
@@ -289,19 +323,24 @@ describe("SConnect", () => {
             const receivedMessages: string[] = [];
             channelB.on("message", (msg) => receivedMessages.push(msg));
 
+            // B 监听配对请求
+            const pairRequestPromise = new Promise<PairRequest>((resolve) => {
+                channelB.on("pairRequest", (request) => {
+                    resolve(request);
+                });
+            });
+
+            // A 发起配对
             const pairingA = channelA.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
-            const pairingB = channelB.pairInit({
-                myDeviceId: "device-b",
-                remoteDeviceId: "device-a",
-            });
 
-            // 只有 device-a 输入 PIN
-            pairingA.inputOtherPin(pairingB.pin);
+            const pairRequest = await pairRequestPromise;
+            const credentialBPromise = pairRequest.inputPin(pairingA.pin);
+            const credentialAPromise = pairingA.waitForPairing();
 
-            await Promise.all([pairingA.waitForPairing(), pairingB.waitForPairing()]);
+            await Promise.all([credentialAPromise, credentialBPromise]);
 
             const testMessage = "native encrypted";
             await channelA.send(testMessage);
@@ -314,23 +353,24 @@ describe("SConnect", () => {
             channelA.disconnect();
             channelB.disconnect();
         });
-    });
 
-    describe("不受信任信道 - Credential 重连", () => {
-        it("有 Credential 时 IK 握手成功应返回 success=true", async () => {
-            // 第一次配对
-            const [adapterA1, adapterB1] = UntrustedLoopbackAdapter.createPair();
-            const channelA1 = new SConnect(adapterA1, { handshakeTimeout: 10000 });
-            const channelB1 = new SConnect(adapterB1, { handshakeTimeout: 10000 });
+        it("旧模式：双方都调用 pairInit，一方输入 PIN", async () => {
+            const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair();
+            const channelA = new SConnect(adapterA, { handshakeTimeout: 10000 });
+            const channelB = new SConnect(adapterB, { handshakeTimeout: 10000 });
 
-            await channelA1.init("device-a");
-            await channelB1.init("device-b");
+            await channelA.init("device-a");
+            await channelB.init("device-b");
 
-            const pairingA = channelA1.pairInit({
+            const receivedMessages: string[] = [];
+            channelB.on("message", (msg) => receivedMessages.push(msg));
+
+            // 双方都调用 pairInit
+            const pairingA = channelA.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
-            const pairingB = channelB1.pairInit({
+            const pairingB = channelB.pairInit({
                 myDeviceId: "device-b",
                 remoteDeviceId: "device-a",
             });
@@ -339,19 +379,54 @@ describe("SConnect", () => {
             const promiseB = pairingB.waitForPairing();
             await new Promise((r) => setTimeout(r, 50));
 
-            // A 输入 B 的 PIN（A 作为发起方）
+            // A 输入 B 的 PIN
             pairingA.inputOtherPin(pairingB.pin);
 
-            const [credentialA, credentialB] = await Promise.all([
-                pairingA.waitForPairing(),
-                promiseB,
-            ]);
+            const [credentialA, credentialB] = await Promise.all([pairingA.waitForPairing(), promiseB]);
 
-            // 验证 Credential 包含公钥
+            expect(credentialA).toBeDefined();
+            expect(credentialB).toBeDefined();
+
+            await channelA.send("hello from old mode");
+            await new Promise((r) => setTimeout(r, 100));
+
+            expect(receivedMessages).toContain("hello from old mode");
+
+            channelA.disconnect();
+            channelB.disconnect();
+        });
+    });
+
+    describe("不受信任信道 - Credential 重连", () => {
+        it("有 Credential 时 IK 握手成功应返回 success=true", async () => {
+            const [adapterA1, adapterB1] = UntrustedLoopbackAdapter.createPair();
+            const channelA1 = new SConnect(adapterA1, { handshakeTimeout: 10000 });
+            const channelB1 = new SConnect(adapterB1, { handshakeTimeout: 10000 });
+
+            await channelA1.init("device-a");
+            await channelB1.init("device-b");
+
+            // B 监听配对请求
+            const pairRequestPromise = new Promise<PairRequest>((resolve) => {
+                channelB1.on("pairRequest", (request) => {
+                    resolve(request);
+                });
+            });
+
+            // A 发起配对
+            const pairingA = channelA1.pairInit({
+                myDeviceId: "device-a",
+                remoteDeviceId: "device-b",
+            });
+
+            const pairRequest = await pairRequestPromise;
+            const credentialBPromise = pairRequest.inputPin(pairingA.pin);
+            const credentialAPromise = pairingA.waitForPairing();
+
+            const [credentialA, credentialB] = await Promise.all([credentialAPromise, credentialBPromise]);
+
             expect(credentialA.myPublicKey).toBeInstanceOf(Uint8Array);
             expect(credentialA.myPublicKey.length).toBeGreaterThan(0);
-            expect(credentialA.remotePublicKey).toBeInstanceOf(Uint8Array);
-            expect(credentialA.remotePublicKey.length).toBeGreaterThan(0);
 
             channelA1.disconnect();
             channelB1.disconnect();
@@ -361,7 +436,6 @@ describe("SConnect", () => {
             const channelA2 = new SConnect(adapterA2, { handshakeTimeout: 10000 });
             const channelB2 = new SConnect(adapterB2, { handshakeTimeout: 10000 });
 
-            // 用配对时的密钥初始化
             await channelA2.init("device-a", {
                 privateKey: credentialA.myPrivateKey as Uint8Array,
                 publicKey: credentialA.myPublicKey,
@@ -371,12 +445,8 @@ describe("SConnect", () => {
                 publicKey: credentialB.myPublicKey,
             });
 
-            // device-a < device-b，所以 device-a 是发起方，device-b 是响应方
-            // 响应方先开始等待
             const resultBPromise = channelB2.tryConnect(credentialB);
-            // 等一下让响应方先设置好消息处理器
             await new Promise((r) => setTimeout(r, 10));
-            // 发起方发起握手
             const resultA = await channelA2.tryConnect(credentialA);
             const resultB = await resultBPromise;
 

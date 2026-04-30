@@ -13,18 +13,8 @@
         "forceConsistentCasingInFileNames": true,
         "resolveJsonModule": true,
         "isolatedModules": true,
-        "lib": [
-            "ESNext",
-            "DOM"
-        ]
+        "lib": ["ESNext", "DOM"]
     },
-    "include": [
-        "*.ts"
-    ],
-    "exclude": [
-        "*.test.ts",
-        "vite.config.ts",
-        "dist",
-        "node_modules"
-    ]
+    "include": ["*.ts"],
+    "exclude": ["*.test.ts", "vite.config.ts", "dist", "node_modules"]
 }

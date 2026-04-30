@@ -8,25 +8,11 @@ describe("SPAKE2", () => {
             kdf: { AAD: "test" },
         });
 
-        const clientState = await spake.startClient(
-            "client",
-            "server",
-            "password123",
-            "salt123",
-        );
+        const clientState = await spake.startClient("client", "server", "password123", "salt123");
 
-        const verifier = await spake.computeVerifier(
-            "password123",
-            "salt123",
-            "client",
-            "server",
-        );
+        const verifier = await spake.computeVerifier("password123", "salt123", "client", "server");
 
-        const serverState = await spake.startServer(
-            "client",
-            "server",
-            verifier,
-        );
+        const serverState = await spake.startServer("client", "server", verifier);
 
         const clientMsg = clientState.getMessage();
         const serverMsg = serverState.getMessage();
@@ -51,42 +37,14 @@ describe("SPAKE2", () => {
             kdf: { AAD: "test" },
         });
 
-        const clientState1 = await spake.startClient(
-            "client",
-            "server",
-            "password1",
-            "salt",
-        );
-        const clientState2 = await spake.startClient(
-            "client",
-            "server",
-            "password2",
-            "salt",
-        );
+        const clientState1 = await spake.startClient("client", "server", "password1", "salt");
+        const clientState2 = await spake.startClient("client", "server", "password2", "salt");
 
-        const verifier1 = await spake.computeVerifier(
-            "password1",
-            "salt",
-            "client",
-            "server",
-        );
-        const verifier2 = await spake.computeVerifier(
-            "password2",
-            "salt",
-            "client",
-            "server",
-        );
+        const verifier1 = await spake.computeVerifier("password1", "salt", "client", "server");
+        const verifier2 = await spake.computeVerifier("password2", "salt", "client", "server");
 
-        const serverState1 = await spake.startServer(
-            "client",
-            "server",
-            verifier1,
-        );
-        const serverState2 = await spake.startServer(
-            "client",
-            "server",
-            verifier2,
-        );
+        const serverState1 = await spake.startServer("client", "server", verifier1);
+        const serverState2 = await spake.startServer("client", "server", verifier2);
 
         const clientMsg1 = clientState1.getMessage();
         const clientMsg2 = clientState2.getMessage();
@@ -108,42 +66,14 @@ describe("SPAKE2", () => {
             kdf: { AAD: "test" },
         });
 
-        const clientState1 = await spake.startClient(
-            "client",
-            "server",
-            "password",
-            "salt1",
-        );
-        const clientState2 = await spake.startClient(
-            "client",
-            "server",
-            "password",
-            "salt2",
-        );
+        const clientState1 = await spake.startClient("client", "server", "password", "salt1");
+        const clientState2 = await spake.startClient("client", "server", "password", "salt2");
 
-        const verifier1 = await spake.computeVerifier(
-            "password",
-            "salt1",
-            "client",
-            "server",
-        );
-        const verifier2 = await spake.computeVerifier(
-            "password",
-            "salt2",
-            "client",
-            "server",
-        );
+        const verifier1 = await spake.computeVerifier("password", "salt1", "client", "server");
+        const verifier2 = await spake.computeVerifier("password", "salt2", "client", "server");
 
-        const serverState1 = await spake.startServer(
-            "client",
-            "server",
-            verifier1,
-        );
-        const serverState2 = await spake.startServer(
-            "client",
-            "server",
-            verifier2,
-        );
+        const serverState1 = await spake.startServer("client", "server", verifier1);
+        const serverState2 = await spake.startServer("client", "server", verifier2);
 
         const clientMsg1 = clientState1.getMessage();
         const clientMsg2 = clientState2.getMessage();
@@ -167,25 +97,11 @@ describe("SPAKE2", () => {
             kdf: { AAD: "test" },
         });
 
-        const clientState = await spake.startClient(
-            "client",
-            "server",
-            "password",
-            "salt",
-        );
+        const clientState = await spake.startClient("client", "server", "password", "salt");
 
-        const verifier = await spake.computeVerifier(
-            "password",
-            "salt",
-            "client",
-            "server",
-        );
+        const verifier = await spake.computeVerifier("password", "salt", "client", "server");
 
-        const serverState = await spake.startServer(
-            "client",
-            "server",
-            verifier,
-        );
+        const serverState = await spake.startServer("client", "server", verifier);
 
         const clientMsg = clientState.getMessage();
         const serverMsg = serverState.getMessage();

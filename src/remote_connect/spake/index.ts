@@ -5,13 +5,7 @@
 
 import BN from "bn.js";
 import { ec as EC } from "elliptic";
-import {
-    uint8ArrayToHex,
-    hexToUint8Array,
-    stringToUint8Array,
-    uint8ArrayEquals,
-    concatUint8Array,
-} from "./utils";
+import { uint8ArrayToHex, hexToUint8Array, stringToUint8Array, uint8ArrayEquals, concatUint8Array } from "./utils";
 
 // ==================== 椭圆曲线定义 ====================
 
@@ -21,10 +15,7 @@ const curveEd25519 = {
     name: "ed25519",
     M: "d048032c6ea0b6d697ddc2e86bda85a33adac920f1bf18e1b0c6d166a5cecdaf",
     N: "d3bfb518f44f3430f29d0c92af503865a1ed3281dc69b35dd868ba85f886c4ab",
-    p: new BN(
-        "7237005577332262213973186563042994240857116359379907606001950938285454250989",
-        10,
-    ),
+    p: new BN("7237005577332262213973186563042994240857116359379907606001950938285454250989", 10),
     h: new BN(8),
 };
 
@@ -52,10 +43,7 @@ class EllipticCurve {
         const hex = typeof buf === "string" ? buf : uint8ArrayToHex(buf);
         if (this.name === "ed25519") {
             const b = new BN(hex, 16, "le");
-            return this.ec.pointFromY(
-                b.mod(TWO_POW_255).toString(16),
-                b.gte(TWO_POW_255),
-            );
+            return this.ec.pointFromY(b.mod(TWO_POW_255).toString(16), b.gte(TWO_POW_255));
         }
         return this.ec.decodePoint(hex, true);
     }
@@ -64,13 +52,7 @@ class EllipticCurve {
         if (this.name === "ed25519") {
             const x = p.getX();
             const y = p.getY();
-            return new Uint8Array(
-                x
-                    .mod(new BN(2))
-                    .mul(TWO_POW_255)
-                    .add(y)
-                    .toArray("le", 32),
-            );
+            return new Uint8Array(x.mod(new BN(2)).mul(TWO_POW_255).add(y).toArray("le", 32));
         }
         return new Uint8Array(p.encodeCompressed());
     }
@@ -80,20 +62,14 @@ class EllipticCurve {
 
 async function sha256(content: Uint8Array): Promise<Uint8Array> {
     if (typeof globalThis.crypto !== "undefined" && globalThis.crypto.subtle) {
-        const hashBuffer = await globalThis.crypto.subtle.digest(
-            "SHA-256",
-            content as any,
-        );
+        const hashBuffer = await globalThis.crypto.subtle.digest("SHA-256", content as any);
         return new Uint8Array(hashBuffer);
     }
     // Fallback: 使用 bn.js 实现的简单 SHA-256（仅用于测试）
     throw new Error("SHA-256 not available");
 }
 
-async function hmacSha256(
-    content: Uint8Array,
-    secret: Uint8Array,
-): Promise<Uint8Array> {
+async function hmacSha256(content: Uint8Array, secret: Uint8Array): Promise<Uint8Array> {
     if (typeof globalThis.crypto !== "undefined" && globalThis.crypto.subtle) {
         const key = await globalThis.crypto.subtle.importKey(
             "raw",
@@ -102,21 +78,13 @@ async function hmacSha256(
             false,
             ["sign"],
         );
-        const signature = await globalThis.crypto.subtle.sign(
-            "HMAC",
-            key,
-            content as any,
-        );
+        const signature = await globalThis.crypto.subtle.sign("HMAC", key, content as any);
         return new Uint8Array(signature);
     }
     throw new Error("HMAC-SHA256 not available");
 }
 
-async function hkdfSha256(
-    salt: Uint8Array,
-    ikm: Uint8Array,
-    info: string,
-): Promise<Uint8Array> {
+async function hkdfSha256(salt: Uint8Array, ikm: Uint8Array, info: string): Promise<Uint8Array> {
     if (typeof globalThis.crypto !== "undefined" && globalThis.crypto.subtle) {
         // HKDF 实现 (RFC 5869)
         // Step 1: Extract
@@ -154,13 +122,9 @@ async function scrypt(
 
     // 使用 PBKDF2 作为 fallback（安全性较低，但可用于测试）
     if (typeof globalThis.crypto !== "undefined" && globalThis.crypto.subtle) {
-        const key = await globalThis.crypto.subtle.importKey(
-            "raw",
-            passphrase as any,
-            { name: "PBKDF2" },
-            false,
-            ["deriveBits"],
-        );
+        const key = await globalThis.crypto.subtle.importKey("raw", passphrase as any, { name: "PBKDF2" }, false, [
+            "deriveBits",
+        ]);
         const derivedBits = await globalThis.crypto.subtle.deriveBits(
             {
                 name: "PBKDF2",
@@ -226,11 +190,7 @@ function concat(...bufs: Uint8Array[]): Uint8Array {
 interface CipherSuite {
     curve: EllipticCurve;
     hash: (content: Uint8Array) => Promise<Uint8Array>;
-    kdf: (
-        salt: Uint8Array,
-        ikm: Uint8Array,
-        info: string,
-    ) => Promise<Uint8Array>;
+    kdf: (salt: Uint8Array, ikm: Uint8Array, info: string) => Promise<Uint8Array>;
     mac: (content: Uint8Array, secret: Uint8Array) => Promise<Uint8Array>;
     mhf: (
         passphrase: Uint8Array,
@@ -296,7 +256,7 @@ class SharedSecret {
         // 使用与原始 spake2 相同的参数格式
         const aad = this.options.kdf?.AAD || "";
         const Kc = await this.cipherSuite.kdf(
-            new TextEncoder().encode(""),  // salt 为空字符串
+            new TextEncoder().encode(""), // salt 为空字符串
             this.Ka,
             "ConfirmationKeys" + aad,
         );
@@ -362,9 +322,7 @@ class ClientState {
 
     async finish(incomingMessage: Uint8Array): Promise<SharedSecret> {
         if (!this.T) {
-            throw new Error(
-                "getMessage method needs to be called before this method",
-            );
+            throw new Error("getMessage method needs to be called before this method");
         }
 
         const { curve } = this.cipherSuite;
@@ -436,9 +394,7 @@ class ServerState {
 
     async finish(incomingMessage: Uint8Array): Promise<SharedSecret> {
         if (!this.S) {
-            throw new Error(
-                "getMessage method needs to be called before this method",
-            );
+            throw new Error("getMessage method needs to be called before this method");
         }
 
         const { curve } = this.cipherSuite;
@@ -500,11 +456,7 @@ export class SPAKE2 {
         });
     }
 
-    async startServer(
-        clientIdentity: string,
-        serverIdentity: string,
-        verifier: Uint8Array,
-    ): Promise<ServerState> {
+    async startServer(clientIdentity: string, serverIdentity: string, verifier: Uint8Array): Promise<ServerState> {
         const { cipherSuite, options } = this;
         const { p } = cipherSuite.curve;
 
