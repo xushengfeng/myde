@@ -474,18 +474,40 @@ export class SConnect implements SecureChannel {
 
         let resolvePairing: (credential: Credential) => void;
         let rejectPairing: (error: Error) => void;
+        let pinAttempts = 0;
+        let savedPin: string | null = null;
         let pairingStarted = false;
+        let waitingForPairing = false;
 
         const pairingPromise = new Promise<Credential>((resolve, reject) => {
             resolvePairing = resolve;
             rejectPairing = reject;
         });
 
+        const startPairing = (pin: string) => {
+            if (pairingStarted) return;
+            pairingStarted = true;
+
+            this.setState("Handshaking", "pake");
+
+            const credential: CredentialPublicInfo = {
+                myDeviceId: this.myDeviceId,
+                remoteDeviceId: senderId,
+            };
+
+            this.performPAKEClient(credential, pin)
+                .then(resolvePairing)
+                .catch(rejectPairing);
+        };
+
         const request: PairRequest = {
             remoteDeviceId: senderId,
             inputPin: (pin: string): void => {
-                if (pairingStarted) return;
-                pairingStarted = true;
+                pinAttempts++;
+                if (pinAttempts > this.options.maxPinAttempts) {
+                    rejectPairing(new SConnectError("PIN_MISMATCH", "Maximum PIN attempts exceeded"));
+                    return;
+                }
 
                 if (!this.validatePin(pin)) {
                     this.emit("error", new SConnectError("PIN_INVALID", "PIN must be 6 digits"));
@@ -493,18 +515,26 @@ export class SConnect implements SecureChannel {
                     return;
                 }
 
-                this.setState("Handshaking", "pake");
-
-                const credential: CredentialPublicInfo = {
-                    myDeviceId: this.myDeviceId,
-                    remoteDeviceId: senderId,
-                };
-
-                this.performPAKEClient(credential, pin)
-                    .then(resolvePairing)
-                    .catch(rejectPairing);
+                if (waitingForPairing) {
+                    // waitForPairing 已调用，直接开始配对
+                    startPairing(pin);
+                } else {
+                    // 保存 PIN，等 waitForPairing 调用
+                    savedPin = pin;
+                }
             },
-            waitForPairing: () => pairingPromise,
+            waitForPairing: () => {
+                if (pairingStarted) {
+                    // 已经在配对中，直接返回 promise
+                } else if (savedPin) {
+                    // inputPin 已调用，开始配对
+                    startPairing(savedPin);
+                } else {
+                    // 等待 inputPin 调用
+                    waitingForPairing = true;
+                }
+                return pairingPromise;
+            },
             reject: () => {
                 rejectPairing(new SConnectError("PAIRING_FAILED", "Pairing rejected"));
             },
