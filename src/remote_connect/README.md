@@ -59,27 +59,28 @@ const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair();
 const channelA = new SConnect(adapterA, { handshakeTimeout: 10000 });
 const channelB = new SConnect(adapterB, { handshakeTimeout: 10000 });
 
-// 初始化
+// 初始化，id需要手动创建，建议使用crypto.randomUUID()
 await channelA.init("device-a");
 await channelB.init("device-b");
 
 // ===== 接收方 B：监听配对请求 =====
 channelB.on("pairRequest", async (request) => {
     console.log(`${request.remoteDeviceId} 请求配对`);
-    
+
     // 用户输入对方显示的 PIN
     const pin = await getUserInput("请输入对方显示的 PIN:");
-    
+
     // 接受配对
-    const credential = await request.inputPin(pin);
+    request.inputOtherPin(pin);
+    const credential = await request.waitForPairing();
     console.log("B 配对成功", credential);
-    
+
     // 或者拒绝配对
     // request.reject();
 });
 
 // ===== 发起方 A：发起配对 =====
-const pairing = channelA.pairInit({
+const pairing = await channelA.pairInit({
     myDeviceId: "device-a",
     remoteDeviceId: "device-b",
 });
@@ -90,6 +91,8 @@ console.log("请将此 PIN 告诉对方:", pairing.pin);
 // 等待对方输入 PIN 完成配对
 const credentialA = await pairing.waitForPairing();
 console.log("A 配对成功", credentialA);
+
+// 任何一方都可以输入pin
 
 // 现在可以安全通信
 await channelA.send("Secure message");
@@ -109,10 +112,10 @@ if (result.success) {
 // ===== 接收方 B =====
 channelB.on("connectRequest", async (request) => {
     console.log(`${request.remoteDeviceId} 请求连接`);
-    
+
     // 从本地存储加载 B 保存的关于 A 的 Credential
     const credentialOfA = loadCredential(request.remoteDeviceId);
-    
+
     if (credentialOfA) {
         // 使用保存的 Credential 接受连接
         const result = await request.accept(credentialOfA);
@@ -139,11 +142,11 @@ class SConnect implements SecureChannel {
     tryConnect(credential: CredentialPublicInfo | Credential): Promise<ConnectResult>;
 
     // 发起方调用：发起配对请求
-    pairInit(credential: CredentialPublicInfo): {
-        pin: string;                           // 显示给用户的 PIN
-        inputOtherPin: (pin: string) => void;  // 可选：也可输入对方的 PIN
+    pairInit(credential: CredentialPublicInfo): Promise<{
+        pin: string; // 显示给用户的 PIN
+        inputOtherPin: (pin: string) => void; // 可选：也可输入对方的 PIN
         waitForPairing: () => Promise<Credential>;
-    };
+    }>;
 
     // 断开连接
     disconnect(): void;
@@ -178,9 +181,10 @@ interface PairRequest {
     remoteDeviceId: string;
     /** 发起方的显示名称（可选） */
     remoteDisplayName?: string;
-    
+
     /** 输入对方的 PIN 完成配对 */
-    inputPin: (pin: string) => Promise<Credential>;
+    inputOtherPin: (pin: string) => Promise<Credential>;
+    waitForPairing: () => Promise<Credential>;
     /** 拒绝配对请求 */
     reject: () => void;
 }
@@ -194,46 +198,11 @@ interface ConnectRequest {
     remoteDeviceId: string;
     /** 发起方的显示名称（可选） */
     remoteDisplayName?: string;
-    
+
     /** 接受连接请求，传入本地保存的关于对方的 Credential */
     accept: (credential: Credential) => Promise<ConnectResult>;
     /** 拒绝连接请求 */
     reject: () => void;
-}
-```
-
-### ChannelOptions
-
-```typescript
-interface ChannelOptions {
-    handshakeTimeout?: number; // 握手超时（毫秒），默认 30000
-    maxPinAttempts?: number; // 最大 PIN 尝试次数，默认 5
-}
-```
-
-### SignalingAdapter
-
-```typescript
-// 受信任适配器
-interface TrustedSignalingAdapter {
-    trustIdentity: true;
-    supportNativeEncryption: false;
-    init(myId: string): Promise<void>;
-    connect(id: string): Promise<void>;
-    send(data: Uint8Array): Promise<void>;
-    close(): void;
-    onMessage: (handler: (data: Uint8Array) => void) => void;
-    onClose: (handler: () => void) => void;
-    onError: (handler: (err: Error) => void) => void;
-    onPairRequest: (handler: (remoteDeviceId: string, message: Uint8Array) => void) => void;
-}
-
-// 不受信任适配器
-interface UntrustedSignalingAdapter {
-    trustIdentity: false;
-    supportNativeEncryption: boolean;
-    // ... 其他方法相同
-    onPairRequest: (handler: (remoteDeviceId: string, message: Uint8Array) => void) => void;
 }
 ```
 
@@ -251,6 +220,21 @@ interface Credential extends CredentialPublicInfo {
 
 ## 内置适配器
 
+### PeerjsAdapter
+
+基于 PeerJS (WebRTC) 的适配器。
+
+```typescript
+import { PeerjsAdapter } from "@myde/remote-connect/peerjs_adapter";
+
+const adapter = new PeerjsAdapter(
+    { debug: 0 }, // PeerJS 选项
+    true, // 是否支持原生加密（WebRTC DTLS）
+);
+
+const channel = new SConnect(adapter);
+```
+
 ### LoopbackAdapter
 
 本地回环适配器，用于测试和本地 IPC。
@@ -267,36 +251,6 @@ const [adapterA, adapterB] = LoopbackAdapter.createPair();
 const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair(
     supportNativeEncryption, // 是否支持原生加密，默认 true
 );
-```
-
-### PeerjsAdapter
-
-基于 PeerJS (WebRTC) 的适配器。
-
-```typescript
-import { PeerjsAdapter } from "@myde/remote-connect/peerjs_adapter";
-
-const adapter = new PeerjsAdapter(
-    { debug: 0 },           // PeerJS 选项
-    true                    // 是否支持原生加密（WebRTC DTLS）
-);
-
-await adapter.init("my-device-id");
-await adapter.connect("remote-device-id");
-```
-
-**配对请求支持：**
-
-PeerjsAdapter 支持通过 `sendPairRequest` 方法发送配对请求，接收方通过 `onPairRequest` 监听：
-
-```typescript
-// 发送配对请求
-await adapter.sendPairRequest("remote-device-id", requestData);
-
-// 监听配对请求
-adapter.onPairRequest((remoteDeviceId, message) => {
-    console.log(`${remoteDeviceId} 请求配对`);
-});
 ```
 
 ## 安全模型
