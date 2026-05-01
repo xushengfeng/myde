@@ -322,25 +322,38 @@ export class SConnect implements SecureChannel {
         const senderIdLength = new DataView(payload.buffer, payload.byteOffset).getUint16(0);
         const senderId = new TextDecoder().decode(payload.subarray(2, 2 + senderIdLength));
 
+        let resolvePairing: (credential: Credential) => void;
+        let rejectPairing: (error: Error) => void;
+        let pairingStarted = false;
+
+        const pairingPromise = new Promise<Credential>((resolve, reject) => {
+            resolvePairing = resolve;
+            rejectPairing = reject;
+        });
+
         const request: PairRequest = {
             remoteDeviceId: senderId,
-            inputPin: (pin: string): Promise<Credential> => {
-                return new Promise((resolve, reject) => {
-                    if (!this.validatePin(pin)) {
-                        reject(new Error("Invalid PIN format"));
-                        return;
-                    }
+            inputPin: (pin: string): void => {
+                if (pairingStarted) return;
+                pairingStarted = true;
 
-                    const credential: CredentialPublicInfo = {
-                        myDeviceId: this.myDeviceId,
-                        remoteDeviceId: senderId,
-                    };
+                if (!this.validatePin(pin)) {
+                    rejectPairing(new Error("Invalid PIN format"));
+                    return;
+                }
 
-                    this.performPAKEClient(credential, pin).then(resolve).catch(reject);
-                });
+                const credential: CredentialPublicInfo = {
+                    myDeviceId: this.myDeviceId,
+                    remoteDeviceId: senderId,
+                };
+
+                this.performPAKEClient(credential, pin)
+                    .then(resolvePairing)
+                    .catch(rejectPairing);
             },
+            waitForPairing: () => pairingPromise,
             reject: () => {
-                // 拒绝配对
+                rejectPairing(new Error("Pairing rejected"));
             },
         };
 

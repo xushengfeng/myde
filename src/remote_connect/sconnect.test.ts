@@ -207,7 +207,8 @@ describe("SConnect", () => {
             const pairRequest = await pairRequestPromise;
 
             // B 输入 A 的 PIN
-            const credentialBPromise = pairRequest.inputPin(pairingA.pin);
+            pairRequest.inputPin(pairingA.pin);
+            const credentialBPromise = pairRequest.waitForPairing();
 
             // A 等待配对完成
             const credentialAPromise = pairingA.waitForPairing();
@@ -251,8 +252,10 @@ describe("SConnect", () => {
             // 等待 B 收到配对请求
             const pairRequest = await pairRequestPromise;
 
-            // B 拒绝配对
+            // B 拒绝配对 - 需要捕获 rejection
+            const rejectPromise = pairRequest.waitForPairing().catch(() => {});
             pairRequest.reject();
+            await rejectPromise;
 
             // A 的配对应该超时失败（因为 B 拒绝了，不会完成 PAKE）
             await expect(pairingA.waitForPairing()).rejects.toThrow();
@@ -290,7 +293,8 @@ describe("SConnect", () => {
             });
 
             const pairRequest = await pairRequestPromise;
-            const credentialBPromise = pairRequest.inputPin(pairingA.pin);
+            pairRequest.inputPin(pairingA.pin);
+            const credentialBPromise = pairRequest.waitForPairing();
             const credentialAPromise = pairingA.waitForPairing();
 
             await Promise.all([credentialAPromise, credentialBPromise]);
@@ -338,7 +342,8 @@ describe("SConnect", () => {
             });
 
             const pairRequest = await pairRequestPromise;
-            const credentialBPromise = pairRequest.inputPin(pairingA.pin);
+            pairRequest.inputPin(pairingA.pin);
+            const credentialBPromise = pairRequest.waitForPairing();
             const credentialAPromise = pairingA.waitForPairing();
 
             await Promise.all([credentialAPromise, credentialBPromise]);
@@ -422,7 +427,8 @@ describe("SConnect", () => {
             });
 
             const pairRequest = await pairRequestPromise;
-            const credentialBPromise = pairRequest.inputPin(pairingA.pin);
+            pairRequest.inputPin(pairingA.pin);
+            const credentialBPromise = pairRequest.waitForPairing();
             const credentialAPromise = pairingA.waitForPairing();
 
             const [credentialA, credentialB] = await Promise.all([credentialAPromise, credentialBPromise]);
@@ -496,7 +502,8 @@ describe("SConnect", () => {
             });
 
             const pairRequest = await pairRequestPromise;
-            const credentialBPromise = pairRequest.inputPin(pairingA.pin);
+            pairRequest.inputPin(pairingA.pin);
+            const credentialBPromise = pairRequest.waitForPairing();
             const credentialAPromise = pairingA.waitForPairing();
 
             const [credentialA, credentialB] = await Promise.all([credentialAPromise, credentialBPromise]);
@@ -565,7 +572,8 @@ describe("SConnect", () => {
             });
 
             const pairRequest = await pairRequestPromise;
-            const credentialBPromise = pairRequest.inputPin(pairingA.pin);
+            pairRequest.inputPin(pairingA.pin);
+            const credentialBPromise = pairRequest.waitForPairing();
             const credentialAPromise = pairingA.waitForPairing();
 
             const [credentialA, credentialB] = await Promise.all([credentialAPromise, credentialBPromise]);
