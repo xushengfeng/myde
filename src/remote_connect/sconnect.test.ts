@@ -312,7 +312,7 @@ describe("SConnect", () => {
             pairRequest.reject();
             await rejectPromise;
 
-            // A 的配对应该超时失败（因为 B 拒绝了，不会完成 PAKE）
+            // A 应该立即收到拒绝通知（不是超时）
             await expect(pairingA.waitForPairing()).rejects.toThrow();
 
             channelA.disconnect();

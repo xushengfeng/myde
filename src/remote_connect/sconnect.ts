@@ -29,6 +29,7 @@ interface KeyPair {
 // 协议消息类型
 const MSG_PAIR_REQUEST = 0x01;
 const MSG_USE_YOUR_PIN = 0x02; // 通知对方使用自己的 PIN
+const MSG_PAIR_REJECT = 0x07; // 拒绝配对请求
 const MSG_CONNECT_REQUEST = 0x03;
 const MSG_CONNECT_ACCEPT = 0x04;
 const MSG_CONNECT_REJECT = 0x05;
@@ -172,8 +173,16 @@ export class SConnect implements SecureChannel {
             resolvePairing = resolve;
             rejectPairing = reject;
         });
+        pairingPromise.catch(() => {}); // 防止 unhandled rejection
 
         this.setState("Handshaking", "pake");
+
+        // 设置回调：当收到 MSG_PAIR_REJECT 消息时，立即 reject
+        this.onPairReject = () => {
+            this.setState("Ready");
+            rejectPairing(new SConnectError("PAIRING_FAILED", "Pairing rejected by peer"));
+            pairingStarted = true; // 确保其他地方不再启动
+        };
 
         // startResponder 始终作为 Server，使用指定的 PIN 计算 verifier
         const startResponder = (usePin: string) => {
@@ -239,6 +248,10 @@ export class SConnect implements SecureChannel {
 
         this.sendCipher = null;
         this.receiveCipher = null;
+
+        // 清理回调
+        this.onUseYourPin = null;
+        this.onPairReject = null;
 
         if (this.noise) {
             destroyNoise(this.noise);
@@ -404,7 +417,7 @@ export class SConnect implements SecureChannel {
     private isHandshakeMessage(type: number): boolean {
         switch (this.handshakeType) {
             case "pake":
-                return type === MSG_APP_DATA; // PAKE uses raw data
+                return type === MSG_APP_DATA || type === MSG_PAIR_REJECT;
             case "ik":
                 return type === MSG_NOISE_DATA || type === MSG_APP_DATA;
             case "connect-request":
@@ -417,7 +430,15 @@ export class SConnect implements SecureChannel {
     }
 
     private handleHandshakeMessage(data: Uint8Array): void {
-        // 握手消息由各握手方法的消息处理器处理
+        const type = data[0];
+
+        // 处理配对拒绝消息
+        if (type === MSG_PAIR_REJECT) {
+            this.handlePairReject();
+            return;
+        }
+
+        // 其他握手消息由各握手方法的消息处理器处理
         // 这里只是路由，实际处理在各方法的 messageHandler 中
     }
 
@@ -442,6 +463,13 @@ export class SConnect implements SecureChannel {
         if (this.onUseYourPin) {
             this.onUseYourPin();
             this.onUseYourPin = null;
+        }
+    }
+
+    private handlePairReject(): void {
+        if (this.onPairReject) {
+            this.onPairReject();
+            this.onPairReject = null;
         }
     }
 
@@ -506,6 +534,8 @@ export class SConnect implements SecureChannel {
 
     // 当前配对请求的回调函数，用于处理 MSG_USE_YOUR_PIN 消息
     private onUseYourPin: (() => void) | null = null;
+    // 当前配对请求的回调函数，用于处理 MSG_PAIR_REJECT 消息
+    private onPairReject: (() => void) | null = null;
 
     private handlePairRequest(payload: Uint8Array): void {
         const senderIdLength = new DataView(payload.buffer, payload.byteOffset).getUint16(0);
@@ -522,6 +552,7 @@ export class SConnect implements SecureChannel {
             resolvePairing = resolve;
             rejectPairing = reject;
         });
+        pairingPromise.catch(() => {}); // 防止 unhandled rejection
 
         const startPairing = (pin: string) => {
             if (pairingStarted) return;
@@ -580,6 +611,8 @@ export class SConnect implements SecureChannel {
                 return pairingPromise;
             },
             reject: () => {
+                // 通知对方配对被拒绝
+                this.signalAdapter.send(new Uint8Array([MSG_PAIR_REJECT])).catch(() => {});
                 rejectPairing(new SConnectError("PAIRING_FAILED", "Pairing rejected"));
             },
         };
