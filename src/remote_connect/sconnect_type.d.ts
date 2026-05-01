@@ -200,6 +200,10 @@ interface ConnectRequest {
 
 /** 通道配置选项 */
 interface ChannelOptions {
+    /** 连接请求超时时间（毫秒），默认 30000 */
+    connectTimeout?: number;
+    /** 配对超时时间（毫秒），默认 60000（PIN 输入需要更多时间） */
+    pairingTimeout?: number;
     /** 握手超时时间（毫秒），默认 30000 */
     handshakeTimeout?: number;
     /** 允许的最大 PIN 错误尝试次数，默认 5，超出后自动断开并触发 error 事件 */
@@ -253,21 +257,43 @@ interface ConnectNeedsPairing {
 
 type ConnectResult = ConnectSuccess | ConnectFailed | ConnectNeedsPairing;
 
+// ================= 状态类型 =================
+
+/** 通道状态 */
+type ChannelState = "Idle" | "Ready" | "Handshaking" | "Connected";
+
+/** 握手类型 */
+type HandshakeType = "pake" | "ik" | "connect-request" | "connect-response" | null;
+
 // ================= 错误类型 =================
 
 /** 安全通道相关错误的基类 */
-declare class SecureChannelError extends Error {
-    code:
-        | "PIN_INVALID"
-        | "HANDSHAKE_FAILED"
-        | "CHANNEL_NOT_READY"
-        | "RECONNECT_FAILED"
-        | "CREDENTIAL_ROTATION_FAILED"
-        | "PAIRING_FAILED";
+declare class SConnectError extends Error {
+    code: ErrorCode;
+    recoverable: boolean;
 }
 
-declare class InvalidPINFormatError extends SecureChannelError {}
-declare class HandshakeFailedError extends SecureChannelError {}
-declare class ChannelNotReadyError extends SecureChannelError {}
-declare class ReconnectFailedError extends SecureChannelError {}
-declare class PairingFailedError extends SecureChannelError {}
+type ErrorCode =
+    // 配对错误
+    | "PIN_INVALID"
+    | "PIN_MISMATCH"
+    | "PAKE_FAILED"
+    // 连接错误
+    | "TIMEOUT"
+    | "ADAPTER_ERROR"
+    | "PEER_DISCONNECTED"
+    // 验证错误
+    | "CREDENTIAL_INVALID"
+    | "CREDENTIAL_EXPIRED"
+    | "IK_HANDSHAKE_FAILED"
+    // 状态错误
+    | "NOT_INITIALIZED"
+    | "ALREADY_CONNECTING"
+    | "CHANNEL_NOT_READY"
+    // 对端错误
+    | "UNEXPECTED_MESSAGE"
+    | "NOT_CONNECTED"
+    | "ALREADY_CONNECTED"
+    // 致命错误
+    | "ADAPTER_INIT_FAILED"
+    | "CRYPTO_UNAVAILABLE";

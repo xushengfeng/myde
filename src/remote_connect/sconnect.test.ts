@@ -117,8 +117,10 @@ describe("SConnect", () => {
             await channelA.send(testMessage);
             await new Promise((r) => setTimeout(r, 50));
 
+            // 原始数据包含类型字节（0x20 = MSG_APP_DATA）
             expect(rawSentData).not.toBeNull();
-            expect(new TextDecoder().decode(rawSentData!)).toBe(testMessage);
+            expect(rawSentData![0]).toBe(0x20); // 应用数据类型
+            expect(new TextDecoder().decode(rawSentData!.subarray(1))).toBe(testMessage);
             expect(receivedMessages).toContain(testMessage);
 
             channelA.disconnect();
@@ -230,8 +232,8 @@ describe("SConnect", () => {
 
         it("B 可以拒绝配对请求", async () => {
             const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair();
-            const channelA = new SConnect(adapterA, { handshakeTimeout: 2000 });
-            const channelB = new SConnect(adapterB, { handshakeTimeout: 2000 });
+            const channelA = new SConnect(adapterA, { pairingTimeout: 2000 });
+            const channelB = new SConnect(adapterB, { pairingTimeout: 2000 });
 
             await channelA.init("device-a");
             await channelB.init("device-b");
@@ -353,7 +355,8 @@ describe("SConnect", () => {
             await new Promise((r) => setTimeout(r, 100));
 
             expect(rawSentData).not.toBeNull();
-            expect(new TextDecoder().decode(rawSentData!)).toBe(testMessage);
+            expect(rawSentData![0]).toBe(0x20);
+            expect(new TextDecoder().decode(rawSentData!.subarray(1))).toBe(testMessage);
             expect(receivedMessages).toContain(testMessage);
 
             channelA.disconnect();
