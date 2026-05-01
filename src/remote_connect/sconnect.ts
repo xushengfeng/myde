@@ -155,11 +155,11 @@ export class SConnect implements SecureChannel {
         return this.PIN;
     }
 
-    pairInit(credential: CredentialPublicInfo): {
+    async pairInit(credential: CredentialPublicInfo): Promise<{
         pin: string;
         inputOtherPin: (pin: string) => void;
         waitForPairing: () => Promise<Credential>;
-    } {
+    }> {
         if (this.state !== "Ready") {
             throw new SConnectError("CHANNEL_NOT_READY", `Cannot pair in ${this.state} state`);
         }
@@ -171,6 +171,8 @@ export class SConnect implements SecureChannel {
         let pairingStarted = false;
         let waitingForPairing = false;
         let savedPin: string | null = null;
+
+        await this.signalAdapter.connect(credential.remoteDeviceId);
 
         const pairingPromise = new Promise<Credential>((resolve, reject) => {
             resolvePairing = resolve;

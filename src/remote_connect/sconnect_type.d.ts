@@ -62,14 +62,14 @@ export declare class SecureChannel {
     /**
      * 在需要身份验证的信道中进行配对，通过 PIN，完成基于 PAKE 的握手，只需要一方输入 PIN。
      */
-    pairInit(credential: CredentialPublicInfo): {
+    pairInit(credential: CredentialPublicInfo): Promise<{
         /** 展示给用户的 6 位数字 PIN，需要用户输入到另一端 */
         pin: string;
         /** 用户输入对方的 PIN */
         inputOtherPin: (pin: string) => void;
         /** 等待配对完成 */
         waitForPairing: () => Promise<Credential>;
-    };
+    }>;
 
     // ================= 数据收发（安全通道建立后） =================
 

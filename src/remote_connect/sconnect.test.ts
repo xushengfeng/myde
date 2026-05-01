@@ -200,7 +200,7 @@ describe("SConnect", () => {
             });
 
             // A 发起配对
-            const pairingA = channelA.pairInit({
+            const pairingA = await channelA.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
@@ -251,7 +251,7 @@ describe("SConnect", () => {
             });
 
             // A 发起配对
-            const pairingA = channelA.pairInit({
+            const pairingA = await channelA.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
@@ -299,7 +299,7 @@ describe("SConnect", () => {
             });
 
             // A 发起配对
-            const pairingA = channelA.pairInit({
+            const pairingA = await channelA.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
@@ -342,7 +342,7 @@ describe("SConnect", () => {
             });
 
             // A 发起配对
-            const pairingA = channelA.pairInit({
+            const pairingA = await channelA.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
@@ -391,7 +391,7 @@ describe("SConnect", () => {
             });
 
             // A 发起配对
-            const pairingA = channelA.pairInit({
+            const pairingA = await channelA.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
@@ -435,7 +435,7 @@ describe("SConnect", () => {
             });
 
             // A 发起配对
-            const pairingA = channelA1.pairInit({
+            const pairingA = await channelA1.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
@@ -510,7 +510,7 @@ describe("SConnect", () => {
             });
 
             // A 发起配对
-            const pairingA = channelA1.pairInit({
+            const pairingA = await channelA1.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
@@ -580,7 +580,7 @@ describe("SConnect", () => {
             });
 
             // A 发起配对
-            const pairingA = channelA1.pairInit({
+            const pairingA = await channelA1.pairInit({
                 myDeviceId: "device-a",
                 remoteDeviceId: "device-b",
             });
