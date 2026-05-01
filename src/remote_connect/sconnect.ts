@@ -35,6 +35,7 @@ const MSG_CONNECT_ACCEPT = 0x04;
 const MSG_CONNECT_REJECT = 0x05;
 const MSG_ERROR = 0x06;
 const MSG_NOISE_DATA = 0x10;
+const MSG_SPAKE_DATA = 0x11;
 const MSG_APP_DATA = 0x20;
 
 type SecureChannelEvents = {
@@ -74,6 +75,8 @@ export class SConnect implements SecureChannel {
     // 状态机
     private state: ChannelState = "Idle";
     private handshakeType: HandshakeType = null;
+    private handshakeMessageHandler: ((type: number, payload: Uint8Array) => void) | null = null;
+    private handshakeMessageQueue: { type: number; payload: Uint8Array }[] = [];
 
     // 设备身份
     private myDeviceId = "";
@@ -417,7 +420,12 @@ export class SConnect implements SecureChannel {
     private isHandshakeMessage(type: number): boolean {
         switch (this.handshakeType) {
             case "pake":
-                return type === MSG_APP_DATA || type === MSG_PAIR_REJECT;
+                return (
+                    type === MSG_APP_DATA ||
+                    type === MSG_PAIR_REJECT ||
+                    type === MSG_USE_YOUR_PIN ||
+                    type === MSG_SPAKE_DATA
+                );
             case "ik":
                 return type === MSG_NOISE_DATA || type === MSG_APP_DATA;
             case "connect-request":
@@ -431,6 +439,7 @@ export class SConnect implements SecureChannel {
 
     private handleHandshakeMessage(data: Uint8Array): void {
         const type = data[0];
+        const payload = data.subarray(1);
 
         // 处理配对拒绝消息
         if (type === MSG_PAIR_REJECT) {
@@ -438,8 +447,18 @@ export class SConnect implements SecureChannel {
             return;
         }
 
+        if (type === MSG_USE_YOUR_PIN) {
+            this.handleUseYourPin();
+            return;
+        }
+
         // 其他握手消息由各握手方法的消息处理器处理
-        // 这里只是路由，实际处理在各方法的 messageHandler 中
+        if (this.handshakeMessageHandler) {
+            this.handshakeMessageHandler(type, payload);
+        } else {
+            // 如果还未注册处理器（例如正在进行耗时的异步密钥计算），先缓冲消息
+            this.handshakeMessageQueue.push({ type, payload });
+        }
     }
 
     private handleProtocolMessage(data: Uint8Array): void {
@@ -642,11 +661,11 @@ export class SConnect implements SecureChannel {
             remoteDeviceId: senderId,
             accept: (credential: Credential): Promise<ConnectResult> => {
                 this.setState("Handshaking", "connect-response");
-                this.signalAdapter.send(new Uint8Array([MSG_CONNECT_ACCEPT]));
+                this.sendHandshakeMessage(MSG_CONNECT_ACCEPT, new Uint8Array(0)).catch(() => {});
                 return this.performIKResponder(credential);
             },
             reject: () => {
-                this.signalAdapter.send(new Uint8Array([MSG_CONNECT_REJECT]));
+                this.sendHandshakeMessage(MSG_CONNECT_REJECT, new Uint8Array(0)).catch(() => {});
             },
         };
 
@@ -662,14 +681,14 @@ export class SConnect implements SecureChannel {
                 reject(new SConnectError("TIMEOUT", "Connect request timeout"));
             }, this.options.connectTimeout);
 
-            const messageHandler = (data: Uint8Array) => {
-                if (data[0] === MSG_CONNECT_ACCEPT) {
+            const messageHandler = (type: number, _payload: Uint8Array) => {
+                if (type === MSG_CONNECT_ACCEPT) {
                     clearTimeout(timeout);
                     this.activeTimers.delete(timeout);
                     this.restoreMessageHandler();
                     this.setState("Handshaking", "ik");
                     this.performIKInitiator(credential).then(resolve).catch(reject);
-                } else if (data[0] === MSG_CONNECT_REJECT) {
+                } else if (type === MSG_CONNECT_REJECT) {
                     clearTimeout(timeout);
                     this.activeTimers.delete(timeout);
                     this.restoreMessageHandler();
@@ -678,7 +697,7 @@ export class SConnect implements SecureChannel {
                 }
             };
 
-            this.signalAdapter.onMessage(messageHandler);
+            this.setHandshakeMessageHandler(messageHandler);
 
             const myIdBytes = new TextEncoder().encode(this.myDeviceId);
             const message = new Uint8Array(1 + 2 + myIdBytes.length);
@@ -723,11 +742,12 @@ export class SConnect implements SecureChannel {
                 reject(new SConnectError("TIMEOUT", "PAKE pairing timeout"));
             }, this.options.pairingTimeout);
 
-            const messageHandler = async (data: Uint8Array) => {
+            const messageHandler = async (type: number, payload: Uint8Array) => {
+                if (type !== MSG_SPAKE_DATA) return;
                 try {
-                    const spakeLen = new DataView(data.buffer, data.byteOffset).getUint16(0);
-                    const spakeMsg = data.subarray(2, 2 + spakeLen);
-                    const remotePublicKey = data.subarray(2 + spakeLen);
+                    const spakeLen = new DataView(payload.buffer, payload.byteOffset).getUint16(0);
+                    const spakeMsg = payload.subarray(2, 2 + spakeLen);
+                    const remotePublicKey = payload.subarray(2 + spakeLen);
 
                     const serverMsg = serverState.getMessage();
                     const myPublicKey = this.myKeyPair?.publicKey ?? new Uint8Array();
@@ -735,7 +755,7 @@ export class SConnect implements SecureChannel {
                     new DataView(response.buffer).setUint16(0, serverMsg.length);
                     response.set(serverMsg, 2);
                     response.set(myPublicKey, 2 + serverMsg.length);
-                    await this.signalAdapter.send(response);
+                    await this.sendHandshakeMessage(MSG_SPAKE_DATA, response);
 
                     const sharedSecret = await serverState.finish(spakeMsg);
 
@@ -765,7 +785,7 @@ export class SConnect implements SecureChannel {
                 }
             };
 
-            this.signalAdapter.onMessage(messageHandler);
+            this.setHandshakeMessageHandler(messageHandler);
         });
     }
 
@@ -790,7 +810,6 @@ export class SConnect implements SecureChannel {
         new DataView(message.buffer).setUint16(0, clientMsg.length);
         message.set(clientMsg, 2);
         message.set(myPublicKey, 2 + clientMsg.length);
-        await this.signalAdapter.send(message);
 
         return new Promise((resolve, reject) => {
             const timeout = this.createTimer(() => {
@@ -800,11 +819,12 @@ export class SConnect implements SecureChannel {
                 reject(new SConnectError("TIMEOUT", "PAKE pairing timeout"));
             }, this.options.pairingTimeout);
 
-            const messageHandler = async (data: Uint8Array) => {
+            const messageHandler = async (type: number, payload: Uint8Array) => {
+                if (type !== MSG_SPAKE_DATA) return;
                 try {
-                    const spakeLen = new DataView(data.buffer, data.byteOffset).getUint16(0);
-                    const spakeMsg = data.subarray(2, 2 + spakeLen);
-                    const remotePublicKey = data.subarray(2 + spakeLen);
+                    const spakeLen = new DataView(payload.buffer, payload.byteOffset).getUint16(0);
+                    const spakeMsg = payload.subarray(2, 2 + spakeLen);
+                    const remotePublicKey = payload.subarray(2 + spakeLen);
 
                     const sharedSecret = await clientState.finish(spakeMsg);
 
@@ -834,7 +854,15 @@ export class SConnect implements SecureChannel {
                 }
             };
 
-            this.signalAdapter.onMessage(messageHandler);
+            this.setHandshakeMessageHandler(messageHandler);
+
+            this.sendHandshakeMessage(MSG_SPAKE_DATA, message).catch((err) => {
+                this.activeTimers.delete(timeout);
+                clearTimeout(timeout);
+                this.restoreMessageHandler();
+                this.setState("Ready");
+                reject(err);
+            });
         });
     }
 
@@ -849,9 +877,12 @@ export class SConnect implements SecureChannel {
             initialiseNoise(this.noise, new Uint8Array(0), credential.remotePublicKey);
 
             const handshakeMessage = sendNoise(this.noise);
-            await this.signalAdapter.send(handshakeMessage);
 
-            const response = await this.waitForNoiseResponse();
+            const responsePromise = this.waitForNoiseResponse();
+
+            this.sendHandshakeMessage(MSG_NOISE_DATA, handshakeMessage).catch(() => {});
+
+            const response = await responsePromise;
             recvNoise(this.noise, response);
 
             if (this.noise.complete) {
@@ -886,17 +917,18 @@ export class SConnect implements SecureChannel {
                 reject(new SConnectError("TIMEOUT", "IK handshake timeout"));
             }, this.options.handshakeTimeout);
 
-            const messageHandler = (data: Uint8Array) => {
+            const messageHandler = (type: number, payload: Uint8Array) => {
+                if (type !== MSG_NOISE_DATA) return;
                 try {
                     const keyPair = this.myKeyPair;
                     if (!keyPair) throw new Error("No key pair");
 
                     this.noise = createNoise("IK", false, keyPair);
                     initialiseNoise(this.noise, new Uint8Array(0));
-                    recvNoise(this.noise, data);
+                    recvNoise(this.noise, payload);
 
                     const responseMsg = sendNoise(this.noise);
-                    this.signalAdapter.send(responseMsg);
+                    this.sendHandshakeMessage(MSG_NOISE_DATA, responseMsg).catch(() => {});
 
                     if (this.noise.complete) {
                         if (!this.signalAdapter.supportNativeEncryption) {
@@ -928,7 +960,7 @@ export class SConnect implements SecureChannel {
                 }
             };
 
-            this.signalAdapter.onMessage(messageHandler);
+            this.setHandshakeMessageHandler(messageHandler);
         });
     }
 
@@ -941,21 +973,41 @@ export class SConnect implements SecureChannel {
                 reject(new SConnectError("TIMEOUT", "Noise handshake timeout"));
             }, this.options.handshakeTimeout);
 
-            const handler = (data: Uint8Array) => {
+            const handler = (type: number, payload: Uint8Array) => {
+                if (type !== MSG_NOISE_DATA) return;
                 this.activeTimers.delete(timeout);
                 clearTimeout(timeout);
                 this.restoreMessageHandler();
-                resolve(data);
+                resolve(payload);
             };
 
-            this.signalAdapter.onMessage(handler);
+            this.setHandshakeMessageHandler(handler);
         });
     }
 
     // ================= 工具方法 =================
 
+    private async sendHandshakeMessage(type: number, payload: Uint8Array): Promise<void> {
+        const message = new Uint8Array(1 + payload.length);
+        message[0] = type;
+        message.set(payload, 1);
+        await this.signalAdapter.send(message);
+    }
+
+    private setHandshakeMessageHandler(handler: (type: number, payload: Uint8Array) => void): void {
+        this.handshakeMessageHandler = handler;
+        // 处理已经排队的消息
+        while (this.handshakeMessageQueue.length > 0) {
+            const msg = this.handshakeMessageQueue.shift();
+            if (msg) {
+                handler(msg.type, msg.payload);
+            }
+        }
+    }
+
     private restoreMessageHandler(): void {
-        this.signalAdapter.onMessage((data) => this.handleRawMessage(data));
+        this.handshakeMessageHandler = null;
+        this.handshakeMessageQueue = [];
     }
 
     private initializeEncryption(sharedSecret: Uint8Array): void {
