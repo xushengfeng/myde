@@ -28,6 +28,7 @@ interface KeyPair {
 
 // 协议消息类型
 const MSG_PAIR_REQUEST = 0x01;
+const MSG_USE_YOUR_PIN = 0x02; // 通知对方使用自己的 PIN
 const MSG_CONNECT_REQUEST = 0x03;
 const MSG_CONNECT_ACCEPT = 0x04;
 const MSG_CONNECT_REJECT = 0x05;
@@ -164,6 +165,8 @@ export class SConnect implements SecureChannel {
         let rejectPairing: (error: Error) => void;
         let pinAttempts = 0;
         let pairingStarted = false;
+        let waitingForPairing = false;
+        let savedPin: string | null = null;
 
         const pairingPromise = new Promise<Credential>((resolve, reject) => {
             resolvePairing = resolve;
@@ -172,12 +175,15 @@ export class SConnect implements SecureChannel {
 
         this.setState("Handshaking", "pake");
 
-        // 立即设置为响应方
-        this.setupPAKEResponder(credential, pin).then(resolvePairing).catch(rejectPairing);
+        // startResponder 始终作为 Server，使用指定的 PIN 计算 verifier
+        const startResponder = (usePin: string) => {
+            if (pairingStarted) return;
+            pairingStarted = true;
+            this.setupPAKEResponder(credential, usePin).then(resolvePairing).catch(rejectPairing);
+        };
 
         const inputOtherPin = (remotePin: string) => {
             if (pairingStarted) return;
-            pairingStarted = true;
 
             pinAttempts++;
             if (pinAttempts > this.options.maxPinAttempts) {
@@ -192,13 +198,38 @@ export class SConnect implements SecureChannel {
                 return;
             }
 
-            this.performPAKEClient(credential, remotePin).then(resolvePairing).catch(rejectPairing);
+            // 通知对方使用自己的 PIN
+            this.signalAdapter.send(new Uint8Array([MSG_USE_YOUR_PIN])).catch(() => {});
+
+            if (waitingForPairing) {
+                // waitForPairing 已调用，用远程 PIN 启动 Server
+                startResponder(remotePin);
+            } else {
+                // 保存 PIN，等 waitForPairing 调用
+                savedPin = remotePin;
+            }
+        };
+
+        const waitForPairing = (): Promise<Credential> => {
+            if (pairingStarted) {
+                return pairingPromise;
+            }
+
+            if (savedPin) {
+                // inputOtherPin 已调用，用远程 PIN 启动 Server
+                startResponder(savedPin);
+            } else {
+                // 未调用 inputOtherPin，用自己的 PIN 启动 Server
+                waitingForPairing = true;
+                startResponder(pin);
+            }
+            return pairingPromise;
         };
 
         // 发送配对请求
         this.sendPairRequest(credential).catch(rejectPairing);
 
-        return { pin, inputOtherPin, waitForPairing: () => pairingPromise };
+        return { pin, inputOtherPin, waitForPairing };
     }
 
     // ================= 断开 =================
@@ -398,9 +429,19 @@ export class SConnect implements SecureChannel {
             case MSG_PAIR_REQUEST:
                 this.handlePairRequest(payload);
                 break;
+            case MSG_USE_YOUR_PIN:
+                this.handleUseYourPin();
+                break;
             case MSG_CONNECT_REQUEST:
                 this.handleConnectRequest(payload);
                 break;
+        }
+    }
+
+    private handleUseYourPin(): void {
+        if (this.onUseYourPin) {
+            this.onUseYourPin();
+            this.onUseYourPin = null;
         }
     }
 
@@ -463,6 +504,9 @@ export class SConnect implements SecureChannel {
 
     // ================= 配对请求 =================
 
+    // 当前配对请求的回调函数，用于处理 MSG_USE_YOUR_PIN 消息
+    private onUseYourPin: (() => void) | null = null;
+
     private handlePairRequest(payload: Uint8Array): void {
         const senderIdLength = new DataView(payload.buffer, payload.byteOffset).getUint16(0);
         const senderId = new TextDecoder().decode(payload.subarray(2, 2 + senderIdLength));
@@ -491,6 +535,13 @@ export class SConnect implements SecureChannel {
             };
 
             this.performPAKEClient(credential, pin).then(resolvePairing).catch(rejectPairing);
+        };
+
+        // 设置回调：当收到 MSG_USE_YOUR_PIN 消息时，用自己的 PIN 启动 Client
+        this.onUseYourPin = () => {
+            if (waitingForPairing && !pairingStarted) {
+                startPairing(this.PIN);
+            }
         };
 
         const request: PairRequest = {
@@ -523,7 +574,7 @@ export class SConnect implements SecureChannel {
                     // inputPin 已调用，开始配对
                     startPairing(savedPin);
                 } else {
-                    // 等待 inputPin 调用
+                    // 等待 inputPin 调用或 MSG_USE_YOUR_PIN 消息
                     waitingForPairing = true;
                 }
                 return pairingPromise;
