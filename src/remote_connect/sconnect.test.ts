@@ -174,7 +174,7 @@ describe("SConnect", () => {
             const pairRequest = await pairRequestPromise;
 
             expect(pairRequest.remoteDeviceId).toBe("device-a");
-            expect(typeof pairRequest.inputPin).toBe("function");
+            expect(typeof pairRequest.inputOtherPin).toBe("function");
             expect(typeof pairRequest.reject).toBe("function");
 
             channelA.disconnect();
@@ -209,7 +209,7 @@ describe("SConnect", () => {
             const pairRequest = await pairRequestPromise;
 
             // B 输入 A 的 PIN
-            pairRequest.inputPin(pairingA.pin);
+            pairRequest.inputOtherPin(pairingA.pin);
             const credentialBPromise = pairRequest.waitForPairing();
 
             // A 等待配对完成
@@ -295,7 +295,7 @@ describe("SConnect", () => {
             });
 
             const pairRequest = await pairRequestPromise;
-            pairRequest.inputPin(pairingA.pin);
+            pairRequest.inputOtherPin(pairingA.pin);
             const credentialBPromise = pairRequest.waitForPairing();
             const credentialAPromise = pairingA.waitForPairing();
 
@@ -344,7 +344,7 @@ describe("SConnect", () => {
             });
 
             const pairRequest = await pairRequestPromise;
-            pairRequest.inputPin(pairingA.pin);
+            pairRequest.inputOtherPin(pairingA.pin);
             const credentialBPromise = pairRequest.waitForPairing();
             const credentialAPromise = pairingA.waitForPairing();
 
@@ -430,7 +430,7 @@ describe("SConnect", () => {
             });
 
             const pairRequest = await pairRequestPromise;
-            pairRequest.inputPin(pairingA.pin);
+            pairRequest.inputOtherPin(pairingA.pin);
             const credentialBPromise = pairRequest.waitForPairing();
             const credentialAPromise = pairingA.waitForPairing();
 
@@ -505,7 +505,7 @@ describe("SConnect", () => {
             });
 
             const pairRequest = await pairRequestPromise;
-            pairRequest.inputPin(pairingA.pin);
+            pairRequest.inputOtherPin(pairingA.pin);
             const credentialBPromise = pairRequest.waitForPairing();
             const credentialAPromise = pairingA.waitForPairing();
 
@@ -575,7 +575,7 @@ describe("SConnect", () => {
             });
 
             const pairRequest = await pairRequestPromise;
-            pairRequest.inputPin(pairingA.pin);
+            pairRequest.inputOtherPin(pairingA.pin);
             const credentialBPromise = pairRequest.waitForPairing();
             const credentialAPromise = pairingA.waitForPairing();
 

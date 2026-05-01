@@ -173,9 +173,7 @@ export class SConnect implements SecureChannel {
         this.setState("Handshaking", "pake");
 
         // 立即设置为响应方
-        this.setupPAKEResponder(credential, pin)
-            .then(resolvePairing)
-            .catch(rejectPairing);
+        this.setupPAKEResponder(credential, pin).then(resolvePairing).catch(rejectPairing);
 
         const inputOtherPin = (remotePin: string) => {
             if (pairingStarted) return;
@@ -194,9 +192,7 @@ export class SConnect implements SecureChannel {
                 return;
             }
 
-            this.performPAKEClient(credential, remotePin)
-                .then(resolvePairing)
-                .catch(rejectPairing);
+            this.performPAKEClient(credential, remotePin).then(resolvePairing).catch(rejectPairing);
         };
 
         // 发送配对请求
@@ -436,8 +432,7 @@ export class SConnect implements SecureChannel {
 
         const reencoded = new TextEncoder().encode(text);
         const isText =
-            reencoded.length === payload.length &&
-            !payload.some((b) => b < 32 && b !== 10 && b !== 13 && b !== 9);
+            reencoded.length === payload.length && !payload.some((b) => b < 32 && b !== 10 && b !== 13 && b !== 9);
         if (isText) {
             this.emit("message", text);
         } else {
@@ -495,14 +490,12 @@ export class SConnect implements SecureChannel {
                 remoteDeviceId: senderId,
             };
 
-            this.performPAKEClient(credential, pin)
-                .then(resolvePairing)
-                .catch(rejectPairing);
+            this.performPAKEClient(credential, pin).then(resolvePairing).catch(rejectPairing);
         };
 
         const request: PairRequest = {
             remoteDeviceId: senderId,
-            inputPin: (pin: string): void => {
+            inputOtherPin: (pin: string): void => {
                 pinAttempts++;
                 if (pinAttempts > this.options.maxPinAttempts) {
                     rejectPairing(new SConnectError("PIN_MISMATCH", "Maximum PIN attempts exceeded"));
@@ -621,10 +614,7 @@ export class SConnect implements SecureChannel {
 
     // ================= PAKE =================
 
-    private async setupPAKEResponder(
-        credential: CredentialPublicInfo,
-        myPin: string,
-    ): Promise<Credential> {
+    private async setupPAKEResponder(credential: CredentialPublicInfo, myPin: string): Promise<Credential> {
         await this.signalAdapter.connect(credential.remoteDeviceId);
 
         const spake = spake2({
@@ -639,11 +629,7 @@ export class SConnect implements SecureChannel {
             credential.remoteDeviceId,
         );
 
-        const serverState = await spake.startServer(
-            credential.myDeviceId,
-            credential.remoteDeviceId,
-            verifier,
-        );
+        const serverState = await spake.startServer(credential.myDeviceId, credential.remoteDeviceId, verifier);
 
         return new Promise((resolve, reject) => {
             const timeout = this.createTimer(() => {
@@ -699,10 +685,7 @@ export class SConnect implements SecureChannel {
         });
     }
 
-    private async performPAKEClient(
-        credential: CredentialPublicInfo,
-        remotePin: string,
-    ): Promise<Credential> {
+    private async performPAKEClient(credential: CredentialPublicInfo, remotePin: string): Promise<Credential> {
         await this.signalAdapter.connect(credential.remoteDeviceId);
 
         const spake = spake2({
@@ -922,10 +905,7 @@ export class SConnect implements SecureChannel {
         this.emit("disconnect");
     }
 
-    private emit<K extends keyof SecureChannelEvents>(
-        event: K,
-        ...args: Parameters<SecureChannelEvents[K]>
-    ): void {
+    private emit<K extends keyof SecureChannelEvents>(event: K, ...args: Parameters<SecureChannelEvents[K]>): void {
         const handlers = this.eventHandlers.get(event);
         if (handlers) {
             for (const handler of handlers) {
@@ -948,18 +928,13 @@ export class SConnect implements SecureChannel {
 
     private wrapError(error: unknown): SConnectError {
         if (error instanceof SConnectError) return error;
-        return new SConnectError(
-            "ADAPTER_ERROR",
-            error instanceof Error ? error.message : String(error),
-        );
+        return new SConnectError("ADAPTER_ERROR", error instanceof Error ? error.message : String(error));
     }
 
     private async generateKeyPair(): Promise<KeyPair> {
-        const keyPair = await crypto.subtle.generateKey(
-            { name: "X25519" } as AlgorithmIdentifier,
-            true,
-            ["deriveBits"],
-        );
+        const keyPair = await crypto.subtle.generateKey({ name: "X25519" } as AlgorithmIdentifier, true, [
+            "deriveBits",
+        ]);
 
         const publicKeyBuffer = await crypto.subtle.exportKey("raw", (keyPair as CryptoKeyPair).publicKey);
         const privateKeyBuffer = await crypto.subtle.exportKey("pkcs8", (keyPair as CryptoKeyPair).privateKey);

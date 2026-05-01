@@ -179,7 +179,7 @@ interface PairRequest {
     /** 发起方的显示名称（可选） */
     remoteDisplayName?: string;
     /** 输入对方的 PIN（触发 PAKE 交换） */
-    inputPin: (pin: string) => void;
+    inputOtherPin: (pin: string) => void;
     /** 等待配对完成 */
     waitForPairing: () => Promise<Credential>;
     /** 拒绝配对请求 */
