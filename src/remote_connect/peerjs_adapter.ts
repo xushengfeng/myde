@@ -44,6 +44,11 @@ export class PeerjsAdapter implements UntrustedSignalingAdapter {
             });
 
             this.peer.on("connection", (conn) => {
+                if (this.connection) {
+                    console.warn("Already have an active connection, rejecting new connection from", conn.peer);
+                    conn.close();
+                    return;
+                }
                 this.setupConnection(conn);
             });
         });
