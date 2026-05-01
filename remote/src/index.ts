@@ -2,7 +2,7 @@ import type {} from "../../src/desktop-api";
 import { RemoteRender } from "./remote-render";
 import { PeerManager, createConnectionUI } from "./server";
 
-const { MSysApi, MInputMap, MConnect, MSetting } = myde;
+const { MSysApi, MInputMap, MSetting } = myde;
 
 const nSetting = MSetting.init<{
     "remote.myId": string;
@@ -110,7 +110,7 @@ class RemoteDesktop {
                     }
                     break;
 
-                case "register":
+                case "register": {
                     if (peer.type === "launcher") {
                         this.render.sendToplevelListToPeer(peerId);
                     } else if (peer.toplevelId) {
@@ -131,6 +131,7 @@ class RemoteDesktop {
                     }
                     nSetting.nset("remote.peers", peers);
                     break;
+                }
 
                 case "requestToplevelState":
                     if (msg.toplevelId) {

@@ -12,46 +12,9 @@ export interface PeerInfo {
     toplevelId: string | null;
 }
 
-class NoPeerAdapter {
-    trustIdentity = false as const;
-    supportNativeEncryption = true;
-    private conn: any;
-    private messageHandler: ((data: Uint8Array) => void) | null = null;
-
-    constructor(conn: any) {
-        this.conn = conn;
-        this.conn.on("data", (d: any) => {
-            let bytes: Uint8Array | null = null;
-            if (d instanceof Uint8Array) bytes = d;
-            else if (d instanceof ArrayBuffer) bytes = new Uint8Array(d);
-            else if (typeof d === "string") bytes = new TextEncoder().encode(d);
-
-            if (this.messageHandler) this.messageHandler(bytes);
-        });
-    }
-
-    async init(_myId: string) {}
-    async connect() {}
-    async send(data: Uint8Array) {
-        this.conn.send(data);
-    }
-    close() {
-        this.conn.close();
-    }
-    onMessage(handler: (data: Uint8Array) => void) {
-        this.messageHandler = handler;
-    }
-    onClose(handler: () => void) {
-        this.conn.on("close", handler);
-    }
-    onError(handler: (err: Error) => void) {
-        this.conn.on("error", (e: any) => handler(new Error(String(e))));
-    }
-}
-
 export class PeerManager {
     private peers = new Map<string, PeerInfo>();
-    private adapter: PeerjsAdapter | null = null;
+    private connect: SConnect | null = null;
     private serverId: string;
     private myPin = "";
 
@@ -64,57 +27,46 @@ export class PeerManager {
     }
 
     async start() {
-        this.adapter = new PeerjsAdapter({ debug: 1 });
-        const connect = new SConnect(this.adapter);
-        await connect.init(this.serverId);
+        const adapter = new PeerjsAdapter({ debug: 0 });
+        this.connect = new SConnect(adapter);
+        await this.connect.init(this.serverId);
+        this.myPin = this.connect.updatePIN();
 
-        const peer = (this.adapter as any).peer;
-        peer.on("connection", (conn: any) => {
-            conn.on("open", () => {
-                this.handleIncomingConnection(conn);
-            });
+        this.connect.on("pairRequest", async (req) => {
+            console.log(`[server] pairRequest from ${req.remoteDeviceId}`);
+            if (this.onConnectHandler) {
+                this.onConnectHandler(req.remoteDeviceId, this.myPin);
+            }
+            try {
+                const credential = await req.waitForPairing();
+                console.log(`[server] pairing with ${req.remoteDeviceId} succeeded`);
+                this.registerPeer(req.remoteDeviceId);
+            } catch (err) {
+                console.error(`[server] pairing failed:`, err);
+            }
         });
 
-        this.myPin = connect.updatePIN();
+        this.connect.on("disconnect", () => {
+            console.log(`[server] disconnected`);
+            for (const [id] of this.peers) {
+                this.peers.delete(id);
+                if (this.onDisconnectHandler) this.onDisconnectHandler(id);
+            }
+        });
     }
 
-    private async handleIncomingConnection(conn: any) {
-        const remotePeerId = conn.peer;
-        if (this.peers.has(remotePeerId)) return;
-
-        console.log(`[server] incoming connection from ${remotePeerId}`);
-
-        const adapter = new NoPeerAdapter(conn);
-        const connect = new SConnect(adapter);
-        await connect.init(this.serverId);
-
-        const pairing = connect.pairInit({
-            myDeviceId: this.serverId,
-            remoteDeviceId: remotePeerId,
-        });
-
-        this.myPin = pairing.pin;
-        if (this.onConnectHandler) {
-            this.onConnectHandler(remotePeerId, this.myPin);
-        }
-
-        try {
-            await pairing.waitForPairing();
-            console.log(`[server] pairing with ${remotePeerId} succeeded`);
-        } catch (err) {
-            console.error(`[server] pairing with ${remotePeerId} failed:`, err);
-            return;
-        }
+    private registerPeer(peerId: string) {
+        if (!this.connect) return;
 
         const peerInfo: PeerInfo = {
-            id: remotePeerId,
-            connect,
+            id: peerId,
+            connect: this.connect,
             type: "launcher",
             toplevelId: null,
         };
-        this.peers.set(remotePeerId, peerInfo);
+        this.peers.set(peerId, peerInfo);
 
-        connect.on("message", (payload: string) => {
+        this.connect.on("message", (payload: string) => {
             try {
                 const msg = JSON.parse(payload);
                 if (msg.type === "register") {
@@ -123,58 +75,37 @@ export class PeerManager {
                 }
             } catch {}
             if (this.onMessageHandler) {
-                try {
-                    this.onMessageHandler(remotePeerId, payload);
-                } catch (err) {
-                    console.error("[server] onMessageHandler threw:", err);
-                }
+                this.onMessageHandler(peerId, payload);
             }
-        });
-
-        connect.on("disconnect", () => {
-            this.peers.delete(remotePeerId);
-            if (this.onDisconnectHandler) {
-                this.onDisconnectHandler(remotePeerId);
-            }
-        });
-
-        connect.on("error", (err: Error) => {
-            console.error(`Peer ${remotePeerId} error:`, err);
         });
     }
 
     getMyPin(): string {
         return this.myPin;
     }
-
     getServerId(): string {
         return this.serverId;
     }
-
     getPeer(id: string): PeerInfo | undefined {
         return this.peers.get(id);
     }
-
     getAllPeers(): PeerInfo[] {
         return Array.from(this.peers.values());
     }
 
     sendMessage(peerId: string, message: any): void {
         const peer = this.peers.get(peerId);
-        if (peer) {
-            peer.connect.send(JSON.stringify(message)).catch(() => {});
-        }
+        if (peer) peer.connect.send(JSON.stringify(message)).catch(() => {});
     }
 
     broadcast(message: any, toplevelId?: string | null): void {
+        if (!this.connect) return;
         const msgStr = JSON.stringify(message);
         for (const [_id, peer] of this.peers) {
             if (peer.type === "launcher") {
-                peer.connect.send(msgStr).catch(() => {});
-            } else if (peer.type === "render") {
-                if (!toplevelId || peer.toplevelId === toplevelId) {
-                    peer.connect.send(msgStr).catch(() => {});
-                }
+                this.connect.send(msgStr).catch(() => {});
+            } else if (peer.type === "render" && (!toplevelId || peer.toplevelId === toplevelId)) {
+                this.connect.send(msgStr).catch(() => {});
             }
         }
     }
@@ -182,23 +113,19 @@ export class PeerManager {
     setOnMessage(handler: MessageHandler) {
         this.onMessageHandler = handler;
     }
-
     setOnDisconnect(handler: DisconnectHandler) {
         this.onDisconnectHandler = handler;
     }
-
     setOnConnect(handler: ConnectHandler) {
         this.onConnectHandler = handler;
     }
 
     destroy() {
-        for (const [_id, peer] of this.peers) {
-            peer.connect.disconnect();
-        }
+        for (const [_id, peer] of this.peers) peer.connect.disconnect();
         this.peers.clear();
-        if (this.adapter) {
-            this.adapter.close();
-            this.adapter = null;
+        if (this.connect) {
+            this.connect.disconnect();
+            this.connect = null;
         }
     }
 }
@@ -206,33 +133,20 @@ export class PeerManager {
 export function createConnectionUI(manager: PeerManager) {
     const style = document.createElement("style");
     style.textContent = `
-        .conn-panel {
-            position: fixed;
-            bottom: 16px;
-            right: 16px;
-            background: #1e1e1e;
-            color: #ccc;
-            border: 1px solid #333;
-            border-radius: 8px;
-            padding: 14px 18px;
-            font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            z-index: 99999;
-            min-width: 260px;
-            box-shadow: 0 4px 20px rgba(0,0,0,.5);
-        }
-        .conn-panel h3 { margin: 0 0 8px; font-size: 14px; color: #fff; }
-        .conn-panel .row { display: flex; justify-content: space-between; margin-bottom: 4px; }
-        .conn-panel .label { color: #888; }
-        .conn-panel .val { color: #4caf50; font-family: monospace; user-select: all; }
-        .conn-panel .peers-section { margin-top: 10px; border-top: 1px solid #333; padding-top: 8px; }
-        .conn-panel .peer-item { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 12px; }
-        .conn-panel .peer-id { font-family: monospace; color: #aaa; flex: 1; overflow: hidden; text-overflow: ellipsis; }
-        .conn-panel .peer-type { margin: 0 8px; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
-        .conn-panel .peer-type.launcher { background: #1b5e20; color: #a5d6a7; }
-        .conn-panel .peer-type.render { background: #0d47a1; color: #90caf9; }
-        .conn-panel .disconnect-btn { background: none; border: 1px solid #555; color: #ef5350; border-radius: 3px; padding: 1px 6px; cursor: pointer; font-size: 11px; }
-        .conn-panel .disconnect-btn:hover { background: #b71c1c22; }
-        .conn-panel .empty { color: #555; font-size: 12px; }
+        .conn-panel{position:fixed;bottom:16px;right:16px;background:#1e1e1e;color:#ccc;border:1px solid #333;border-radius:8px;padding:14px 18px;font:13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;z-index:99999;min-width:260px;box-shadow:0 4px 20px rgba(0,0,0,.5)}
+        .conn-panel h3{margin:0 0 8px;font-size:14px;color:#fff}
+        .conn-panel .row{display:flex;justify-content:space-between;margin-bottom:4px}
+        .conn-panel .label{color:#888}
+        .conn-panel .val{color:#4caf50;font-family:monospace;user-select:all}
+        .conn-panel .peers-section{margin-top:10px;border-top:1px solid #333;padding-top:8px}
+        .conn-panel .peer-item{display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:12px}
+        .conn-panel .peer-id{font-family:monospace;color:#aaa;flex:1;overflow:hidden;text-overflow:ellipsis}
+        .conn-panel .peer-type{margin:0 8px;padding:1px 6px;border-radius:3px;font-size:11px}
+        .conn-panel .peer-type.launcher{background:#1b5e20;color:#a5d6a7}
+        .conn-panel .peer-type.render{background:#0d47a1;color:#90caf9}
+        .conn-panel .disconnect-btn{background:none;border:1px solid #555;color:#ef5350;border-radius:3px;padding:1px 6px;cursor:pointer;font-size:11px}
+        .conn-panel .disconnect-btn:hover{background:#b71c1c22}
+        .conn-panel .empty{color:#555;font-size:12px}
     `;
     document.head.appendChild(style);
 
@@ -255,17 +169,12 @@ export function createConnectionUI(manager: PeerManager) {
                 )
                 .join("");
         }
-
         panel.innerHTML = `
             <h3>Connection</h3>
             <div class="row"><span class="label">Server ID</span><span class="val">${manager.getServerId()}</span></div>
             <div class="row"><span class="label">PIN</span><span class="val">${manager.getMyPin() || "…"}</span></div>
-            <div class="peers-section">
-                <div class="row"><span class="label">Peers (${peers.length})</span></div>
-                ${peersHtml}
-            </div>
+            <div class="peers-section"><div class="row"><span class="label">Peers (${peers.length})</span></div>${peersHtml}</div>
         `;
-
         panel.querySelectorAll(".disconnect-btn").forEach((btn) => {
             btn.addEventListener("click", () => {
                 const id = (btn as HTMLElement).dataset.id;
@@ -277,11 +186,7 @@ export function createConnectionUI(manager: PeerManager) {
         });
     }
 
-    manager.setOnConnect((peerId, pin) => {
-        render();
-    });
-    manager.setOnDisconnect(() => {
-        render();
-    });
+    manager.setOnConnect(() => render());
+    manager.setOnDisconnect(() => render());
     render();
 }
