@@ -52,7 +52,7 @@ describe("SConnect", () => {
             };
 
             const receivedMessages: string[] = [];
-            channelB.on("message", (msg) => receivedMessages.push(msg));
+            channelB.on("data", (_, text) => receivedMessages.push(text()));
 
             await Promise.all([channelA.tryConnect(), channelB.tryConnect()]);
 
@@ -130,7 +130,7 @@ describe("SConnect", () => {
             await channelB.init("device-b");
 
             const receivedMessages: string[] = [];
-            channelB.on("message", (msg) => receivedMessages.push(msg));
+            channelB.on("data", (_, text) => receivedMessages.push(text()));
 
             // B 监听配对请求
             const pairRequestPromise = new Promise<PairRequest>((resolve) => {
@@ -181,7 +181,7 @@ describe("SConnect", () => {
             const pinB = channelB.updatePIN();
 
             const receivedMessages: string[] = [];
-            channelB.on("message", (msg) => receivedMessages.push(msg));
+            channelB.on("data", (_, text) => receivedMessages.push(text()));
 
             // B 监听配对请求
             const pairRequestPromise = new Promise<PairRequest>((resolve) => {
@@ -321,7 +321,7 @@ describe("SConnect", () => {
             };
 
             const receivedMessages: string[] = [];
-            channelB.on("message", (msg) => receivedMessages.push(msg));
+            channelB.on("data", (_, text) => receivedMessages.push(text()));
 
             // B 监听配对请求
             const pairRequestPromise = new Promise<PairRequest>((resolve) => {
@@ -583,7 +583,7 @@ describe("SConnect", () => {
             await channelB2.init("device-b", "device-a");
 
             const receivedMessages: string[] = [];
-            channelB2.on("message", (msg) => receivedMessages.push(msg));
+            channelB2.on("data", (_, text) => receivedMessages.push(text()));
 
             // B 监听连接请求
             const connectRequestPromise = new Promise<ConnectRequest>((resolve) => {
@@ -647,7 +647,7 @@ describe("SConnect", () => {
             await channelB.init("device-b", "device-a");
 
             const receivedData: ArrayBuffer[] = [];
-            channelB.on("binary", (data) => receivedData.push(data));
+            channelB.on("data", (data) => receivedData.push(data));
 
             await Promise.all([channelA.tryConnect(), channelB.tryConnect()]);
 

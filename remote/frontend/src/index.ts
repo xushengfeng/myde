@@ -165,7 +165,7 @@ class App {
 
     private onConnected() {
         this.connect.send(JSON.stringify({ type: "register", clientType: "launcher" }));
-        this.connect.on("message", (s: string) => this.onServerMsg(s));
+        this.connect.on("data", (_, t) => this.onServerMsg(t()));
         this.connect.on("disconnect", () => {
             this.connected = false;
             this.setStatus("Disconnected", false);

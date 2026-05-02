@@ -1,4 +1,4 @@
-import type { renderTools, renderToolsOn } from "../../src/renderer/view/render_tools";
+import type { renderTools, renderToolsOn } from "../../src/view/render_tools";
 import type { PeerManager } from "./server";
 
 interface CanvasState {
@@ -95,7 +95,7 @@ export class RemoteRender implements renderTools {
             canvasId,
             width: canvasData.canvas.width,
             height: canvasData.canvas.height,
-            data: Array.from(imageData.data),
+            data: Array.from(imageData.data), // todo 发送二进制
         };
         if (toplevelId) message.toplevelId = toplevelId;
 

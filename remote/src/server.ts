@@ -66,7 +66,8 @@ export class PeerManager {
         };
         this.peers.set(peerId, peerInfo);
 
-        this.connect.on("message", (payload: string) => {
+        this.connect.on("data", (_, payloadF) => {
+            const payload = payloadF();
             try {
                 const msg = JSON.parse(payload);
                 if (msg.type === "register") {

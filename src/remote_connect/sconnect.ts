@@ -9,6 +9,7 @@ import type {
     HandshakeType,
     PairRequest,
     SecureChannel,
+    SecureChannelEvents,
     SignalingAdapter,
 } from "./sconnect_type";
 import { spake2 } from "./spake/index";
@@ -39,30 +40,45 @@ const MSG_NOISE_DATA = 0x10;
 const MSG_SPAKE_DATA = 0x11;
 const MSG_APP_DATA = 0x20;
 
-type SecureChannelEvents = {
-    ready: () => void;
-    message: (payload: string) => void;
-    binary: (data: ArrayBuffer) => void;
-    disconnect: () => void;
-    error: (err: SConnectError) => void;
-    pairRequest: (request: PairRequest) => void;
-    connectRequest: (request: ConnectRequest) => void;
-    credentialRotated: (updatedCredential: Credential) => void;
-    credentialInvalidated: (remoteDeviceId: string) => void;
-};
-
 // 错误类
 class SConnectError extends Error {
-    code: string;
+    code: ErrorCode;
     recoverable: boolean;
 
-    constructor(code: string, message: string, recoverable = true) {
+    constructor(code: ErrorCode, message: string, recoverable = true) {
         super(message);
         this.name = "SConnectError";
         this.code = code;
         this.recoverable = recoverable;
     }
 }
+
+type ErrorCode =
+    // 配对错误
+    | "PIN_INVALID"
+    | "PIN_MISMATCH"
+    | "PAKE_FAILED"
+    | "PAIRING_FAILED"
+    // 连接错误
+    | "TIMEOUT"
+    | "ADAPTER_ERROR"
+    | "PEER_DISCONNECTED"
+    // 验证错误
+    | "CREDENTIAL_INVALID"
+    | "CREDENTIAL_EXPIRED"
+    | "IK_HANDSHAKE_FAILED"
+    // 状态错误
+    | "NOT_INITIALIZED"
+    | "ALREADY_CONNECTING"
+    | "CHANNEL_NOT_READY"
+    | "REMOTE_ID_UNKNOWN"
+    // 对端错误
+    | "UNEXPECTED_MESSAGE"
+    | "NOT_CONNECTED"
+    | "ALREADY_CONNECTED"
+    // 致命错误
+    | "ADAPTER_INIT_FAILED"
+    | "CRYPTO_UNAVAILABLE";
 
 class Limiter {
     private lastTime = 0;
@@ -105,6 +121,8 @@ export class SConnect implements SecureChannel {
 
     private pairLimiter: Limiter;
     private connectLimiter: Limiter;
+
+    private textDecoder = new TextDecoder();
 
     constructor(signalAdapter: SignalingAdapter, options?: ChannelOptions) {
         this.signalAdapter = signalAdapter;
@@ -531,12 +549,14 @@ export class SConnect implements SecureChannel {
             try {
                 payload = new Uint8Array(this.receiveCipher.decrypt(payload));
             } catch {
-                this.emit("binary", new Uint8Array(payload).buffer as ArrayBuffer);
+                this.emit("data", new Uint8Array(payload).buffer as ArrayBuffer, () =>
+                    this.textDecoder.decode(payload),
+                );
                 return;
             }
         }
 
-        const text = new TextDecoder().decode(payload);
+        const text = this.textDecoder.decode(payload);
         try {
             const parsed = JSON.parse(text);
             if (parsed.type === "credential_rotation") {
@@ -549,14 +569,7 @@ export class SConnect implements SecureChannel {
             // Not JSON
         }
 
-        const reencoded = new TextEncoder().encode(text);
-        const isText =
-            reencoded.length === payload.length && !payload.some((b) => b < 32 && b !== 10 && b !== 13 && b !== 9);
-        if (isText) {
-            this.emit("message", text);
-        } else {
-            this.emit("binary", payload.buffer as ArrayBuffer);
-        }
+        this.emit("data", payload.buffer, () => this.textDecoder.decode(payload));
     }
 
     // ================= 错误消息 =================

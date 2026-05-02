@@ -91,31 +91,7 @@ export declare class SecureChannel {
      * @param event 事件名
      * @param callback 回调函数
      */
-    on(event: "ready", callback: () => void): void;
-    on(event: "message", callback: (payload: string) => void): void;
-    on(event: "binary", callback: (data: ArrayBuffer) => void): void;
-    on(event: "disconnect", callback: () => void): void;
-    on(event: "error", callback: (err: SecureChannelError) => void): void;
-    /**
-     * 收到配对请求事件（接收方监听）。
-     * 回调参数包含发起方信息，以及 inputPin/reject 函数。
-     */
-    on(event: "pairRequest", callback: (request: PairRequest) => void): void;
-    /**
-     * 收到连接请求事件（接收方监听，用于 Credential 重连）。
-     * 回调参数包含发起方信息，以及 accept/reject 函数。
-     */
-    on(event: "connectRequest", callback: (request: ConnectRequest) => void): void;
-    /**
-     * 凭证轮换事件（己方或对方主动发起）。
-     * 应用层应使用 `updatedCredential` 覆盖本地存储的旧凭证。
-     */
-    on(event: "credentialRotated", callback: (updatedCredential: Credential) => void): void;
-    /**
-     * 凭证失效事件（如对方撤销信任，导致我方凭证不再被接受）。
-     * 应用层应删除本地对应的凭证，并提示用户重新配对。
-     */
-    on(event: "credentialInvalidated", callback: (remoteDeviceId: string) => void): void;
+    on<K extends keyof SecureChannelEvents>(event: K, callback: SecureChannelEvents[K]): void;
 
     /** 移除事件监听 */
     off(event: string, callback: Function): void;
@@ -263,6 +239,17 @@ interface ConnectNeedsPairing {
 
 type ConnectResult = ConnectSuccess | ConnectFailed | ConnectNeedsPairing;
 
+export type SecureChannelEvents = {
+    ready: () => void;
+    data: (data: ArrayBuffer, text: () => string) => void;
+    disconnect: () => void;
+    error: (err: SConnectError) => void;
+    pairRequest: (request: PairRequest) => void;
+    connectRequest: (request: ConnectRequest) => void;
+    credentialRotated: (updatedCredential: Credential) => void;
+    credentialInvalidated: (remoteDeviceId: string) => void;
+};
+
 // ================= 状态类型 =================
 
 /** 通道状态 */
@@ -270,36 +257,3 @@ type ChannelState = "Idle" | "Ready" | "Handshaking" | "Connected";
 
 /** 握手类型 */
 type HandshakeType = "pake" | "ik" | "connect-request" | "connect-response" | null;
-
-// ================= 错误类型 =================
-
-/** 安全通道相关错误的基类 */
-declare class SConnectError extends Error {
-    code: ErrorCode;
-    recoverable: boolean;
-}
-
-type ErrorCode =
-    // 配对错误
-    | "PIN_INVALID"
-    | "PIN_MISMATCH"
-    | "PAKE_FAILED"
-    // 连接错误
-    | "TIMEOUT"
-    | "ADAPTER_ERROR"
-    | "PEER_DISCONNECTED"
-    // 验证错误
-    | "CREDENTIAL_INVALID"
-    | "CREDENTIAL_EXPIRED"
-    | "IK_HANDSHAKE_FAILED"
-    // 状态错误
-    | "NOT_INITIALIZED"
-    | "ALREADY_CONNECTING"
-    | "CHANNEL_NOT_READY"
-    // 对端错误
-    | "UNEXPECTED_MESSAGE"
-    | "NOT_CONNECTED"
-    | "ALREADY_CONNECTED"
-    // 致命错误
-    | "ADAPTER_INIT_FAILED"
-    | "CRYPTO_UNAVAILABLE";

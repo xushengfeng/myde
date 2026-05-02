@@ -32,7 +32,7 @@
         "sconnect_type.d.ts"
     ],
     "scripts": {
-        "build": "vite build && npm run build:types",
+        "build": "vite build && npm run build:types && cp sconnect_type.d.ts dist/",
         "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
         "test": "vitest run"
     },
