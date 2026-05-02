@@ -662,6 +662,109 @@ describe("SConnect", () => {
             channelB.disconnect();
         });
     });
+
+    describe("频率限制", () => {
+        it("应限制配对请求频率", async () => {
+            const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair();
+            const channelA = new SConnect(adapterA, { pairInterval: 1000 });
+            const channelB = new SConnect(adapterB, { pairInterval: 1000 });
+
+            await channelA.init("device-a");
+            await channelB.init("device-b");
+
+            // B 监听配对请求
+            let pairRequestCount = 0;
+            channelB.on("pairRequest", (request) => {
+                if (pairRequestCount === 0) {
+                    request.reject();
+                }
+                pairRequestCount++;
+            });
+
+            let errorCount = 0;
+
+            // A 连续发起多个配对请求
+            for (let i = 0; i < 5; i++) {
+                try {
+                    const p = await channelA.pairInit({
+                        myDeviceId: "device-a",
+                        remoteDeviceId: "device-b",
+                    });
+                    await p.waitForPairing();
+                } catch (e) {
+                    errorCount++;
+                }
+            }
+
+            // 由于频率限制，B 应该只收到有限的配对请求
+            expect(pairRequestCount).toBeLessThan(5);
+            expect(errorCount).toBe(5);
+
+            channelA.disconnect();
+            channelB.disconnect();
+        });
+
+        it("应限制连接请求频率", async () => {
+            const [adapterA1, adapterB1] = UntrustedLoopbackAdapter.createPair();
+            const channelA1 = new SConnect(adapterA1, { handshakeTimeout: 10000 });
+            const channelB1 = new SConnect(adapterB1, { handshakeTimeout: 10000 });
+
+            await channelA1.init("device-a");
+            await channelB1.init("device-b");
+
+            // B 监听配对请求
+            const pairRequestPromise = new Promise<PairRequest>((resolve) => {
+                channelB1.on("pairRequest", (request) => {
+                    resolve(request);
+                });
+            });
+
+            // A 发起配对
+            const pairingA = await channelA1.pairInit({
+                myDeviceId: "device-a",
+                remoteDeviceId: "device-b",
+            });
+
+            const pairRequest = await pairRequestPromise;
+            pairRequest.inputOtherPin(pairingA.pin);
+            const credentialBPromise = pairRequest.waitForPairing();
+            const credentialAPromise = pairingA.waitForPairing();
+
+            const [credentialA] = await Promise.all([credentialAPromise, credentialBPromise]);
+
+            channelA1.disconnect();
+            channelB1.disconnect();
+
+            const [adapterA2, adapterB2] = UntrustedLoopbackAdapter.createPair();
+            const channelA = new SConnect(adapterA2, { connectInterval: 100 });
+            const channelB = new SConnect(adapterB2, { connectInterval: 100 });
+
+            await channelA.init("device-a", "device-b");
+            await channelB.init("device-b", "device-a");
+
+            // B 监听连接请求
+            let connectRequestCount = 0;
+            channelB.on("connectRequest", (request) => {
+                if (connectRequestCount === 0) {
+                    request.reject();
+                }
+                connectRequestCount++;
+            });
+
+            // A 连续发起多个连接请求
+            for (let i = 0; i < 20; i++) {
+                const r = await channelA.tryConnect(credentialA);
+                // 本来只拒绝第一次连接请求，后续的应该被频率限制拒绝
+                expect(r.success).toBeFalsy();
+            }
+
+            // 由于频率限制，B 应该只收到有限的连接请求
+            expect(connectRequestCount).toBeLessThan(20);
+
+            channelA.disconnect();
+            channelB.disconnect();
+        });
+    });
 });
 
 // TODO: 安全性验证

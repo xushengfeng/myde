@@ -64,6 +64,22 @@ class SConnectError extends Error {
     }
 }
 
+class Limiter {
+    private lastTime = 0;
+    constructor(private interval: number) {}
+    canExecute(): boolean {
+        const now = Date.now();
+        if (now - this.lastTime >= this.interval) {
+            this.lastTime = now;
+            return true;
+        }
+        return false;
+    }
+    cleanup() {
+        this.lastTime = 0;
+    }
+}
+
 export class SConnect implements SecureChannel {
     private signalAdapter: SignalingAdapter;
     private options: Required<ChannelOptions>;
@@ -87,6 +103,9 @@ export class SConnect implements SecureChannel {
     // 计时器管理
     private activeTimers: Set<ReturnType<typeof setTimeout>> = new Set();
 
+    private pairLimiter: Limiter;
+    private connectLimiter: Limiter;
+
     constructor(signalAdapter: SignalingAdapter, options?: ChannelOptions) {
         this.signalAdapter = signalAdapter;
         this.options = {
@@ -94,7 +113,12 @@ export class SConnect implements SecureChannel {
             pairingTimeout: options?.pairingTimeout ?? 60000,
             handshakeTimeout: options?.handshakeTimeout ?? 30000,
             maxPinAttempts: options?.maxPinAttempts ?? 5,
+            pairInterval: options?.pairInterval ?? 1000,
+            connectInterval: options?.connectInterval ?? 20,
         };
+
+        this.pairLimiter = new Limiter(this.options.pairInterval);
+        this.connectLimiter = new Limiter(this.options.connectInterval);
 
         this.signalAdapter.onMessage((data) => this.handleRawMessage(data));
         this.signalAdapter.onClose(() => this.handleDisconnect());
@@ -564,6 +588,15 @@ export class SConnect implements SecureChannel {
     private onPairReject: (() => void) | null = null;
 
     private handlePairRequest(payload: Uint8Array): void {
+        if (!this.pairLimiter.canExecute()) {
+            // 考虑到id都是临时可变的，无法区分真实设备，所以全部限制
+            // todo 中间信息攻击，比如useyourpin dos，或者其它，需要状态机限制顺序和个数
+            // todo 提示被频繁占用
+            // todo 其他可能的配对方式
+            this.signalAdapter.send(new Uint8Array([MSG_PAIR_REJECT])).catch(() => {}); // todo 区分拒绝原因
+            return;
+        }
+
         const senderIdLength = new DataView(payload.buffer, payload.byteOffset).getUint16(0);
         const senderId = new TextDecoder().decode(payload.subarray(2, 2 + senderIdLength));
 
@@ -666,6 +699,12 @@ export class SConnect implements SecureChannel {
 
         if (senderId !== this.remoteId) {
             this.sendHandshakeMessage(MSG_CONNECT_REJECT, new Uint8Array(0)).catch(() => {});
+            return;
+        }
+
+        if (!this.connectLimiter.canExecute()) {
+            // todo 提示被频繁占用
+            this.signalAdapter.send(new Uint8Array([MSG_CONNECT_REJECT])).catch(() => {});
             return;
         }
 

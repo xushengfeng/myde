@@ -207,6 +207,10 @@ interface ChannelOptions {
     handshakeTimeout?: number;
     /** 允许的最大 PIN 错误尝试次数，默认 5，超出后自动断开并触发 error 事件 */
     maxPinAttempts?: number;
+    /** 配对请求间隔限制（毫秒），默认 1000 */
+    pairInterval?: number;
+    /** 连接请求间隔限制（毫秒），默认 20 */
+    connectInterval?: number;
 }
 
 interface CredentialPublicInfo {
