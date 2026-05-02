@@ -26,14 +26,11 @@ const channelA = new SConnect(adapterA);
 const channelB = new SConnect(adapterB);
 
 // 初始化设备身份
-await channelA.init("device-a");
-await channelB.init("device-b");
+await channelA.init("device-a", "device-b");
+await channelB.init("device-b", "device-a");
 
 // 建立连接
-const result = await channelA.tryConnect({
-    myDeviceId: "device-a",
-    remoteDeviceId: "device-b",
-});
+const result = await channelA.tryConnect();
 
 if (result.success) {
     // 发送消息
@@ -101,13 +98,17 @@ await channelA.send("Secure message");
 ### 3. 使用凭证重连
 
 ```typescript
-// ===== 发起方 A =====
 // A 有 B 的 Credential（之前配对获得的）
+// 必须提供对方 id，Credential 里有
+await channelA.init("device-a", "device-b");
+await channelB.init("device-b", "device-a");
+// ===== 发起方 A =====
 const credentialOfB = loadCredential("device-b");
 const result = await channelA.tryConnect(credentialOfB);
 if (result.success) {
     console.log("连接成功");
 }
+// 如果 { success: false, reason: "NEEDS_PAIRING" } ，需要重新执行配对流程
 
 // ===== 接收方 B =====
 channelB.on("connectRequest", async (request) => {
@@ -127,6 +128,14 @@ channelB.on("connectRequest", async (request) => {
 });
 ```
 
+## 理念
+
+- 通道本身无状态，不持有任何长期凭证。凭证记忆由外部应用层处理
+- 每个id不代表设备，而是连接的两个端点，如果两个端点建立连接，那不能进行更多连接，除非创建新的连接通道
+- 双方id由上层注入，通道仅负责使用这些id进行握手和加密通信。如果某个设备有多个连接，实际上就有多个id
+- 所有凭证的存储、加载、更新均由外部通过返回值/回调管理。
+- 支持"临时会话"模式（应用层不保存返回的 Credential 即可）。
+
 ## API 参考
 
 ### SConnect
@@ -136,10 +145,10 @@ class SConnect implements SecureChannel {
     constructor(signalAdapter: SignalingAdapter, options?: ChannelOptions);
 
     // 初始化设备身份
-    init(myDeviceId: string, keyPair?: KeyPair): Promise<Uint8Array>;
+    init(myDeviceId: string, remoteId?: string): Promise<void>;
 
     // 尝试连接
-    tryConnect(credential: CredentialPublicInfo | Credential): Promise<ConnectResult>;
+    tryConnect(credential?: CredentialPublicInfo | Credential): Promise<ConnectResult>;
 
     // 发起方调用：发起配对请求
     pairInit(credential: CredentialPublicInfo): Promise<{
