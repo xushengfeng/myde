@@ -203,6 +203,8 @@ export class SConnect implements SecureChannel {
             if (pairingStarted) return;
 
             pinAttempts++;
+
+            // todo 掩耳盗铃
             if (pinAttempts > this.options.maxPinAttempts) {
                 this.setState("Ready");
                 rejectPairing(new SConnectError("PIN_MISMATCH", "Maximum PIN attempts exceeded"));
@@ -662,6 +664,11 @@ export class SConnect implements SecureChannel {
         const senderIdLength = new DataView(payload.buffer, payload.byteOffset).getUint16(0);
         const senderId = new TextDecoder().decode(payload.subarray(2, 2 + senderIdLength));
 
+        if (senderId !== this.remoteId) {
+            this.sendHandshakeMessage(MSG_CONNECT_REJECT, new Uint8Array(0)).catch(() => {});
+            return;
+        }
+
         const request: ConnectRequest = {
             remoteDeviceId: senderId,
             accept: (credential: Credential): Promise<ConnectResult> => {
@@ -779,6 +786,7 @@ export class SConnect implements SecureChannel {
                     };
 
                     this.setState("Connected");
+                    this.remoteId = credential.remoteDeviceId;
                     this.emit("ready");
                     resolve(fullCredential);
                 } catch {
@@ -848,6 +856,7 @@ export class SConnect implements SecureChannel {
                     };
 
                     this.setState("Connected");
+                    this.remoteId = credential.remoteDeviceId;
                     this.emit("ready");
                     resolve(fullCredential);
                 } catch {

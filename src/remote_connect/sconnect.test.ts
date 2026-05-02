@@ -491,6 +491,57 @@ describe("SConnect", () => {
             channelB2.disconnect();
         });
 
+        it("init没有记录时重连失效", async () => {
+            // 第一次配对
+            const [adapterA1, adapterB1] = UntrustedLoopbackAdapter.createPair();
+            const channelA1 = new SConnect(adapterA1, { handshakeTimeout: 10000 });
+            const channelB1 = new SConnect(adapterB1, { handshakeTimeout: 10000 });
+
+            await channelA1.init("device-a");
+            await channelB1.init("device-b");
+
+            // B 监听配对请求
+            const pairRequestPromise = new Promise<PairRequest>((resolve) => {
+                channelB1.on("pairRequest", (request) => {
+                    resolve(request);
+                });
+            });
+
+            // A 发起配对
+            const pairingA = await channelA1.pairInit({
+                myDeviceId: "device-a",
+                remoteDeviceId: "device-b",
+            });
+
+            const pairRequest = await pairRequestPromise;
+            pairRequest.inputOtherPin(pairingA.pin);
+            const credentialBPromise = pairRequest.waitForPairing();
+            const credentialAPromise = pairingA.waitForPairing();
+
+            const [credentialA] = await Promise.all([credentialAPromise, credentialBPromise]);
+
+            channelA1.disconnect();
+            channelB1.disconnect();
+
+            // 第二次重连 - B 自动拒绝
+            const [adapterA2, adapterB2] = UntrustedLoopbackAdapter.createPair();
+            const channelA2 = new SConnect(adapterA2, { handshakeTimeout: 2000 });
+            const channelB2 = new SConnect(adapterB2, { handshakeTimeout: 2000 });
+
+            await channelA2.init("device-a", "device-b");
+            await channelB2.init("device-b");
+
+            // A 发起连接
+            const resultAPromise = channelA2.tryConnect(credentialA);
+
+            // A 应该收到失败结果
+            const resultA = await resultAPromise;
+            expect(resultA.success).toBe(false);
+
+            channelA2.disconnect();
+            channelB2.disconnect();
+        });
+
         it("重连后应能收发消息", async () => {
             // 第一次配对
             const [adapterA1, adapterB1] = UntrustedLoopbackAdapter.createPair();
