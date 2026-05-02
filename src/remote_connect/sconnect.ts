@@ -169,8 +169,6 @@ export class SConnect implements SecureChannel {
         }
 
         const pin = this.PIN || this.updatePIN();
-        let resolvePairing: (credential: Credential) => void;
-        let rejectPairing: (error: Error) => void;
         let pinAttempts = 0;
         let pairingStarted = false;
         let waitingForPairing = false;
@@ -178,10 +176,11 @@ export class SConnect implements SecureChannel {
 
         await this.signalAdapter.connect(credential.remoteDeviceId);
 
-        const pairingPromise = new Promise<Credential>((resolve, reject) => {
-            resolvePairing = resolve;
-            rejectPairing = reject;
-        });
+        const {
+            promise: pairingPromise,
+            resolve: resolvePairing,
+            reject: rejectPairing,
+        } = Promise.withResolvers<Credential>();
         pairingPromise.catch(() => {}); // 防止 unhandled rejection
 
         this.setState("Handshaking", "pake");
@@ -566,17 +565,17 @@ export class SConnect implements SecureChannel {
         const senderIdLength = new DataView(payload.buffer, payload.byteOffset).getUint16(0);
         const senderId = new TextDecoder().decode(payload.subarray(2, 2 + senderIdLength));
 
-        let resolvePairing: (credential: Credential) => void;
-        let rejectPairing: (error: Error) => void;
         let pinAttempts = 0;
         let savedPin: string | null = null;
         let pairingStarted = false;
         let waitingForPairing = false;
 
-        const pairingPromise = new Promise<Credential>((resolve, reject) => {
-            resolvePairing = resolve;
-            rejectPairing = reject;
-        });
+        const {
+            promise: pairingPromise,
+            resolve: resolvePairing,
+            reject: rejectPairing,
+        } = Promise.withResolvers<Credential>();
+
         pairingPromise.catch(() => {}); // 防止 unhandled rejection
 
         const startPairing = (pin: string) => {
@@ -782,7 +781,7 @@ export class SConnect implements SecureChannel {
                     this.setState("Connected");
                     this.emit("ready");
                     resolve(fullCredential);
-                } catch (err) {
+                } catch {
                     this.activeTimers.delete(timeout);
                     clearTimeout(timeout);
                     this.restoreMessageHandler();
@@ -851,7 +850,7 @@ export class SConnect implements SecureChannel {
                     this.setState("Connected");
                     this.emit("ready");
                     resolve(fullCredential);
-                } catch (err) {
+                } catch {
                     this.activeTimers.delete(timeout);
                     clearTimeout(timeout);
                     this.restoreMessageHandler();
@@ -907,7 +906,7 @@ export class SConnect implements SecureChannel {
 
             this.setState("Ready");
             return { success: false };
-        } catch (error) {
+        } catch {
             this.setState("Ready");
             this.emit("error", new SConnectError("IK_HANDSHAKE_FAILED", "Noise IK handshake failed"));
             return { success: false };
@@ -957,7 +956,7 @@ export class SConnect implements SecureChannel {
                         this.setState("Ready");
                         resolve({ success: false });
                     }
-                } catch (err) {
+                } catch {
                     this.activeTimers.delete(timeout);
                     clearTimeout(timeout);
                     this.restoreMessageHandler();

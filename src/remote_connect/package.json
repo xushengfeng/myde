@@ -49,5 +49,8 @@
         "type": "git",
         "url": "https://github.com/xushengfeng/myde/",
         "directory": "src/remote_connect"
+    },
+    "devDependencies": {
+        "@types/b4a": "^1.6.5"
     }
 }

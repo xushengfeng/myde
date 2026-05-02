@@ -21,17 +21,13 @@ export interface NoiseState {
 /**
  * 创建 Noise 握手状态
  */
-export function createNoise(
-    pattern: string,
-    initiator: boolean,
-    staticKeypair?: KeyPair,
-): NoiseState {
+export function createNoise(pattern: string, initiator: boolean, staticKeypair?: KeyPair): NoiseState {
     if (!staticKeypair || staticKeypair.publicKey.length === 0) {
         throw new Error("Static keypair with valid keys is required");
     }
     const b4aKeypair = {
-        publicKey: b4a.from(staticKeypair.publicKey),
-        secretKey: b4a.from(staticKeypair.privateKey),
+        publicKey: b4a.from(staticKeypair.publicKey) as Buffer,
+        secretKey: b4a.from(staticKeypair.privateKey) as Buffer,
     };
     const noise = new Noise(pattern, initiator, b4aKeypair);
     return noise as any;
@@ -40,11 +36,7 @@ export function createNoise(
 /**
  * 初始化握手状态
  */
-export function initialiseNoise(
-    state: NoiseState,
-    prologue: Uint8Array,
-    remoteStatic?: Uint8Array,
-): void {
+export function initialiseNoise(state: NoiseState, prologue: Uint8Array, remoteStatic?: Uint8Array): void {
     const noise = state as any;
     noise.initialise(b4a.from(prologue), remoteStatic ? b4a.from(remoteStatic) : undefined);
 }
@@ -87,13 +79,13 @@ export function createCipher(key: Uint8Array): {
     encrypt: (data: Uint8Array) => Uint8Array;
     decrypt: (data: Uint8Array) => Uint8Array;
 } {
-    const cipher = new Cipher(b4a.from(key));
+    const cipher = new Cipher(b4a.from(key) as Buffer);
     return {
         encrypt: (data: Uint8Array) => {
-            return cipher.encrypt(b4a.from(data));
+            return cipher.encrypt(b4a.from(data) as Buffer);
         },
         decrypt: (data: Uint8Array) => {
-            return cipher.decrypt(b4a.from(data));
+            return cipher.decrypt(b4a.from(data) as Buffer);
         },
     };
 }
