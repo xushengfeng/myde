@@ -26,10 +26,9 @@ export declare class SecureChannel {
      * 必须在 tryConnect 或 pairInit 之前调用。
      *
      * @param myDeviceId 本设备 UUID
-     * @param keyPair 可选的长期密钥对，不提供则自动生成
-     * @returns 本设备的公钥（用于注册或交换）
+     * @param remoteId 可选的远程设备 UUID
      */
-    init(myDeviceId: string, keyPair?: { publicKey: Uint8Array; privateKey: Uint8Array }): Promise<Uint8Array>;
+    init(myDeviceId: string, remoteId?: string): Promise<void>;
 
     /**
      * 主动断开连接并清理会话密钥。
@@ -48,7 +47,7 @@ export declare class SecureChannel {
      * @returns 若成功，返回 `{ success: true, credential }`，其中 credential 可能更新了 lastConnected；
      *          若失败（凭证失效、对方无记录等），返回 `{ success: false }`，需重新走配对流程。
      */
-    tryConnect(credential: CredentialPublicInfo | Credential): Promise<ConnectResult>;
+    tryConnect(credential?: CredentialPrivateInfo): Promise<ConnectResult>;
 
     // ================= 初次配对（需用户传递 PIN） =================
 
@@ -221,20 +220,23 @@ interface CredentialPublicInfo {
     remoteDisplayName?: string;
 }
 
-/**
- * 配对后生成的完整凭证。
- * 应用层负责安全存储（例如存入系统 Keychain 或 Web Crypto 不可提取密钥）。
- * 私钥部分（myPrivateKey）绝不应离开本地设备。
- */
-interface Credential extends CredentialPublicInfo {
+interface CredentialPrivateInfo {
     /** 我方长期私钥（格式取决于底层实现，可能为 CryptoKey 或 Uint8Array） */
-    myPrivateKey: CryptoKey | Uint8Array;
+    myPrivateKey: Uint8Array; // todo 使用 Web Crypto API
     /** 我方长期公钥（用于对方验证我方身份） */
     myPublicKey: Uint8Array;
     /** 对方长期公钥（用于验证对方身份） */
     remotePublicKey: Uint8Array;
     /** 凭证创建时间戳（毫秒） */
     createdAt: number;
+}
+
+/**
+ * 配对后生成的完整凭证。
+ * 应用层负责安全存储（例如存入系统 Keychain 或 Web Crypto 不可提取密钥）。
+ * 私钥部分（myPrivateKey）绝不应离开本地设备。
+ */
+interface Credential extends CredentialPublicInfo, CredentialPrivateInfo {
     /** 上次成功连接时间戳（毫秒），用于 UI 排序 */
     lastConnected?: number;
 }

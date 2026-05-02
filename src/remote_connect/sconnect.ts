@@ -4,6 +4,7 @@ import type {
     ConnectRequest,
     ConnectResult,
     Credential,
+    CredentialPrivateInfo,
     CredentialPublicInfo,
     HandshakeType,
     PairRequest,
@@ -66,6 +67,7 @@ class SConnectError extends Error {
 export class SConnect implements SecureChannel {
     private signalAdapter: SignalingAdapter;
     private options: Required<ChannelOptions>;
+    private remoteId = "";
     private noise: NoiseState | null = null;
     private sendCipher: ReturnType<typeof createCipher> | null = null;
     private receiveCipher: ReturnType<typeof createCipher> | null = null;
@@ -101,33 +103,35 @@ export class SConnect implements SecureChannel {
 
     // ================= 初始化 =================
 
-    async init(myDeviceId: string, keyPair?: KeyPair): Promise<Uint8Array> {
+    async init(myDeviceId: string, remoteId?: string) {
         if (this.state !== "Idle") {
             throw new SConnectError("NOT_INITIALIZED", "Already initialized");
         }
 
         this.myDeviceId = myDeviceId;
+        if (remoteId) {
+            this.remoteId = remoteId;
+        }
         await this.signalAdapter.init(myDeviceId);
 
-        if (keyPair) {
-            this.myKeyPair = keyPair;
-        } else {
-            this.myKeyPair = await this.generateKeyPair();
-        }
+        this.myKeyPair = await this.generateKeyPair();
 
         this.setState("Ready");
-        return this.myKeyPair.publicKey;
     }
 
     // ================= 连接 =================
 
-    async tryConnect(credential: CredentialPublicInfo | Credential): Promise<ConnectResult> {
+    async tryConnect(credential?: CredentialPrivateInfo): Promise<ConnectResult> {
         if (this.state !== "Ready") {
             throw new SConnectError("CHANNEL_NOT_READY", `Cannot connect in ${this.state} state`);
         }
 
+        if (!this.remoteId) {
+            throw new SConnectError("REMOTE_ID_UNKNOWN", "Remote ID is not known. Try pairing first.");
+        }
+
         try {
-            await this.signalAdapter.connect(credential.remoteDeviceId);
+            await this.signalAdapter.connect(this.remoteId);
 
             if (this.signalAdapter.trustIdentity) {
                 this.setState("Connected");
@@ -135,9 +139,9 @@ export class SConnect implements SecureChannel {
                 return { success: true, credential: this.buildCredential(credential) };
             }
 
-            if ("myPrivateKey" in credential && credential.myPrivateKey) {
+            if (credential && "myPrivateKey" in credential && credential.myPrivateKey) {
                 this.setState("Handshaking", "connect-request");
-                return await this.sendConnectRequest(credential as Credential);
+                return await this.sendConnectRequest(credential);
             }
 
             return { success: false, reason: "NEEDS_PAIRING" };
@@ -674,7 +678,7 @@ export class SConnect implements SecureChannel {
         this.emit("connectRequest", request);
     }
 
-    private async sendConnectRequest(credential: Credential): Promise<ConnectResult> {
+    private async sendConnectRequest(credential: CredentialPrivateInfo): Promise<ConnectResult> {
         return new Promise((resolve, reject) => {
             const timeout = this.createTimer(() => {
                 this.restoreMessageHandler();
@@ -870,12 +874,12 @@ export class SConnect implements SecureChannel {
 
     // ================= Noise IK =================
 
-    private async performIKInitiator(credential: Credential): Promise<ConnectResult> {
+    private async performIKInitiator(credential: CredentialPrivateInfo): Promise<ConnectResult> {
         try {
-            const keyPair = this.myKeyPair;
-            if (!keyPair) throw new Error("No key pair");
-
-            this.noise = createNoise("IK", true, keyPair);
+            this.noise = createNoise("IK", true, {
+                privateKey: credential.myPrivateKey,
+                publicKey: credential.myPublicKey,
+            });
             initialiseNoise(this.noise, new Uint8Array(0), credential.remotePublicKey);
 
             const handshakeMessage = sendNoise(this.noise);
@@ -897,7 +901,7 @@ export class SConnect implements SecureChannel {
                 this.emit("ready");
                 return {
                     success: true,
-                    credential: { ...credential, lastConnected: Date.now() },
+                    credential: this.buildCredential(credential),
                 };
             }
 
@@ -910,7 +914,7 @@ export class SConnect implements SecureChannel {
         }
     }
 
-    private async performIKResponder(credential: Credential): Promise<ConnectResult> {
+    private async performIKResponder(credential: CredentialPrivateInfo): Promise<ConnectResult> {
         return new Promise((resolve, reject) => {
             const timeout = this.createTimer(() => {
                 this.restoreMessageHandler();
@@ -922,10 +926,10 @@ export class SConnect implements SecureChannel {
             const messageHandler = (type: number, payload: Uint8Array) => {
                 if (type !== MSG_NOISE_DATA) return;
                 try {
-                    const keyPair = this.myKeyPair;
-                    if (!keyPair) throw new Error("No key pair");
-
-                    this.noise = createNoise("IK", false, keyPair);
+                    this.noise = createNoise("IK", false, {
+                        privateKey: credential.myPrivateKey,
+                        publicKey: credential.myPublicKey,
+                    });
                     initialiseNoise(this.noise, new Uint8Array(0));
                     recvNoise(this.noise, payload);
 
@@ -945,7 +949,7 @@ export class SConnect implements SecureChannel {
                         this.emit("ready");
                         resolve({
                             success: true,
-                            credential: { ...credential, lastConnected: Date.now() },
+                            credential: this.buildCredential(credential),
                         });
                     } else {
                         this.activeTimers.delete(timeout);
@@ -1024,14 +1028,16 @@ export class SConnect implements SecureChannel {
         }
     }
 
-    private buildCredential(credential: CredentialPublicInfo | Credential): Credential {
+    private buildCredential(credential: CredentialPrivateInfo | undefined): Credential {
         return {
-            ...credential,
-            myPrivateKey: "myPrivateKey" in credential ? credential.myPrivateKey : new Uint8Array(),
+            myDeviceId: this.myDeviceId,
+            remoteDeviceId: this.remoteId,
+            myPrivateKey: new Uint8Array(),
             myPublicKey: this.myKeyPair?.publicKey ?? new Uint8Array(),
-            remotePublicKey: "remotePublicKey" in credential ? credential.remotePublicKey : new Uint8Array(),
-            createdAt: "createdAt" in credential ? credential.createdAt : Date.now(),
+            remotePublicKey: new Uint8Array(),
+            createdAt: Date.now(),
             lastConnected: Date.now(),
+            ...credential,
         };
     }
 

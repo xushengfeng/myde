@@ -18,64 +18,16 @@ function waitForEvent<T extends any[], E extends string>(
 }
 
 describe("SConnect", () => {
-    describe("init", () => {
-        it("应返回本设备公钥", async () => {
-            const [adapterA] = LoopbackAdapter.createPair();
-            const channelA = new SConnect(adapterA);
-
-            const publicKey = await channelA.init("device-a");
-
-            expect(publicKey).toBeInstanceOf(Uint8Array);
-            expect(publicKey.length).toBeGreaterThan(0);
-
-            channelA.disconnect();
-        });
-
-        it("应支持传入自定义密钥对", async () => {
-            const [adapterA] = LoopbackAdapter.createPair();
-            const channelA = new SConnect(adapterA);
-
-            const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" } as AlgorithmIdentifier, true, [
-                "sign",
-                "verify",
-            ]);
-            const publicKey = new Uint8Array(
-                await crypto.subtle.exportKey("raw", (keyPair as CryptoKeyPair).publicKey),
-            );
-            const privateKey = new Uint8Array(
-                await crypto.subtle.exportKey("pkcs8", (keyPair as CryptoKeyPair).privateKey),
-            );
-
-            const returnedPublicKey = await channelA.init("device-a", {
-                publicKey,
-                privateKey,
-            });
-
-            expect(returnedPublicKey).toEqual(publicKey);
-
-            channelA.disconnect();
-        });
-    });
-
     describe("受信任信道 (trustIdentity=true)", () => {
         it("应直接建立明文连接", async () => {
             const [adapterA, adapterB] = LoopbackAdapter.createPair();
             const channelA = new SConnect(adapterA);
             const channelB = new SConnect(adapterB);
 
-            await channelA.init("device-a");
-            await channelB.init("device-b");
+            await channelA.init("device-a", "device-b");
+            await channelB.init("device-b", "device-a");
 
-            const [resultA, resultB] = await Promise.all([
-                channelA.tryConnect({
-                    myDeviceId: "device-a",
-                    remoteDeviceId: "device-b",
-                }),
-                channelB.tryConnect({
-                    myDeviceId: "device-b",
-                    remoteDeviceId: "device-a",
-                }),
-            ]);
+            const [resultA, resultB] = await Promise.all([channelA.tryConnect(), channelB.tryConnect()]);
 
             expect(resultA.success).toBe(true);
             expect(resultB.success).toBe(true);
@@ -89,8 +41,8 @@ describe("SConnect", () => {
             const channelA = new SConnect(adapterA);
             const channelB = new SConnect(adapterB);
 
-            await channelA.init("device-a");
-            await channelB.init("device-b");
+            await channelA.init("device-a", "device-b");
+            await channelB.init("device-b", "device-a");
 
             let rawSentData: Uint8Array | null = null;
             const originalSend = adapterA.send.bind(adapterA);
@@ -102,16 +54,7 @@ describe("SConnect", () => {
             const receivedMessages: string[] = [];
             channelB.on("message", (msg) => receivedMessages.push(msg));
 
-            await Promise.all([
-                channelA.tryConnect({
-                    myDeviceId: "device-a",
-                    remoteDeviceId: "device-b",
-                }),
-                channelB.tryConnect({
-                    myDeviceId: "device-b",
-                    remoteDeviceId: "device-a",
-                }),
-            ]);
+            await Promise.all([channelA.tryConnect(), channelB.tryConnect()]);
 
             const testMessage = "plaintext hello";
             await channelA.send(testMessage);
@@ -133,12 +76,9 @@ describe("SConnect", () => {
             const [adapterA, adapterB] = UntrustedLoopbackAdapter.createPair();
             const channelA = new SConnect(adapterA);
 
-            await channelA.init("device-a");
+            await channelA.init("device-a", "device-b");
 
-            const result = await channelA.tryConnect({
-                myDeviceId: "device-a",
-                remoteDeviceId: "device-b",
-            });
+            const result = await channelA.tryConnect();
             expect(result.success).toBe(false);
             if (!result.success) {
                 // @ts-ignore
@@ -424,8 +364,8 @@ describe("SConnect", () => {
             const channelA1 = new SConnect(adapterA1, { handshakeTimeout: 10000 });
             const channelB1 = new SConnect(adapterB1, { handshakeTimeout: 10000 });
 
-            await channelA1.init("device-a");
-            await channelB1.init("device-b");
+            await channelA1.init("device-a", "device-b");
+            await channelB1.init("device-b", "device-a");
 
             // B 监听配对请求
             const pairRequestPromise = new Promise<PairRequest>((resolve) => {
@@ -458,14 +398,8 @@ describe("SConnect", () => {
             const channelA2 = new SConnect(adapterA2, { handshakeTimeout: 10000 });
             const channelB2 = new SConnect(adapterB2, { handshakeTimeout: 10000 });
 
-            await channelA2.init("device-a", {
-                privateKey: credentialA.myPrivateKey as Uint8Array,
-                publicKey: credentialA.myPublicKey,
-            });
-            await channelB2.init("device-b", {
-                privateKey: credentialB.myPrivateKey as Uint8Array,
-                publicKey: credentialB.myPublicKey,
-            });
+            await channelA2.init("device-a", "device-b");
+            await channelB2.init("device-b", "device-a");
 
             // B 监听连接请求
             const connectRequestPromise = new Promise<ConnectRequest>((resolve) => {
@@ -530,14 +464,8 @@ describe("SConnect", () => {
             const channelA2 = new SConnect(adapterA2, { handshakeTimeout: 2000 });
             const channelB2 = new SConnect(adapterB2, { handshakeTimeout: 2000 });
 
-            await channelA2.init("device-a", {
-                privateKey: credentialA.myPrivateKey as Uint8Array,
-                publicKey: credentialA.myPublicKey,
-            });
-            await channelB2.init("device-b", {
-                privateKey: credentialB.myPrivateKey as Uint8Array,
-                publicKey: credentialB.myPublicKey,
-            });
+            await channelA2.init("device-a", "device-b");
+            await channelB2.init("device-b", "device-a");
 
             // B 监听连接请求并拒绝
             const connectRequestPromise = new Promise<ConnectRequest>((resolve) => {
@@ -600,14 +528,8 @@ describe("SConnect", () => {
             const channelA2 = new SConnect(adapterA2, { handshakeTimeout: 10000 });
             const channelB2 = new SConnect(adapterB2, { handshakeTimeout: 10000 });
 
-            await channelA2.init("device-a", {
-                privateKey: credentialA.myPrivateKey as Uint8Array,
-                publicKey: credentialA.myPublicKey,
-            });
-            await channelB2.init("device-b", {
-                privateKey: credentialB.myPrivateKey as Uint8Array,
-                publicKey: credentialB.myPublicKey,
-            });
+            await channelA2.init("device-a", "device-b");
+            await channelB2.init("device-b", "device-a");
 
             const receivedMessages: string[] = [];
             channelB2.on("message", (msg) => receivedMessages.push(msg));
@@ -645,22 +567,13 @@ describe("SConnect", () => {
             const channelA = new SConnect(adapterA);
             const channelB = new SConnect(adapterB);
 
-            await channelA.init("device-a");
-            await channelB.init("device-b");
+            await channelA.init("device-a", "device-b");
+            await channelB.init("device-b", "device-a");
 
             // @ts-ignore
             const readyPromise = waitForEvent(channelA, "ready");
 
-            await Promise.all([
-                channelA.tryConnect({
-                    myDeviceId: "device-a",
-                    remoteDeviceId: "device-b",
-                }),
-                channelB.tryConnect({
-                    myDeviceId: "device-b",
-                    remoteDeviceId: "device-a",
-                }),
-            ]);
+            await Promise.all([channelA.tryConnect(), channelB.tryConnect()]);
 
             await readyPromise;
 
@@ -679,22 +592,13 @@ describe("SConnect", () => {
             const channelA = new SConnect(adapterA);
             const channelB = new SConnect(adapterB);
 
-            await channelA.init("device-a");
-            await channelB.init("device-b");
+            await channelA.init("device-a", "device-b");
+            await channelB.init("device-b", "device-a");
 
             const receivedData: ArrayBuffer[] = [];
             channelB.on("binary", (data) => receivedData.push(data));
 
-            await Promise.all([
-                channelA.tryConnect({
-                    myDeviceId: "device-a",
-                    remoteDeviceId: "device-b",
-                }),
-                channelB.tryConnect({
-                    myDeviceId: "device-b",
-                    remoteDeviceId: "device-a",
-                }),
-            ]);
+            await Promise.all([channelA.tryConnect(), channelB.tryConnect()]);
 
             const testData = new Uint8Array([1, 2, 3, 4, 5]);
             await channelA.sendBinary(testData);
