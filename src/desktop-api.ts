@@ -8,6 +8,8 @@ import type { setting } from "./setting/setting";
 import type { nowConfig } from "./setting/config";
 import { setPowerState } from "./sys_api/power";
 import type { SConnect } from "./remote_connect/sconnect";
+import { mpris } from "./sys_api/mpris";
+import { notification } from "./sys_api/notification";
 
 export const _myde = {
     MSysApi: {
@@ -19,6 +21,8 @@ export const _myde = {
         server,
         fs: new vfs("/"),
         power: setPowerState,
+        media: undefined as unknown as mpris,
+        notification: undefined as unknown as notification,
     },
     MInputMap: {
         mapKeyCode,

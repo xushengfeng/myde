@@ -1,4 +1,6 @@
 const fs = require("node:fs") as typeof import("node:fs");
+const { dbusIO } = require("myde-dbus") as typeof import("myde-dbus");
+const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
 import { addStyle, initDKH, pack } from "dkh-ui";
 import { _myde } from "../../desktop-api";
@@ -7,8 +9,10 @@ import { setting } from "../../setting/setting";
 import { vfs } from "../../sys_api/fs";
 import { SConnect } from "../../remote_connect/sconnect";
 import { PeerjsAdapter } from "../../remote_connect/peerjs_adapter";
+import { mpris } from "../../sys_api/mpris";
+import { notification } from "../../sys_api/notification";
 
-function loadDesktop(p: string) {
+async function loadDesktop(p: string) {
     const dirPath = p.replace(/\/$/, "");
     const packagePath = `${dirPath}/package.json`;
     if (!fs.existsSync(packagePath)) {
@@ -25,6 +29,8 @@ function loadDesktop(p: string) {
         defaultSetting: { version: "0.0.1", "icon.theme": "breeze" },
     });
     myde.MConnect = new SConnect(new PeerjsAdapter());
+    myde.MSysApi.media = new mpris(await newDBusIO());
+    myde.MSysApi.notification = new notification(await newDBusIO());
     const packageData = fs.readFileSync(packagePath, "utf-8");
     const packageJson = JSON.parse(packageData);
     const mainPath = `${dirPath}/${packageJson.main || "index.js"}`;
@@ -34,6 +40,14 @@ function loadDesktop(p: string) {
     script.type = "module";
     script.text = indexData;
     document.body.appendChild(script);
+}
+
+async function newDBusIO() {
+    const socket = new mus.USocket();
+    socket.connect("/run/user/1000/bus");
+    const io = new dbusIO({ socket });
+    await io.connect();
+    return io;
 }
 
 initDKH({ pureStyle: true });
@@ -63,5 +77,5 @@ if (!nodeModule) {
 }
 const desktopPath = urlParams.get("desktop");
 if (desktopPath) {
-    loadDesktop(desktopPath);
+    await loadDesktop(desktopPath);
 }

@@ -17,7 +17,6 @@ export class mpris {
                 this.emitNewPlayer(name);
             }
         });
-
         infc.ListNames().then(([m]) => {
             for (const name of m) {
                 if (name.startsWith("org.mpris.MediaPlayer2.")) {
@@ -42,7 +41,7 @@ export class mpris {
     }
 }
 
-class mprisPlayer {
+export class mprisPlayer {
     private dbusClient: dbusClient;
     private root: dbusInterface | undefined;
     private player: dbusInterface | undefined;
@@ -89,7 +88,7 @@ class mprisPlayer {
     setCurrentTime(s: number) {
         this.getPlayer().set("Position", [BigInt(s * 10e5)], "x");
     }
-    private async metadata() {
+    async metadata() {
         const metadata = (await this.getPlayer().get<"a{sv}">("Metadata"))?.[0];
         const nMetadata: Record<string, any> = {};
         for (const [key, value] of metadata) {
@@ -127,13 +126,6 @@ class mprisPlayer {
     onStatusChange(callback: () => unknown) {
         this.getPlayer().propertiesChanged((changed) => {
             if ("PlaybackStatus" in changed) {
-                callback();
-            }
-        });
-    }
-    onTimeChange(callback: () => unknown) {
-        this.getPlayer().propertiesChanged((changed) => {
-            if ("Position" in changed) {
                 callback();
             }
         });

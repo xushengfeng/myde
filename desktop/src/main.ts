@@ -1,7 +1,8 @@
 import { addClass, button, ele, type ElType, image, pack, setProperty, view } from "dkh-ui";
 
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/desktop-api";
-import { txt } from "dkh-ui";
+import type { mprisPlayer } from "../../src/sys_api/mpris";
+import { txt, dynamicList } from "dkh-ui";
 
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
 const fs = MSysApi.fs;
@@ -161,7 +162,12 @@ class ViewData {
 const viewData = new ViewData();
 
 const planteData: Plant[] = [
-    { id: "0", posi: "top", items: [{ id: "showAllView" }, { id: "clock" }], glow: true },
+    {
+        id: "0",
+        posi: "top",
+        items: [{ id: "showAllView" }, { id: "clock" }, { id: "mediaControl" }, { id: "notifications" }],
+        glow: true,
+    },
     {
         id: "1",
         posi: "bottom",
@@ -1000,6 +1006,132 @@ tools.registerTool("apps", (_tipEl, a) => {
         bindC(c);
     });
     return appsEl;
+});
+
+const notifications = new Map<string, { title: string; content: string; id: string }>();
+tools.registerTool("notifications", (_tipEl) => {
+    const tipEl = pack(_tipEl);
+    const nolist = view("y").style({ display: "none" }).addInto(tipEl);
+    const btn = button("🔔").on("click", () => {
+        if (nolist.el.style.display === "none") {
+            nolist.style({ display: "flex" });
+        } else {
+            nolist.style({ display: "none" });
+        }
+    });
+
+    const d = dynamicList(nolist, [], (id: string) => {
+        const n = notifications.get(id);
+        if (!n) return view();
+        return view("y")
+            .add(
+                view("x").add([
+                    txt(n.title),
+                    button("×").on("click", () => {
+                        notifications.delete(id);
+                        d.setList(Array.from(notifications.keys()));
+                    }),
+                ]),
+            )
+            .add(txt(n.content).style({ fontSize: "12px", color: "gray" }));
+    });
+
+    MSysApi.notification.on("new", (n) => {
+        const id = crypto.randomUUID();
+        notifications.set(id, { content: n.body, title: n.summary, id });
+        d.setList(Array.from(notifications.keys()));
+    });
+
+    MSysApi.notification.init();
+
+    d.setList(Array.from(notifications.keys()));
+
+    return btn;
+});
+
+const mediaControl = new Map<string, mprisPlayer>();
+tools.registerTool("mediaControl", (_tipEl) => {
+    const tipEl = pack(_tipEl);
+    const main = view("y").style({ display: "none" }).addInto(tipEl);
+    const btn = button("🎵").on("click", () => {
+        if (main.el.style.display === "none") {
+            main.style({ display: "flex" });
+        } else {
+            main.style({ display: "none" });
+        }
+    });
+
+    const list = view("x").addInto(main);
+    const ditial = view("y").addInto(main);
+
+    const cover = view().addInto(ditial);
+    const title = view().addInto(ditial);
+    const artist = view().addInto(ditial);
+
+    const controls = view("x").addInto(ditial);
+    const prevBtn = button("⏮️").addInto(controls);
+    const playBtn = button("▶️").addInto(controls);
+    const pauseBtn = button("⏸️").addInto(controls);
+    const nextBtn = button("⏭️").addInto(controls);
+    const time = view()
+        .style({
+            width: "160px",
+            height: "10px",
+            background: "rgba(0,0,0,0.1)",
+            borderRadius: "5px",
+            overflow: "hidden",
+        })
+        .addInto(controls);
+    const timex = view()
+        .style({
+            width: "0%",
+            height: "100%",
+            background: "rgba(0,0,0,0.5)",
+        })
+        .addInto(time);
+
+    MSysApi.media.onNewPlayer((p) => {
+        mediaControl.set(p.getServerName(), p);
+        update(p.getServerName());
+        p.onMetaChange(() => update(p.getServerName()));
+    });
+
+    MSysApi.media.init();
+
+    let timer: NodeJS.Timeout | undefined;
+
+    async function update(name: string) {
+        clearInterval(timer);
+        const p = mediaControl.get(name);
+        if (!p) return;
+        list.clear().add(Array.from(mediaControl.keys()).map((n) => button(n).on("click", () => update(n))));
+        const metadata = await p.metadata();
+        if (metadata["mpris:artUrl"]) {
+            cover.clear();
+            image(metadata["mpris:artUrl"], "cover")
+                .style({ width: "100px", height: "100px", objectFit: "cover" })
+                .addInto(cover);
+        } else {
+            cover.clear();
+        }
+        title.sv(metadata["xesam:title"] || "");
+        artist.sv((metadata["xesam:artist"] || []).join(", "));
+
+        playBtn.on("click", () => p.play());
+        pauseBtn.on("click", () => p.pause());
+        nextBtn.on("click", () => p.next());
+        prevBtn.on("click", () => p.previous());
+
+        if ((await p.duration()) !== Infinity) {
+            clearInterval(timer);
+            timer = setInterval(async () => {
+                if (await p.paused()) return;
+                timex.style({ width: `${((await p.getCurrentTime()) / (await p.duration())) * 100}%` });
+            }, 100);
+        }
+    }
+
+    return btn;
 });
 
 const wino = { t: 0, l: 0, r: 0, b: 0 };
