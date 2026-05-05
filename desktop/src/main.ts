@@ -1,4 +1,4 @@
-import { addClass, button, ele, type ElType, image, pack, setProperty, view } from "dkh-ui";
+import { a, addClass, button, ele, type ElType, image, pack, setProperty, view } from "dkh-ui";
 
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/desktop-api";
 import type { mprisPlayer } from "../../src/sys_api/mpris";
@@ -20,7 +20,11 @@ type Plant = {
 };
 
 type ToolsItem = {
-    cb: (tipEl: HTMLElement, showA: "left" | "right" | "top" | "bottom") => ElType<HTMLElement>;
+    cb: (p: {
+        tipEl: HTMLElement;
+        showTip: (op?: { state?: "show" | "hide" | "toggle"; anchorEl?: HTMLElement }) => void;
+        showA: "left" | "right" | "top" | "bottom";
+    }) => ElType<HTMLElement>;
     sizeLimit: {
         maxW: number;
         minW: number;
@@ -58,7 +62,83 @@ class Tools {
     getTool(name: string) {
         const tool = this.tools.get(name);
         if (!tool) return undefined;
-        return { getEl: (showA: "left" | "right" | "top" | "bottom") => tool.cb(this.tipEl, showA) };
+        const tipel = (() => {
+            let show = false;
+            const el = view()
+                .style({
+                    position: "fixed",
+                    width: "fit-content",
+                    height: "fit-content",
+                    padding: "6px",
+                    background: "rgba(255,255,255,0.8)",
+                    backdropFilter: "blur(12px)",
+                    borderRadius: "12px",
+                })
+                .addInto(this.tipEl)
+                .bindSet((s: "show" | "hide" | "toggle") => {
+                    if (s === "show") {
+                        el.style({ display: "block" });
+                        show = true;
+                    } else if (s === "hide") {
+                        el.style({ display: "none" });
+                        show = false;
+                    } else {
+                        el.style({ display: show ? "none" : "block" });
+                        show = !show;
+                    }
+                })
+                .bindGet(() => show);
+            return el;
+        })().sv("hide");
+        const anchorname = `--${crypto.randomUUID()}`;
+        // todo 回收
+        window.addEventListener("pointerdown", (e) => {
+            const target = e.target as HTMLElement;
+            if (tipel.gv === true && !tipel.el.contains(target)) {
+                tipel.sv("hide");
+            }
+        });
+        return {
+            getEl: (showA: "left" | "right" | "top" | "bottom") => {
+                const el = tool.cb({
+                    tipEl: tipel.el,
+                    showTip: (s) => {
+                        const state = s?.state || "toggle";
+                        if (state === "show") tipel.sv("show");
+                        else if (state === "hide") tipel.sv("hide");
+                        else tipel.sv("toggle");
+                        const anchorEl = s?.anchorEl ? pack(s.anchorEl) : el;
+                        anchorEl.style({
+                            // @ts-expect-error
+                            anchorName: anchorname,
+                        });
+                        tipel.style({
+                            // @ts-expect-error
+                            positionAnchor: anchorname,
+                            ...(showA === "left"
+                                ? {
+                                      positionArea: "left center",
+                                  }
+                                : showA === "right"
+                                  ? {
+                                        positionArea: "right center",
+                                    }
+                                  : showA === "top"
+                                    ? {
+                                          positionArea: "top center",
+                                      }
+                                    : showA === "bottom"
+                                      ? {
+                                            positionArea: "bottom center",
+                                        }
+                                      : {}),
+                        });
+                    },
+                    showA,
+                });
+                return el;
+            },
+        };
     }
 }
 
@@ -795,12 +875,12 @@ tools.registerTool("clock", () => {
     return clockEl;
 });
 
-tools.registerTool("apps", (_tipEl, a) => {
+tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
     const appsEl = view().style({
         display: "flex",
         flexDirection: "inherit",
     });
-    const tipEl = pack(_tipEl);
+    const a = showA;
 
     const iconConfig: DesktopIconConfig = {
         theme: setting.get("icon.theme"),
@@ -876,6 +956,7 @@ tools.registerTool("apps", (_tipEl, a) => {
         const timer = new Timer(400);
         timer.on(() => {
             preview.remove();
+            showTip({ state: "hide" });
         });
         const preview = view()
             .style({ display: "flex" })
@@ -891,7 +972,7 @@ tools.registerTool("apps", (_tipEl, a) => {
                 if (!data) return;
                 timer.reset();
                 if (!timer.end) return;
-                tipEl.add(preview);
+                preview.addInto(tipEl);
                 if (a === "left" || a === "right") {
                     preview.style({ flexDirection: "column" });
                 } else {
@@ -921,47 +1002,7 @@ tools.registerTool("apps", (_tipEl, a) => {
                         return el;
                     }),
                 );
-                const anchorPos = appEl.el.getBoundingClientRect();
-                const thisPos = preview.el.getBoundingClientRect();
-                const x = Math.max(
-                    0,
-                    Math.min(
-                        window.innerWidth - thisPos.width,
-                        anchorPos.left + anchorPos.width / 2 - thisPos.width / 2,
-                    ),
-                );
-                const y = Math.max(
-                    0,
-                    Math.min(
-                        window.innerHeight - thisPos.height,
-                        anchorPos.top + anchorPos.height / 2 - thisPos.height / 2,
-                    ),
-                );
-                preview.style({
-                    position: "fixed",
-                    maxWidth: `${window.innerWidth}px`,
-                    maxHeight: `${window.innerHeight}px`,
-                    overflow: `auto`,
-                    ...(a === "left"
-                        ? {
-                              right: `${window.innerWidth - anchorPos.left}px`,
-                              top: `${y}px`,
-                          }
-                        : a === "top"
-                          ? {
-                                bottom: `${window.innerHeight - anchorPos.top}px`,
-                                left: `${x}px`,
-                            }
-                          : a === "right"
-                            ? {
-                                  left: `${anchorPos.right}px`,
-                                  top: `${y}px`,
-                              }
-                            : {
-                                  top: `${anchorPos.bottom}px`,
-                                  left: `${x}px`,
-                              }),
-                });
+                showTip({ state: "show", anchorEl: appEl.el });
             })
             .on("pointerleave", () => {
                 timer.start();
@@ -1009,15 +1050,10 @@ tools.registerTool("apps", (_tipEl, a) => {
 });
 
 const notifications = new Map<string, { title: string; content: string; id: string }>();
-tools.registerTool("notifications", (_tipEl) => {
-    const tipEl = pack(_tipEl);
-    const nolist = view("y").style({ display: "none" }).addInto(tipEl);
+tools.registerTool("notifications", ({ tipEl, showTip }) => {
+    const nolist = view("y").addInto(tipEl);
     const btn = button("🔔").on("click", () => {
-        if (nolist.el.style.display === "none") {
-            nolist.style({ display: "flex" });
-        } else {
-            nolist.style({ display: "none" });
-        }
+        showTip();
     });
 
     const d = dynamicList(nolist, [], (id: string) => {
@@ -1050,15 +1086,10 @@ tools.registerTool("notifications", (_tipEl) => {
 });
 
 const mediaControl = new Map<string, mprisPlayer>();
-tools.registerTool("mediaControl", (_tipEl) => {
-    const tipEl = pack(_tipEl);
-    const main = view("y").style({ display: "none" }).addInto(tipEl);
+tools.registerTool("mediaControl", ({ tipEl, showTip }) => {
+    const main = view("y").addInto(tipEl);
     const btn = button("🎵").on("click", () => {
-        if (main.el.style.display === "none") {
-            main.style({ display: "flex" });
-        } else {
-            main.style({ display: "none" });
-        }
+        showTip();
     });
 
     const list = view("x").addInto(main);
