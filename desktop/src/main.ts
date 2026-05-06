@@ -90,7 +90,6 @@ class Tools {
                 .bindGet(() => show);
             return el;
         })().sv("hide");
-        const anchorname = `--${crypto.randomUUID()}`;
         // todo 回收
         window.addEventListener("pointerdown", (e) => {
             const target = e.target as HTMLElement;
@@ -107,6 +106,7 @@ class Tools {
                         if (state === "show") tipel.sv("show");
                         else if (state === "hide") tipel.sv("hide");
                         else tipel.sv("toggle");
+                        const anchorname = `--${crypto.randomUUID()}`;
                         const anchorEl = s?.anchorEl ? pack(s.anchorEl) : el;
                         anchorEl.style({
                             // @ts-expect-error
@@ -245,7 +245,13 @@ const planteData: Plant[] = [
     {
         id: "0",
         posi: "top",
-        items: [{ id: "showAllView" }, { id: "clock" }, { id: "mediaControl" }, { id: "notifications" }],
+        items: [
+            { id: "showAllView" },
+            { id: "clock" },
+            { id: "mediaControl" },
+            { id: "tray" },
+            { id: "notifications" },
+        ],
         glow: true,
     },
     {
@@ -1155,7 +1161,7 @@ tools.registerTool("mediaControl", ({ tipEl, showTip }) => {
 
     MSysApi.media.init();
 
-    let timer: NodeJS.Timeout | undefined;
+    let timer: number | undefined;
 
     async function update(name: string) {
         clearInterval(timer);
@@ -1189,6 +1195,48 @@ tools.registerTool("mediaControl", ({ tipEl, showTip }) => {
     }
 
     return btn;
+});
+
+tools.registerTool("tray", ({ tipEl, showTip }) => {
+    const el = view("x");
+
+    MSysApi.tray.init().then(async () => {
+        for (const t of MSysApi.tray.tarysService.values()) {
+            const icon = view().addInto(el);
+            image(
+                (await t.getIcon({
+                    theme: setting.get("icon.theme"),
+                })) || "",
+                await t.title(),
+            )
+                .style({ width: "24px", height: "24px", objectFit: "cover" })
+                .addInto(icon);
+            icon.on("click", async () => {
+                const menu = await t.getMenu();
+                if (!menu) return;
+                const menuEl = view("y").addInto(mainEl);
+                for (const item of menu) {
+                    const itemEl = view("x").style({ whiteSpace: "pre" }).addInto(menuEl);
+                    if (item.iconUrl) {
+                        image((await item.iconUrl({ theme: setting.get("icon.theme") })) ?? "", "icon")
+                            .style({ width: "16px", height: "16px", objectFit: "cover" })
+                            .addInto(itemEl);
+                    }
+                    txt(item.label).addInto(itemEl);
+                    itemEl.on("click", () => {
+                        item.click();
+                        menuEl.remove();
+                        showTip({ state: "hide" });
+                    });
+                }
+                pack(tipEl).clear();
+                menuEl.addInto(tipEl);
+                showTip({ state: "show", anchorEl: icon.el });
+            });
+        }
+    });
+
+    return el;
 });
 
 const wino = { t: 0, l: 0, r: 0, b: 0 };

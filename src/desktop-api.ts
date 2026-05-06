@@ -8,8 +8,9 @@ import type { setting } from "./setting/setting";
 import type { nowConfig } from "./setting/config";
 import { setPowerState } from "./sys_api/power";
 import type { SConnect } from "./remote_connect/sconnect";
-import { mpris } from "./sys_api/mpris";
-import { notification } from "./sys_api/notification";
+import type { mpris } from "./sys_api/mpris";
+import type { notification } from "./sys_api/notification";
+import type { tray } from "./sys_api/appIndicator";
 
 export const _myde = {
     MSysApi: {
@@ -26,6 +27,7 @@ export const _myde = {
         verifyUserPassword: async (_password: string) => {
             return false;
         },
+        tray: undefined as unknown as tray,
     },
     MInputMap: {
         mapKeyCode,

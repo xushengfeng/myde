@@ -12,6 +12,7 @@ import { PeerjsAdapter } from "../../remote_connect/peerjs_adapter";
 import { mpris } from "../../sys_api/mpris";
 import { notification } from "../../sys_api/notification";
 import { getEnv } from "../../sys_api/env";
+import { tray } from "../../sys_api/appIndicator";
 
 const {
     default: { loginService },
@@ -47,6 +48,7 @@ async function loadDesktop(p: string) {
     myde.MConnect = new SConnect(new PeerjsAdapter());
     myde.MSysApi.media = new mpris(await newDBusIO());
     myde.MSysApi.notification = new notification(await newDBusIO());
+    myde.MSysApi.tray = new tray(await newDBusIO());
     const packageData = fs.readFileSync(packagePath, "utf-8");
     const packageJson = JSON.parse(packageData);
     const mainPath = `${dirPath}/${packageJson.main || "index.js"}`;

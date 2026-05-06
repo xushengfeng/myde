@@ -3,6 +3,7 @@ const fs = require("node:fs/promises") as typeof import("node:fs/promises");
 const fsSync = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 const os = require("node:os") as typeof import("node:os");
+const { scheduler } = require("node:timers/promises") as typeof import("node:timers/promises");
 
 import ini from "ini";
 
@@ -130,6 +131,7 @@ export type DesktopIconConfig = {
     size?: number;
     scale?: number;
     theme?: string;
+    themeBasePath?: string;
 };
 
 const iconSizeCache = new Map<string, string[]>();
@@ -138,7 +140,7 @@ const iconBlobCache = new Map<string, string>();
 async function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<string | undefined> {
     if (!_icon) return undefined;
 
-    const cacheKey = `${_icon}:${op?.size || 48}:${op?.scale || 1}:${op?.theme || ""}`;
+    const cacheKey = `${_icon}:${op?.size || 48}:${op?.scale || 1}:${op?.theme || ""}:${op?.themeBasePath || ""}`;
 
     // 检查缓存
     if (iconBlobCache.has(cacheKey)) {
@@ -256,6 +258,14 @@ async function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<st
             return f(x, size);
         }
 
+        async function findThemeDirsWithPath(theme: string | undefined, basePath?: string) {
+            if (theme === undefined) return undefined;
+            if (!basePath) return undefined;
+            const g = path.join(basePath, theme);
+            if (await fs.stat(g).catch(() => false)) return g;
+            return undefined;
+        }
+
         async function findThemeDirs(theme: string | undefined) {
             if (theme === undefined) return undefined;
             const g = path.join("/usr/share/icons/", theme);
@@ -271,7 +281,9 @@ async function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<st
         }
 
         const iconDirs = [
+            await findThemeDirsWithPath(op?.theme, op?.themeBasePath),
             (await findThemeDirsUser(op?.theme)) ?? (await findThemeDirs(op?.theme)),
+            await findThemeDirsWithPath("hicolor", op?.themeBasePath),
             await findThemeDirs("hicolor"),
             await findThemeDirsUser("hicolor"),
             "/usr/share/pixmaps/",
