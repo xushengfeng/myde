@@ -23,6 +23,9 @@ export const _myde = {
         power: setPowerState,
         media: undefined as unknown as mpris,
         notification: undefined as unknown as notification,
+        verifyUserPassword: async (_password: string) => {
+            return false;
+        },
     },
     MInputMap: {
         mapKeyCode,

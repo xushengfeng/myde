@@ -20,6 +20,9 @@ importers:
       myde-dbus:
         specifier: ^0.4.0
         version: 0.4.0
+      myde-pam-client:
+        specifier: ^0.1.0
+        version: 0.1.0
       myde-unix-socket:
         specifier: ^0.2.1
         version: 0.2.1
@@ -1579,6 +1582,9 @@ packages:
 
   myde-dbus@0.4.0:
     resolution: {integrity: sha512-P+Aw60YIR+GjK+EbS7Kwzpczs7eA4zq8ApMi/ttNoov6uNEy8spcBIkuzj9GyG17DueRAF9ZBlUTpcnpw7IF0A==}
+
+  myde-pam-client@0.1.0:
+    resolution: {integrity: sha512-6xzfSvs/L+h0UARuqx23B8TWnj+iOblRUSpTPR/TiMVO/a30CysZaE0XVHIXOnuUIpqv+4QjSK2ZXrgSYubWjA==}
 
   myde-unix-socket@0.2.1:
     resolution: {integrity: sha512-z6QNKO7UiXMFrg2/Y04X9UU7wN8PNvOhHx24QQlg08r2uppxQIyo9If5PJ5Cy/VJXOaO19zXQg8taac2qCRS2w==}
@@ -3720,6 +3726,8 @@ snapshots:
   ms@2.1.2: {}
 
   myde-dbus@0.4.0: {}
+
+  myde-pam-client@0.1.0: {}
 
   myde-unix-socket@0.2.1: {}
 

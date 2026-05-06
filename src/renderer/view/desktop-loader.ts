@@ -11,6 +11,11 @@ import { SConnect } from "../../remote_connect/sconnect";
 import { PeerjsAdapter } from "../../remote_connect/peerjs_adapter";
 import { mpris } from "../../sys_api/mpris";
 import { notification } from "../../sys_api/notification";
+import { getEnv } from "../../sys_api/env";
+
+const {
+    default: { loginService },
+} = require("myde-pam-client") as typeof import("myde-pam-client");
 
 async function loadDesktop(p: string) {
     const dirPath = p.replace(/\/$/, "");
@@ -20,6 +25,17 @@ async function loadDesktop(p: string) {
         return;
     }
     myde.MSysApi.fs = new vfs(dirPath);
+    myde.MSysApi.verifyUserPassword = async (password: string) => {
+        return new Promise<boolean>((resolve) => {
+            loginService.authenticate(getEnv().USER, password, (e) => {
+                if (e) {
+                    resolve(false);
+                } else {
+                    resolve(true);
+                }
+            });
+        });
+    };
     myde.MSetting = new setting<nowConfig>({
         version: "0.0.1",
         filePath: `${urlParams.get("userData")}/setting.json`,

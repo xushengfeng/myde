@@ -1,4 +1,4 @@
-import { a, addClass, button, ele, type ElType, image, pack, setProperty, view } from "dkh-ui";
+import { a, addClass, button, ele, type ElType, image, input, pack, setProperty, view } from "dkh-ui";
 
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/desktop-api";
 import type { mprisPlayer } from "../../src/sys_api/mpris";
@@ -376,9 +376,11 @@ class Timer {
     }
     start() {
         this.end = false;
+        clearTimeout(this.timerId);
         this.timerId = window.setTimeout(() => {
             this.onxcb();
             this.end = true;
+            clearTimeout(this.timerId);
         }, this.delay);
     }
 }
@@ -752,12 +754,36 @@ stateLock.on("lock", ({ nextTrigger, leave }) => {
     });
 });
 stateLock.on("passwd", ({ nextTrigger, leave }) => {
-    toolTip.clear().add(button("确认进入").on("click", () => nextTrigger("out"), { once: true }));
-    const t = setTimeout(() => {
+    const inputEl = input("password");
+    const timer = new Timer(30000);
+    let cheking = false;
+    toolTip.clear().add([
+        inputEl,
+        button("确认进入").on("click", async () => {
+            if (cheking) return;
+            cheking = true;
+            inputEl.attr({ disabled: true });
+            const r = await myde.MSysApi.verifyUserPassword(inputEl.gv);
+            if (r) nextTrigger("out");
+            else {
+                inputEl.sv("");
+                inputEl.attr({ disabled: false, placeholder: "密码错误，请重试" }); // todo pam code
+                cheking = false;
+            }
+        }),
+    ]);
+
+    inputEl.on("input", () => {
+        timer.reset();
+        timer.start();
+    });
+
+    timer.on(() => {
         nextTrigger("lock");
-    }, 3000);
+    });
+    timer.start();
     leave(() => {
-        clearTimeout(t);
+        timer.reset();
     });
 });
 stateLock.on("out", () => {
@@ -1243,19 +1269,23 @@ windowEl.on("pointerup", (e) => {
 });
 
 body.on("keydown", (e) => {
-    e.preventDefault();
-    if (e.repeat) return;
-    for (const [id, client] of server.server.clients) {
-        if (id !== viewData.focusClient) continue;
-        client.keyboard.sendKey(MInputMap.mapKeyCode(e.code), "pressed");
+    if (state.getState() === "normal") {
+        e.preventDefault();
+        if (e.repeat) return;
+        for (const [id, client] of server.server.clients) {
+            if (id !== viewData.focusClient) continue;
+            client.keyboard.sendKey(MInputMap.mapKeyCode(e.code), "pressed");
+        }
     }
 });
 body.on("keyup", (e) => {
-    e.preventDefault();
-    if (e.repeat) return;
-    for (const [id, client] of server.server.clients) {
-        if (id !== viewData.focusClient) continue;
-        client.keyboard.sendKey(MInputMap.mapKeyCode(e.code), "released");
+    if (state.getState() === "normal") {
+        e.preventDefault();
+        if (e.repeat) return;
+        for (const [id, client] of server.server.clients) {
+            if (id !== viewData.focusClient) continue;
+            client.keyboard.sendKey(MInputMap.mapKeyCode(e.code), "released");
+        }
     }
 });
 

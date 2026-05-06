@@ -24,6 +24,7 @@
         "dkh-ui": "^0.14.2",
         "ini": "^5.0.0",
         "myde-dbus": "^0.4.0",
+        "myde-pam-client": "^0.1.0",
         "myde-unix-socket": "^0.2.1",
         "noise-handshake": "^4.2.0",
         "noise-protocol": "^3.0.2",
