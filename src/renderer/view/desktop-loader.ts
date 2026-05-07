@@ -13,6 +13,7 @@ import { mpris } from "../../sys_api/mpris";
 import { notification } from "../../sys_api/notification";
 import { getEnv } from "../../sys_api/env";
 import { tray } from "../../sys_api/appIndicator";
+import { power } from "../../sys_api/power";
 
 const {
     default: { loginService },
@@ -49,6 +50,7 @@ async function loadDesktop(p: string) {
     myde.MSysApi.media = new mpris(await newDBusIO());
     myde.MSysApi.notification = new notification(await newDBusIO());
     myde.MSysApi.tray = new tray(await newDBusIO());
+    myde.MSysApi.power = new power(await newDBusIO(true));
     const packageData = fs.readFileSync(packagePath, "utf-8");
     const packageJson = JSON.parse(packageData);
     const mainPath = `${dirPath}/${packageJson.main || "index.js"}`;
@@ -60,9 +62,13 @@ async function loadDesktop(p: string) {
     document.body.appendChild(script);
 }
 
-async function newDBusIO() {
+async function newDBusIO(system = false) {
     const socket = new mus.USocket();
-    socket.connect("/run/user/1000/bus");
+    if (system) {
+        socket.connect("/run/dbus/system_bus_socket");
+    } else {
+        socket.connect("/run/user/1000/bus");
+    }
     const io = new dbusIO({ socket });
     await io.connect();
     return io;

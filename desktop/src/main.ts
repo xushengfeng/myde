@@ -250,6 +250,7 @@ const planteData: Plant[] = [
             { id: "clock" },
             { id: "mediaControl" },
             { id: "tray" },
+            { id: "power" },
             { id: "notifications" },
         ],
         glow: true,
@@ -1234,6 +1235,31 @@ tools.registerTool("tray", ({ tipEl, showTip }) => {
                 showTip({ state: "show", anchorEl: icon.el });
             });
         }
+    });
+
+    return el;
+});
+
+tools.registerTool("power", ({ tipEl, showTip }) => {
+    const el = view("x");
+
+    MSysApi.power.init().then(async () => {
+        for (const t of MSysApi.power.getDevices()) {
+            if ((await t.getPowerSupply()) && ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")) {
+                el.clear().add(`🔋${await t.getPercentage()}%`);
+            }
+        }
+        const list = view("y").addInto(tipEl);
+        el.on("click", async () => {
+            list.clear();
+            for (const t of MSysApi.power.getDevices()) {
+                const name = (await t.getModel()) || "Unknown";
+                const percentage = await t.getPercentage();
+                const status = await t.getState();
+                view("x").addInto(list).add(`${name}: ${percentage}% (${status})`);
+            }
+            showTip({ state: "show", anchorEl: el.el });
+        });
     });
 
     return el;
