@@ -431,6 +431,14 @@ class xdgSurfaceData {
         this.xdg_surface[child].parent = undefined;
         this.xdg_surface[parent].children = this.xdg_surface[parent].children.filter((c) => c !== child);
     }
+    getMainSurfaceRect(id: WaylandObjectId2<"xdg_surface">) {
+        const xdgSurface = this.getXdgSurface(id);
+        const mainWlSurface = this.wl_surface.getWlSurface(xdgSurface.surface);
+        const size = mainWlSurface.size;
+        // todo subsurface 需要考虑吗
+        return { w: size.w, h: size.h };
+    }
+    /** 获取xdgsurface窗口大小 */
     getReRect(id: WaylandObjectId2<"xdg_surface">) {
         const xdgSurface = this.getXdgSurface(id);
         const mainWlSurface = this.wl_surface.getWlSurface(xdgSurface.surface);
@@ -1666,10 +1674,12 @@ class WaylandClient {
                 updatePointerFocus: (p: { x: number; y: number }) => {
                     if (!this.obj2.pointer) return;
                     const { x, y } = p;
+                    // 获取在哪个xdgsurface上，并区分surface还是popup
                     let nx = x;
                     let ny = y;
                     let canSend = false;
                     let inXdgSurface: WaylandObjectId2<"xdg_surface"> | undefined;
+                    /** 相对于主xdgsurface坐标，适用于popup */
                     const xdgSurfaceOffset = { x: 0, y: 0 };
                     let reasonSurfaceType: "main" | "popup" | null = null;
                     const xdgM = this.dataManager.xdgSurface;
@@ -1702,12 +1712,14 @@ class WaylandClient {
                             return undefined;
                         }
                     }
+                    // 获取与xdgsurface相关的所有surface，比如子表面
                     const surfaces: {
                         id: WaylandObjectId2<"wl_surface">;
+                        /** 相对于主surface坐标 */
                         offsetRect: { x: number; y: number; w: number; h: number };
                     }[] = [];
                     const mainSurfaceId = xdgM.getXdgSurface(inXdgSurface).surface;
-                    const rel = xdgM.getReRect(inXdgSurface);
+                    const rel = xdgM.getMainSurfaceRect(inXdgSurface);
                     const { winGeo: selfOffset = { x: 0, y: 0 } } = xdgM.getXdgSurface(inXdgSurface);
                     surfaces.push({ id: mainSurfaceId, offsetRect: { x: 0, y: 0, w: rel.w, h: rel.h } });
                     surfaces.push(...this.dataManager.wlSubSurface.getChildrenDeep(mainSurfaceId));
