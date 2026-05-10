@@ -1675,9 +1675,6 @@ class WaylandClient {
                     if (!this.obj2.pointer) return;
                     const { x, y } = p;
                     // 获取在哪个xdgsurface上，并区分surface还是popup
-                    let nx = x;
-                    let ny = y;
-                    let canSend = false;
                     let inXdgSurface: WaylandObjectId2<"xdg_surface"> | undefined;
                     /** 相对于主xdgsurface坐标，适用于popup */
                     const xdgSurfaceOffset = { x: 0, y: 0 };
@@ -1724,59 +1721,68 @@ class WaylandClient {
                     surfaces.push({ id: mainSurfaceId, offsetRect: { x: 0, y: 0, w: rel.w, h: rel.h } });
                     surfaces.push(...this.dataManager.wlSubSurface.getChildrenDeep(mainSurfaceId));
 
+                    let inSurface: { id: WaylandObjectId2<"wl_surface">; x: number; y: number } | undefined;
+                    let canSend = false;
                     for (const { id: s, offsetRect } of surfaces.toReversed()) {
                         const offsetX = offsetRect.x - selfOffset.x + xdgSurfaceOffset.x;
                         const offsetY = offsetRect.y - selfOffset.y + xdgSurfaceOffset.y;
                         const offsetX1 = offsetRect.x + offsetRect.w - selfOffset.x + xdgSurfaceOffset.x;
                         const offsetY1 = offsetRect.y + offsetRect.h - selfOffset.y + xdgSurfaceOffset.y;
                         if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
-                            console.log(`pointer in surface ${s}`);
-                            nx = x - offsetX;
-                            ny = y - offsetY;
-                            // todo input region
-                            // const surfaceInputRegion = this.getObject<"wl_surface">(s).data.inputRegion;
-                            // if (surfaceInputRegion) {
-                            //     for (const r of surfaceInputRegion) {
-                            //         if (x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
-                            //             if (r.type === "+") {
-                            //                 canSend = true;
-                            //             } else {
-                            //                 canSend = false;
-                            //                 break;
-                            //             }
-                            //         }
-                            //     }
-                            // } else canSend = true;
-                            canSend = true;
-                            if (this.obj2.focusSurface !== s) {
-                                if (this.obj2.focusSurface && this.objects.has(this.obj2.focusSurface)) {
-                                    this.sendMessageImm(this.obj2.pointer, "wl_pointer.leave", {
-                                        serial: 0,
-                                        surface: this.obj2.focusSurface,
-                                    });
-                                    if (this.obj2.focusSurfaceType === "main" && reasonSurfaceType === "main")
-                                        this.keyboard.blurSurface(this.obj2.focusSurface); // todo popup
+                            const nx = x - offsetX;
+                            const ny = y - offsetY;
+
+                            const surfaceInputRegion = this.getObject<"wl_surface">(s).data.inputRegion;
+                            if (surfaceInputRegion) {
+                                for (const r of surfaceInputRegion) {
+                                    if (nx >= r.x && nx < r.x + r.width && ny >= r.y && ny < r.y + r.height) {
+                                        if (r.type === "+") {
+                                            canSend = true;
+                                        } else {
+                                            canSend = false;
+                                            break;
+                                        }
+                                    }
                                 }
-                                this.sendMessageImm(this.obj2.pointer, "wl_pointer.enter", {
-                                    serial: 0,
-                                    surface: s,
-                                    surface_x: nx,
-                                    surface_y: ny,
-                                });
-                                this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
-                                if (
-                                    (this.obj2.focusSurfaceType === "main" || !this.obj2.focusSurfaceType) &&
-                                    reasonSurfaceType === "main"
-                                )
-                                    this.keyboard.focusSurface(s);
-                                this.obj2.focusSurface = s;
-                                this.obj2.focusSurfaceType = reasonSurfaceType;
+                            } else canSend = true;
+
+                            if (canSend) {
+                                console.log(`pointer in surface ${s}`);
+                                inSurface = { id: s, x: nx, y: ny };
+                                break;
                             }
-                            break;
                         }
                     }
-                    if (!canSend) return undefined;
-                    return { x: nx, y: ny };
+
+                    if (inSurface) {
+                        const { id: s, x: nx, y: ny } = inSurface;
+                        if (this.obj2.focusSurface !== s) {
+                            if (this.obj2.focusSurface && this.objects.has(this.obj2.focusSurface)) {
+                                this.sendMessageImm(this.obj2.pointer, "wl_pointer.leave", {
+                                    serial: 0,
+                                    surface: this.obj2.focusSurface,
+                                });
+                                if (this.obj2.focusSurfaceType === "main" && reasonSurfaceType === "main")
+                                    this.keyboard.blurSurface(this.obj2.focusSurface); // todo popup
+                            }
+                            this.sendMessageImm(this.obj2.pointer, "wl_pointer.enter", {
+                                serial: 0,
+                                surface: s,
+                                surface_x: nx,
+                                surface_y: ny,
+                            });
+                            this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+                            if (
+                                (this.obj2.focusSurfaceType === "main" || !this.obj2.focusSurfaceType) &&
+                                reasonSurfaceType === "main"
+                            )
+                                this.keyboard.focusSurface(s);
+                            this.obj2.focusSurface = s;
+                            this.obj2.focusSurfaceType = reasonSurfaceType;
+                        }
+                        return { x: nx, y: ny };
+                    }
+                    return undefined;
                 },
                 sendPointerEvent: (type: "move" | "down" | "up", p: { x: number; y: number; button: number }) => {
                     if (!this.obj2.pointer) return;
