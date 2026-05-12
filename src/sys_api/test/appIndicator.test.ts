@@ -17,6 +17,7 @@ describe("tray", () => {
         await trayInstance.init();
         for (const [s, item] of trayInstance.tarysService) {
             console.log(s, await item.title());
+            console.log(await item.getIcon());
         }
     });
     it("menu", async () => {

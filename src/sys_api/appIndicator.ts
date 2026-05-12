@@ -71,8 +71,15 @@ export class trayItem {
         return (await this.mainInterface.get<"b">("ItemIsMenu"))[0];
     }
     async getIcon(op?: { size?: number; scale?: number; theme?: string }) {
-        const iconName = (await this.mainInterface.get<"s">("IconName"))[0];
-        const iconThemePath = (await this.mainInterface.get<"s">("IconThemePath"))[0];
+        let iconName: string | undefined;
+        try {
+            iconName = (await this.mainInterface.get<"s">("IconName"))[0];
+        } catch {}
+        let iconThemePath: string | undefined;
+        try {
+            iconThemePath = (await this.mainInterface.get<"s">("IconThemePath"))[0];
+        } catch {}
+
         if (iconName) {
             const blobUrl = await getDesktopIcon(iconName, {
                 themeBasePath: iconThemePath,
