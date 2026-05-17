@@ -393,7 +393,8 @@ class freeLayout {
         const l = this.findLines(posi, round);
         return [l.length > 0, l] as const;
     }
-    moveStart(posi: { x: number; y: number }, round = 0) {
+    moveStart(_posi: { x: number; y: number }, round = 0) {
+        const posi = { x: Math.round(_posi.x), y: Math.round(_posi.y) };
         this.moveStartPosi = posi;
         const lines = this.findLines(posi, round);
         this.moveT = lines.map((line) => {
@@ -403,8 +404,8 @@ class freeLayout {
     }
     move(posi: { x: number; y: number }) {
         if (this.moveT.length === 0) return;
-        const dx = posi.x - (this.moveStartPosi?.x ?? 0);
-        const dy = posi.y - (this.moveStartPosi?.y ?? 0);
+        const dx = Math.round(posi.x) - (this.moveStartPosi?.x ?? 0);
+        const dy = Math.round(posi.y) - (this.moveStartPosi?.y ?? 0);
         const t = structuredClone(this.moveT);
         const winOlds: Record<
             number,

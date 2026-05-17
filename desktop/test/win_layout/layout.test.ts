@@ -298,9 +298,10 @@ describe("随机测试", () => {
         function run(a: () => void, name: string, c: number) {
             const lastState = layout.getAllWindows();
             a();
+            expect(lastState.length).not.toEqual(layout.getAllWindows().length);
             checkSize(layout, { lastState, name, c });
         }
-        for (let i = 0; i < 310; i++) {
+        for (let i = 0; i < 338; i++) {
             const action = random();
             if (action < 0.6) {
                 // 添加窗口
