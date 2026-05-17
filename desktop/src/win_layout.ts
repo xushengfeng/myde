@@ -30,8 +30,125 @@ class freeLayout {
         return Array.from(this.windows.entries()).map(([id, win]) => ({ id, ...win, size: win.width * win.height }));
     }
     removeWindow(id: number) {
+        const xWins = this.findSameDirectionWindows(id, "x");
+        const yWins = this.findSameDirectionWindows(id, "y");
+        const xSize = xWins.reduce((sum, id) => sum + this.getWindow(id).width * this.getWindow(id).height, 0);
+        const ySize = yWins.reduce((sum, id) => sum + this.getWindow(id).width * this.getWindow(id).height, 0);
+        if (xSize > ySize) {
+            const start = this.getWindow(xWins[0]).x;
+            const end = this.getWindow(xWins[xWins.length - 1]).x + this.getWindow(xWins[xWins.length - 1]).width;
+            this.adaptSize(
+                xWins.filter((winid) => winid !== id),
+                "x",
+                start,
+                end,
+            );
+        } else if (ySize > xSize) {
+            const start = this.getWindow(yWins[0]).y;
+            const end = this.getWindow(yWins[yWins.length - 1]).y + this.getWindow(yWins[yWins.length - 1]).height;
+            this.adaptSize(
+                yWins.filter((winid) => winid !== id),
+                "y",
+                start,
+                end,
+            );
+        } else if (xWins.length === 1 && yWins.length === 1) {
+            // 这种情况是找不到“栏”了，或者说有更复杂的“栏”，那么就不变动太多了，如果临近有可变的尽量变
+            // 不进行整体计算，而是类似挤压的方式，被移除的窗口向内挤压，使得自己面积为0，其他窗口跟着动
+            const rmWinRect = this.getWindow(id);
+            const topCenter = { x: rmWinRect.x + rmWinRect.width / 2, y: rmWinRect.y };
+            const bottomCenter = {
+                x: rmWinRect.x + rmWinRect.width / 2,
+                y: rmWinRect.y + rmWinRect.height,
+            };
+            const leftCenter = { x: rmWinRect.x, y: rmWinRect.y + rmWinRect.height / 2 };
+            const rightCenter = {
+                x: rmWinRect.x + rmWinRect.width,
+                y: rmWinRect.y + rmWinRect.height / 2,
+            };
+            const canMoveTop = this.canMove(topCenter);
+            const canMoveBottom = this.canMove(bottomCenter);
+            const canMoveLeft = this.canMove(leftCenter);
+            const canMoveRight = this.canMove(rightCenter);
+
+            const zipX = () => {
+                let xend = leftCenter.x + rmWinRect.width / 2;
+                if (!canMoveLeft) xend = leftCenter.x;
+                if (!canMoveRight) xend = rightCenter.x;
+                this.moveStart(leftCenter);
+                // todo 整数
+                // todo 最小宽高限制
+                this.move({ x: xend, y: leftCenter.y });
+                this.moveEnd();
+                this.moveStart(rightCenter);
+                this.move({ x: xend, y: rightCenter.y });
+                this.moveEnd();
+            };
+            const zipY = () => {
+                let yend = topCenter.y + rmWinRect.height / 2;
+                if (!canMoveTop) yend = topCenter.y;
+                if (!canMoveBottom) yend = bottomCenter.y;
+                this.moveStart(topCenter);
+                this.move({ x: topCenter.x, y: yend });
+                this.moveEnd();
+                this.moveStart(bottomCenter);
+                this.move({ x: bottomCenter.x, y: yend });
+                this.moveEnd();
+            };
+
+            if ((canMoveTop || canMoveBottom) && (canMoveLeft || canMoveRight)) {
+                // 两个方向都可以挤压，选择把短边挤掉，即挤压位移小的那个
+                if (rmWinRect.width < rmWinRect.height) {
+                    zipX();
+                } else {
+                    zipY();
+                }
+            } else {
+                if (canMoveTop || canMoveBottom) {
+                    zipY();
+                } else {
+                    zipX();
+                }
+            }
+        } else if (xSize === ySize) {
+            const sizeX = this.outRect(xWins);
+            const sizeY = this.outRect(yWins);
+            const rX = Math.max(sizeX.width, sizeX.height) / Math.min(sizeX.width, sizeX.height);
+            const rY = Math.max(sizeY.width, sizeY.height) / Math.min(sizeY.width, sizeY.height);
+            // 比较哪个更接近正方形，保持更平衡的布局
+            // 不可能相等，向两个方向扩张的栏比例不可能一样，除非没有栏
+            if (rX < rY) {
+                this.adaptSize(
+                    xWins.filter((winid) => winid !== id),
+                    "x",
+                    sizeX.left,
+                    sizeX.right,
+                );
+            } else {
+                this.adaptSize(
+                    yWins.filter((winid) => winid !== id),
+                    "y",
+                    sizeY.top,
+                    sizeY.bottom,
+                );
+            }
+        }
         this.windows.delete(id);
-        // todo 调整比例
+        // todo callback
+    }
+    private outRect(ids: number[]) {
+        let left = this.baseWidth;
+        let top = this.baseHeight;
+        let right = 0;
+        let bottom = 0;
+        for (const id of ids) {
+            const win = this.getWindow(id);
+            left = Math.min(left, win.x);
+            top = Math.min(top, win.y);
+            right = Math.max(right, win.x + win.width);
+            bottom = Math.max(bottom, win.y + win.height);
+        }
+        return { left, top, right, bottom, width: right - left, height: bottom - top };
     }
     private setWindow(id: number, x: number, y: number, width: number, height: number) {
         const win = this.windows.get(id);
@@ -95,29 +212,37 @@ class freeLayout {
             this.setWindow(id, targetWin.x + newWidth, targetWin.y, newWidth, targetWin.height);
         }
 
-        this.adaptSize(id, isThin ? "y" : "x");
+        const sameDirWins = this.findSameDirectionWindows(id, isThin ? "y" : "x");
+        const winsStart = this.getWindow(sameDirWins[0]);
+        // biome-ignore lint/style/noNonNullAssertion: 必然包括自己
+        const winsEnd = this.getWindow(sameDirWins.at(-1)!);
+        this.adaptSize(
+            sameDirWins,
+            isThin ? "y" : "x",
+            isThin ? winsStart.y : winsStart.x,
+            isThin ? winsEnd.y + winsEnd.height : winsEnd.x + winsEnd.width,
+        );
 
         return id;
     }
 
     /** 调整比例，保持平衡，比如同个方向三分时不是一大两小，应该保持均匀 */
-    adaptSize(winid: number, t: "x" | "y") {
-        const sameDirWins = this.findSameDirectionWindows(winid, t);
-        if (sameDirWins.length <= 1) return;
+    adaptSize(winids: number[], t: "x" | "y", start: number, end: number) {
+        if (winids.length === 0) return;
         if (t === "x") {
-            const totalWidth = sameDirWins.reduce((sum, id) => sum + this.getWindow(id).width, 0);
-            const avgWidth = totalWidth / sameDirWins.length;
-            let currentX = this.getWindow(sameDirWins[0]).x;
-            for (const id of sameDirWins) {
+            const totalWidth = end - start;
+            const avgWidth = totalWidth / winids.length;
+            let currentX = start;
+            for (const id of winids) {
                 const win = this.getWindow(id);
                 this.setWindow(id, currentX, win.y, avgWidth, win.height);
                 currentX += avgWidth;
             }
         } else {
-            const totalHeight = sameDirWins.reduce((sum, id) => sum + this.getWindow(id).height, 0);
-            const avgHeight = totalHeight / sameDirWins.length;
-            let currentY = this.getWindow(sameDirWins[0]).y;
-            for (const id of sameDirWins) {
+            const totalHeight = end - start;
+            const avgHeight = totalHeight / winids.length;
+            let currentY = start;
+            for (const id of winids) {
                 const win = this.getWindow(id);
                 this.setWindow(id, win.x, currentY, win.width, avgHeight);
                 currentY += avgHeight;
@@ -130,6 +255,7 @@ class freeLayout {
         const sameDirWins: number[] = [winid];
         for (const [id, win] of this.windows) {
             if (id === winid) continue;
+            // todo 挨着
             if (t === "x") {
                 if (win.y === targetWin.y && win.height === targetWin.height) {
                     sameDirWins.push(id);
@@ -157,6 +283,9 @@ class freeLayout {
         oldWin: { x: number; y: number; width: number; height: number };
     }[] = [];
     private moveStartPosi: { x: number; y: number } | null = null;
+    canMove(posi: { x: number; y: number }, round = 0) {
+        return this.findLines(posi, round).length > 0;
+    }
     moveStart(posi: { x: number; y: number }, round = 0) {
         this.moveStartPosi = posi;
         const lines = this.findLines(posi, round);

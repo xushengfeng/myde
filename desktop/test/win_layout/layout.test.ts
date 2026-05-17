@@ -90,6 +90,74 @@ describe("freeLayout", () => {
     });
 });
 
+describe("removeWindow", () => {
+    function getWinByPoint(layout: freeLayout, x: number, y: number) {
+        const win = layout
+            .getAllWindows()
+            .find((win) => x > win.x && x < win.x + win.width && y > win.y && y < win.y + win.height);
+        if (!win) throw new Error(`No window found at point (${x}, ${y})`);
+        return win;
+    }
+    it("2分", () => {
+        const layout = new freeLayout(800, 600);
+        layout.addWindow();
+        layout.removeWindow(getWinByPoint(layout, 100, 100).id);
+        matchLayout(layout, [{ x: 0, y: 0, width: 800, height: 600 }]);
+    });
+    it("3分 应该由右边两个拓展", () => {
+        const layout = new freeLayout(800, 600);
+        layout.addWindow();
+        layout.addWindow({ x: 700, y: 0 }); // 右边分割
+
+        layout.removeWindow(getWinByPoint(layout, 100, 100).id);
+        matchLayout(layout, [
+            { x: 0, y: 0, width: 800, height: 300 },
+            { x: 0, y: 300, width: 800, height: 300 },
+        ]);
+    });
+    it("4分 移除后应该选择接近方形的大区域拓展", () => {
+        const layout = new freeLayout(800, 600);
+        layout.addWindow();
+        layout.addWindow();
+        layout.addWindow();
+        layout.removeWindow(getWinByPoint(layout, 100, 100).id);
+        matchLayout(layout, [
+            { x: 0, y: 0, width: 400, height: 600 },
+            { x: 400, y: 0, width: 400, height: 300 },
+            { x: 400, y: 300, width: 400, height: 300 },
+        ]);
+    });
+    it("6分 移除后应该选择面积大的区域拓展", () => {
+        const layout = new freeLayout(800, 600);
+        layout.addWindow();
+        layout.addWindow();
+        layout.addWindow();
+        layout.addWindow();
+        layout.addWindow();
+        layout.removeWindow(getWinByPoint(layout, 100, 100).id);
+        matchLayout(layout, [
+            { x: 0, y: 0, width: 400, height: 300 },
+            { x: 400, y: 0, width: 400, height: 300 },
+            { x: 0, y: 300, width: 800 / 3, height: 300 },
+            { x: 800 / 3, y: 300, width: 800 / 3, height: 300 },
+            { x: (800 / 3) * 2, y: 300, width: 800 / 3, height: 300 },
+        ]);
+    });
+    it("比例分割，如带鱼屏", () => {
+        const layout = new freeLayout(1200, 120);
+        for (let i = 0; i < 4; i++) layout.addWindow();
+        layout.addWindow();
+        layout.removeWindow(getWinByPoint(layout, 100, 100).id);
+        const wins = layout.getAllWindows();
+        for (const win of wins) {
+            expect(win.height).toEqual(120);
+        }
+        for (const win of wins) {
+            expect(win.width).toBeCloseTo(1200 / wins.length, -1);
+        }
+    });
+});
+
 describe("移动", () => {
     it("基本移动", () => {
         const layout = new freeLayout(800, 600);

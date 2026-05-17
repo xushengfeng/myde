@@ -26,6 +26,14 @@ function render() {
                 pointerEvents: "none",
             })
             .add(win.id.toString())
+            .add(
+                button("x")
+                    .style({ pointerEvents: "all" })
+                    .on("click", () => {
+                        layout.removeWindow(win.id);
+                        render();
+                    }),
+            )
             .addInto(main);
     }
 }
