@@ -108,6 +108,30 @@ class freeLayout {
             const [canMoveBottom, moveBottomL] = this.canMove(bottomCenter);
             const [canMoveLeft, moveLeftL] = this.canMove(leftCenter);
             const [canMoveRight, moveRightL] = this.canMove(rightCenter);
+            // 计算某边移动牵动的其他边
+            function pureLs(l: number[]) {
+                return Array.from(new Set(l)).filter((_id) => _id !== id);
+            }
+            const topMoveSize = pureLs(moveTopL.map((line) => line.id)).reduce((sum, id) => {
+                const win = this.getWindow(id);
+                if (win.y2 !== rmWinRect.y1) return sum; // 只有紧挨着的才算
+                return sum + win.width;
+            }, 0);
+            const bottomMoveSize = pureLs(moveBottomL.map((line) => line.id)).reduce((sum, id) => {
+                const win = this.getWindow(id);
+                if (win.y1 !== rmWinRect.y2) return sum;
+                return sum + win.width;
+            }, 0);
+            const leftMoveSize = pureLs(moveLeftL.map((line) => line.id)).reduce((sum, id) => {
+                const win = this.getWindow(id);
+                if (win.x2 !== rmWinRect.x1) return sum;
+                return sum + win.height;
+            }, 0);
+            const rightMoveSize = pureLs(moveRightL.map((line) => line.id)).reduce((sum, id) => {
+                const win = this.getWindow(id);
+                if (win.x1 !== rmWinRect.x2) return sum;
+                return sum + win.height;
+            }, 0);
 
             const zipX = () => {
                 let xend = leftCenter.x;
@@ -115,14 +139,6 @@ class freeLayout {
                 if (!canMoveRight) xend = rightCenter.x;
                 if (canMoveLeft && canMoveRight) {
                     // 如果两边都可以动，优先挤压较影响较小的
-                    const leftMoveSize = moveLeftL.reduce((sum, line) => {
-                        const win = this.getWindow(line.id);
-                        return sum + win.height; // 左边竖线的和作为标准，有的会影响扩大很多竖线
-                    }, 0);
-                    const rightMoveSize = moveRightL.reduce((sum, line) => {
-                        const win = this.getWindow(line.id);
-                        return sum + win.height;
-                    }, 0);
                     if (leftMoveSize < rightMoveSize) {
                         xend = rightCenter.x; // 左边影响小，移到右边
                     } else if (rightMoveSize < leftMoveSize) {
@@ -143,14 +159,6 @@ class freeLayout {
                 if (!canMoveTop) yend = topCenter.y;
                 if (!canMoveBottom) yend = bottomCenter.y;
                 if (canMoveTop && canMoveBottom) {
-                    const topMoveSize = moveTopL.reduce((sum, line) => {
-                        const win = this.getWindow(line.id);
-                        return sum + win.width;
-                    }, 0);
-                    const bottomMoveSize = moveBottomL.reduce((sum, line) => {
-                        const win = this.getWindow(line.id);
-                        return sum + win.width;
-                    }, 0);
                     if (topMoveSize < bottomMoveSize) {
                         yend = bottomCenter.y;
                     } else if (bottomMoveSize < topMoveSize) {
@@ -173,8 +181,18 @@ class freeLayout {
             this.windows.get(id)!.minHeight = 0;
 
             if ((canMoveTop || canMoveBottom) && (canMoveLeft || canMoveRight)) {
-                // 两个方向都可以挤压，选择把短边挤掉，即挤压位移小的那个
-                if (rmWinRect.width < rmWinRect.height) {
+                // 两个方向都可以挤压，选择影响和自己一边一样的，类似3分那种
+                if (topMoveSize === rmWinRect.width || bottomMoveSize === rmWinRect.width) {
+                    zipY();
+                } else if (leftMoveSize === rmWinRect.height || rightMoveSize === rmWinRect.height) {
+                    zipX();
+                } else if (
+                    // 两个方向都可以挤压，选择造成边影响最小的那个方向
+                    // 无限是为了排除不能动
+                    // todo 可以构建风车形的排版，由于互相牵扯，如果其中一个扇叶里面有小窗口，可能会挤压为0，需要解决
+                    Math.min(topMoveSize || Infinity, bottomMoveSize || Infinity) >
+                    Math.min(leftMoveSize || Infinity, rightMoveSize || Infinity)
+                ) {
                     zipX();
                 } else {
                     zipY();

@@ -8,7 +8,21 @@ function checkSize(layout: freeLayout, data?: any) {
     } catch (error) {
         if (data) {
             data;
-            console.log(data.c);
+            const state = {
+                baseWidth: layout.getBaseSize().width,
+                baseHeight: layout.getBaseSize().height,
+                // @ts-expect-error
+                windows: data.lastState.map((win) => ({
+                    id: win.id,
+                    x1: win.x,
+                    y1: win.y,
+                    x2: win.x2,
+                    y2: win.y2,
+                    minWidth: win.minWidth,
+                    minHeight: win.minHeight,
+                })),
+            };
+            console.log(data.c, data.name, JSON.stringify(state));
         }
         throw error;
     }
@@ -301,7 +315,7 @@ describe("随机测试", () => {
             expect(lastState.length).not.toEqual(layout.getAllWindows().length);
             checkSize(layout, { lastState, name, c });
         }
-        for (let i = 0; i < 338; i++) {
+        for (let i = 0; i < 10980; i++) {
             const action = random();
             if (action < 0.6) {
                 // 添加窗口
@@ -340,5 +354,9 @@ describe("随机测试", () => {
                 }
             }
         }
+    });
+    it("tmp", () => {
+        const layout = new freeLayout(800, 600);
+        checkSize(layout);
     });
 });
