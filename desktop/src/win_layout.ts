@@ -2,8 +2,7 @@ class freeLayout {
     private baseWidth: number;
     private baseHeight: number;
 
-    // todo 改成x1,y1,x2,y2更好处理小数
-    private windows: Map<number, { x: number; y: number; width: number; height: number }>;
+    private windows: Map<number, { x1: number; y1: number; x2: number; y2: number }>;
 
     constructor(baseWidth: number, baseHeight: number) {
         this.baseWidth = baseWidth;
@@ -11,29 +10,40 @@ class freeLayout {
         this.windows = new Map();
         this.setWindow(1, 0, 0, baseWidth, baseHeight);
     }
+    getBaseSize() {
+        return { width: this.baseWidth, height: this.baseHeight };
+    }
     setBaseSize(width: number, height: number) {
         const ratioX = width / this.baseWidth;
         const ratioY = height / this.baseHeight;
 
         for (const [id, win] of this.windows) {
-            this.setWindow(id, win.x * ratioX, win.y * ratioY, win.width * ratioX, win.height * ratioY);
+            this.setWindow(id, win.x1 * ratioX, win.y1 * ratioY, win.x2 * ratioX, win.y2 * ratioY);
         }
         this.baseWidth = width;
         this.baseHeight = height;
     }
     getWindow(id: number) {
         const win = this.windows.get(id);
-        if (win) return win;
+        if (win)
+            return {
+                ...win,
+                width: win.x2 - win.x1,
+                height: win.y2 - win.y1,
+                x: win.x1,
+                y: win.y1,
+                size: (win.x2 - win.x1) * (win.y2 - win.y1),
+            };
         throw new Error(`Window with id ${id} not found.`);
     }
     getAllWindows() {
-        return Array.from(this.windows.entries()).map(([id, win]) => ({ id, ...win, size: win.width * win.height }));
+        return Array.from(this.windows.keys()).map((id) => ({ id, ...this.getWindow(id) }));
     }
     removeWindow(id: number) {
         const xWins = this.findSameDirectionWindows(id, "x");
         const yWins = this.findSameDirectionWindows(id, "y");
-        const xSize = xWins.reduce((sum, id) => sum + this.getWindow(id).width * this.getWindow(id).height, 0);
-        const ySize = yWins.reduce((sum, id) => sum + this.getWindow(id).width * this.getWindow(id).height, 0);
+        const xSize = xWins.reduce((sum, id) => sum + this.getWindow(id).size, 0);
+        const ySize = yWins.reduce((sum, id) => sum + this.getWindow(id).size, 0);
         if (xSize > ySize) {
             const start = this.getWindow(xWins[0]).x;
             const end = this.getWindow(xWins[xWins.length - 1]).x + this.getWindow(xWins[xWins.length - 1]).width;
@@ -150,30 +160,33 @@ class freeLayout {
         }
         return { left, top, right, bottom, width: right - left, height: bottom - top };
     }
-    private setWindow(id: number, x: number, y: number, width: number, height: number) {
+    private setWindow(id: number, x1: number, y1: number, x2: number, y2: number) {
         const win = this.windows.get(id);
-        const nx = Math.max(0, Math.min(Math.round(x), this.baseWidth));
-        const ny = Math.max(0, Math.min(Math.round(y), this.baseHeight));
-        const nwidth = Math.max(1, Math.min(Math.round(width), this.baseWidth - nx));
-        const nheight = Math.max(1, Math.min(Math.round(height), this.baseHeight - ny));
+        const nx1 = Math.max(0, Math.min(Math.round(x1), this.baseWidth));
+        const ny1 = Math.max(0, Math.min(Math.round(y1), this.baseHeight));
+        const nx2 = Math.max(0, Math.min(Math.round(x2), this.baseWidth));
+        const ny2 = Math.max(0, Math.min(Math.round(y2), this.baseHeight));
+        if (nx2 < nx1 || ny2 < ny1) {
+            throw new Error(`Invalid window size for id ${id}: (${nx1}, ${ny1}, ${nx2}, ${ny2})`);
+        }
         if (win) {
-            win.x = nx;
-            win.y = ny;
-            win.width = nwidth;
-            win.height = nheight;
+            win.x1 = nx1;
+            win.y1 = ny1;
+            win.x2 = nx2;
+            win.y2 = ny2;
         } else {
-            this.windows.set(id, { x: nx, y: ny, width: nwidth, height: nheight });
+            this.windows.set(id, { x1: nx1, y1: ny1, x2: nx2, y2: ny2 });
         }
         // todo callback
     }
     findMaxWindow() {
         let maxArea = 0;
         let maxId = -1;
-        for (const [id, win] of this.windows) {
+        for (const win of this.getAllWindows()) {
             const area = win.width * win.height;
             if (area > maxArea) {
                 maxArea = area;
-                maxId = id;
+                maxId = win.id;
             }
         }
         // todo 顺序
@@ -193,9 +206,9 @@ class freeLayout {
         const id = this.newWindowId();
         let targetWid = this.findMaxWindow();
         if (posi) {
-            for (const [id, win] of this.windows) {
-                if (posi.x >= win.x && posi.x <= win.x + win.width && posi.y >= win.y && posi.y <= win.y + win.height) {
-                    targetWid = id;
+            for (const win of this.getAllWindows()) {
+                if (posi.x >= win.x1 && posi.x <= win.x2 && posi.y >= win.y1 && posi.y <= win.y2) {
+                    targetWid = win.id;
                     break;
                 }
             }
@@ -203,13 +216,13 @@ class freeLayout {
         const targetWin = this.getWindow(targetWid);
         const isThin = targetWin.width < targetWin.height;
         if (isThin) {
-            const newHeight = targetWin.height / 2;
-            this.setWindow(targetWid, targetWin.x, targetWin.y, targetWin.width, newHeight);
-            this.setWindow(id, targetWin.x, targetWin.y + newHeight, targetWin.width, newHeight);
+            const harfHeight = targetWin.height / 2;
+            this.setWindow(targetWid, targetWin.x1, targetWin.y1, targetWin.x2, targetWin.y1 + harfHeight);
+            this.setWindow(id, targetWin.x1, targetWin.y1 + harfHeight, targetWin.x2, targetWin.y2);
         } else {
-            const newWidth = targetWin.width / 2;
-            this.setWindow(targetWid, targetWin.x, targetWin.y, newWidth, targetWin.height);
-            this.setWindow(id, targetWin.x + newWidth, targetWin.y, newWidth, targetWin.height);
+            const harfWidth = targetWin.width / 2;
+            this.setWindow(targetWid, targetWin.x1, targetWin.y1, targetWin.x1 + harfWidth, targetWin.y2);
+            this.setWindow(id, targetWin.x1 + harfWidth, targetWin.y1, targetWin.x2, targetWin.y2);
         }
 
         const sameDirWins = this.findSameDirectionWindows(id, isThin ? "y" : "x");
@@ -235,7 +248,7 @@ class freeLayout {
             let currentX = start;
             for (const id of winids) {
                 const win = this.getWindow(id);
-                this.setWindow(id, currentX, win.y, avgWidth, win.height);
+                this.setWindow(id, currentX, win.y1, currentX + avgWidth, win.y2);
                 currentX += avgWidth;
             }
         } else {
@@ -244,7 +257,7 @@ class freeLayout {
             let currentY = start;
             for (const id of winids) {
                 const win = this.getWindow(id);
-                this.setWindow(id, win.x, currentY, win.width, avgHeight);
+                this.setWindow(id, win.x1, currentY, win.x2, currentY + avgHeight);
                 currentY += avgHeight;
             }
         }
@@ -253,16 +266,16 @@ class freeLayout {
     private findSameDirectionWindows(winid: number, t: "x" | "y") {
         const targetWin = this.getWindow(winid);
         const sameDirWins: number[] = [winid];
-        for (const [id, win] of this.windows) {
-            if (id === winid) continue;
+        for (const win of this.getAllWindows()) {
+            if (win.id === winid) continue;
             // todo 挨着
             if (t === "x") {
                 if (win.y === targetWin.y && win.height === targetWin.height) {
-                    sameDirWins.push(id);
+                    sameDirWins.push(win.id);
                 }
             } else {
                 if (win.x === targetWin.x && win.width === targetWin.width) {
-                    sameDirWins.push(id);
+                    sameDirWins.push(win.id);
                 }
             }
         }
@@ -280,7 +293,7 @@ class freeLayout {
     private moveT: {
         id: number;
         type: "left" | "right" | "top" | "bottom";
-        oldWin: { x: number; y: number; width: number; height: number };
+        oldWin: { x1: number; y1: number; x2: number; y2: number };
     }[] = [];
     private moveStartPosi: { x: number; y: number } | null = null;
     canMove(posi: { x: number; y: number }, round = 0) {
@@ -299,7 +312,7 @@ class freeLayout {
         const dx = posi.x - (this.moveStartPosi?.x ?? 0);
         const dy = posi.y - (this.moveStartPosi?.y ?? 0);
         const t = structuredClone(this.moveT);
-        const winOlds: Record<number, { x: number; y: number; width: number; height: number }> = {};
+        const winOlds: Record<number, { x1: number; y1: number; x2: number; y2: number }> = {};
         for (const { id, oldWin } of t) {
             winOlds[id] = oldWin;
         }
@@ -309,14 +322,13 @@ class freeLayout {
             for (const { id, type } of t) {
                 const win = winOlds[id];
                 if (type === "left") {
-                    win.x += ddx;
-                    win.width -= ddx;
+                    win.x1 += ddx;
                 } else if (type === "right") {
-                    win.width += ddx;
+                    win.x2 += ddx;
                 }
             }
             for (const win of Object.values(winOlds)) {
-                if (win.width <= 1) {
+                if (win.x2 - win.x1 <= 1) {
                     break xl; // 禁止移动导致窗口消失
                 }
             }
@@ -326,20 +338,19 @@ class freeLayout {
             for (const { id, type } of t) {
                 const win = winOlds[id];
                 if (type === "top") {
-                    win.y += ddy;
-                    win.height -= ddy;
+                    win.y1 += ddy;
                 } else if (type === "bottom") {
-                    win.height += ddy;
+                    win.y2 += ddy;
                 }
             }
             for (const win of Object.values(winOlds)) {
-                if (win.height <= 1) {
+                if (win.y2 - win.y1 <= 1) {
                     break yl;
                 }
             }
         }
         for (const [id, win] of Object.entries(winOlds)) {
-            this.setWindow(Number(id), win.x, win.y, win.width, win.height);
+            this.setWindow(Number(id), win.x1, win.y1, win.x2, win.y2);
         }
     }
     moveEnd() {
@@ -427,22 +438,21 @@ class freeLayout {
     }
     private findLinesInDot(posi: { x: number; y: number }, round = 0) {
         const lines: { id: number; type: "left" | "right" | "top" | "bottom" }[] = [];
-        for (const [id, win] of this.windows) {
-            const x1 = win.x - round;
-            const y1 = win.y - round;
-            const x2 = win.x + win.width + round;
-            const y2 = win.y + win.height + round;
-            if (Math.abs(posi.x - win.x) <= round) {
-                if (win.x !== 0) if (y1 <= posi.y && posi.y <= y2) lines.push({ id, type: "left" });
-            } else if (Math.abs(posi.x - (win.x + win.width)) <= round) {
-                if (win.x + win.width !== this.baseWidth)
-                    if (y1 <= posi.y && posi.y <= y2) lines.push({ id, type: "right" });
+        for (const win of this.getAllWindows()) {
+            const id = win.id;
+            const x1 = win.x1 - round;
+            const y1 = win.y1 - round;
+            const x2 = win.x2 + round;
+            const y2 = win.y2 + round;
+            if (Math.abs(posi.x - win.x1) <= round) {
+                if (win.x1 !== 0) if (y1 <= posi.y && posi.y <= y2) lines.push({ id, type: "left" });
+            } else if (Math.abs(posi.x - win.x2) <= round) {
+                if (win.x2 !== this.baseWidth) if (y1 <= posi.y && posi.y <= y2) lines.push({ id, type: "right" });
             }
-            if (Math.abs(posi.y - win.y) <= round) {
-                if (win.y !== 0) if (x1 <= posi.x && posi.x <= x2) lines.push({ id, type: "top" });
-            } else if (Math.abs(posi.y - (win.y + win.height)) <= round) {
-                if (win.y + win.height !== this.baseHeight)
-                    if (x1 <= posi.x && posi.x <= x2) lines.push({ id, type: "bottom" });
+            if (Math.abs(posi.y - win.y1) <= round) {
+                if (win.y1 !== 0) if (x1 <= posi.x && posi.x <= x2) lines.push({ id, type: "top" });
+            } else if (Math.abs(posi.y - win.y2) <= round) {
+                if (win.y2 !== this.baseHeight) if (x1 <= posi.x && posi.x <= x2) lines.push({ id, type: "bottom" });
             }
         }
         return lines;

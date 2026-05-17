@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { freeLayout } from "../../src/win_layout";
 
+function checkSize(layout: freeLayout) {
+    const allSize = layout.getAllWindows().reduce((acc, win) => acc + win.size, 0);
+    expect(allSize).toEqual(layout.getBaseSize().width * layout.getBaseSize().height);
+}
+
 function matchLayout(
     layout: freeLayout,
     expected: { x: number; y: number; width: number; height: number }[],
@@ -38,13 +43,9 @@ function matchLayout(
 describe("freeLayout", () => {
     it("basic", () => {
         const layout = new freeLayout(800, 600);
-        function checkSize() {
-            const allSize = layout.getAllWindows().reduce((acc, win) => acc + win.size, 0);
-            expect(allSize - 800 * 600).toBeLessThanOrEqual(800 * 600 * 0.1); // todo 允许有10%的误差，因为可能存在重叠或者边界情况
-        }
         for (let i = 0; i < 10; i++) {
             layout.addWindow();
-            checkSize();
+            checkSize(layout);
         }
     });
     it("2分", () => {
