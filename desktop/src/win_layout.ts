@@ -104,15 +104,33 @@ class freeLayout {
                 x: rmWinRect.x + rmWinRect.width,
                 y: rmWinRect.y + rmWinRect.height / 2,
             };
-            const canMoveTop = this.canMove(topCenter);
-            const canMoveBottom = this.canMove(bottomCenter);
-            const canMoveLeft = this.canMove(leftCenter);
-            const canMoveRight = this.canMove(rightCenter);
+            const [canMoveTop, moveTopL] = this.canMove(topCenter);
+            const [canMoveBottom, moveBottomL] = this.canMove(bottomCenter);
+            const [canMoveLeft, moveLeftL] = this.canMove(leftCenter);
+            const [canMoveRight, moveRightL] = this.canMove(rightCenter);
 
             const zipX = () => {
-                let xend = leftCenter.x + rmWinRect.width / 2;
+                let xend = leftCenter.x;
                 if (!canMoveLeft) xend = leftCenter.x;
                 if (!canMoveRight) xend = rightCenter.x;
+                if (canMoveLeft && canMoveRight) {
+                    // 如果两边都可以动，优先挤压较影响较小的
+                    const leftMoveSize = moveLeftL.reduce((sum, line) => {
+                        const win = this.getWindow(line.id);
+                        return sum + win.height; // 左边竖线的和作为标准，有的会影响扩大很多竖线
+                    }, 0);
+                    const rightMoveSize = moveRightL.reduce((sum, line) => {
+                        const win = this.getWindow(line.id);
+                        return sum + win.height;
+                    }, 0);
+                    if (leftMoveSize < rightMoveSize) {
+                        xend = rightCenter.x; // 左边影响小，移到右边
+                    } else if (rightMoveSize < leftMoveSize) {
+                        xend = leftCenter.x;
+                    } else {
+                        xend = leftCenter.x + rmWinRect.width / 2;
+                    }
+                }
                 this.moveStart(leftCenter);
                 this.move({ x: xend, y: leftCenter.y });
                 this.moveEnd();
@@ -121,9 +139,26 @@ class freeLayout {
                 this.moveEnd();
             };
             const zipY = () => {
-                let yend = topCenter.y + rmWinRect.height / 2;
+                let yend = topCenter.y;
                 if (!canMoveTop) yend = topCenter.y;
                 if (!canMoveBottom) yend = bottomCenter.y;
+                if (canMoveTop && canMoveBottom) {
+                    const topMoveSize = moveTopL.reduce((sum, line) => {
+                        const win = this.getWindow(line.id);
+                        return sum + win.width;
+                    }, 0);
+                    const bottomMoveSize = moveBottomL.reduce((sum, line) => {
+                        const win = this.getWindow(line.id);
+                        return sum + win.width;
+                    }, 0);
+                    if (topMoveSize < bottomMoveSize) {
+                        yend = bottomCenter.y;
+                    } else if (bottomMoveSize < topMoveSize) {
+                        yend = topCenter.y;
+                    } else {
+                        yend = topCenter.y + rmWinRect.height / 2;
+                    }
+                }
                 this.moveStart(topCenter);
                 this.move({ x: topCenter.x, y: yend });
                 this.moveEnd();
@@ -355,7 +390,8 @@ class freeLayout {
     }[] = [];
     private moveStartPosi: { x: number; y: number } | null = null;
     canMove(posi: { x: number; y: number }, round = 0) {
-        return this.findLines(posi, round).length > 0;
+        const l = this.findLines(posi, round);
+        return [l.length > 0, l] as const;
     }
     moveStart(posi: { x: number; y: number }, round = 0) {
         this.moveStartPosi = posi;

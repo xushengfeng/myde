@@ -300,7 +300,7 @@ describe("随机测试", () => {
             a();
             checkSize(layout, { lastState, name, c });
         }
-        for (let i = 0; i < 240; i++) {
+        for (let i = 0; i < 310; i++) {
             const action = random();
             if (action < 0.6) {
                 // 添加窗口
