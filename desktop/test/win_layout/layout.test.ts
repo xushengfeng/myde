@@ -5,6 +5,7 @@ function matchLayout(
     layout: freeLayout,
     expected: { x: number; y: number; width: number; height: number }[],
     order = false,
+    round = 1,
 ) {
     const wins = layout.getAllWindows();
     expect(wins.length).toEqual(expected.length);
@@ -21,10 +22,10 @@ function matchLayout(
         for (const win of m) {
             const idx = e.findIndex(
                 (item) =>
-                    Math.abs(win.x - item.x) <= 1 &&
-                    Math.abs(win.y - item.y) <= 1 &&
-                    Math.abs(win.width - item.width) <= 1 &&
-                    Math.abs(win.height - item.height) <= 1,
+                    Math.abs(win.x - item.x) <= round &&
+                    Math.abs(win.y - item.y) <= round &&
+                    Math.abs(win.width - item.width) <= round &&
+                    Math.abs(win.height - item.height) <= round,
             );
             if (idx === -1) {
                 throw new Error(`Window ${JSON.stringify(win)} not found in expected layout.`);
@@ -100,6 +101,37 @@ describe("移动", () => {
             { x: 0, y: 0, width: 410, height: 600 },
             { x: 410, y: 0, width: 390, height: 600 },
         ]);
+    });
+    it("外部禁止移动", () => {
+        const layout = new freeLayout(800, 600);
+        layout.moveStart({ x: 0, y: 0 });
+        layout.move({ x: 400, y: 300 });
+        layout.moveEnd();
+        matchLayout(layout, [{ x: 0, y: 0, width: 800, height: 600 }]);
+    });
+    it("禁止面积为负", () => {
+        const layout = new freeLayout(800, 600);
+        layout.addWindow();
+        layout.addWindow();
+        layout.addWindow();
+        layout.addWindow();
+        layout.addWindow();
+        layout.moveStart({ x: 800 / 3, y: 500 }, 4);
+        layout.move({ x: 790, y: 500 });
+        layout.moveEnd();
+        matchLayout(
+            layout,
+            [
+                { x: 0, y: 0, width: 800 / 3, height: 300 },
+                { x: 800 / 3, y: 0, width: 800 / 3, height: 300 },
+                { x: (800 / 3) * 2, y: 0, width: 800 / 3, height: 300 },
+                { x: 0, y: 300, width: (800 / 3) * 2, height: 300 },
+                { x: (800 / 3) * 2, y: 300, width: 1, height: 300 },
+                { x: (800 / 3) * 2, y: 300, width: 800 / 3, height: 300 },
+            ],
+            false,
+            5,
+        );
     });
     it("错开", () => {
         const layout = new freeLayout(800, 600);

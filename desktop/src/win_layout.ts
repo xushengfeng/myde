@@ -174,18 +174,39 @@ class freeLayout {
         for (const { id, oldWin } of t) {
             winOlds[id] = oldWin;
         }
-        for (const { id, type } of t) {
-            const win = winOlds[id];
-            if (type === "left") {
-                win.x += dx;
-                win.width -= dx;
-            } else if (type === "right") {
-                win.width += dx;
-            } else if (type === "top") {
-                win.y += dy;
-                win.height -= dy;
-            } else if (type === "bottom") {
-                win.height += dy;
+        // 逐步移动，每次移动1px，检测是否有窗口宽高小于等于0，如果有则停止移动，禁止继续移动导致窗口消失
+        xl: for (let x = 1; x <= Math.abs(dx); x++) {
+            const ddx = dx > 0 ? 1 : -1;
+            for (const { id, type } of t) {
+                const win = winOlds[id];
+                if (type === "left") {
+                    win.x += ddx;
+                    win.width -= ddx;
+                } else if (type === "right") {
+                    win.width += ddx;
+                }
+            }
+            for (const win of Object.values(winOlds)) {
+                if (win.width <= 1) {
+                    break xl; // 禁止移动导致窗口消失
+                }
+            }
+        }
+        yl: for (let y = 1; y <= Math.abs(dy); y++) {
+            const ddy = dy > 0 ? 1 : -1;
+            for (const { id, type } of t) {
+                const win = winOlds[id];
+                if (type === "top") {
+                    win.y += ddy;
+                    win.height -= ddy;
+                } else if (type === "bottom") {
+                    win.height += ddy;
+                }
+            }
+            for (const win of Object.values(winOlds)) {
+                if (win.height <= 1) {
+                    break yl;
+                }
             }
         }
         for (const [id, win] of Object.entries(winOlds)) {
@@ -283,14 +304,16 @@ class freeLayout {
             const x2 = win.x + win.width + round;
             const y2 = win.y + win.height + round;
             if (Math.abs(posi.x - win.x) <= round) {
-                if (y1 <= posi.y && posi.y <= y2) lines.push({ id, type: "left" });
+                if (win.x !== 0) if (y1 <= posi.y && posi.y <= y2) lines.push({ id, type: "left" });
             } else if (Math.abs(posi.x - (win.x + win.width)) <= round) {
-                if (y1 <= posi.y && posi.y <= y2) lines.push({ id, type: "right" });
+                if (win.x + win.width !== this.baseWidth)
+                    if (y1 <= posi.y && posi.y <= y2) lines.push({ id, type: "right" });
             }
             if (Math.abs(posi.y - win.y) <= round) {
-                if (x1 <= posi.x && posi.x <= x2) lines.push({ id, type: "top" });
+                if (win.y !== 0) if (x1 <= posi.x && posi.x <= x2) lines.push({ id, type: "top" });
             } else if (Math.abs(posi.y - (win.y + win.height)) <= round) {
-                if (x1 <= posi.x && posi.x <= x2) lines.push({ id, type: "bottom" });
+                if (win.y + win.height !== this.baseHeight)
+                    if (x1 <= posi.x && posi.x <= x2) lines.push({ id, type: "bottom" });
             }
         }
         return lines;
