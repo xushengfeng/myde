@@ -37,6 +37,25 @@ function matchLayout(
     checkSize(layout);
 }
 
+describe("a", () => {
+    it("findSameDirectionWindows", () => {
+        const layout = new freeLayout(800, 600);
+        layout.loadState({
+            baseWidth: 800,
+            baseHeight: 600,
+            windows: [
+                { id: 1, x1: 0, y1: 0, x2: 200, y2: 600, minWidth: 1, minHeight: 1 },
+                { id: 2, x1: 200, y1: 0, x2: 400, y2: 300, minWidth: 1, minHeight: 1 },
+                { id: 3, x1: 200, y1: 300, x2: 400, y2: 600, minWidth: 1, minHeight: 1 },
+                { id: 4, x1: 400, y1: 0, x2: 600, y2: 600, minWidth: 1, minHeight: 1 },
+                { id: 5, x1: 600, y1: 0, x2: 800, y2: 600, minWidth: 1, minHeight: 1 },
+            ],
+        });
+        // @ts-expect-error
+        expect(layout.findSameDirectionWindows(4, "x")).toEqual([4, 5]);
+    });
+});
+
 describe("freeLayout", () => {
     it("basic", () => {
         const layout = new freeLayout(800, 600);

@@ -299,7 +299,6 @@ class freeLayout {
         const sameDirWins: number[] = [winid];
         for (const win of this.getAllWindows()) {
             if (win.id === winid) continue;
-            // todo 挨着
             if (t === "x") {
                 if (win.y === targetWin.y && win.height === targetWin.height) {
                     sameDirWins.push(win.id);
@@ -310,7 +309,35 @@ class freeLayout {
                 }
             }
         }
-        return sameDirWins.toSorted((a, b) => {
+        const z坐标点 = new Set<number>();
+        const nSameDirWins: number[] = [winid];
+        const mw = this.getWindow(winid);
+        if (t === "x") {
+            z坐标点.add(mw.x1);
+            z坐标点.add(mw.x2);
+        } else {
+            z坐标点.add(mw.y1);
+            z坐标点.add(mw.y2);
+        }
+        // 双循环是为了排除顺序影响
+        for (let i = 0; i < sameDirWins.length; i++) {
+            for (const w of sameDirWins) {
+                if (nSameDirWins.includes(w)) continue;
+                const zs =
+                    t === "x"
+                        ? [this.getWindow(w).x1, this.getWindow(w).x2]
+                        : [this.getWindow(w).y1, this.getWindow(w).y2];
+                for (const z of zs) {
+                    // 紧挨着
+                    if (z坐标点.has(z)) {
+                        nSameDirWins.push(w);
+                        z坐标点.add(zs.filter((zz) => zz !== z)[0]);
+                        break;
+                    }
+                }
+            }
+        }
+        return nSameDirWins.toSorted((a, b) => {
             const wa = this.getWindow(a);
             const wb = this.getWindow(b);
             if (t === "x") {
