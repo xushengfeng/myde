@@ -38,6 +38,7 @@ function matchLayout(
             e.splice(idx, 1);
         }
     }
+    checkSize(layout);
 }
 
 describe("freeLayout", () => {

@@ -2,7 +2,10 @@ class freeLayout {
     private baseWidth: number;
     private baseHeight: number;
 
-    private windows: Map<number, { x1: number; y1: number; x2: number; y2: number }>;
+    private windows: Map<
+        number,
+        { x1: number; y1: number; x2: number; y2: number; minWidth: number; minHeight: number }
+    >;
 
     constructor(baseWidth: number, baseHeight: number) {
         this.baseWidth = baseWidth;
@@ -40,6 +43,8 @@ class freeLayout {
         return Array.from(this.windows.keys()).map((id) => ({ id, ...this.getWindow(id) }));
     }
     removeWindow(id: number) {
+        if (!this.windows.has(id)) return;
+        if (this.windows.size === 1) return; // 最后一个窗口不允许删除
         const xWins = this.findSameDirectionWindows(id, "x");
         const yWins = this.findSameDirectionWindows(id, "y");
         const xSize = xWins.reduce((sum, id) => sum + this.getWindow(id).size, 0);
@@ -86,8 +91,6 @@ class freeLayout {
                 if (!canMoveLeft) xend = leftCenter.x;
                 if (!canMoveRight) xend = rightCenter.x;
                 this.moveStart(leftCenter);
-                // todo 整数
-                // todo 最小宽高限制
                 this.move({ x: xend, y: leftCenter.y });
                 this.moveEnd();
                 this.moveStart(rightCenter);
@@ -105,6 +108,11 @@ class freeLayout {
                 this.move({ x: bottomCenter.x, y: yend });
                 this.moveEnd();
             };
+
+            // biome-ignore lint/style/noNonNullAssertion: checked
+            this.windows.get(id)!.minWidth = 0;
+            // biome-ignore lint/style/noNonNullAssertion: checked
+            this.windows.get(id)!.minHeight = 0;
 
             if ((canMoveTop || canMoveBottom) && (canMoveLeft || canMoveRight)) {
                 // 两个方向都可以挤压，选择把短边挤掉，即挤压位移小的那个
@@ -175,7 +183,7 @@ class freeLayout {
             win.x2 = nx2;
             win.y2 = ny2;
         } else {
-            this.windows.set(id, { x1: nx1, y1: ny1, x2: nx2, y2: ny2 });
+            this.windows.set(id, { x1: nx1, y1: ny1, x2: nx2, y2: ny2, minWidth: 1, minHeight: 1 });
         }
         // todo callback
     }
@@ -293,7 +301,7 @@ class freeLayout {
     private moveT: {
         id: number;
         type: "left" | "right" | "top" | "bottom";
-        oldWin: { x1: number; y1: number; x2: number; y2: number };
+        oldWin: { x1: number; y1: number; x2: number; y2: number; minWidth: number; minHeight: number };
     }[] = [];
     private moveStartPosi: { x: number; y: number } | null = null;
     canMove(posi: { x: number; y: number }, round = 0) {
@@ -312,7 +320,10 @@ class freeLayout {
         const dx = posi.x - (this.moveStartPosi?.x ?? 0);
         const dy = posi.y - (this.moveStartPosi?.y ?? 0);
         const t = structuredClone(this.moveT);
-        const winOlds: Record<number, { x1: number; y1: number; x2: number; y2: number }> = {};
+        const winOlds: Record<
+            number,
+            { x1: number; y1: number; x2: number; y2: number; minWidth: number; minHeight: number }
+        > = {};
         for (const { id, oldWin } of t) {
             winOlds[id] = oldWin;
         }
@@ -328,7 +339,7 @@ class freeLayout {
                 }
             }
             for (const win of Object.values(winOlds)) {
-                if (win.x2 - win.x1 <= 1) {
+                if (win.x2 - win.x1 <= win.minWidth) {
                     break xl; // 禁止移动导致窗口消失
                 }
             }
@@ -344,7 +355,7 @@ class freeLayout {
                 }
             }
             for (const win of Object.values(winOlds)) {
-                if (win.y2 - win.y1 <= 1) {
+                if (win.y2 - win.y1 <= win.minHeight) {
                     break yl;
                 }
             }
