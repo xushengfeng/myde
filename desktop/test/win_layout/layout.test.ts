@@ -8,36 +8,27 @@ function checkSize(layout: freeLayout) {
 
 function matchLayout(
     layout: freeLayout,
-    expected: { x: number; y: number; width: number; height: number }[],
+    expected: { x: number; y: number; width?: number; height?: number; x2?: number; y2?: number }[],
     order = false,
-    round = 1,
 ) {
     const wins = layout.getAllWindows();
     expect(wins.length).toEqual(expected.length);
-    if (order) {
-        for (let i = 0; i < expected.length; i++) {
-            expect(wins[i].x).toBeCloseTo(expected[i].x, -1);
-            expect(wins[i].y).toBeCloseTo(expected[i].y, -1);
-            expect(wins[i].width).toBeCloseTo(expected[i].width, -1);
-            expect(wins[i].height).toBeCloseTo(expected[i].height, -1);
-        }
-    } else {
-        const m = structuredClone(wins);
-        const e = structuredClone(expected);
-        for (const win of m) {
-            const idx = e.findIndex(
-                (item) =>
-                    Math.abs(win.x - item.x) <= round &&
-                    Math.abs(win.y - item.y) <= round &&
-                    Math.abs(win.width - item.width) <= round &&
-                    Math.abs(win.height - item.height) <= round,
-            );
-            if (idx === -1) {
-                throw new Error(`Window ${JSON.stringify(win)} not found in expected layout.`);
-            }
-            e.splice(idx, 1);
-        }
+    const m = order ? structuredClone(wins) : wins.toSorted((a, b) => a.x - b.x || a.y - b.y);
+    const e = order ? structuredClone(expected) : expected.toSorted((a, b) => a.x - b.x || a.y - b.y);
+    const re = e.map((win) => ({
+        ...Object.fromEntries(
+            Object.entries(win).map(([k, v]) => (["x", "y", "x2", "y2"].includes(k) ? [k, Math.round(v)] : [k, v])),
+        ),
+    }));
+    const nm = [];
+    for (const x of re) {
+        const w = m.shift();
+        if (!w) throw new Error("No more windows to match");
+        const o = Object.fromEntries(Object.entries(w).flatMap(([k, v]) => (k in x ? [[k, v]] : [])));
+        nm.push(o);
     }
+    expect(nm).toEqual(re);
+
     checkSize(layout);
 }
 
@@ -140,9 +131,9 @@ describe("removeWindow", () => {
         matchLayout(layout, [
             { x: 0, y: 0, width: 400, height: 300 },
             { x: 400, y: 0, width: 400, height: 300 },
-            { x: 0, y: 300, width: 800 / 3, height: 300 },
-            { x: 800 / 3, y: 300, width: 800 / 3, height: 300 },
-            { x: (800 / 3) * 2, y: 300, width: 800 / 3, height: 300 },
+            { x: 0, y: 300, x2: 800 / 3, height: 300 },
+            { x: 800 / 3, y: 300, x2: (800 / 3) * 2, height: 300 },
+            { x: (800 / 3) * 2, y: 300, x2: 800, height: 300 },
         ]);
     });
     it("比例分割，如带鱼屏", () => {
@@ -192,15 +183,14 @@ describe("移动", () => {
         matchLayout(
             layout,
             [
-                { x: 0, y: 0, width: 800 / 3, height: 300 },
-                { x: 800 / 3, y: 0, width: 800 / 3, height: 300 },
-                { x: (800 / 3) * 2, y: 0, width: 800 / 3, height: 300 },
-                { x: 0, y: 300, width: (800 / 3) * 2, height: 300 },
-                { x: (800 / 3) * 2, y: 300, width: 1, height: 300 },
-                { x: (800 / 3) * 2, y: 300, width: 800 / 3, height: 300 },
+                { x: 0, y: 0, x2: 800 / 3, height: 300 },
+                { x: 800 / 3, y: 0, x2: (800 / 3) * 2, height: 300 },
+                { x: (800 / 3) * 2, y: 0, x2: 800, height: 300 },
+                { x: 0, y: 300, x2: (800 / 3) * 2 - 1, height: 300 },
+                { x: (800 / 3) * 2 - 1, y: 300, width: 1, height: 300 },
+                { x: (800 / 3) * 2, y: 300, x2: 800, height: 300 },
             ],
             false,
-            5,
         );
     });
     it("错开", () => {
