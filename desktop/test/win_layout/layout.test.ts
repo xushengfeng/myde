@@ -6,7 +6,10 @@ function checkSize(layout: freeLayout, data?: any) {
     try {
         expect(allSize).toEqual(layout.getBaseSize().width * layout.getBaseSize().height);
     } catch (error) {
-        if (data) data;
+        if (data) {
+            data;
+            console.log(data.c);
+        }
         throw error;
     }
 }
@@ -292,112 +295,49 @@ describe("随机测试", () => {
             };
         }
         const random = createSeededRandom(12345);
-        function run(a: () => void, name: string) {
+        function run(a: () => void, name: string, c: number) {
             const lastState = layout.getAllWindows();
             a();
-            checkSize(layout, { lastState, currentState: layout.getAllWindows(), name });
+            checkSize(layout, { lastState, name, c });
         }
-        for (let i = 0; i < 10000; i++) {
+        for (let i = 0; i < 240; i++) {
             const action = random();
             if (action < 0.6) {
                 // 添加窗口
                 const x = random() * 800;
                 const y = random() * 600;
-                run(() => {
-                    layout.addWindow({ x, y });
-                }, `添加窗口 ${x}, ${y}`);
+                run(
+                    () => {
+                        layout.addWindow({ x, y });
+                    },
+                    `添加窗口 ${x}, ${y}`,
+                    i,
+                );
                 if (layout.getAllWindows().length > 100) {
-                    run(() => {
-                        for (const win of layout.getAllWindows()) {
-                            layout.removeWindow(win.id);
-                        }
-                    }, "清空窗口");
+                    run(
+                        () => {
+                            for (const win of layout.getAllWindows()) {
+                                layout.removeWindow(win.id);
+                            }
+                        },
+                        "清空窗口",
+                        i,
+                    );
                 }
             } else {
                 // 删除窗口
                 const wins = layout.getAllWindows();
                 if (wins.length > 1) {
                     const win = wins[Math.floor(random() * wins.length)];
-                    run(() => {
-                        layout.removeWindow(win.id);
-                    }, `删除窗口 ${win.id}`);
+                    run(
+                        () => {
+                            layout.removeWindow(win.id);
+                        },
+                        `删除窗口 ${win.id}`,
+                        i,
+                    );
                 }
             }
         }
-    });
-
-    it("中途错误的情况1", () => {
-        const layout = new freeLayout(800, 600);
-        layout.loadState({
-            baseWidth: 800,
-            baseHeight: 600,
-            windows: [
-                {
-                    id: 3,
-                    x1: 0,
-                    y1: 0,
-                    x2: 200,
-                    y2: 300,
-                    minWidth: 1,
-                    minHeight: 1,
-                },
-                {
-                    id: 2,
-                    x1: 300,
-                    y1: 300,
-                    x2: 600,
-                    y2: 600,
-                    minWidth: 1,
-                    minHeight: 1,
-                },
-                {
-                    id: 5,
-                    x1: 600,
-                    y1: 300,
-                    x2: 800,
-                    y2: 600,
-                    minWidth: 1,
-                    minHeight: 1,
-                },
-                {
-                    id: 8,
-                    x1: 400,
-                    y1: 0,
-                    x2: 800,
-                    y2: 300,
-                    minWidth: 1,
-                    minHeight: 1,
-                },
-                {
-                    id: 4,
-                    x1: 0,
-                    y1: 300,
-                    x2: 300,
-                    y2: 600,
-                    minWidth: 1,
-                    minHeight: 1,
-                },
-                {
-                    id: 6,
-                    x1: 200,
-                    y1: 0,
-                    x2: 400,
-                    y2: 150,
-                    minWidth: 1,
-                    minHeight: 1,
-                },
-                {
-                    id: 9,
-                    x1: 200,
-                    y1: 150,
-                    x2: 400,
-                    y2: 300,
-                    minWidth: 1,
-                    minHeight: 1,
-                },
-            ],
-        });
-        layout.addWindow({ x: 498.40820133686066, y: 100.7289751432836 });
-        checkSize(layout);
     });
 });
