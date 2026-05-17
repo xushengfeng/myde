@@ -1,17 +1,40 @@
+type WindowInfo = {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    minWidth: number;
+    minHeight: number;
+};
+
 class freeLayout {
     private baseWidth: number;
     private baseHeight: number;
 
-    private windows: Map<
-        number,
-        { x1: number; y1: number; x2: number; y2: number; minWidth: number; minHeight: number }
-    >;
+    private windows: Map<number, WindowInfo>;
 
     constructor(baseWidth: number, baseHeight: number) {
         this.baseWidth = baseWidth;
         this.baseHeight = baseHeight;
         this.windows = new Map();
         this.setWindow(1, 0, 0, baseWidth, baseHeight);
+    }
+    loadState(state: { baseWidth: number; baseHeight: number; windows: (WindowInfo & { id: number })[] }) {
+        this.baseWidth = state.baseWidth;
+        this.baseHeight = state.baseHeight;
+        this.windows.clear();
+        for (const win of state.windows) {
+            this.windows.set(win.id, { ...win });
+        }
+    }
+    clone() {
+        const newLayout = new freeLayout(this.baseWidth, this.baseHeight);
+        newLayout.loadState({
+            baseWidth: this.baseWidth,
+            baseHeight: this.baseHeight,
+            windows: this.getAllWindows(),
+        });
+        return newLayout;
     }
     getBaseSize() {
         return { width: this.baseWidth, height: this.baseHeight };

@@ -1,4 +1,4 @@
-import { button, view } from "dkh-ui";
+import { button, textarea, view } from "dkh-ui";
 import { freeLayout } from "../../src/win_layout";
 
 const layout = new freeLayout(800, 600);
@@ -53,4 +53,19 @@ main.on("pointerup", () => {
     layout.moveEnd();
 });
 
+main.on("dblclick", (e) => {
+    const posi = { x: e.offsetX, y: e.offsetY };
+    layout.addWindow(posi);
+    render();
+});
+
 render();
+
+textarea()
+    .addInto()
+    .on("change", (_, el) => {
+        // biome-ignore lint/security/noGlobalEval: 用于测试的
+        const state = eval(`let y=${el.gv}; y`);
+        layout.loadState(state);
+        render();
+    });
