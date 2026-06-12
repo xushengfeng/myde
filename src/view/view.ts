@@ -541,8 +541,6 @@ class WaylandClient {
     private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
     private nextObjectId: number = 0xff000000;
     private obj2: Partial<{
-        pointer: WaylandObjectId2<"wl_pointer">;
-        keyboard: WaylandObjectId2<"wl_keyboard">;
         focusSurface: WaylandObjectId | null;
         focusSurfaceType: "main" | "popup" | null;
         textInputV1: {
@@ -554,6 +552,13 @@ class WaylandClient {
         pendingPaste: { offerId: WaylandObjectId; fd: number; mime: string; timeout: NodeJS.Timeout };
         modifiers: Set<number>;
     }> & {
+        seats: Map<
+            WaylandObjectId2<"wl_seat">,
+            {
+                pointer?: WaylandObjectId2<"wl_pointer">;
+                keyboard?: WaylandObjectId2<"wl_keyboard">;
+            }
+        >;
         windows: Map<
             WaylandObjectId2<"xdg_toplevel">,
             {
@@ -605,7 +610,7 @@ class WaylandClient {
         this.id = id;
         this.socket = socket;
         this.objects = new Map();
-        this.obj2 = { windows: new Map(), modifiers: new Set(), appid: undefined };
+        this.obj2 = { windows: new Map(), modifiers: new Set(), seats: new Map(), appid: undefined };
         this.wlSurface = new wlSurfaceData(render);
         this.dataManager = {
             wlSubSurface: new wlSubSurfaceData(this.wlSurface),
@@ -741,6 +746,7 @@ class WaylandClient {
             }
             if (proto.name === "wl_seat") {
                 const id = _id as WaylandObjectId2<"wl_seat">;
+                this.obj2.seats.set(id, {});
                 this.sendMessageX(id, "wl_seat.name", { name: "seat0" });
                 this.sendMessageX(id, "wl_seat.capabilities", {
                     capabilities: getEnumValue("wl_seat.capability", ["pointer", "keyboard"]),
@@ -961,11 +967,21 @@ class WaylandClient {
 
         isOp("wl_seat.get_pointer", (x) => {
             const pointerId = x.args.id;
-            this.obj2.pointer = pointerId;
+            const seat = this.obj2.seats.get(x.id);
+            if (!seat) {
+                console.warn(`Seat ${x.id} not found for get_pointer`);
+                return;
+            }
+            seat.pointer = pointerId;
         });
         isOp("wl_seat.get_keyboard", (x) => {
             const keyboardId = x.args.id;
-            this.obj2.keyboard = keyboardId;
+            const seat = this.obj2.seats.get(x.id);
+            if (!seat) {
+                console.warn(`Seat ${x.id} not found for get_keyboard`);
+                return;
+            }
+            seat.keyboard = keyboardId;
             this.sendMessageX(keyboardId, "wl_keyboard.repeat_info", {
                 rate: 25,
                 delay: 600,
@@ -1611,6 +1627,16 @@ class WaylandClient {
         if (xdgSurfaceId === undefined) return;
         this.sendMessageImm(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
     }
+    private getPointers() {
+        return Array.from(this.obj2.seats.values())
+            .map((s) => s.pointer)
+            .filter((p) => p !== undefined);
+    }
+    private getKeyboards() {
+        return Array.from(this.obj2.seats.values())
+            .map((s) => s.keyboard)
+            .filter((k) => k !== undefined);
+    }
     win(id: WaylandWinId) {
         const win = this.obj2.windows.get(id);
         if (win === undefined) return undefined;
@@ -1672,7 +1698,6 @@ class WaylandClient {
                     return true; // todo
                 },
                 updatePointerFocus: (p: { x: number; y: number }) => {
-                    if (!this.obj2.pointer) return;
                     const { x, y } = p;
                     // 获取在哪个xdgsurface上，并区分surface还是popup
                     let inXdgSurface: WaylandObjectId2<"xdg_surface"> | undefined;
@@ -1758,20 +1783,23 @@ class WaylandClient {
                         const { id: s, x: nx, y: ny } = inSurface;
                         if (this.obj2.focusSurface !== s) {
                             if (this.obj2.focusSurface && this.objects.has(this.obj2.focusSurface)) {
-                                this.sendMessageImm(this.obj2.pointer, "wl_pointer.leave", {
-                                    serial: 0,
-                                    surface: this.obj2.focusSurface,
-                                });
+                                for (const p of this.getPointers())
+                                    this.sendMessageImm(p, "wl_pointer.leave", {
+                                        serial: 0,
+                                        surface: this.obj2.focusSurface,
+                                    });
                                 if (this.obj2.focusSurfaceType === "main" && reasonSurfaceType === "main")
                                     this.keyboard.blurSurface(this.obj2.focusSurface); // todo popup
                             }
-                            this.sendMessageImm(this.obj2.pointer, "wl_pointer.enter", {
-                                serial: 0,
-                                surface: s,
-                                surface_x: nx,
-                                surface_y: ny,
-                            });
-                            this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+                            for (const p of this.getPointers()) {
+                                this.sendMessageImm(p, "wl_pointer.enter", {
+                                    serial: 0,
+                                    surface: s,
+                                    surface_x: nx,
+                                    surface_y: ny,
+                                });
+                                this.sendMessageImm(p, "wl_pointer.frame", {});
+                            }
                             if (
                                 (this.obj2.focusSurfaceType === "main" || !this.obj2.focusSurfaceType) &&
                                 reasonSurfaceType === "main"
@@ -1785,72 +1813,78 @@ class WaylandClient {
                     return undefined;
                 },
                 sendPointerEvent: (type: "move" | "down" | "up", p: { x: number; y: number; button: number }) => {
-                    if (!this.obj2.pointer) return;
                     // px py已经相对主xdg surface了
                     const pos = winObj.point.updatePointerFocus({ x: p.x, y: p.y });
                     if (!pos) return;
                     const { x: nx, y: ny } = pos;
                     if (type === "move") {
-                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.motion", {
-                            time: Date.now(),
-                            surface_x: nx,
-                            surface_y: ny,
-                        });
-                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+                        for (const p of this.getPointers()) {
+                            this.sendMessageImm(p, "wl_pointer.motion", {
+                                time: Date.now(),
+                                surface_x: nx,
+                                surface_y: ny,
+                            });
+                            this.sendMessageImm(p, "wl_pointer.frame", {});
+                        }
                     }
                     if (type === "down") {
-                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.button", {
-                            serial: 0,
-                            time: Date.now(),
-                            button:
-                                p.button === 0
-                                    ? InputEventCodes.BTN_LEFT
-                                    : p.button === 1
-                                      ? InputEventCodes.BTN_MIDDLE
-                                      : p.button === 2
-                                        ? InputEventCodes.BTN_RIGHT
-                                        : InputEventCodes.BTN_LEFT,
-                            state: getEnumValue("wl_pointer.button_state", "pressed"),
-                        });
-                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+                        for (const pointer of this.getPointers()) {
+                            this.sendMessageImm(pointer, "wl_pointer.button", {
+                                serial: 0,
+                                time: Date.now(),
+                                button:
+                                    p.button === 0
+                                        ? InputEventCodes.BTN_LEFT
+                                        : p.button === 1
+                                          ? InputEventCodes.BTN_MIDDLE
+                                          : p.button === 2
+                                            ? InputEventCodes.BTN_RIGHT
+                                            : InputEventCodes.BTN_LEFT,
+                                state: getEnumValue("wl_pointer.button_state", "pressed"),
+                            });
+                            this.sendMessageImm(pointer, "wl_pointer.frame", {});
+                        }
                     }
                     if (type === "up") {
-                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.button", {
-                            serial: 0,
-                            time: Date.now(),
-                            button:
-                                p.button === 0
-                                    ? InputEventCodes.BTN_LEFT
-                                    : p.button === 1
-                                      ? InputEventCodes.BTN_MIDDLE
-                                      : p.button === 2
-                                        ? InputEventCodes.BTN_RIGHT
-                                        : InputEventCodes.BTN_LEFT,
-                            state: getEnumValue("wl_pointer.button_state", "released"),
-                        });
-                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+                        for (const pointer of this.getPointers()) {
+                            this.sendMessageImm(pointer, "wl_pointer.button", {
+                                serial: 0,
+                                time: Date.now(),
+                                button:
+                                    p.button === 0
+                                        ? InputEventCodes.BTN_LEFT
+                                        : p.button === 1
+                                          ? InputEventCodes.BTN_MIDDLE
+                                          : p.button === 2
+                                            ? InputEventCodes.BTN_RIGHT
+                                            : InputEventCodes.BTN_LEFT,
+                                state: getEnumValue("wl_pointer.button_state", "released"),
+                            });
+                            this.sendMessageImm(pointer, "wl_pointer.frame", {});
+                        }
                     }
                 },
                 sendScrollEvent: (op: { p: { deltaX: number; deltaY: number; deltaZ: number } }) => {
                     const { p } = op;
-                    if (!this.obj2.pointer) return;
                     // todo region
                     const { deltaX, deltaY } = p;
                     if (deltaX !== 0) {
-                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.axis", {
-                            time: Date.now(),
-                            axis: getEnumValue("wl_pointer.axis", "horizontal_scroll"),
-                            value: deltaX,
-                        });
+                        for (const pointer of this.getPointers())
+                            this.sendMessageImm(pointer, "wl_pointer.axis", {
+                                time: Date.now(),
+                                axis: getEnumValue("wl_pointer.axis", "horizontal_scroll"),
+                                value: deltaX,
+                            });
                     }
                     if (deltaY !== 0) {
-                        this.sendMessageImm(this.obj2.pointer, "wl_pointer.axis", {
-                            time: Date.now(),
-                            axis: getEnumValue("wl_pointer.axis", "vertical_scroll"),
-                            value: deltaY,
-                        });
+                        for (const pointer of this.getPointers())
+                            this.sendMessageImm(pointer, "wl_pointer.axis", {
+                                time: Date.now(),
+                                axis: getEnumValue("wl_pointer.axis", "vertical_scroll"),
+                                value: deltaY,
+                            });
                     }
-                    this.sendMessageImm(this.obj2.pointer, "wl_pointer.frame", {});
+                    for (const pointer of this.getPointers()) this.sendMessageImm(pointer, "wl_pointer.frame", {});
                 },
             },
             getPreview: () => {
@@ -1867,30 +1901,31 @@ class WaylandClient {
     keyboard = {
         // todo Surface管理
         focusSurface: (id: WaylandObjectId) => {
-            if (!this.obj2.keyboard) return;
-            this.sendMessageImm(this.obj2.keyboard, "wl_keyboard.enter", { serial: 0, surface: id, keys: [] });
-            this.sendMessageImm(this.obj2.keyboard, "wl_keyboard.modifiers", {
-                serial: 0,
-                mods_depressed: 0,
-                mods_latched: 0,
-                mods_locked: 0,
-                group: 0,
-            });
+            for (const k of this.getKeyboards()) {
+                this.sendMessageImm(k, "wl_keyboard.enter", { serial: 0, surface: id, keys: [] });
+                this.sendMessageImm(k, "wl_keyboard.modifiers", {
+                    serial: 0,
+                    mods_depressed: 0,
+                    mods_latched: 0,
+                    mods_locked: 0,
+                    group: 0,
+                });
+            }
         },
         blurSurface: (id: WaylandObjectId) => {
-            if (!this.obj2.keyboard) return;
-            this.sendMessageImm(this.obj2.keyboard, "wl_keyboard.leave", { serial: 0, surface: id });
+            for (const k of this.getKeyboards())
+                this.sendMessageImm(k, "wl_keyboard.leave", { serial: 0, surface: id });
         },
         sendKey: (key: number, state: "pressed" | "released") => {
-            if (!this.obj2.keyboard) return;
             const s = this.obj2.serial ?? 1;
             this.obj2.serial = s + 2;
-            this.sendMessageImm(this.obj2.keyboard, "wl_keyboard.key", {
-                serial: s,
-                time: Date.now(),
-                key: key,
-                state: getEnumValue("wl_keyboard.key_state", state), // todo repeat
-            });
+            for (const k of this.getKeyboards())
+                this.sendMessageImm(k, "wl_keyboard.key", {
+                    serial: s,
+                    time: Date.now(),
+                    key: key,
+                    state: getEnumValue("wl_keyboard.key_state", state), // todo repeat
+                });
 
             const isPressed = state === "pressed";
             const modKeyToBit: { [k: number]: number } = {
@@ -1914,13 +1949,15 @@ class WaylandClient {
                 const mods_latched = 0; // todo not tracking latched in this implementation
                 const mods_locked = 0; // todo not tracking locked separately here
 
-                this.sendMessageImm(this.obj2.keyboard, "wl_keyboard.modifiers", {
-                    serial: s,
-                    mods_depressed,
-                    mods_latched,
-                    mods_locked,
-                    group: 0,
-                });
+                for (const k of this.getKeyboards()) {
+                    this.sendMessageImm(k, "wl_keyboard.modifiers", {
+                        serial: s,
+                        mods_depressed,
+                        mods_latched,
+                        mods_locked,
+                        group: 0,
+                    });
+                }
             }
         },
         sendText: (text: string, preedit: boolean) => {
