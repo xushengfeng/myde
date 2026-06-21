@@ -1,8 +1,9 @@
-import { addClass, button, ele, type ElType, image, input, p, pack, setProperty, view } from "dkh-ui";
+import { addClass, button, check, ele, type ElType, image, input, p, pack, setProperty, view } from "dkh-ui";
 
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/desktop-api";
 import type { mprisPlayer } from "../../src/sys_api/mpris";
 import { txt, dynamicList } from "dkh-ui";
+import { blueDevice } from "../../src/sys_api/blue";
 
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
 const fs = MSysApi.fs;
@@ -250,6 +251,7 @@ const planteData: Plant[] = [
             { id: "clock" },
             { id: "mediaControl" },
             { id: "tray" },
+            { id: "blue" },
             { id: "power" },
             { id: "notifications" },
         ],
@@ -1260,6 +1262,36 @@ tools.registerTool("power", ({ tipEl, showTip }) => {
         });
     });
 
+    return el;
+});
+
+tools.registerTool("blue", ({ tipEl, showTip }) => {
+    const el = view("x");
+
+    MSysApi.blue.init().then(async () => {
+        el.add("蓝牙");
+        el.on("click", async () => {
+            const s = check("bluetooth", ["on", "off"]).addInto(tipEl);
+            const state = await MSysApi.blue.isPowered();
+            s.sv(state);
+            const list = view("y").addInto(tipEl);
+            const c: blueDevice[] = [];
+            const uc: blueDevice[] = [];
+            for (const d of MSysApi.blue.getDevices()) {
+                if (await d.isConnected()) c.push(d);
+                else if (await d.isTrusted()) uc.push(d);
+            }
+            for (const d of c) {
+                const name = (await d.getName()) || "Unknown";
+                view("x").addInto(list).add(`🔗 ${name}`);
+            }
+            for (const d of uc) {
+                const name = (await d.getName()) || "Unknown";
+                view("x").addInto(list).add(`🔌 ${name}`);
+            }
+            showTip({ state: "show", anchorEl: el.el });
+        });
+    });
     return el;
 });
 

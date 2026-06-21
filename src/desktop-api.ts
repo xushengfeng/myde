@@ -11,7 +11,8 @@ import type { SConnect } from "./remote_connect/sconnect";
 import type { mpris } from "./sys_api/mpris";
 import type { notification } from "./sys_api/notification";
 import type { tray } from "./sys_api/appIndicator";
-import { power } from "./sys_api/power";
+import type { power } from "./sys_api/power";
+import type { blue } from "./sys_api/blue";
 
 export const _myde = {
     MSysApi: {
@@ -30,6 +31,7 @@ export const _myde = {
         },
         tray: undefined as unknown as tray,
         power: undefined as unknown as power,
+        blue: undefined as unknown as blue,
     },
     MInputMap: {
         mapKeyCode,
