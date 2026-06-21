@@ -1,4 +1,4 @@
-import { a, addClass, button, ele, type ElType, image, input, pack, setProperty, view } from "dkh-ui";
+import { addClass, button, ele, type ElType, image, input, p, pack, setProperty, view } from "dkh-ui";
 
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/desktop-api";
 import type { mprisPlayer } from "../../src/sys_api/mpris";
@@ -1129,8 +1129,8 @@ tools.registerTool("mediaControl", ({ tipEl, showTip }) => {
     const ditial = view("y").addInto(main);
 
     const cover = view().addInto(ditial);
-    const title = view().addInto(ditial);
-    const artist = view().addInto(ditial);
+    const title = p().addInto(ditial);
+    const artist = p().addInto(ditial);
 
     const controls = view("x").addInto(ditial);
     const prevBtn = button("⏮️").addInto(controls);
@@ -1169,17 +1169,15 @@ tools.registerTool("mediaControl", ({ tipEl, showTip }) => {
         const p = mediaControl.get(name);
         if (!p) return;
         list.clear().add(Array.from(mediaControl.keys()).map((n) => button(n).on("click", () => update(n))));
-        const metadata = await p.metadata();
-        if (metadata["mpris:artUrl"]) {
+        const artCover = await p.artCover();
+        if (artCover) {
             cover.clear();
-            image(metadata["mpris:artUrl"], "cover")
-                .style({ width: "100px", height: "100px", objectFit: "cover" })
-                .addInto(cover);
+            image(artCover, "cover").style({ width: "100px", height: "100px", objectFit: "cover" }).addInto(cover);
         } else {
             cover.clear();
         }
-        title.sv(metadata["xesam:title"] || "");
-        artist.sv((metadata["xesam:artist"] || []).join(", "));
+        title.sv(await p.title());
+        artist.sv((await p.artist()).join(", "));
 
         playBtn.on("click", () => p.play());
         pauseBtn.on("click", () => p.pause());

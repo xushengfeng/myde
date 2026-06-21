@@ -1,4 +1,4 @@
-import { dbusClient, type dbusInterface, type dbusIO } from "myde-dbus";
+import { type DBusTypes, dbusClient, type dbusInterface, type dbusIO } from "myde-dbus";
 
 export class mpris {
     private io: dbusIO;
@@ -99,7 +99,7 @@ export class mprisPlayer {
     async duration() {
         const metadata = await this.metadata();
         if ("mpris:length" in metadata) {
-            return (metadata["mpris:length"] as number) / 10e5;
+            return Number((metadata["mpris:length"] as DBusTypes<"x">)[0]) / 10e5;
         } else {
             return Infinity;
         }
@@ -108,10 +108,26 @@ export class mprisPlayer {
         const [status] = await this.getPlayer().get<"s">("PlaybackStatus");
         return status === "Paused" || status === "Stopped";
     }
+    async title() {
+        const metadata = await this.metadata();
+        if ("xesam:title" in metadata) {
+            return (metadata["xesam:title"] as DBusTypes<"s">)[0];
+        } else {
+            return "";
+        }
+    }
+    async artist() {
+        const metadata = await this.metadata();
+        if ("xesam:artist" in metadata) {
+            return (metadata["xesam:artist"] as DBusTypes<"as">)[0];
+        } else {
+            return [];
+        }
+    }
     async artCover() {
         const metadata = await this.metadata();
         if ("mpris:artUrl" in metadata) {
-            return metadata["mpris:artUrl"] as string;
+            return (metadata["mpris:artUrl"] as DBusTypes<"s">)[0];
         } else {
             return "";
         }
