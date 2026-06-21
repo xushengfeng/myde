@@ -13,6 +13,7 @@ import type { notification } from "./sys_api/notification";
 import type { tray } from "./sys_api/appIndicator";
 import type { power } from "./sys_api/power";
 import type { blue } from "./sys_api/blue";
+import type { network } from "./sys_api/network";
 
 export const _myde = {
     MSysApi: {
@@ -32,6 +33,7 @@ export const _myde = {
         tray: undefined as unknown as tray,
         power: undefined as unknown as power,
         blue: undefined as unknown as blue,
+        network: undefined as unknown as network,
     },
     MInputMap: {
         mapKeyCode,

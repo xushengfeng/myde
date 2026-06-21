@@ -15,6 +15,7 @@ import { getEnv } from "../../sys_api/env";
 import { tray } from "../../sys_api/appIndicator";
 import { power } from "../../sys_api/power";
 import { blue } from "../../sys_api/blue";
+import { network } from "../../sys_api/network";
 
 const {
     default: { loginService },
@@ -53,6 +54,7 @@ async function loadDesktop(p: string) {
     myde.MSysApi.tray = new tray(await newDBusIO());
     myde.MSysApi.power = new power(await newDBusIO(true));
     myde.MSysApi.blue = new blue(await newDBusIO(true));
+    myde.MSysApi.network = new network(await newDBusIO(true));
     const packageData = fs.readFileSync(packagePath, "utf-8");
     const packageJson = JSON.parse(packageData);
     const mainPath = `${dirPath}/${packageJson.main || "index.js"}`;

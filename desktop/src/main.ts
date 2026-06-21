@@ -3,7 +3,7 @@ import { addClass, button, check, ele, type ElType, image, input, p, pack, setPr
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/desktop-api";
 import type { mprisPlayer } from "../../src/sys_api/mpris";
 import { txt, dynamicList } from "dkh-ui";
-import { blueDevice } from "../../src/sys_api/blue";
+import type { blueDevice } from "../../src/sys_api/blue";
 
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
 const fs = MSysApi.fs;
@@ -252,6 +252,7 @@ const planteData: Plant[] = [
             { id: "mediaControl" },
             { id: "tray" },
             { id: "blue" },
+            { id: "network" },
             { id: "power" },
             { id: "notifications" },
         ],
@@ -1270,11 +1271,13 @@ tools.registerTool("blue", ({ tipEl, showTip }) => {
 
     MSysApi.blue.init().then(async () => {
         el.add("蓝牙");
+        const mel = view("y").addInto(tipEl);
         el.on("click", async () => {
-            const s = check("bluetooth", ["on", "off"]).addInto(tipEl);
+            mel.clear();
+            const s = check("bluetooth", ["on", "off"]).addInto(mel);
             const state = await MSysApi.blue.isPowered();
             s.sv(state);
-            const list = view("y").addInto(tipEl);
+            const list = view("y").addInto(mel);
             const c: blueDevice[] = [];
             const uc: blueDevice[] = [];
             for (const d of MSysApi.blue.getDevices()) {
@@ -1292,6 +1295,34 @@ tools.registerTool("blue", ({ tipEl, showTip }) => {
             showTip({ state: "show", anchorEl: el.el });
         });
     });
+    return el;
+});
+
+tools.registerTool("network", ({ tipEl, showTip }) => {
+    const el = view("x");
+
+    MSysApi.network.init().then(async () => {
+        el.add("网络");
+        const list = view("y").addInto(tipEl);
+        el.on("click", async () => {
+            list.clear();
+            const activeWifi = await MSysApi.network.getActiveWifiConnection();
+            if (activeWifi) {
+                const name = activeWifi.id;
+                view("x").style({ whiteSpace: "pre" }).addInto(list).add(`🔗 ${name}`);
+            }
+
+            const devices = MSysApi.network.getWifiDevices();
+
+            for (const n of await devices[0].getAccessPoints()) {
+                const name = (await n.getSsid()) || "Unknown";
+                if (name === activeWifi?.id) continue;
+                view("x").style({ whiteSpace: "pre" }).addInto(list).add(`${name}`);
+            }
+            showTip({ state: "show", anchorEl: el.el });
+        });
+    });
+
     return el;
 });
 
