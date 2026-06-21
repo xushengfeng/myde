@@ -7,3 +7,4 @@ test/offical/wayland
 dist
 build
 **/test/**.pcap
+.VSCodeCounter
