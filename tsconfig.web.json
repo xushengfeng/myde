@@ -6,7 +6,6 @@
     "strict": true,
     "jsx": "preserve",
     "esModuleInterop": true,
-    "moduleResolution": "node",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
