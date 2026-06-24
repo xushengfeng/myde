@@ -1,4 +1,4 @@
-import { renderToolsHtmlEl } from "./view/render_tools_el";
+import { renderToolsHtmlEl } from "./wayland/render_tools_el";
 import { mapKeyCode } from "./input_map/web2x";
 import { getDesktopEntries, getDesktopEntry, getDesktopIcon, refreshDesktopEntries } from "./sys_api/application";
 import { getEnv } from "./sys_api/env";
@@ -51,5 +51,5 @@ declare global {
     var myde: DesktopApi;
 }
 
-export type { renderTools } from "./view/render_tools";
-export type { WaylandClient, WaylandWinId } from "./view/view";
+export type { renderTools } from "./wayland/render_tools";
+export type { WaylandClient, WaylandWinId } from "./wayland/server";

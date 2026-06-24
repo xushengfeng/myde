@@ -10,23 +10,23 @@ import {
     type WaylandName,
     type WaylandObjectId,
     type WaylandProtocol,
-} from "../wayland/wayland-binary";
+} from "./utils/wayland-binary";
 import {
     type WaylandEnumObj,
     type WaylandEventObj,
     WaylandEventOpcode,
     type WaylandInterfaces,
     type WaylandRequestObj,
-} from "../wayland/wayland-types";
-import { WaylandDecoder } from "../wayland/wayland-decoder";
-import WaylandProtocolsJSON from "../wayland/protocols.json?raw";
+} from "./protocols/wayland-types";
+import { WaylandDecoder } from "./utils/wayland-decoder";
+import WaylandProtocolsJSON from "./protocols/protocols.json?raw";
 const WaylandProtocolsx = JSON.parse(WaylandProtocolsJSON) as Record<string, WaylandProtocol[]>;
 const WaylandProtocols = Object.fromEntries(Object.values(WaylandProtocolsx).flatMap((v) => v.map((p) => [p.name, p])));
-import { WaylandEncoder } from "../wayland/wayland-encoder";
+import { WaylandEncoder } from "./utils/wayland-encoder";
 
 import { InputEventCodes } from "../input_codes/types";
-import { createFormatTableBuffer, DRM_FORMAT } from "../wayland/dma-buf";
-import { getRectKeyPoint } from "../wayland/xdg";
+import { createFormatTableBuffer, DRM_FORMAT } from "./utils/dma-buf";
+import { getRectKeyPoint } from "./utils/xdg";
 import type { renderTools } from "./render_tools";
 
 export { WaylandClient, WaylandServer };

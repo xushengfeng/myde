@@ -1,9 +1,9 @@
 import { addClass, button, check, ele, type ElType, image, input, p, pack, setProperty, view } from "dkh-ui";
 
-import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../src/desktop-api";
-import type { mprisPlayer } from "../../src/sys_api/mpris";
+import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
+import type { mprisPlayer } from "../../../src/sys_api/mpris";
 import { txt, dynamicList } from "dkh-ui";
-import type { blueDevice } from "../../src/sys_api/blue";
+import type { blueDevice } from "../../../src/sys_api/blue";
 
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
 const fs = MSysApi.fs;

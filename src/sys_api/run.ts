@@ -1,7 +1,7 @@
 const child_process = require("node:child_process") as typeof import("node:child_process");
 
-import type { renderTools } from "../view/render_tools";
-import { WaylandServer } from "../view/view";
+import type { renderTools } from "../wayland/render_tools";
+import { WaylandServer } from "../wayland/server";
 import { getEnv } from "./env";
 
 export function server(op: { dev?: boolean; render: renderTools }) {

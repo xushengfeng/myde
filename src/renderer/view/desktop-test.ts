@@ -2,11 +2,11 @@ const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 
 import { getDesktopEntries, getDesktopIcon } from "../../sys_api/application";
-import { renderToolsHtmlEl } from "../../view/render_tools_el";
+import { renderToolsHtmlEl } from "../../wayland/render_tools_el";
 import { _myde as myde } from "../../desktop-api";
 
 import { button, image, pack, txt, view, initDKH, input, addStyle } from "dkh-ui";
-import type { WaylandClient } from "../../view/view";
+import type { WaylandClient } from "../../wayland/server";
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
     for (const [_id, client] of server.clients) {
