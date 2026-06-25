@@ -317,4 +317,4 @@ runApp("chrome", [], xServerNum);
 
 ## 参考
 
-- [desktop 官方实现](./offical)
+- [desktop 简单演示](./example)

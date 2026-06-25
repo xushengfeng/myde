@@ -11,7 +11,8 @@
         "build": "electron-vite --ignoreConfigWarning build",
         "build:remote-connect": "cd src/remote_connect && pnpm build",
         "desktop:offical": "cd desktop/offical && npm run build && cd ../.. && export desktop='desktop/offical' && electron-vite --ignoreConfigWarning preview",
-        "desktop:remote": "cd desktop/remote && npm run build && cd ../.. && export desktop='desktop/remote' && electron-vite --ignoreConfigWarning preview"
+        "desktop:remote": "cd desktop/remote && npm run build && cd ../.. && export desktop='desktop/remote' && electron-vite --ignoreConfigWarning preview",
+        "desktop:example": "cd desktop/example && npm run build && cd ../.. && export desktop='desktop/example' && electron-vite --ignoreConfigWarning preview"
     },
     "author": {
         "name": "xsf",
