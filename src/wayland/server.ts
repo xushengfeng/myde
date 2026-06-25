@@ -52,6 +52,7 @@ type WaylandData = {
     wl_region: {
         rects: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
     };
+    xdg_wm_base: { pingSerials: Map<number, () => void> };
     xdg_positioner: {
         size: { width: number; height: number };
         anchor_rect: { x: number; y: number; width: number; height: number };
@@ -559,6 +560,7 @@ class WaylandClient {
                 keyboard?: WaylandObjectId2<"wl_keyboard">;
             }
         >;
+        xdg_wm_base: Set<WaylandObjectId2<"xdg_wm_base">>;
         windows: Map<
             WaylandObjectId2<"xdg_toplevel">,
             {
@@ -610,7 +612,13 @@ class WaylandClient {
         this.id = id;
         this.socket = socket;
         this.objects = new Map();
-        this.obj2 = { windows: new Map(), modifiers: new Set(), seats: new Map(), appid: undefined };
+        this.obj2 = {
+            windows: new Map(),
+            modifiers: new Set(),
+            seats: new Map(),
+            appid: undefined,
+            xdg_wm_base: new Set(),
+        };
         this.wlSurface = new wlSurfaceData(render);
         this.dataManager = {
             wlSubSurface: new wlSubSurfaceData(this.wlSurface),
@@ -773,6 +781,11 @@ class WaylandClient {
                     transform: getEnumValue("wl_output.transform", "normal"),
                 });
                 this.sendMessageX(id, "wl_output.done", {});
+            }
+            if (proto.name === "xdg_wm_base") {
+                const id = _id as WaylandObjectId2<"xdg_wm_base">;
+                this.obj2.xdg_wm_base.add(id);
+                this.getObject(id).data = { pingSerials: new Map() };
             }
         });
         isOp("wl_shm.create_pool", (x) => {
@@ -1148,6 +1161,16 @@ class WaylandClient {
                 reactive: false,
             };
         });
+        isOp("xdg_wm_base.pong", (x) => {
+            const thisObj = this.getObject(x.id);
+            const p = thisObj.data.pingSerials.get(x.args.serial);
+            p?.();
+            thisObj.data.pingSerials.delete(x.args.serial);
+        });
+        isOp("xdg_wm_base.destroy", (x) => {
+            this.obj2.xdg_wm_base.delete(x.id);
+        });
+
         isOp("xdg_positioner.set_size", (x) => {
             const pData = this.getObject(x.id).data;
             pData.size = x.args;
@@ -1897,6 +1920,17 @@ class WaylandClient {
             },
         };
         return winObj;
+    }
+    async ping() {
+        const ps: Promise<void>[] = [];
+        for (const id of this.obj2.xdg_wm_base) {
+            const p = Promise.withResolvers<void>();
+            ps.push(p.promise);
+            const serial = Math.floor(Math.random() * 1000000);
+            this.sendMessageImm(id, "xdg_wm_base.ping", { serial: serial });
+            this.getObject(id).data.pingSerials.set(serial, p.resolve);
+        }
+        await Promise.all(ps);
     }
     keyboard = {
         // todo Surface管理
