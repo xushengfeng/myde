@@ -218,6 +218,8 @@ function focusWindow(clientId: string, windowId: WaylandWinId) {
 }
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
+    const windowsUnderPointer: { clientId: string; winId: WaylandWinId; zIndex: number }[] = [];
+
     for (const [clientId, client] of Array.from(server.server.clients)) {
         for (const [winId] of Array.from(client.getWindows())) {
             const xwin = client.win(winId);
@@ -230,19 +232,42 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
             const ny = p.y - rect.top;
 
             if (xwin.point.inWin({ x: nx, y: ny })) {
-                xwin.point.sendPointerEvent(type, new PointerEvent(p.type, { ...p, clientX: nx, clientY: ny }));
-
-                if (type === "down") {
-                    focusWindow(clientId, winId);
-                }
-                break;
+                const mWinId = createWindowId(clientId, winId);
+                const state = windowStates.get(mWinId);
+                const zIndex = state?.zIndex ?? 0;
+                windowsUnderPointer.push({ clientId, winId, zIndex });
             }
         }
+    }
+
+    if (windowsUnderPointer.length === 0) return;
+
+    windowsUnderPointer.sort((a, b) => b.zIndex - a.zIndex);
+    const topWindow = windowsUnderPointer[0];
+
+    const client = server.server.clients.get(topWindow.clientId);
+    if (!client) return;
+
+    const xwin = client.win(topWindow.winId);
+    if (!xwin) return;
+
+    const rect = render.getXdgSurfaceEle(xwin.point.renderId())?.getBoundingClientRect();
+    if (!rect) return;
+
+    const nx = p.x - rect.left;
+    const ny = p.y - rect.top;
+
+    xwin.point.sendPointerEvent(type, new PointerEvent(p.type, { ...p, clientX: nx, clientY: ny }));
+
+    if (type === "down") {
+        focusWindow(topWindow.clientId, topWindow.winId);
     }
 }
 
 function sendScrollEvent(p: WheelEvent) {
-    for (const [, client] of Array.from(server.server.clients)) {
+    const windowsUnderPointer: { clientId: string; winId: WaylandWinId; zIndex: number }[] = [];
+
+    for (const [clientId, client] of Array.from(server.server.clients)) {
         for (const [winId] of Array.from(client.getWindows())) {
             const xwin = client.win(winId);
             if (!xwin) continue;
@@ -255,9 +280,34 @@ function sendScrollEvent(p: WheelEvent) {
             const ny = p.y - rect.top;
 
             if (xwin.point.inWin({ x: nx, y: ny })) {
-                xwin.point.sendScrollEvent({ p });
+                const mWinId = createWindowId(clientId, winId);
+                const state = windowStates.get(mWinId);
+                const zIndex = state?.zIndex ?? 0;
+                windowsUnderPointer.push({ clientId, winId, zIndex });
             }
         }
+    }
+
+    if (windowsUnderPointer.length === 0) return;
+
+    windowsUnderPointer.sort((a, b) => b.zIndex - a.zIndex);
+    const topWindow = windowsUnderPointer[0];
+
+    const client = server.server.clients.get(topWindow.clientId);
+    if (!client) return;
+
+    const xwin = client.win(topWindow.winId);
+    if (!xwin) return;
+
+    const rootEl = render.getXdgSurfaceEle(xwin.point.renderId());
+    if (!rootEl) return;
+
+    const rect = rootEl.getBoundingClientRect();
+    const nx = p.x - rect.left;
+    const ny = p.y - rect.top;
+
+    if (xwin.point.inWin({ x: nx, y: ny })) {
+        xwin.point.sendScrollEvent({ p });
     }
 }
 
