@@ -1,6 +1,7 @@
 import { button, image, pack, txt, view } from "dkh-ui";
 
 import type { WaylandWinId } from "../../../src/desktop-api";
+import type { blueDevice } from "../../../src/sys_api/blue";
 
 const { MSysApi, MInputMap, MUtils } = myde;
 
@@ -334,6 +335,13 @@ const taskbarApps = view()
         flex: "1",
     })
     .addInto(taskbar);
+const networkBtn = txt("网络").style({ fontSize: "13px", color: "#333", cursor: "pointer" }).addInto(taskbar);
+
+const blueBtn = txt("蓝牙").style({ fontSize: "13px", color: "#333", cursor: "pointer" }).addInto(taskbar);
+
+const powerBtn = txt("").style({ fontSize: "13px", color: "#333", cursor: "pointer" }).addInto(taskbar);
+
+const trayEl = view().style({ display: "flex", gap: "4px" }).addInto(taskbar);
 
 const clock = txt("")
     .style({
@@ -485,6 +493,150 @@ document.addEventListener("keyup", (e) => {
 
 mainEl.on("wheel", (e) => {
     sendScrollEvent(e);
+});
+
+MSysApi.network.init().then(async () => {
+    const activeWifi = await MSysApi.network.getActiveWifiConnection();
+    if (activeWifi) {
+        networkBtn.sv(`🔗 ${activeWifi.id}`);
+    }
+    networkBtn.on("click", async () => {
+        const list = view("y").addInto(mainEl);
+        list.style({
+            position: "absolute",
+            bottom: "56px",
+            left: "12px",
+            background: "rgba(255,255,255,0.9)",
+            padding: "8px",
+            borderRadius: "8px",
+            minWidth: "200px",
+        });
+        if (activeWifi) {
+            view("x").style({ whiteSpace: "pre" }).addInto(list).add(`🔗 ${activeWifi.id}`);
+        }
+        const devices = MSysApi.network.getWifiDevices();
+        for (const n of await devices[0].getAccessPoints()) {
+            const name = (await n.getSsid()) || "Unknown";
+            if (name === activeWifi?.id) continue;
+            view("x").style({ whiteSpace: "pre" }).addInto(list).add(`${name}`);
+        }
+        const close = () => {
+            list.remove();
+        };
+        list.on("pointerdown", (e) => {
+            e.stopPropagation();
+        });
+        mainEl.on("pointerdown", close, { once: true });
+    });
+});
+
+MSysApi.blue.init().then(async () => {
+    const state = await MSysApi.blue.isPowered();
+    blueBtn.sv(state ? "蓝牙" : "蓝牙(关)");
+    blueBtn.on("click", async () => {
+        const list = view("y").addInto(mainEl);
+        list.style({
+            position: "absolute",
+            bottom: "56px",
+            left: "80px",
+            background: "rgba(255,255,255,0.9)",
+            padding: "8px",
+            borderRadius: "8px",
+            minWidth: "200px",
+        });
+        const powered = await MSysApi.blue.isPowered();
+        txt(powered ? "已开启" : "已关闭").addInto(list);
+        const c: blueDevice[] = [];
+        const uc: blueDevice[] = [];
+        for (const d of MSysApi.blue.getDevices()) {
+            if (await d.isConnected()) c.push(d);
+            else if (await d.isTrusted()) uc.push(d);
+        }
+        for (const d of c) {
+            const name = (await d.getName()) || "Unknown";
+            view("x").addInto(list).add(`🔗 ${name}`);
+        }
+        for (const d of uc) {
+            const name = (await d.getName()) || "Unknown";
+            view("x").addInto(list).add(`🔌 ${name}`);
+        }
+        const close = () => {
+            list.remove();
+        };
+        list.on("pointerdown", (e) => {
+            e.stopPropagation();
+        });
+        mainEl.on("pointerdown", close, { once: true });
+    });
+});
+
+MSysApi.power.init().then(async () => {
+    for (const t of MSysApi.power.getDevices()) {
+        if ((await t.getPowerSupply()) && ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")) {
+            const percentage = await t.getPercentage();
+            powerBtn.sv(`🔋${percentage}%`);
+        }
+    }
+    powerBtn.on("click", async () => {
+        const list = view("y").addInto(mainEl);
+        list.style({
+            position: "absolute",
+            bottom: "56px",
+            right: "12px",
+            background: "rgba(255,255,255,0.9)",
+            padding: "8px",
+            borderRadius: "8px",
+            minWidth: "200px",
+        });
+        for (const t of MSysApi.power.getDevices()) {
+            const name = (await t.getModel()) || "Unknown";
+            const percentage = await t.getPercentage();
+            const status = await t.getState();
+            view("x").addInto(list).add(`${name}: ${percentage}% (${status})`);
+        }
+        const close = () => {
+            list.remove();
+        };
+        list.on("pointerdown", (e) => {
+            e.stopPropagation();
+        });
+        mainEl.on("pointerdown", close, { once: true });
+    });
+});
+
+MSysApi.tray.init().then(async () => {
+    for (const t of Array.from(MSysApi.tray.tarysService.values())) {
+        const icon = view().addInto(trayEl);
+        image((await t.getIcon({})) || "", await t.title())
+            .style({ width: "24px", height: "24px", objectFit: "cover" })
+            .addInto(icon);
+        icon.on("click", async () => {
+            const menu = await t.getMenu();
+            if (!menu) return;
+            const menuEl = view("y").addInto(mainEl);
+            menuEl.style({
+                position: "absolute",
+                bottom: "56px",
+                right: "12px",
+                background: "rgba(255,255,255,0.9)",
+                padding: "8px",
+                borderRadius: "8px",
+            });
+            for (const item of menu) {
+                const itemEl = view("x").style({ whiteSpace: "pre" }).addInto(menuEl);
+                if (item.iconUrl) {
+                    image((await item.iconUrl({})) ?? "", "icon")
+                        .style({ width: "16px", height: "16px", objectFit: "cover" })
+                        .addInto(itemEl);
+                }
+                txt(item.label).addInto(itemEl);
+                itemEl.on("click", () => {
+                    item.click();
+                    menuEl.remove();
+                });
+            }
+        });
+    }
 });
 
 server.runApp("weston-terminal");
