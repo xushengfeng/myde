@@ -1,5 +1,6 @@
 allowBuilds:
   electron: true
+  esbuild: false
 
 ignoredBuiltDependencies:
   - esbuild

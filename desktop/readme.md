@@ -1,4 +1,4 @@
-# MyDE 桌面插件开发文档
+# MyDE 桌面实现开发文档
 
 ## Quick Start
 
@@ -317,4 +317,4 @@ runApp("chrome", [], xServerNum);
 
 ## 参考
 
-- [desktop 官方实现](../desktop)
+- [desktop 官方实现](./offical)
