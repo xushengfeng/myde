@@ -1,58 +1,6 @@
 # MyDE 桌面实现开发文档
 
-## Quick Start
-
-### 1. 创建项目
-
-```bash
-mkdir my-desktop && cd my-desktop
-mkdir src dist
-```
-
-### 2. 创建 package.json
-
-```json
-{
-    "name": "my_desktop",
-    "main": "dist/index.js",
-    "type": "module"
-}
-```
-
-### 3. 编写 src/index.ts
-
-```typescript
-import type {} from "../../src/desktop-api";
-
-const { MSysApi, MUtils } = myde; // myde 在引入上面类型后就可用了
-
-const render = new MUtils.renderToolsHtmlEl();
-render.on({
-    onToplevelCreate: (_, el) => document.body.appendChild(el),
-    onToplevelRemove: (_, el) => el.remove(),
-});
-
-const { runApp, server } = MSysApi.server({ render });
-
-server.on("newClient", (client) => {
-    client.onSync("windowBound", () => ({ width: 800, height: 600 }));
-});
-
-runApp("weston-terminal");
-```
-
-### 4. 编译并运行
-
-```bash
-# 编译
-npx tsc src/index.ts --outDir dist --module esnext --target esnext
-
-# 在主项目中启动
-export desktop='my-desktop'
-npm run start
-```
-
----
+开发流程见[AGENTS.md#桌面实现开发](../AGENTS.md#桌面实现开发)
 
 ## 背景介绍
 
@@ -60,11 +8,9 @@ npm run start
 
 实际类似开发传统浏览器单页页面，可以使用浏览器的所有api，但是不需要提供html页面，而是操控已经存在的页面。
 
-尽管运行在electron中，但是考虑到安全屏蔽了nodejs相关的系统操作api，统一由`myde`提供。
+尽管运行在electron中，但是考虑到后续整合方便，**屏蔽了nodejs相关的系统操作api，包括fs之类**，统一由`myde`全局变量提供。
 
 在这个框架中，提供了界面窗口渲染和内部的管理，插件需要把提供的数据添加到网页，按需创建壁纸、启动器等，把鼠标键盘等事件发送到框架内。
-
----
 
 ## 加载机制
 
@@ -72,28 +18,20 @@ npm run start
 
 不要使用动态加载机制，而是一起打包，建议使用vite。如果加载资源，可以使用`MSysApi.fs`，可以读取插件文件夹下的所有文件。
 
----
-
 ## myde 全局变量
 
 插件通过 `myde` 访问系统 API：
 
 ```typescript
+import type {} from "../../src/desktop-api";
 const { MSysApi, MRootDir, MInputMap, MUtils } = myde;
 ```
 
-| 对象        | 说明     |
-| ----------- | -------- |
-| `MSysApi`   | 系统 API |
-| `MSetting`  | 设置     |
-| `MInputMap` | 键盘映射 |
-| `MUtils`    | 工具函数 |
-
----
+定义自`src/desktop-api.ts`
 
 ## MSysApi
 
-### 创建服务器
+### 创建Wayland服务器
 
 ```typescript
 const { server, runApp } = MSysApi.server({ render });
@@ -123,10 +61,10 @@ const env = MSysApi.getEnv();
 
 ### fs
 
-只读虚拟文件系统，基于插件根目录，防止路径遍历：
+只读虚拟文件系统，基于插件根目录，可以读取插件目录下的内容（类似相对路径），但是不能读取外部的其他系统文件：
 
 ```typescript
-const fs = new MSysApi.fs(MRootDir);
+const fs = MSysApi.fs;
 
 // 读取文件
 const text = await fs.readTextFile("config.json");
@@ -147,11 +85,45 @@ const stat = await fs.stat("file.txt"); // { size, mtime, isFile, isDirectory }
 
 所有方法都有同步版本（如 `readTextFileSync`）。
 
----
+### login
+
+设置系统关机、挂起等，锁屏自己实现
+
+### media
+
+mpris，获取正在播放的媒体相关信息，并控制播放暂停等
+
+### notification
+
+通知
+
+### verifyUserPassword
+
+判断当前用户输入密码是否正确，用于锁屏，底层是pam
+
+多次错误会导致验证锁定（视pam设置而定）
+
+### tray
+
+拖盘
+
+### power
+
+电量获取，包括笔记本电池、蓝牙设备电源等
+
+### blue
+
+蓝牙设备，包括显示连接设备、记住的设备、设备连接断开
+
+### network
+
+主要查看无线网络连接名称，包括设备连接和断开，还没有开发新连接
 
 ## MUtils
 
 ### renderToolsHtmlEl
+
+myde不处理DOM，需要DOM渲染器帮忙，这是为了方便测试或者在纯nodejs环境使用
 
 内置的 DOM 渲染器：
 
@@ -167,28 +139,27 @@ render.on({
 const el = render.getXdgSurfaceEle(renderId);
 ```
 
----
-
 ## MInputMap
 
+把浏览器键盘码转换为Linux键码，才能发送给窗口
+
 ```typescript
-// 浏览器键盘码 -> Linux 键码
 const keyCode = MInputMap.mapKeyCode("KeyA");
 ```
 
----
-
 ## MSetting
 
-提供设置读写，这个设置可以由启动器共享，意味着换桌面插件后还可以保留，比如壁纸等。桌面还可以创建读写命名空间，也就是自定义设置。
+提供设置读写，这个设置可以由启动器共享，意味着换桌面实现后还可以保留，比如壁纸等。桌面还可以创建读写命名空间，也就是自定义设置。
 
 自带类型约束和默认配置。
 
----
-
 ## Wayland 服务器
 
+从`MSysApi.server({ render });`导出的`server`变量的进一步用法
+
 ### 服务器事件
+
+一般一个`client`对应一个应用，但是应用可以有多个窗口。有些应用则会多个`client`，每个`client`一个窗口。
 
 ```typescript
 server.on("newClient", (client, clientId) => {});
@@ -223,12 +194,12 @@ win.point.inWin({ x, y });
 ### 输入事件
 
 ```typescript
+// 它们的x、y或者clientX等应该相对于XdgSurfaceEle左上角
 win.point.sendPointerEvent("move" | "down" | "up", pointerEvent);
 win.point.sendScrollEvent({ p: wheelEvent });
+// mapKeyCode转换过来的
 client.keyboard.sendKey(keyCode, "pressed" | "released");
 ```
-
----
 
 ## 输入处理
 
@@ -242,6 +213,7 @@ function sendPointerEvent(type, p) {
             const nx = p.x - rect.left,
                 ny = p.y - rect.top;
 
+            // 实际上，对于堆叠桌面，还要看遮挡关系
             if (xwin.point.inWin({ x: nx, y: ny })) {
                 xwin.point.sendPointerEvent(
                     type,
@@ -279,8 +251,6 @@ document.addEventListener("wheel", (e) => {
 });
 ```
 
----
-
 ## 启动应用
 
 ```typescript
@@ -299,8 +269,6 @@ for (let i = 0; i < 100; i++) {
 runApp("chrome", [], xServerNum);
 ```
 
----
-
 ## 开发提示
 
 使用不了`require`，应该使用打包器打包成一个js文件。如果有复杂计算任务，使用 woker+wasm，如果需要其他系统 api，需要修改引擎，请提交 issuse 或 pr。
@@ -309,11 +277,9 @@ runApp("chrome", [], xServerNum);
 
 避免复杂循环导致页面卡死，必要时添加`await scheduler.yield()`。
 
-不使用 css 的`cursor`属性，需要自己实现光标
+禁止了浏览器光标显示，需要自己实现绘制光标
 
 不使用 title 属性，或者借助 title 实现自己的 tooltip
-
---
 
 ## 参考
 

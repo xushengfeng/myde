@@ -1,82 +1,89 @@
 # myde
 
-基于 Electron 的 Linux Wayland 桌面环境（合成器）
+基于 Electron 构建的 Linux Wayland 桌面环境（合成器）。它通过 JavaScript 解析 Wayland 协议，将原生应用（如 Firefox）渲染至 Canvas，而非依赖 Web 定制软件。
 
-目前在开发中，不能原生启动，仅支持部分软件，性能不行
+> **当前状态**：开发中，尚无法原生启动；仅支持部分应用，性能有待优化。
 
-这个项目再次证明了 web 技术开发的潜力（之前也有人开发了 [term.everything](https://github.com/mmulet/term.everything/tree/typescript) 和 [greenfield](https://github.com/udevbe/greenfield)）
+## 项目愿景
 
-前端的美术基础、ux 交互以及造轮子的热情很适合开发桌面窗口管理器，kwin 和 gnome 也或多或少提供了前端开发接口。
+myde 再次证明了 Web 技术栈在桌面环境领域的潜力（此前已有 [term.everything](https://github.com/mmulet/term.everything/tree/typescript) 和 [greenfield](https://github.com/udevbe/greenfield) 等探索性项目）。
 
-这个项目更进一步，只负责把软件渲染到 canvas 上以及处理部分输入，合成渲染由 chrome 负责，其他的一切，无论是窗口管理，还是窗口装饰、桌面组件、任务栏……等等都可以自己开发。你可以开发前卫的桌面和交互方式，或者模仿 win、mac，甚至开发手机平板 ui。开发者不用处理显示协议，不用管理内存，在相对 c、rust 开发更方便的条件下，希望可以孵化出更易用、功能更强大的 Linux 桌面。
+前端开发者在美术设计、UX 交互和“造轮子”方面的热情，天然适合桌面窗口管理器的开发。事实上，KWin 和 GNOME 已或多或少提供了前端可编程接口。
 
-通过模块化插件形式，用户可以直接切换下载好的桌面。
+myde 走得更远——它负责将应用渲染到 Canvas 并处理部分输入事件，合成与绘制交由 Chrome 完成。其余一切，包括窗口管理、装饰、桌面组件、任务栏等，均可由开发者自由定制。这意味着你可以设计前卫的交互界面，复刻 Windows/macOS 风格，甚至适配手机或平板布局。开发者无需处理底层显示协议，无需手动管理内存，在相比 C/Rust 更便利的开发环境下，希望孵化出更易用、功能更强的 Linux 桌面。
 
-现在项目怎么样了？目前只有少量软件可以显示，自定义桌面 api 还不稳定，你可以视为 demo 演示。项目现在是 alapha 状态，等到我将其作为我电脑的桌面时，进入 beta 状态。其他见[文档局限条目](#局限)
+项目采用模块化插件架构，用户可轻松切换已下载的桌面实现。
 
-![演示](https://youke1.picui.cn/s1/2025/10/21/68f76fd90a9ae.png)
+## 当前进展
 
-## 运行
+目前仅少量示例应用可正常显示，自定义桌面 API 尚不稳定，请将其视为 **技术演示**。项目处于 **Alpha** 阶段，待其成为我的日常桌面环境时，将转入 Beta 阶段。更多局限请参考[局限](#局限)章节。
 
-运行环境为 Linux，带有 X11 或 Wayland 的桌面
+![演示截图](https://img.remit.ee/api/file/BQACAgUAAyEGAASHRsPbAAEWG_NqPfhEOlCPBcEuIWkvU_V7gde0mgACZyQAAk058VUY2cUWL9qISDwE.png)
 
-需要安装 xwayland-satellite
+## 运行指南
 
-在`script/xcb/`下运行`xkbcomp $DISPLAY x.xcb`（需要 X11 支持）
+### 环境要求
 
-安装依赖：
+- Linux 系统，已运行 X11 或 Wayland 会话
+- 需安装 `xwayland-satellite`
+- 请在 `script/xcb/` 目录下执行（需 X11 支持）：
+    ```shell
+    xkbcomp $DISPLAY x.xcb
+    ```
+
+### 安装依赖
+
+（`pnpm` 可替换为 `npm`，依个人偏好）
 
 ```shell
 pnpm i
-pnpm run pkgRebuild
 ```
 
-运行默认桌面：
+### 启动桌面
 
-```shell
-pnpm run desktop
-```
+- 启动默认桌面：
+    ```shell
+    pnpm run desktop:offical
+    ```
+- 启动简易 Windows 风格演示桌面：
+    ```shell
+    pnpm run desktop:example
+    ```
 
-将弹出一个窗口，可以在里面启动你自己系统的软件。
+执行后将会弹出窗口，你可以在其中启动系统已安装的应用程序。
 
-## 自定义桌面
+## 开发指南
 
-默认桌面的实现在`desktop`文件夹下面，作为参考。
+开发细节请参阅 [AGENTS.md](./AGENTS.md)，该文档面向开发者和 LLM 工具。
 
-可以通过环境变量`desktop`传递自定义桌面的文件夹，本质是一个 npm 模块，包含`package.json`，`main`属性指向核心 js 文件。
+### 自定义桌面开发
 
-尽管此项目是 AGPL-3，但自定义桌面插件理论上不会被传染。考虑到用户安全和社区繁荣，建议开源以提供社区审查，考虑到个人版权，建议使用稍微严格的许可证。
+- 默认桌面实现位于 `desktop/` 文件夹，可供参考。
+- 提供窗口管理 API、统一设置/互联 API，以及众多系统 API（如 MPRIS 媒体控制、通知、电量、蓝牙、Wi-Fi 等）。详细进度和支持列表请参考[详细文档](./docs/details.md)。
 
-## 调试
-
-运行调试窗口：
-
-```shell
-pnpm run start
-```
-
-将弹出一个窗口，固定了一些开发调试的软件。
+> **许可说明**：尽管本项目采用 AGPL-3 协议，但自定义桌面插件**理论上不受传染**。出于用户安全和社区繁荣考虑，建议开源以方便社区审查；同时，若保留个人版权，可采用稍严格的许可证。
 
 ## 局限
 
-### 目前局限
+### 当前已知局限
 
-下面的局限大部分存在明确的解决方向，但现在我还在努力开发。
+- 由于 Electron 无法直接输出到原生显示，目前仅能以窗口形式展示桌面（类似通过窗口启动 Weston）。若要作为真实桌面，需要一个桌面宿主，然后启动 myde 的全屏窗口。
+- 可正常显示的示例应用：`weston-flower`、`weston-simple-damage`、`weston-simple-shm`、`weston-simple-egl`、`weston-clickdot` 等；以及 `gtk4-demos`、`google-chrome`、`firefox` 等 CPU 软件渲染模式的应用。但依赖 GPU 渲染的应用（如 Blender）无法正常显示。
+- 许多协议虽支持，但具体实现仍有偏差，细节待完善。
+- 目前**不支持 GPU 渲染**，全程采用软件渲染合成。
 
-由于 Electron 展示无法直接输出，所以现在只能显示一个窗口作为桌面演示，就像通过窗口启动 Weston 一样。如果要用作真实桌面，需要一个桌面宿主，然后启动 myde 的全屏窗口。
+### 长期性能隐患
 
-目前可以显示的窗口：`weston-flower`、`weston-simple-damage`、`weston-simple-shm`、`weston-simple-egl`、`weston-clickdot`等
+- JavaScript 在高帧率下可能存在性能瓶颈。
+- 单进程模型可能引发界面阻塞。
 
-以及：`gtk4-demos` `google-chrome`
+## 实现原理
 
-许多协议只是看起来支持，实际上具体实现没有搞好。目前支持鼠标、键盘输入，popup 弹窗等。
+关于项目架构与实现原理的详细说明，请参阅[此文档](./docs/details.md)。
 
-现在没有处理 mmap，所以一些内存共享还要多一次复制。暂时不支持 GPU 渲染，全程还是软件渲染合成。
+myde 基于 **Node.js** 与 **Electron** 框架，利用 Node.js 原生模块与系统底层组件（如 Wayland 服务端、dbus）通过 **Unix Socket** 进行进程间通信。所有 Wayland 协议消息经由 JavaScript 解析和处理，最终通过 Electron 的渲染进程（即 Web 页面）中的 **Canvas** 完成图形绘制。这种设计将 Web 前端的灵活性与本机桌面环境的底层能力紧密结合。
 
-### 其他局限
+### 使用了原生编程的地方
 
-js 的性能在高帧率下可能不足。单进程模型可能导致阻塞界面。
-
-## 原理
-
-关于此项目的实现原理和架构安排可以见[此文档](./docs/details.md)
+- Unix socket库（nodejs自带的socket库不支持fd传输）
+- pam 模块
