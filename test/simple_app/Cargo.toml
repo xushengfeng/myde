@@ -1,0 +1,23 @@
+[package]
+name = "simple-app"
+version = "0.1.0"
+edition = "2021"
+description = "Simple Wayland test applications for protocol support verification"
+
+[lib]
+name = "simple_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dmabuf_one_frame"
+path = "src/bin/dmabuf_one_frame.rs"
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.31", features = ["client", "staging"] }
+anyhow = "1"
+rustix = { version = "1", features = ["fs"] }
+memmap2 = "0.9"
+libc = "0.2"
+gbm = "0.18"
+
