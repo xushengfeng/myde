@@ -68,8 +68,12 @@ async function createWin() {
         },
     });
 
-    if (process.env.desktop) {
-        let desktop_path = process.env.desktop;
+    if (process.env.desktop === ":test") {
+        rendererPath(main_window.webContents, "test.html", {
+            query: { userData: app.getPath("userData"), env: JSON.stringify(process.env) },
+        });
+    } else {
+        let desktop_path = process.env.desktop ?? "desktop/offical";
         if (!path.isAbsolute(desktop_path)) {
             desktop_path = path.join(run_path, desktop_path);
         }
@@ -82,10 +86,8 @@ async function createWin() {
                 ...(process.env.nodeModule ? { nodeModule: "on" } : {}),
             },
         });
-    } else
-        rendererPath(main_window.webContents, "test.html", {
-            query: { userData: app.getPath("userData"), env: JSON.stringify(process.env) },
-        });
+    }
+
     if (dev) main_window.webContents.openDevTools();
 }
 

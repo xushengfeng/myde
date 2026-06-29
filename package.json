@@ -6,10 +6,10 @@
     "scripts": {
         "pack": "npm run build && electron-builder --dir -c electron-builder.config.js",
         "dist": "npm run build && electron-builder -p never -c electron-builder.config.js",
-        "start": "electron-vite --ignoreConfigWarning preview",
         "dev": "electron-vite --ignoreConfigWarning dev",
         "build": "electron-vite --ignoreConfigWarning build",
         "build:remote-connect": "cd src/remote_connect && pnpm build",
+        "desktop:simpletest": "export desktop=':test' && electron-vite --ignoreConfigWarning preview",
         "desktop:offical": "cd desktop/offical && npm run build && cd ../.. && export desktop='desktop/offical' && electron-vite --ignoreConfigWarning preview",
         "desktop:remote": "cd desktop/remote && npm run build && cd ../.. && export desktop='desktop/remote' && electron-vite --ignoreConfigWarning preview",
         "desktop:example": "cd desktop/example && npm run build && cd ../.. && export desktop='desktop/example' && electron-vite --ignoreConfigWarning preview"
