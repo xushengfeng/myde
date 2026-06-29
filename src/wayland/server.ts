@@ -36,7 +36,7 @@ type WaylandObjectId2<t extends WaylandInterfaces> = number & { __brand: "Waylan
 type WaylandObjectId3<t extends string> = number & { __brand: "WaylandObjectId"; __interface: t };
 
 type WaylandSurfaceData = {
-    buffer?: { id: WaylandObjectId2<"wl_buffer">; data: ImageData };
+    buffer?: { id: WaylandObjectId2<"wl_buffer"> };
     damageList?: { x: number; y: number; width: number; height: number }[];
     damageBufferList?: { x: number; y: number; width: number; height: number }[];
     callback?: WaylandObjectId2<"wl_callback">;
@@ -820,9 +820,7 @@ class WaylandClient {
             const surface = this.getObject(x.id);
             const bufferId = waylandObjectId(x.args.buffer, "wl_buffer");
             if (!bufferId) return;
-            const buffer = this.getObject(bufferId);
-            const imageData = buffer.data.imageData;
-            surface.data.pending.buffer = { id: bufferId, data: imageData };
+            surface.data.pending.buffer = { id: bufferId };
         });
         isOp("wl_surface.damage", (x) => {
             const surface = this.getObject(x.id);
@@ -861,7 +859,7 @@ class WaylandClient {
             // biome-ignore lint/style/noNonNullAssertion: 忽略小概率
             const ctx = canvas.getContext("2d")!;
             const buffer = data.buffer;
-            const imagedata = buffer?.data;
+            const imagedata = this.getObjectOption(buffer?.id)?.data.imageData;
             if (!imagedata) {
                 console.warn("wl_surface buffer not found", surfaceId);
             } else {
@@ -891,7 +889,8 @@ class WaylandClient {
                     }
                 }
 
-                const bufferX = this.getObject(buffer.id);
+                // biome-ignore lint/style/noNonNullAssertion: imagedata有
+                const bufferX = this.getObject(buffer!.id);
                 const buffern = new Uint8ClampedArray(bufferX.data.end - bufferX.data.start);
                 try {
                     fs.readSync(bufferX.data.fd, buffern, bufferX.data.start, buffern.length, 0);
