@@ -29,7 +29,7 @@ jobs:
                   USE_HARD_LINKS: false
               run: |
                   npm install -g pnpm@10.0.0
-                  pnpm install
+                  pnpm install --ignore-workspace
                   cd desktop/offical
                   pnpm install
                   pnpm run build
