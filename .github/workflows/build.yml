@@ -31,7 +31,7 @@ jobs:
                   npm install -g pnpm@10.0.0
                   pnpm install --ignore-workspace
                   cd desktop/offical
-                  pnpm install
+                  pnpm install --ignore-workspace
                   pnpm run build
                   cd ..
                   pnpm run dist
