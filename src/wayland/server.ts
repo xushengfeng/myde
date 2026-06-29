@@ -35,18 +35,21 @@ type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandO
 type WaylandObjectId2<t extends WaylandInterfaces> = number & { __brand: "WaylandObjectId"; __interface: t };
 type WaylandObjectId3<t extends string> = number & { __brand: "WaylandObjectId"; __interface: t };
 
+type WaylandSurfaceData = {
+    buffer?: { id: WaylandObjectId2<"wl_buffer">; data: ImageData };
+    damageList?: { x: number; y: number; width: number; height: number }[];
+    damageBufferList?: { x: number; y: number; width: number; height: number }[];
+    callback?: WaylandObjectId2<"wl_callback">;
+    inputRegion?: WaylandData["wl_region"]["rects"];
+};
+
 type WaylandData = {
     wl_shm_pool: { fd: number };
     wl_surface: {
+        // 直接把buf传递出去是不是更有效呢，让渲染器读fd
         canvas: OffscreenCanvas;
-        buffer?: { id: WaylandObjectId2<"wl_buffer">; data: ImageData };
-        buffer2?: { id: WaylandObjectId2<"wl_buffer">; data: ImageData };
-        // 双缓冲，不过没有实际作用，只是为了日志对齐，方便调试
-        bufferPointer: 0 | 1;
-        damageList?: { x: number; y: number; width: number; height: number }[];
-        damageBufferList?: { x: number; y: number; width: number; height: number }[];
-        callback?: WaylandObjectId2<"wl_callback">;
-        inputRegion?: WaylandData["wl_region"]["rects"];
+        current: WaylandSurfaceData;
+        pending: WaylandSurfaceData;
     };
     wl_buffer: { fd: number; start: number; end: number; imageData: ImageData };
     wl_region: {
@@ -795,7 +798,7 @@ class WaylandClient {
         isOp("wl_compositor.create_surface", (x) => {
             const surfaceId = x.args.id;
             const surface = this.getObject(surfaceId);
-            surface.data = { canvas: new OffscreenCanvas(1, 1), bufferPointer: 0 };
+            surface.data = { canvas: new OffscreenCanvas(1, 1), current: {}, pending: {} };
             this.wlSurface.addWlSurface(surfaceId);
         });
         isOp("wl_compositor.create_region", (x) => {
@@ -819,43 +822,45 @@ class WaylandClient {
             if (!bufferId) return;
             const buffer = this.getObject(bufferId);
             const imageData = buffer.data.imageData;
-            if (surface.data.bufferPointer === 0) surface.data.buffer = { id: bufferId, data: imageData };
-            else surface.data.buffer2 = { id: bufferId, data: imageData };
+            surface.data.pending.buffer = { id: bufferId, data: imageData };
         });
         isOp("wl_surface.damage", (x) => {
             const surface = this.getObject(x.id);
-            const damageList = surface.data.damageList || [];
+            const damageList = surface.data.pending.damageList || [];
             damageList.push({
                 x: x.args.x,
                 y: x.args.y,
                 width: x.args.width,
                 height: x.args.height,
             });
-            surface.data.damageList = damageList;
+            surface.data.pending.damageList = damageList;
         });
         isOp("wl_surface.damage_buffer", (x) => {
             const surface = this.getObject(x.id);
-            const damageBufferList = surface.data.damageBufferList || [];
+            const damageBufferList = surface.data.pending.damageBufferList || [];
             damageBufferList.push({
                 x: x.args.x,
                 y: x.args.y,
                 width: x.args.width,
                 height: x.args.height,
             });
-            surface.data.damageBufferList = damageBufferList;
+            surface.data.pending.damageBufferList = damageBufferList;
         });
         isOp("wl_surface.frame", (x) => {
             const callbackId = x.args.callback;
             const surface = this.getObject(x.id);
-            surface.data.callback = callbackId;
+            surface.data.pending.callback = callbackId;
         });
         isOp("wl_surface.commit", (x) => {
             const surfaceId = x.id;
             const surface = this.getObject(surfaceId);
+            const data = surface.data.pending;
+            surface.data.current = data;
+            surface.data.pending = {};
             const canvas = surface.data.canvas;
             // biome-ignore lint/style/noNonNullAssertion: 忽略小概率
             const ctx = canvas.getContext("2d")!;
-            const buffer = surface.data.bufferPointer === 0 ? surface.data.buffer : surface.data.buffer2;
+            const buffer = data.buffer;
             const imagedata = buffer?.data;
             if (!imagedata) {
                 console.warn("wl_surface buffer not found", surfaceId);
@@ -903,7 +908,7 @@ class WaylandClient {
                 }
                 imagedata.data.set(rgba);
 
-                const damageList = [...(surface.data.damageList || []), ...(surface.data.damageBufferList || [])];
+                const damageList = [...(data.damageList || []), ...(data.damageBufferList || [])];
                 // todo 有区别，但现在先不处理
                 if (damageList.length) {
                     for (const damage of damageList) {
@@ -923,29 +928,22 @@ class WaylandClient {
                 this.wlSurface.renderWlSurface(surfaceId, canvas);
             }
 
-            surface.data.damageList = [];
-            surface.data.damageBufferList = [];
             requestAnimationFrame(() => {
-                const bufferId = surface.data.bufferPointer === 0 ? surface.data.buffer2?.id : surface.data.buffer?.id;
+                const bufferId = data.buffer?.id;
                 if (bufferId) {
                     this.sendMessageImm(bufferId, "wl_buffer.release", {});
                 }
-                surface.data.bufferPointer = surface.data.bufferPointer === 0 ? 1 : 0;
-                const x = surface.data.callback;
+                const x = data.callback;
                 if (x) {
                     this.sendMessageImm(x, "wl_callback.done", { callback_data: Date.now() });
                     this.sendMessageImm(this.displayId, "wl_display.delete_id", {
                         id: x,
                     });
-                    surface.data.callback = undefined;
                 }
             });
         });
         isOp("wl_surface.destroy", (x) => {
             const surfaceId = x.id;
-            const surface = this.getObject(surfaceId);
-            surface.data.canvas.width = 1;
-            surface.data.canvas.height = 1;
             this.wlSurface.destroyWlSurface(surfaceId);
             // todo 相关的如subsurface、xdgsurface等
         });
@@ -953,7 +951,7 @@ class WaylandClient {
             const surface = this.getObject(x.id);
             console.error("re", x.args);
             const region = this.getObjectOption(waylandObjectId(x.args.region, "wl_region"));
-            surface.data.inputRegion = region?.data.rects;
+            surface.data.pending.inputRegion = region?.data.rects;
         });
         isOp("wl_surface.offset", (x) => {
             this.wlSurface.setWlSurfaceOffset(x.id, x.args.x, x.args.y);
@@ -1780,7 +1778,7 @@ class WaylandClient {
                             const nx = x - offsetX;
                             const ny = y - offsetY;
 
-                            const surfaceInputRegion = this.getObject<"wl_surface">(s).data.inputRegion;
+                            const surfaceInputRegion = this.getObject<"wl_surface">(s).data.current.inputRegion;
                             if (surfaceInputRegion) {
                                 for (const r of surfaceInputRegion) {
                                     if (nx >= r.x && nx < r.x + r.width && ny >= r.y && ny < r.y + r.height) {
