@@ -26,6 +26,9 @@ importers:
       myde-unix-socket:
         specifier: ^0.2.3
         version: 0.2.3
+      myde-xcb:
+        specifier: ^0.1.0
+        version: 0.1.0
       noise-handshake:
         specifier: ^4.2.0
         version: 4.2.0(bare-events@2.8.2)
@@ -1752,6 +1755,9 @@ packages:
 
   myde-unix-socket@0.2.3:
     resolution: {integrity: sha512-UYn5p54Jq+j8T6UJRy11H2jfYIFZXE4z+yHrd+sRMAWVX909SfO/RLkkAwEbVW9yLhl+Y3whPU7b0qQkJ0CRLQ==}
+
+  myde-xcb@0.1.0:
+    resolution: {integrity: sha512-86cfQzySMU2MK7Mai1bwrEGF3vYSJZO7QHX9Ww46jtz1q01E2HtdvXnprOH8sYgVJYTe0qO3UX/mcxUZQpTydQ==}
 
   nanoassert@2.0.0:
     resolution: {integrity: sha512-7vO7n28+aYO4J+8w96AzhmU8G+Y/xpPDJz/se19ICsqj/momRbb9mh9ZUtkoJ5X3nTnPdhEJyc0qnM6yAsHBaA==}
@@ -4003,6 +4009,8 @@ snapshots:
   myde-pam-client@0.1.0: {}
 
   myde-unix-socket@0.2.3: {}
+
+  myde-xcb@0.1.0: {}
 
   nanoassert@2.0.0: {}
 

@@ -5,6 +5,9 @@ allowBuilds:
 ignoredBuiltDependencies:
   - esbuild
 
+minimumReleaseAgeExclude:
+  - myde-xcb@0.1.0
+
 onlyBuiltDependencies:
   - '@biomejs/biome'
   - electron

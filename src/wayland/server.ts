@@ -28,6 +28,7 @@ import { InputEventCodes } from "../input_codes/types";
 import { createFormatTableBuffer, DRM_FORMAT } from "./utils/dma-buf";
 import { getRectKeyPoint } from "./utils/xdg";
 import type { renderTools } from "./render_tools";
+import { buildXkb } from "myde-xcb";
 
 export { WaylandClient, WaylandServer };
 
@@ -997,7 +998,7 @@ class WaylandClient {
                 delay: 600,
             });
 
-            const keymapStr = fs.readFileSync(path.join(__dirname, "../../", "script/xcb", "x.xkb"), "utf-8");
+            const keymapStr = buildXkb();
             const { fd, size } = newFd(keymapStr);
 
             this.sendMessageX(keyboardId, "wl_keyboard.keymap", {

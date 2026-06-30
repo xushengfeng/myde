@@ -1,3 +1,0 @@
-```
-xkbcomp $DISPLAY x.xcb
-```
