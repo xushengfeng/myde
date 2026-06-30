@@ -1,8 +1,10 @@
 /// <reference types="vite/client" />
-import { app, globalShortcut, nativeTheme, BrowserWindow } from "electron";
+import { app, globalShortcut, nativeTheme, BrowserWindow, sharedTexture } from "electron";
 import * as path from "node:path";
 const run_path = path.join(path.resolve(__dirname, ""), "../../");
 import url from "node:url";
+
+const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
 let /** 是否开启开发模式 */ dev: boolean;
 
@@ -67,6 +69,7 @@ async function createWin() {
             contextIsolation: false,
         },
     });
+    mainWin = main_window;
 
     if (process.env.desktop === ":test") {
         rendererPath(main_window.webContents, "test.html", {
@@ -91,6 +94,8 @@ async function createWin() {
     if (dev) main_window.webContents.openDevTools();
 }
 
+let mainWin: BrowserWindow | null = null;
+
 // 自动开启开发者模式
 if (process.argv.includes("-d") || import.meta.env.DEV) {
     dev = true;
@@ -109,4 +114,31 @@ app.whenReady().then(() => {
 app.on("will-quit", () => {
     // Unregister all shortcuts.
     globalShortcut.unregisterAll();
+});
+
+const ipcPath = path.join("/tmp", "myde.sock");
+
+const server = new mus.UServer();
+server.listen(ipcPath);
+server.on("connection", (socket) => {
+    socket.on("data", (data, fd) => {
+        const message = data.toString();
+        const j = JSON.parse(message) as {
+            id: number;
+            options: Parameters<typeof sharedTexture.importSharedTexture>[0];
+        };
+        console.log("Received message:", message, fd, j);
+        for (const [pidx, p] of (j.options.textureInfo.handle.nativePixmap?.planes ?? []).entries()) {
+            p.fd = fd[pidx];
+            console.log("Plane info:", p);
+        }
+        if (mainWin) {
+            const texture = sharedTexture.importSharedTexture(j.options);
+            log("Imported shared texture:", texture);
+            sharedTexture.sendSharedTexture(
+                { importedSharedTexture: texture, frame: mainWin.webContents.mainFrame },
+                j.id,
+            );
+        }
+    });
 });

@@ -2698,7 +2698,7 @@
   "linux-dmabuf-v1": [
     {
       "name": "zwp_linux_dmabuf_v1",
-      "version": 0,
+      "version": 5,
       "request": [
         {
           "name": "destroy",
@@ -2781,7 +2781,7 @@
     },
     {
       "name": "zwp_linux_buffer_params_v1",
-      "version": 0,
+      "version": 5,
       "request": [
         {
           "name": "destroy",
@@ -2925,7 +2925,7 @@
     },
     {
       "name": "zwp_linux_dmabuf_feedback_v1",
-      "version": 0,
+      "version": 5,
       "request": [
         {
           "name": "destroy",

@@ -246,8 +246,6 @@ view()
             "weston-simple-damage",
             "weston-simple-shm",
             "weston-simple-egl",
-            "weston-simple-dmabuf-egl",
-            "weston-simple-dmabuf-feedback",
             "weston-editor",
             "weston-clickdot",
             "weston-subsurfaces",
@@ -275,6 +273,12 @@ view()
                     runApp(execPath);
                 }),
         ),
+    )
+    .add(
+        button("dma-buf-one-frame").on("click", () => {
+            const execPath = path.join(__dirname, "../..", "test/simple_app/target/debug/dmabuf_one_frame");
+            runApp(execPath);
+        }),
     )
     .addInto();
 
