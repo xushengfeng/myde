@@ -30,6 +30,11 @@
     - xdg_popup 部分
     - xdg_positioner 部分
 
+- linux-dmabuf-v1
+    - zwp_linux_dmabuf_v1 部分，format和modifier不支持
+    - zwp_linux_buffer_params_v1 部分
+    - zwp_linux_dmabuf_feedback_v1
+
 - text-input-unstable-v1
     - zwp_text_input_v1 部分
     - zwp_text_input_manager_v1
