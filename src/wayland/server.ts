@@ -1,5 +1,6 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
+const { sharedTexture } = require("electron") as typeof import("electron");
 
 const usocket = require("myde-unix-socket") as typeof import("myde-unix-socket");
 import type { UServer, USocket } from "myde-unix-socket";
@@ -52,7 +53,22 @@ type WaylandData = {
         current: WaylandSurfaceData;
         pending: WaylandSurfaceData;
     };
-    wl_buffer: { fd: number; start: number; end: number; imageData: ImageData };
+    wl_buffer:
+        | { type: "shm"; fd: number; start: number; end: number; imageData: ImageData }
+        | {
+              type: "dmabuf";
+              planes: {
+                  fd: number;
+                  plane_idx: number;
+                  offset: number;
+                  stride: number;
+                  modifier_hi: number;
+                  modifier_lo: number;
+              }[];
+              width: number;
+              height: number;
+              format: number;
+          };
     wl_region: {
         rects: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
     };
@@ -68,6 +84,16 @@ type WaylandData = {
         parent_size: { parent_width: number; parent_height: number };
     };
     wl_data_source: { offers: string[] };
+    zwp_linux_buffer_params_v1: {
+        planes: {
+            fd: number;
+            plane_idx: number;
+            offset: number;
+            stride: number;
+            modifier_hi: number;
+            modifier_lo: number;
+        }[];
+    };
 };
 
 type WaylandObjectX<T extends WaylandInterfaces> = {
@@ -811,6 +837,7 @@ class WaylandClient {
             const buffer = this.getObject(x.args.id);
             const imageData = new ImageData(x.args.width, x.args.height);
             buffer.data = {
+                type: "shm",
                 fd: thisObj.data.fd,
                 start: x.args.offset,
                 end: x.args.offset + x.args.stride * x.args.height,
@@ -850,7 +877,7 @@ class WaylandClient {
             const surface = this.getObject(x.id);
             surface.data.pending.callback = callbackId;
         });
-        isOp("wl_surface.commit", (x) => {
+        isOp("wl_surface.commit", async (x) => {
             const surfaceId = x.id;
             const surface = this.getObject(surfaceId);
             const data = surface.data.pending;
@@ -860,10 +887,75 @@ class WaylandClient {
             // biome-ignore lint/style/noNonNullAssertion: 忽略小概率
             const ctx = canvas.getContext("2d")!;
             const buffer = data.buffer;
-            const imagedata = this.getObjectOption(buffer?.id)?.data.imageData;
-            if (!imagedata) {
+            const bufferId = buffer?.id;
+            const bufferObj = this.getObjectOption(bufferId)?.data;
+            if (!bufferObj) {
                 console.warn("wl_surface buffer not found", surfaceId);
             } else {
+                let imagedata: ImageData;
+                if (bufferObj.type === "shm") {
+                    imagedata = bufferObj.imageData;
+
+                    const buffern = new Uint8ClampedArray(bufferObj.end - bufferObj.start);
+                    try {
+                        fs.readSync(bufferObj.fd, buffern, bufferObj.start, buffern.length, 0);
+                    } catch (error) {
+                        console.error("Error reading shm buffer:", error);
+                    }
+                    // todo 搞清楚为什么给定rgb格式，读取出来是bgr格式
+                    const rgba = new Uint8ClampedArray(buffern.length);
+                    for (let i = 0; i < buffern.length; i += 4) {
+                        rgba[i] = buffern[i + 2];
+                        rgba[i + 1] = buffern[i + 1];
+                        rgba[i + 2] = buffern[i];
+                        rgba[i + 3] = buffern[i + 3];
+                    }
+                    imagedata.data.set(rgba);
+                } else {
+                    const modifierX = bufferObj.planes[0];
+                    const modifier = (modifierX.modifier_hi << 32) | modifierX.modifier_lo;
+
+                    const format =
+                        bufferObj.format === DRM_FORMAT.DRM_FORMAT_ARGB8888
+                            ? "bgra"
+                            : bufferObj.format === DRM_FORMAT.DRM_FORMAT_ABGR8888
+                              ? "rgba"
+                              : bufferObj.format === DRM_FORMAT.DRM_FORMAT_NV12
+                                ? "nv12"
+                                : bufferObj.format === DRM_FORMAT.DRM_FORMAT_NV16
+                                  ? "nv16"
+                                  : bufferObj.format === DRM_FORMAT.DRM_FORMAT_P010
+                                    ? "p010le"
+                                    : "bgra";
+
+                    const t = await importSharedTexture({
+                        textureInfo: {
+                            handle: {
+                                nativePixmap: {
+                                    planes: bufferObj.planes.map((p) => ({
+                                        stride: p.stride,
+                                        offset: p.offset,
+                                        size: p.stride * bufferObj.height,
+                                        fd: p.fd,
+                                    })),
+                                    modifier: modifier.toString(),
+                                    supportsZeroCopyWebGpuImport: true,
+                                },
+                            },
+                            codedSize: { height: bufferObj.height, width: bufferObj.width },
+                            pixelFormat: format,
+                        },
+                    });
+
+                    const x = t.getVideoFrame();
+                    const c = new OffscreenCanvas(x.codedWidth, x.codedHeight);
+                    const ctx = c.getContext("2d")!;
+                    ctx.drawImage(x, 0, 0);
+                    imagedata = ctx.getImageData(0, 0, x.codedWidth, x.codedHeight);
+
+                    x.close();
+                    t.release();
+                }
                 if (imagedata.width !== canvas.width || imagedata.height !== canvas.height) {
                     canvas.width = imagedata.width;
                     canvas.height = imagedata.height;
@@ -889,24 +981,6 @@ class WaylandClient {
                         }
                     }
                 }
-
-                // biome-ignore lint/style/noNonNullAssertion: imagedata有
-                const bufferX = this.getObject(buffer!.id);
-                const buffern = new Uint8ClampedArray(bufferX.data.end - bufferX.data.start);
-                try {
-                    fs.readSync(bufferX.data.fd, buffern, bufferX.data.start, buffern.length, 0);
-                } catch (error) {
-                    console.error("Error reading shm buffer:", error);
-                }
-                // todo 搞清楚为什么给定rgb格式，读取出来是bgr格式
-                const rgba = new Uint8ClampedArray(buffern.length);
-                for (let i = 0; i < buffern.length; i += 4) {
-                    rgba[i] = buffern[i + 2];
-                    rgba[i + 1] = buffern[i + 1];
-                    rgba[i + 2] = buffern[i];
-                    rgba[i + 3] = buffern[i + 3];
-                }
-                imagedata.data.set(rgba);
 
                 const damageList = [...(data.damageList || []), ...(data.damageBufferList || [])];
                 // todo 有区别，但现在先不处理
@@ -1342,6 +1416,7 @@ class WaylandClient {
             this.emit("windowClosed", x.id);
         });
 
+        isOp("zwp_linux_dmabuf_v1.create_params", (x) => {});
         isOp("zwp_linux_dmabuf_v1.get_surface_feedback", (x) => {
             const feedbackId = x.args.id;
             this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
@@ -1351,7 +1426,10 @@ class WaylandClient {
 
             const formatTable = createFormatTableBuffer([
                 { format: DRM_FORMAT.DRM_FORMAT_ARGB8888, modifier: 0n },
-                { format: DRM_FORMAT.DRM_FORMAT_XRGB8888, modifier: 0n },
+                { format: DRM_FORMAT.DRM_FORMAT_ABGR8888, modifier: 0n },
+                { format: DRM_FORMAT.DRM_FORMAT_NV12, modifier: 0n },
+                { format: DRM_FORMAT.DRM_FORMAT_NV16, modifier: 0n },
+                { format: DRM_FORMAT.DRM_FORMAT_P010, modifier: 0n },
             ]);
             const { fd } = newFd(new Uint8Array(formatTable.buffer));
             this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.format_table", {
@@ -1370,6 +1448,31 @@ class WaylandClient {
             this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_done", {});
 
             this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
+        });
+        isOp("zwp_linux_buffer_params_v1.add", (x) => {
+            const params = this.getObject(x.id);
+            if (!params.data) {
+                params.data = { planes: [] };
+            }
+            params.data.planes[x.args.plane_idx] = {
+                fd: x.args.fd,
+                plane_idx: x.args.plane_idx,
+                offset: x.args.offset,
+                stride: x.args.stride,
+                modifier_hi: x.args.modifier_hi,
+                modifier_lo: x.args.modifier_lo,
+            };
+        });
+        isOp("zwp_linux_buffer_params_v1.create_immed", (x) => {
+            const params = this.getObject(x.id);
+            if (!params.data) {
+                console.error("No planes data for create_immed");
+                return;
+            }
+            const planes = params.data.planes;
+            const bufferId = x.args.buffer_id;
+            const buffer = this.getObject(bufferId);
+            buffer.data = { type: "dmabuf", planes, width: x.args.width, height: x.args.height, format: x.args.format };
         });
 
         isOp("zwp_text_input_manager_v1.create_text_input", (x) => {
@@ -2178,3 +2281,29 @@ function newFd(data: string | Uint8Array): { fd: number; size: number } {
         size: typeof data === "string" ? Buffer.byteLength(data) : data.length,
     };
 }
+
+let sharedTextureCounter = 1;
+const sharedTextureCbMap = new Map<number, (cb: ReturnType<typeof sharedTexture.importSharedTexture>) => void>();
+async function importSharedTexture(
+    options: Parameters<typeof sharedTexture.importSharedTexture>[0],
+): Promise<ReturnType<typeof sharedTexture.importSharedTexture>> {
+    const id = sharedTextureCounter++;
+    const { promise, resolve } = Promise.withResolvers<ReturnType<typeof sharedTexture.importSharedTexture>>();
+    sharedTextureCbMap.set(id, resolve);
+    const fds = options.textureInfo.handle.nativePixmap?.planes.map((p) => p.fd);
+
+    if (fds !== undefined) ipc.write({ data: Buffer.from(JSON.stringify({ id, options })), fds }, () => {});
+    return promise;
+}
+
+sharedTexture.setSharedTextureReceiver(async (cb, id) => {
+    const receiver = sharedTextureCbMap.get(id);
+    if (receiver) {
+        receiver(cb.importedSharedTexture);
+        sharedTextureCbMap.delete(id);
+    } else {
+        console.error(`No receiver found for shared texture id ${id}`);
+    }
+});
+
+const ipc = new usocket.USocket({ path: "/tmp/myde.sock" });

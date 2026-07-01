@@ -1,8 +1,8 @@
 use std::os::fd::{AsFd, OwnedFd};
 
 use anyhow::Result;
-use wayland_client::QueueHandle;
 use wayland_client::protocol::wl_buffer;
+use wayland_client::QueueHandle;
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1,
 };
@@ -11,7 +11,11 @@ use wayland_protocols::wp::linux_dmabuf::zv1::client::{
 fn open_drm_render_node() -> Result<std::fs::File> {
     for i in 128..=150 {
         let path = format!("/dev/dri/renderD{i}");
-        if let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(&path) {
+        if let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+        {
             return Ok(file);
         }
     }
@@ -32,7 +36,7 @@ pub fn create_gbm_dmabuf(
     let mut bo = dev.create_buffer_object::<()>(
         width as u32,
         height as u32,
-        gbm::Format::Xrgb8888,
+        gbm::Format::Argb8888,
         gbm::BufferObjectFlags::LINEAR | gbm::BufferObjectFlags::RENDERING,
     )?;
 

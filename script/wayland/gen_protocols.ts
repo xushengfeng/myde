@@ -67,7 +67,6 @@ const supportedProtocols: Array<{
             { name: "zwp_linux_buffer_params_v1", version: 5 },
             { name: "zwp_linux_dmabuf_feedback_v1", version: 5 },
         ],
-        developing: true,
     },
     // {
     //     name: "text-input-unstable-v3",

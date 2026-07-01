@@ -1,6 +1,6 @@
 use anyhow::Result;
 use simple_app::dmabuf;
-use simple_app::DRM_FORMAT_XRGB8888;
+use simple_app::DRM_FORMAT_ARGB8888;
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
 };
@@ -41,7 +41,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_registry::Event::Global { name, interface, version } = event {
+        if let wl_registry::Event::Global {
+            name,
+            interface,
+            version,
+        } = event
+        {
             match interface.as_str() {
                 "wl_compositor" => {
                     state.compositor = Some(registry.bind(name, version.min(4), qh, ()));
@@ -136,7 +141,10 @@ fn main() -> Result<()> {
     event_queue.roundtrip(&mut app)?;
 
     let compositor = app.compositor.clone().expect("wl_compositor not available");
-    let dmabuf = app.linux_dmabuf.clone().expect("zwp_linux_dmabuf_v1 not available");
+    let dmabuf = app
+        .linux_dmabuf
+        .clone()
+        .expect("zwp_linux_dmabuf_v1 not available");
     let wm_base = app.xdg_wm_base.clone().expect("xdg_wm_base not available");
 
     let surface = compositor.create_surface(&qh, ());
@@ -153,12 +161,7 @@ fn main() -> Result<()> {
     let height = 256i32;
 
     let (dma_buf_fd, gbm_stride) = dmabuf::create_gbm_dmabuf(width, height, |x, y| {
-        [
-            (x % 256) as u8,
-            (y % 256) as u8,
-            ((x + y) % 256) as u8,
-            255,
-        ]
+        [(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8, 255]
     })?;
 
     let buffer = dmabuf::create_dmabuf_buffer(
@@ -168,7 +171,7 @@ fn main() -> Result<()> {
         width,
         height,
         gbm_stride,
-        DRM_FORMAT_XRGB8888,
+        DRM_FORMAT_ARGB8888,
     )?;
 
     surface.attach(Some(&buffer), 0, 0);

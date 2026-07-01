@@ -28,4 +28,7 @@ export enum DRM_FORMAT {
     DRM_FORMAT_ABGR8888 = fourcc_code("A", "B", "2", "4"),
     DRM_FORMAT_RGBA8888 = fourcc_code("R", "A", "2", "4"),
     DRM_FORMAT_BGRA8888 = fourcc_code("B", "A", "2", "4"),
+    DRM_FORMAT_NV12 = fourcc_code("N", "V", "1", "2"),
+    DRM_FORMAT_NV16 = fourcc_code("N", "V", "1", "6"),
+    DRM_FORMAT_P010 = fourcc_code("P", "0", "1", "0"),
 }
