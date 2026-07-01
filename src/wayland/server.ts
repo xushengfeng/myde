@@ -886,15 +886,16 @@ class WaylandClient {
             const canvas = surface.data.canvas;
             // biome-ignore lint/style/noNonNullAssertion: 忽略小概率
             const ctx = canvas.getContext("2d")!;
+            ctx.globalCompositeOperation = "copy"; // drawImageData时不混合而是替换
             const buffer = data.buffer;
             const bufferId = buffer?.id;
             const bufferObj = this.getObjectOption(bufferId)?.data;
             if (!bufferObj) {
                 console.warn("wl_surface buffer not found", surfaceId);
             } else {
-                let imagedata: ImageData;
+                let image: ImageData | VideoFrame;
                 if (bufferObj.type === "shm") {
-                    imagedata = bufferObj.imageData;
+                    image = bufferObj.imageData;
 
                     const buffern = new Uint8ClampedArray(bufferObj.end - bufferObj.start);
                     try {
@@ -910,7 +911,7 @@ class WaylandClient {
                         rgba[i + 2] = buffern[i];
                         rgba[i + 3] = buffern[i + 3];
                     }
-                    imagedata.data.set(rgba);
+                    image.data.set(rgba);
                 } else {
                     const modifierX = bufferObj.planes[0];
                     const modifier = (modifierX.modifier_hi << 32) | modifierX.modifier_lo;
@@ -947,19 +948,22 @@ class WaylandClient {
                         },
                     });
 
-                    const x = t.getVideoFrame();
-                    const c = new OffscreenCanvas(x.codedWidth, x.codedHeight);
-                    const ctx = c.getContext("2d")!;
-                    ctx.drawImage(x, 0, 0);
-                    imagedata = ctx.getImageData(0, 0, x.codedWidth, x.codedHeight);
-
-                    x.close();
+                    image = t.getVideoFrame();
                     t.release();
                 }
-                if (imagedata.width !== canvas.width || imagedata.height !== canvas.height) {
-                    canvas.width = imagedata.width;
-                    canvas.height = imagedata.height;
-                    this.wlSurface.updateWlSurfaceSize(surfaceId, imagedata.width, imagedata.height);
+                let width = 0,
+                    height = 0;
+                if (image instanceof VideoFrame) {
+                    width = image.codedWidth;
+                    height = image.codedHeight;
+                } else {
+                    width = image.width;
+                    height = image.height;
+                }
+                if (width !== canvas.width || height !== canvas.height) {
+                    canvas.width = width;
+                    canvas.height = height;
+                    this.wlSurface.updateWlSurfaceSize(surfaceId, width, height);
                     // for (const [id, p] of this.objects) {
                     //     if (p.protocol.name === "xdg_toplevel") {
                     // this.sendMessage(id, 0, {
@@ -986,18 +990,36 @@ class WaylandClient {
                 // todo 有区别，但现在先不处理
                 if (damageList.length) {
                     for (const damage of damageList) {
-                        ctx.putImageData(
-                            imagedata,
-                            0,
-                            0,
-                            damage.x,
-                            damage.y,
-                            Math.min(canvas.width, damage.width),
-                            Math.min(canvas.height, damage.height),
-                        );
+                        if (image instanceof VideoFrame) {
+                            ctx.drawImage(
+                                image,
+                                damage.x,
+                                damage.y,
+                                Math.min(canvas.width, damage.width),
+                                Math.min(canvas.height, damage.height),
+                                damage.x,
+                                damage.y,
+                                Math.min(canvas.width, damage.width),
+                                Math.min(canvas.height, damage.height),
+                            );
+                        } else
+                            ctx.putImageData(
+                                image,
+                                0,
+                                0,
+                                damage.x,
+                                damage.y,
+                                Math.min(canvas.width, damage.width),
+                                Math.min(canvas.height, damage.height),
+                            );
                     }
                 } else {
-                    ctx.putImageData(imagedata, 0, 0);
+                    if (image instanceof VideoFrame) {
+                        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+                    } else ctx.putImageData(image, 0, 0);
+                }
+                if (image instanceof VideoFrame) {
+                    image.close();
                 }
                 this.wlSurface.renderWlSurface(surfaceId, canvas);
             }
