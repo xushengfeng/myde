@@ -1425,7 +1425,10 @@ class WaylandClient {
 
             const formatTable = createFormatTableBuffer([
                 { format: DRM_FORMAT.DRM_FORMAT_ARGB8888, modifier: 0n },
-                { format: DRM_FORMAT.DRM_FORMAT_XRGB8888, modifier: 0n },
+                { format: DRM_FORMAT.DRM_FORMAT_ABGR8888, modifier: 0n },
+                { format: DRM_FORMAT.DRM_FORMAT_NV12, modifier: 0n },
+                { format: DRM_FORMAT.DRM_FORMAT_NV16, modifier: 0n },
+                { format: DRM_FORMAT.DRM_FORMAT_P010, modifier: 0n },
             ]);
             const { fd } = newFd(new Uint8Array(formatTable.buffer));
             this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.format_table", {
