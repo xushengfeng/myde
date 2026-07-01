@@ -1279,10 +1279,10 @@ class WaylandClient {
             const xid = x.id;
             const toplevelId = x.args.id;
             this.sendMessageImm(toplevelId, "xdg_toplevel.wm_capabilities", {
-                capabilities: [
+                capabilities: new Uint32Array([
                     getEnumValue("xdg_toplevel.wm_capabilities", "minimize"),
                     getEnumValue("xdg_toplevel.wm_capabilities", "maximize"),
-                ],
+                ]),
             });
             const outerBounds = this.emitSync("windowBound") || { width: 800, height: 600 };
             this.sendMessageX(toplevelId, "xdg_toplevel.configure_bounds", {
@@ -1440,7 +1440,7 @@ class WaylandClient {
             const r = fs.statSync("/dev/dri/card1"); // todo
             const buffer = Buffer.alloc(8);
             buffer.writeBigUInt64LE(BigInt(r.rdev));
-            const a = Array.from(new Uint8Array(buffer.buffer));
+            const a = new Uint8Array(buffer.buffer);
             this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.main_device", { device: a });
             this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_target_device", {
                 device: a,
@@ -1682,10 +1682,7 @@ class WaylandClient {
                     encoder.writeNewId(argValue);
                     break;
                 case WaylandArgType.ARRAY:
-                    {
-                        const u32 = new Uint32Array(argValue);
-                        encoder.writeArray(new Uint8Array(u32.buffer));
-                    }
+                    encoder.writeArray(new Uint8Array((argValue as ArrayBufferView).buffer));
                     break;
                 case WaylandArgType.FD:
                     fds.push(argValue);
@@ -1745,7 +1742,7 @@ class WaylandClient {
         this.sendMessageImm(winid, "xdg_toplevel.configure", {
             width: win.box.width,
             height: win.box.height,
-            states: s,
+            states: new Uint32Array(s),
         });
         const xdgSurfaceId = this.dataManager.xdgSurface.getXdgSurfaceByToplevel(winid);
         if (xdgSurfaceId === undefined) return;
@@ -1794,10 +1791,10 @@ class WaylandClient {
                 this.sendMessageImm(id, "xdg_toplevel.configure", {
                     width,
                     height,
-                    states: [
+                    states: new Uint32Array([
                         getEnumValue("xdg_toplevel.state", "activated"),
                         getEnumValue("xdg_toplevel.state", "maximized"),
-                    ],
+                    ]),
                 });
                 this.sendMessageImm(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
             },
@@ -2037,7 +2034,7 @@ class WaylandClient {
         // todo Surface管理
         focusSurface: (id: WaylandObjectId) => {
             for (const k of this.getKeyboards()) {
-                this.sendMessageImm(k, "wl_keyboard.enter", { serial: 0, surface: id, keys: [] });
+                this.sendMessageImm(k, "wl_keyboard.enter", { serial: 0, surface: id, keys: new Uint32Array([]) });
                 this.sendMessageImm(k, "wl_keyboard.modifiers", {
                     serial: 0,
                     mods_depressed: 0,

@@ -201,7 +201,7 @@ function argsMap(
         int: "number",
         uint: "number",
         string: "string",
-        array: "number[]",
+        array: "ArrayBufferView",
         fixed: "number",
         fd: "number",
         object: "number",

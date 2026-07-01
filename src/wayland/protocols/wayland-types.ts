@@ -324,7 +324,7 @@ export type WaylandEventObj = {
         /** surface gaining keyboard focus*/
         surface: number;
         /** the keys currently logically down*/
-        keys: number[];
+        keys: ArrayBufferView;
     };
     "wl_keyboard.leave": {
         /** serial number of the leave event*/
@@ -412,7 +412,7 @@ export type WaylandEventObj = {
     "xdg_toplevel.configure": {
         width: number;
         height: number;
-        states: number[];
+        states: ArrayBufferView;
     };
     "xdg_toplevel.close": {};
     "xdg_toplevel.configure_bounds": {
@@ -421,7 +421,7 @@ export type WaylandEventObj = {
     };
     "xdg_toplevel.wm_capabilities": {
         /** array of 32-bit capabilities*/
-        capabilities: number[];
+        capabilities: ArrayBufferView;
     };
     "xdg_popup.configure": {
         /** x position relative to parent surface window geometry*/
@@ -464,16 +464,16 @@ export type WaylandEventObj = {
     };
     "zwp_linux_dmabuf_feedback_v1.main_device": {
         /** device dev_t value*/
-        device: number[];
+        device: ArrayBufferView;
     };
     "zwp_linux_dmabuf_feedback_v1.tranche_done": {};
     "zwp_linux_dmabuf_feedback_v1.tranche_target_device": {
         /** device dev_t value*/
-        device: number[];
+        device: ArrayBufferView;
     };
     "zwp_linux_dmabuf_feedback_v1.tranche_formats": {
         /** array of 16-bit indexes*/
-        indices: number[];
+        indices: ArrayBufferView;
     };
     "zwp_linux_dmabuf_feedback_v1.tranche_flags": {
         /** tranche flags*/
@@ -484,7 +484,7 @@ export type WaylandEventObj = {
     };
     "zwp_text_input_v1.leave": {};
     "zwp_text_input_v1.modifiers_map": {
-        map: number[];
+        map: ArrayBufferView;
     };
     "zwp_text_input_v1.input_panel_state": {
         state: number;
