@@ -66,6 +66,7 @@ type WaylandData = {
               }[];
               width: number;
               height: number;
+              format: number;
           };
     wl_region: {
         rects: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
@@ -913,6 +914,19 @@ class WaylandClient {
                     const modifierX = bufferObj.planes[0];
                     const modifier = (modifierX.modifier_hi << 32) | modifierX.modifier_lo;
 
+                    const format =
+                        bufferObj.format === DRM_FORMAT.DRM_FORMAT_ARGB8888
+                            ? "bgra"
+                            : bufferObj.format === DRM_FORMAT.DRM_FORMAT_ABGR8888
+                              ? "rgba"
+                              : bufferObj.format === DRM_FORMAT.DRM_FORMAT_NV12
+                                ? "nv12"
+                                : bufferObj.format === DRM_FORMAT.DRM_FORMAT_NV16
+                                  ? "nv16"
+                                  : bufferObj.format === DRM_FORMAT.DRM_FORMAT_P010
+                                    ? "p010le"
+                                    : "bgra";
+
                     const t = await importSharedTexture({
                         textureInfo: {
                             handle: {
@@ -928,7 +942,7 @@ class WaylandClient {
                                 },
                             },
                             codedSize: { height: bufferObj.height, width: bufferObj.width },
-                            pixelFormat: "bgra",
+                            pixelFormat: format,
                         },
                     });
                     console.log("imt", t);
@@ -1458,7 +1472,7 @@ class WaylandClient {
             const planes = params.data.planes;
             const bufferId = x.args.buffer_id;
             const buffer = this.getObject(bufferId);
-            buffer.data = { type: "dmabuf", planes, width: x.args.width, height: x.args.height };
+            buffer.data = { type: "dmabuf", planes, width: x.args.width, height: x.args.height, format: x.args.format };
         });
 
         isOp("zwp_text_input_manager_v1.create_text_input", (x) => {
