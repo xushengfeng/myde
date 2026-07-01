@@ -928,7 +928,7 @@ class WaylandClient {
                                 },
                             },
                             codedSize: { height: bufferObj.height, width: bufferObj.width },
-                            pixelFormat: "rgba",
+                            pixelFormat: "bgra",
                         },
                     });
                     console.log("imt", t);
@@ -2278,7 +2278,7 @@ async function importSharedTexture(
     sharedTextureCbMap.set(id, resolve);
     const fds = options.textureInfo.handle.nativePixmap?.planes.map((p) => p.fd);
 
-    if (fds !== undefined) ipc._write({ data: Buffer.from(JSON.stringify({ id, options })), fds }, null, () => {});
+    if (fds !== undefined) ipc.write({ data: Buffer.from(JSON.stringify({ id, options })), fds }, () => {});
     return promise;
 }
 
