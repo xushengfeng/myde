@@ -1,5 +1,7 @@
 # myde
 
+[English](./README.en.md)
+
 基于 Electron 构建的 Linux Wayland 桌面环境（合成器）。它通过 JavaScript 解析 Wayland 协议，将原生应用（如 Firefox）渲染至 Canvas，而非依赖 Web 定制软件。
 
 > **当前状态**：开发中，仅支持部分应用。
