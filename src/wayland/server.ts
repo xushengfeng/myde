@@ -945,19 +945,15 @@ class WaylandClient {
                             pixelFormat: format,
                         },
                     });
-                    console.log("imt", t);
 
                     const x = t.getVideoFrame();
                     const c = new OffscreenCanvas(x.codedWidth, x.codedHeight);
                     const ctx = c.getContext("2d")!;
                     ctx.drawImage(x, 0, 0);
                     imagedata = ctx.getImageData(0, 0, x.codedWidth, x.codedHeight);
-                    console.log(
-                        imagedata,
-                        imagedata.data.every((v) => v === 0),
-                    );
 
                     x.close();
+                    t.release();
                 }
                 if (imagedata.width !== canvas.width || imagedata.height !== canvas.height) {
                     canvas.width = imagedata.width;

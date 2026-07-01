@@ -127,14 +127,11 @@ server.on("connection", (socket) => {
             id: number;
             options: Parameters<typeof sharedTexture.importSharedTexture>[0];
         };
-        console.log("Received message:", message, fd, j);
         for (const [pidx, p] of (j.options.textureInfo.handle.nativePixmap?.planes ?? []).entries()) {
             p.fd = fd[pidx];
-            console.log("Plane info:", p);
         }
         if (mainWin) {
             const texture = sharedTexture.importSharedTexture(j.options);
-            log("Imported shared texture:", texture);
             sharedTexture.sendSharedTexture(
                 { importedSharedTexture: texture, frame: mainWin.webContents.mainFrame },
                 j.id,
