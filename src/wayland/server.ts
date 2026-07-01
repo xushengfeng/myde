@@ -1442,8 +1442,15 @@ class WaylandClient {
             buffer.writeBigUInt64LE(BigInt(r.rdev));
             const a = new Uint8Array(buffer.buffer);
             this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.main_device", { device: a });
+
             this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_target_device", {
                 device: a,
+            });
+            this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_formats", {
+                indices: new Uint16Array([0, 1, 2, 3, 4]),
+            });
+            this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_flags", {
+                flags: getEnumValue("zwp_linux_dmabuf_feedback_v1.tranche_flags", []),
             });
             this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_done", {});
 
