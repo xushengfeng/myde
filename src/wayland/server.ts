@@ -1437,7 +1437,10 @@ class WaylandClient {
             this.emit("windowClosed", x.id);
         });
 
-        isOp("zwp_linux_dmabuf_v1.create_params", (x) => {});
+        isOp("zwp_linux_dmabuf_v1.create_params", (x) => {
+            const params = this.getObject(x.args.params_id);
+            params.data = { planes: [] };
+        });
         isOp("zwp_linux_dmabuf_v1.get_surface_feedback", (x) => {
             const feedbackId = x.args.id;
             this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
@@ -1479,9 +1482,6 @@ class WaylandClient {
         });
         isOp("zwp_linux_buffer_params_v1.add", (x) => {
             const params = this.getObject(x.id);
-            if (!params.data) {
-                params.data = { planes: [] };
-            }
             params.data.planes[x.args.plane_idx] = {
                 fd: x.args.fd,
                 plane_idx: x.args.plane_idx,
