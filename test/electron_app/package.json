@@ -1,0 +1,8 @@
+{
+    "name": "electron-app-test",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "example": "node start.js example.js"
+    }
+}
