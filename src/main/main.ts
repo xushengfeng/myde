@@ -15,8 +15,6 @@ if (process.platform === "win32") {
     the_icon = path.join(run_path, "assets/logo/icon.ico");
 }
 
-const isMac = process.platform === "darwin";
-
 function log(...params: unknown[]) {
     if (dev) console.log(...params);
 }
