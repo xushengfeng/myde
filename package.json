@@ -38,7 +38,7 @@
         "@biomejs/biome": "^2.2.4",
         "@types/ini": "^4.1.1",
         "@types/xml2js": "^0.4.14",
-        "electron": "^43.0.0-beta.8",
+        "electron": "^43.0.0",
         "electron-builder": "^24.4.0",
         "electron-vite": "^4.0.1",
         "typescript": "^6.0.2",
