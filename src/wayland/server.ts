@@ -881,7 +881,7 @@ class WaylandClient {
             const surfaceId = x.id;
             const surface = this.getObject(surfaceId);
             const data = surface.data.pending;
-            surface.data.current = data;
+            surface.data.current = Object.assign({}, surface.data.current, data);
             surface.data.pending = {};
             const canvas = surface.data.canvas;
             // biome-ignore lint/style/noNonNullAssertion: 忽略小概率
@@ -891,7 +891,6 @@ class WaylandClient {
             const bufferId = buffer?.id;
             const bufferObj = this.getObjectOption(bufferId)?.data;
             if (!bufferObj) {
-                console.warn("wl_surface buffer not found", surfaceId);
             } else {
                 let image: ImageData | VideoFrame;
                 if (bufferObj.type === "shm") {
