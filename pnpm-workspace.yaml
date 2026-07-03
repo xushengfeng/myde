@@ -7,6 +7,7 @@ ignoredBuiltDependencies:
 
 minimumReleaseAgeExclude:
   - myde-xcb@0.1.0
+  - myde-xcb@0.1.1
 
 onlyBuiltDependencies:
   - '@biomejs/biome'
