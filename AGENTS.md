@@ -18,7 +18,7 @@
 
 ## wayland api
 
-纯node环境
+纯node环境，但是dmabuf需要electron渲染进程环境，总之是无dom的electron渲染进程
 
 `src/wayland/server.ts`是各个协议主要实现
 
@@ -32,6 +32,14 @@
 
 大部分api用了dbus，但是dbus的具体创建、连接在外部。class创建时应该传入dbus作为参数
 
+## 测试工具
+
+可以自定义应用，实现针对性测试
+
+`test/simple_app`下可以创建rust bin应用，适用于wayland api
+
+使用`test/electron_app`可以创建单脚本控制主进程和渲染进程的特殊应用，适用于wayland api和系统api相关
+
 ## 常用开发流程
 
 ### 新增wayland协议
@@ -39,9 +47,10 @@
 - 下载协议xml文件到`script/wayland/xml`
 - 修改`script/wayland/gen_protocols.ts`的`supportedProtocols`变量并运行
 - 编辑`src/wayland/server.ts`
-- 暂无自动测试
 
 由于最后窗口需要显示，所以有渲染器这个概念，比如`src/wayland/render_tools_el.ts`就把中间的窗口操作转成dom操作，桌面开发可引用，避免二次开发。当然，无头服务器或者其他可自定义渲染器
+
+默认不进行测试，如果开发者要求添加测试，仿照`src/wayland/test/dma-buf.test.ts`
 
 ### 系统api开发
 
