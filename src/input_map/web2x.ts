@@ -52,7 +52,7 @@ export function mapKeyCode(code: string): number {
     if (code.startsWith("Numpad")) {
         const numpadKey = code.slice(6);
         if (!Number.isNaN(Number(numpadKey))) {
-            return InputEventCodes[`KEY_KP_${numpadKey}`] || 0;
+            return InputEventCodes[`KEY_KP${numpadKey}`] || 0;
         } else if (numpadKey === "Add") {
             return InputEventCodes.KEY_KPPLUS;
         } else if (numpadKey === "Subtract") {

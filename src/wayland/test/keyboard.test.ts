@@ -21,6 +21,13 @@ describe("keyboard app", () => {
         fs.writeFileSync(tmpfile, `(${k.toString()})()`);
         expect(mapKeyCode("KeyA")).toBe(30);
         expect(mapKeyCode("KeyB")).toBe(48);
+        expect(mapKeyCode("Enter")).toBe(28);
+        expect(mapKeyCode("Space")).toBe(57);
+        expect(mapKeyCode("ArrowUp")).toBe(103);
+        expect(mapKeyCode("ArrowDown")).toBe(108);
+        expect(mapKeyCode("ArrowLeft")).toBe(105);
+        expect(mapKeyCode("ArrowRight")).toBe(106);
+        expect(mapKeyCode("Numpad0")).toBe(82);
         const { waitExit } = testRunnerApp(`test/electron_app/start.js ${tmpfile}`, ({ client, runner }) => {
             client.on("windowCreated", (windowId) => {
                 client.win(windowId)?.focus();
