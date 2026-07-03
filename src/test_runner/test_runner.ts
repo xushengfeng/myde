@@ -94,7 +94,6 @@ export function testRunnerApp(
         const render = new myde.MUtils.renderToolsHtmlEl();
 
         const serverX = myde.MSysApi.server({
-            dev: true,
             render: render,
         });
         const server = serverX.server;
@@ -111,7 +110,6 @@ export function testRunnerApp(
             client.onSync("windowBound", () => {
                 return { width: window.innerWidth, height: window.innerHeight };
             });
-            console.log("insert");
             clientPromise.resolve({
                 client: client,
                 runner: {
@@ -125,7 +123,10 @@ export function testRunnerApp(
             });
         });
 
-        serverX.runApp(`${__dirname.replace("/out/renderer", "")}/${appPath}`);
+        const p = serverX.runApp(`${__dirname.replace("/out/renderer", "")}/${appPath}`);
+        p.stdout.on("data", (data) => {
+            ipcRenderer.send("test", { type: "applog", data: data.toString() });
+        });
     });
     const app = `const appPath="${appPath}"\n${baseTeamplate}\n${`(${script.toString()})(await clientPromise.promise)`}`;
     const r = testRunnerRaw(app);

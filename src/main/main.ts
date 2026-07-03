@@ -153,5 +153,7 @@ ipcMain.on("test", (_, data) => {
         app.quit();
     } else if (data.type === "data") {
         console.log(JSON.stringify(data.data));
+    } else if (data.type === "applog") {
+        console.log(JSON.stringify({ applog: data.data }));
     }
 });
