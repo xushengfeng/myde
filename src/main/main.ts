@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { app, globalShortcut, nativeTheme, BrowserWindow, sharedTexture } from "electron";
+import { app, globalShortcut, nativeTheme, BrowserWindow, sharedTexture, ipcMain } from "electron";
 import * as path from "node:path";
 const run_path = path.join(path.resolve(__dirname, ""), "../../");
 import url from "node:url";
@@ -59,7 +59,7 @@ async function createWin() {
     const main_window = new BrowserWindow({
         backgroundColor: nativeTheme.shouldUseDarkColors ? "#0f0f0f" : "#ffffff",
         icon: the_icon,
-        show: true,
+        show: isTestMode ? false : true,
         width: 1200,
         height: 800,
         webPreferences: {
@@ -103,6 +103,16 @@ if (process.argv.includes("-d") || import.meta.env.DEV) {
 
 dev = true;
 
+let isTestMode = false;
+
+if (process.env.testMode === "on") {
+    isTestMode = true;
+}
+
+if (isTestMode) {
+    dev = false;
+}
+
 app.commandLine.appendSwitch("enable-experimental-web-platform-features", "enable");
 
 app.whenReady().then(() => {
@@ -136,4 +146,12 @@ server.on("connection", (socket) => {
             );
         }
     });
+});
+
+ipcMain.on("test", (_, data) => {
+    if (data.type === "kill") {
+        app.quit();
+    } else if (data.type === "data") {
+        console.log(JSON.stringify(data.data));
+    }
 });
