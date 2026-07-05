@@ -59,13 +59,16 @@ async function createWin() {
     const main_window = new BrowserWindow({
         backgroundColor: nativeTheme.shouldUseDarkColors ? "#0f0f0f" : "#ffffff",
         icon: the_icon,
-        show: isTestMode ? false : true,
+        show: !isTestMode,
         width: 1200,
         height: 800,
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false,
         },
+        frame: !runAsDesktop,
+        hasShadow: !runAsDesktop,
+        roundedCorners: !runAsDesktop,
     });
     mainWin = main_window;
 
@@ -103,15 +106,13 @@ if (process.argv.includes("-d") || import.meta.env.DEV) {
 
 dev = true;
 
-let isTestMode = false;
-
-if (process.env.testMode === "on") {
-    isTestMode = true;
-}
+const isTestMode = process.env.testMode === "on";
 
 if (isTestMode) {
     dev = false;
 }
+
+const runAsDesktop = Boolean(process.env.runAsDesktop);
 
 app.commandLine.appendSwitch("enable-experimental-web-platform-features", "enable");
 
