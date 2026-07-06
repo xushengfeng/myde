@@ -119,6 +119,92 @@ mpris，获取正在播放的媒体相关信息，并控制播放暂停等
 
 主要查看无线网络连接名称，包括设备连接和断开，还没有开发新连接
 
+### input
+
+原生输入设备读取，支持键盘、鼠标、触控板、数位板、触屏、游戏手柄
+
+```typescript
+const { input } = MSysApi;
+
+// 获取所有输入设备（每个设备都是 EventEmitter）
+const devices = input.getDevices();
+// [InputDevice, InputDevice, ...]
+
+// 获取单个设备
+const device = input.getDevice("/dev/input/event0");
+
+// 监听单个设备事件
+const keyboard = devices.find(d => d.type === "keyboard");
+if (keyboard) {
+    keyboard.on("keyDown", (event) => {
+        console.log(`${keyboard.name} 按键按下: code=${event.code}`);
+    });
+    
+    keyboard.on("keyUp", (event) => {
+        console.log(`${keyboard.name} 按键释放: code=${event.code}`);
+    });
+}
+
+// 监听鼠标设备
+const mouse = devices.find(d => d.type === "mouse");
+if (mouse) {
+    mouse.on("relative", (event) => {
+        console.log(`${mouse.name} 移动: code=${event.code} value=${event.value}`);
+    });
+}
+
+// 监听触屏设备
+const touchscreen = devices.find(d => d.type === "touchscreen");
+if (touchscreen) {
+    touchscreen.on("absolute", (event) => {
+        console.log(`${touchscreen.name} 触摸: code=${event.code} value=${event.value}`);
+    });
+}
+
+// 聚合监听所有设备事件（input 本身也是 EventEmitter）
+input.on("keyDown", (event) => {
+    console.log(`[任意键盘] ${event.device.name} 按下: code=${event.code}`);
+});
+
+input.on("relative", (event) => {
+    console.log(`[任意鼠标] ${event.device.name} 移动: code=${event.code} value=${event.value}`);
+});
+
+// 监听设备变化
+input.on("deviceAdded", (device) => {
+    console.log("设备接入:", device.name, device.type);
+});
+
+input.on("deviceRemoved", (device) => {
+    console.log("设备断开:", device.name, device.type);
+});
+```
+
+设备类型 (`device.type`)：
+- `"keyboard"` - 键盘
+- `"mouse"` - 鼠标
+- `"touchpad"` - 触控板
+- `"touchscreen"` - 触屏
+- `"tablet"` - 数位板
+- `"gamepad"` - 游戏手柄
+- `"unknown"` - 未知设备
+
+事件类型（通过 `event.type` 区分）：
+- `EV_KEY` (1): 按键事件，value=1按下，value=0释放，value=2长按
+- `EV_REL` (2): 相对移动事件（鼠标），event.code 区分轴向
+- `EV_ABS` (3): 绝对位置事件（触屏、触控板、数位板），event.code 区分轴向
+- `EV_SYN` (0): 同步事件，表示一帧事件结束
+
+每个设备可监听的事件：
+- `"event"` - 所有原始事件
+- `"key"` / `"keyDown"` / `"keyUp"` / `"keyRepeat"` - 按键事件
+- `"relative"` - 相对移动
+- `"absolute"` - 绝对位置
+- `"sync"` - 同步帧
+- `"error"` - 读取错误
+
+权限要求：用户需要在 `input` 组中才能读取 `/dev/input/event*`，否则设备列表为空
+
 ## MUtils
 
 ### renderToolsHtmlEl

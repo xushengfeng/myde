@@ -8,6 +8,7 @@ import type { blue } from "./sys_api/blue";
 import type { display } from "./sys_api/display";
 import { getEnv } from "./sys_api/env";
 import { vfs } from "./sys_api/fs";
+import type { InputManager } from "./sys_api/input";
 import { setPowerState } from "./sys_api/login";
 import type { mpris } from "./sys_api/mpris";
 import type { network } from "./sys_api/network";
@@ -36,6 +37,7 @@ export const _myde = {
         blue: undefined as unknown as blue,
         network: undefined as unknown as network,
         display: undefined as unknown as display,
+        input: undefined as unknown as InputManager,
     },
     MInputMap: {
         mapKeyCode,

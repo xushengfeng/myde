@@ -13,6 +13,7 @@ import { blue } from "../../sys_api/blue";
 import { display } from "../../sys_api/display";
 import { getEnv } from "../../sys_api/env";
 import { vfs } from "../../sys_api/fs";
+import { InputManager } from "../../sys_api/input";
 import { mpris } from "../../sys_api/mpris";
 import { network } from "../../sys_api/network";
 import { notification } from "../../sys_api/notification";
@@ -61,6 +62,8 @@ async function loadDesktop(p: string) {
     myde.MSysApi.power = new power(await newDBusIO(true));
     myde.MSysApi.blue = new blue(await newDBusIO(true));
     myde.MSysApi.network = new network(await newDBusIO(true));
+    myde.MSysApi.input = new InputManager(fs);
+    await myde.MSysApi.input.init();
     const packageData = fs.readFileSync(packagePath, "utf-8");
     const packageJson = JSON.parse(packageData);
     const mainPath = `${dirPath}/${packageJson.main || "index.js"}`;
