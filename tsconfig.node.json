@@ -23,6 +23,15 @@
     "electron.vite.config.*",
     "src/main/*",
     "src/preload/*",
+    "src/desktop-api.ts",
+    "src/sys_api/**/*.ts",
+    "src/setting/**/*.ts",
+    "src/wayland/**/*.ts",
+    "src/test_runner/**/*.ts",
+    "src/input_map/**/*.ts",
+    "src/input_codes/**/*.ts",
+    "src/remote_connect/**/*.ts",
+    "src/vite-env.d.ts",
     "lib/**/*.ts"
   ]
 }

@@ -15,16 +15,21 @@
     "noImplicitAny": false,
     "noImplicitReturns": true,
     "composite": true,
+    "types": [
+      "node"
+    ],
     "lib": [
       "ESNext",
       "DOM",
       "DOM.Iterable"
     ]
   },
+  "references": [
+    {
+      "path": "./tsconfig.node.json"
+    }
+  ],
   "include": [
-    "src/renderer/**/*.ts",
-    "src/preload/*.d.ts",
-    "src/**/*.ts",
-    "lib/**/*.ts"
+    "src/renderer/**/*.ts"
   ]
 }

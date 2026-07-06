@@ -1165,7 +1165,7 @@ tools.registerTool("mediaControl", ({ tipEl, showTip }) => {
 
     MSysApi.media.init();
 
-    let timer: number | undefined;
+    let timer: ReturnType<typeof setInterval> | undefined;
 
     async function update(name: string) {
         clearInterval(timer);

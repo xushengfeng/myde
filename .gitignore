@@ -8,3 +8,4 @@ dist
 build
 **/test/**.pcap
 .VSCodeCounter
+tsconfig*.tsbuildinfo

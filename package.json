@@ -9,6 +9,7 @@
         "dev": "electron-vite --ignoreConfigWarning dev",
         "build": "electron-vite --ignoreConfigWarning build",
         "build:remote-connect": "cd src/remote_connect && pnpm build",
+        "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
         "desktop:simpletest": "export desktop=':test' && electron-vite --ignoreConfigWarning preview",
         "desktop:offical": "cd desktop/offical && npm run build && cd ../.. && export desktop='desktop/offical' && electron-vite --ignoreConfigWarning preview",
         "desktop:remote": "cd desktop/remote && npm run build && cd ../.. && export desktop='desktop/remote' && electron-vite --ignoreConfigWarning preview",
@@ -37,6 +38,7 @@
     "devDependencies": {
         "@biomejs/biome": "^2.2.4",
         "@types/ini": "^4.1.1",
+        "@types/node": "^24.12.0",
         "@types/xml2js": "^0.4.14",
         "electron": "^43.0.0",
         "electron-builder": "^24.4.0",
