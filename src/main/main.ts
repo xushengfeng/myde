@@ -1,7 +1,10 @@
 /// <reference types="vite/client" />
-import { app, globalShortcut, nativeTheme, BrowserWindow, sharedTexture, ipcMain } from "electron";
+
 import * as path from "node:path";
+import { app, BrowserWindow, globalShortcut, ipcMain, nativeTheme, sharedTexture } from "electron";
+
 const run_path = path.join(path.resolve(__dirname, ""), "../../");
+
 import url from "node:url";
 
 const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
@@ -88,11 +91,18 @@ async function createWin() {
                 env: JSON.stringify(process.env),
                 desktop: desktop_path,
                 ...(process.env.nodeModule ? { nodeModule: "on" } : {}),
+                displayType: runAsDesktop ? "desktop" : "window",
             },
         });
     }
 
     if (dev) main_window.webContents.openDevTools();
+    if (runAsDesktop) {
+        mainWin.webContents.on("console-message", ({ message, level, lineNumber }) => {
+            if (level === "error")
+                console.log(`console-message: lineNumber=${lineNumber}, message=${JSON.stringify(message)}`);
+        });
+    }
 }
 
 let mainWin: BrowserWindow | null = null;
@@ -158,3 +168,7 @@ ipcMain.on("test", (_, data) => {
         console.log(JSON.stringify({ applog: data.data }));
     }
 });
+
+if (runAsDesktop) {
+    dev = false;
+}
