@@ -4,18 +4,19 @@ const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
 import { addStyle, initDKH, pack } from "dkh-ui";
 import { _myde } from "../../desktop-api";
+import { PeerjsAdapter } from "../../remote_connect/peerjs_adapter";
+import { SConnect } from "../../remote_connect/sconnect";
 import type { nowConfig } from "../../setting/config";
 import { setting } from "../../setting/setting";
-import { vfs } from "../../sys_api/fs";
-import { SConnect } from "../../remote_connect/sconnect";
-import { PeerjsAdapter } from "../../remote_connect/peerjs_adapter";
-import { mpris } from "../../sys_api/mpris";
-import { notification } from "../../sys_api/notification";
-import { getEnv } from "../../sys_api/env";
 import { tray } from "../../sys_api/appIndicator";
-import { power } from "../../sys_api/power";
 import { blue } from "../../sys_api/blue";
+import { display } from "../../sys_api/display";
+import { getEnv } from "../../sys_api/env";
+import { vfs } from "../../sys_api/fs";
+import { mpris } from "../../sys_api/mpris";
 import { network } from "../../sys_api/network";
+import { notification } from "../../sys_api/notification";
+import { power } from "../../sys_api/power";
 
 const {
     default: { loginService },
@@ -27,6 +28,11 @@ async function loadDesktop(p: string) {
     if (!fs.existsSync(packagePath)) {
         console.error("Desktop package.json not found:", packagePath);
         return;
+    }
+    myde.MSysApi.display = new display();
+    myde.MSysApi.display.setType(urlParams.get("displayType") === "desktop" ? "desktop" : "window");
+    if (myde.MSysApi.display.getType() === "desktop") {
+        await myde.MSysApi.display.connect({ socketPath: getEnv().MYDE_WRAP_SOCKET, mus });
     }
     myde.MSysApi.fs = new vfs(dirPath);
     myde.MSysApi.verifyUserPassword = async (password: string) => {

@@ -1,7 +1,10 @@
 /// <reference types="vite/client" />
-import { app, globalShortcut, nativeTheme, BrowserWindow, sharedTexture, ipcMain } from "electron";
+
 import * as path from "node:path";
+import { app, BrowserWindow, globalShortcut, ipcMain, nativeTheme, sharedTexture } from "electron";
+
 const run_path = path.join(path.resolve(__dirname, ""), "../../");
+
 import url from "node:url";
 
 const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
@@ -59,13 +62,16 @@ async function createWin() {
     const main_window = new BrowserWindow({
         backgroundColor: nativeTheme.shouldUseDarkColors ? "#0f0f0f" : "#ffffff",
         icon: the_icon,
-        show: isTestMode ? false : true,
+        show: !isTestMode,
         width: 1200,
         height: 800,
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false,
         },
+        frame: !runAsDesktop,
+        hasShadow: !runAsDesktop,
+        roundedCorners: !runAsDesktop,
     });
     mainWin = main_window;
 
@@ -85,11 +91,18 @@ async function createWin() {
                 env: JSON.stringify(process.env),
                 desktop: desktop_path,
                 ...(process.env.nodeModule ? { nodeModule: "on" } : {}),
+                displayType: runAsDesktop ? "desktop" : "window",
             },
         });
     }
 
     if (dev) main_window.webContents.openDevTools();
+    if (runAsDesktop) {
+        mainWin.webContents.on("console-message", ({ message, level, lineNumber }) => {
+            if (level === "error")
+                console.log(`console-message: lineNumber=${lineNumber}, message=${JSON.stringify(message)}`);
+        });
+    }
 }
 
 let mainWin: BrowserWindow | null = null;
@@ -103,15 +116,13 @@ if (process.argv.includes("-d") || import.meta.env.DEV) {
 
 dev = true;
 
-let isTestMode = false;
-
-if (process.env.testMode === "on") {
-    isTestMode = true;
-}
+const isTestMode = process.env.testMode === "on";
 
 if (isTestMode) {
     dev = false;
 }
+
+const runAsDesktop = Boolean(process.env.runAsDesktop);
 
 app.commandLine.appendSwitch("enable-experimental-web-platform-features", "enable");
 
@@ -157,3 +168,7 @@ ipcMain.on("test", (_, data) => {
         console.log(JSON.stringify({ applog: data.data }));
     }
 });
+
+if (runAsDesktop) {
+    dev = false;
+}
