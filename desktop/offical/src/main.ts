@@ -1244,24 +1244,32 @@ tools.registerTool("tray", ({ tipEl, showTip }) => {
 tools.registerTool("power", ({ tipEl, showTip }) => {
     const el = view("x");
 
-    MSysApi.power.init().then(async () => {
-        for (const t of MSysApi.power.getDevices()) {
-            if ((await t.getPowerSupply()) && ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")) {
-                el.clear().add(`🔋${await t.getPercentage()}%`);
-            }
-        }
-        const list = view("y").addInto(tipEl);
-        el.on("click", async () => {
-            list.clear();
+    MSysApi.power
+        .init()
+        .then(async () => {
             for (const t of MSysApi.power.getDevices()) {
-                const name = (await t.getModel()) || "Unknown";
-                const percentage = await t.getPercentage();
-                const status = await t.getState();
-                view("x").addInto(list).add(`${name}: ${percentage}% (${status})`);
+                if (
+                    (await t.getPowerSupply()) &&
+                    ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")
+                ) {
+                    el.clear().add(`🔋${await t.getPercentage()}%`);
+                }
             }
-            showTip({ state: "show", anchorEl: el.el });
+            const list = view("y").addInto(tipEl);
+            el.on("click", async () => {
+                list.clear();
+                for (const t of MSysApi.power.getDevices()) {
+                    const name = (await t.getModel()) || "Unknown";
+                    const percentage = await t.getPercentage();
+                    const status = await t.getState();
+                    view("x").addInto(list).add(`${name}: ${percentage}% (${status})`);
+                }
+                showTip({ state: "show", anchorEl: el.el });
+            });
+        })
+        .catch((e) => {
+            console.error("power init error", e);
         });
-    });
 
     return el;
 });
@@ -1269,59 +1277,69 @@ tools.registerTool("power", ({ tipEl, showTip }) => {
 tools.registerTool("blue", ({ tipEl, showTip }) => {
     const el = view("x");
 
-    MSysApi.blue.init().then(async () => {
-        el.add("蓝牙");
-        const mel = view("y").addInto(tipEl);
-        el.on("click", async () => {
-            mel.clear();
-            const s = check("bluetooth", ["on", "off"]).addInto(mel);
-            const state = await MSysApi.blue.isPowered();
-            s.sv(state);
-            const list = view("y").addInto(mel);
-            const c: blueDevice[] = [];
-            const uc: blueDevice[] = [];
-            for (const d of MSysApi.blue.getDevices()) {
-                if (await d.isConnected()) c.push(d);
-                else if (await d.isTrusted()) uc.push(d);
-            }
-            for (const d of c) {
-                const name = (await d.getName()) || "Unknown";
-                view("x").addInto(list).add(`🔗 ${name}`);
-            }
-            for (const d of uc) {
-                const name = (await d.getName()) || "Unknown";
-                view("x").addInto(list).add(`🔌 ${name}`);
-            }
-            showTip({ state: "show", anchorEl: el.el });
+    MSysApi.blue
+        .init()
+        .then(async () => {
+            el.add("蓝牙");
+            const mel = view("y").addInto(tipEl);
+            el.on("click", async () => {
+                mel.clear();
+                const s = check("bluetooth", ["on", "off"]).addInto(mel);
+                const state = await MSysApi.blue.isPowered();
+                s.sv(state);
+                const list = view("y").addInto(mel);
+                const c: blueDevice[] = [];
+                const uc: blueDevice[] = [];
+                for (const d of MSysApi.blue.getDevices()) {
+                    if (await d.isConnected()) c.push(d);
+                    else if (await d.isTrusted()) uc.push(d);
+                }
+                for (const d of c) {
+                    const name = (await d.getName()) || "Unknown";
+                    view("x").addInto(list).add(`🔗 ${name}`);
+                }
+                for (const d of uc) {
+                    const name = (await d.getName()) || "Unknown";
+                    view("x").addInto(list).add(`🔌 ${name}`);
+                }
+                showTip({ state: "show", anchorEl: el.el });
+            });
+        })
+        .catch((e) => {
+            console.error("blue init error", e);
         });
-    });
     return el;
 });
 
 tools.registerTool("network", ({ tipEl, showTip }) => {
     const el = view("x");
 
-    MSysApi.network.init().then(async () => {
-        el.add("网络");
-        const list = view("y").addInto(tipEl);
-        el.on("click", async () => {
-            list.clear();
-            const activeWifi = await MSysApi.network.getActiveWifiConnection();
-            if (activeWifi) {
-                const name = activeWifi.id;
-                view("x").style({ whiteSpace: "pre" }).addInto(list).add(`🔗 ${name}`);
-            }
+    MSysApi.network
+        .init()
+        .then(async () => {
+            el.add("网络");
+            const list = view("y").addInto(tipEl);
+            el.on("click", async () => {
+                list.clear();
+                const activeWifi = await MSysApi.network.getActiveWifiConnection();
+                if (activeWifi) {
+                    const name = activeWifi.id;
+                    view("x").style({ whiteSpace: "pre" }).addInto(list).add(`🔗 ${name}`);
+                }
 
-            const devices = MSysApi.network.getWifiDevices();
+                const devices = MSysApi.network.getWifiDevices();
 
-            for (const n of await devices[0].getAccessPoints()) {
-                const name = (await n.getSsid()) || "Unknown";
-                if (name === activeWifi?.id) continue;
-                view("x").style({ whiteSpace: "pre" }).addInto(list).add(`${name}`);
-            }
-            showTip({ state: "show", anchorEl: el.el });
+                for (const n of await devices[0].getAccessPoints()) {
+                    const name = (await n.getSsid()) || "Unknown";
+                    if (name === activeWifi?.id) continue;
+                    view("x").style({ whiteSpace: "pre" }).addInto(list).add(`${name}`);
+                }
+                showTip({ state: "show", anchorEl: el.el });
+            });
+        })
+        .catch((e) => {
+            console.error("network init error", e);
         });
-    });
 
     return el;
 });
