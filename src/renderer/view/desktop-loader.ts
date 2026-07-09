@@ -4,8 +4,8 @@ const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
 import { addStyle, initDKH, pack } from "dkh-ui";
 import { _myde } from "../../desktop-api";
-import { PeerjsAdapter } from "../../remote_connect/peerjs_adapter";
-import { SConnect } from "../../remote_connect/sconnect";
+import { PeerjsAdapter } from "myde-remote-connect/peerjs_adapter";
+import { SConnect } from "myde-remote-connect/sconnect";
 import type { nowConfig } from "../../setting/config";
 import { setting } from "../../setting/setting";
 import { tray } from "../../sys_api/appIndicator";

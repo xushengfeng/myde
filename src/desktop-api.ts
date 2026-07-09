@@ -1,5 +1,5 @@
 import { mapKeyCode } from "./input_map/web2x";
-import type { SConnect } from "./remote_connect/sconnect";
+import type { SConnect } from "myde-remote-connect/sconnect";
 import type { nowConfig } from "./setting/config";
 import type { setting } from "./setting/setting";
 import type { tray } from "./sys_api/appIndicator";

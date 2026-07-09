@@ -1,5 +1,5 @@
-import { SConnect } from "../../../src/remote_connect";
-import { PeerjsAdapter } from "../../../src/remote_connect/peerjs_adapter";
+import { SConnect } from "myde-remote-connect";
+import { PeerjsAdapter } from "myde-remote-connect/peerjs_adapter";
 
 interface ServerMsg {
     type: string;

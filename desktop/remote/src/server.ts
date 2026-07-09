@@ -1,5 +1,5 @@
-import { SConnect } from "../../src/remote_connect/sconnect";
-import { PeerjsAdapter } from "../../src/remote_connect/peerjs_adapter";
+import { SConnect } from "myde-remote-connect/sconnect";
+import { PeerjsAdapter } from "myde-remote-connect/peerjs_adapter";
 
 type MessageHandler = (peerId: string, data: string) => void;
 type DisconnectHandler = (peerId: string) => void;
