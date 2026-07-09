@@ -94,19 +94,44 @@ export class PeerManager {
         return Array.from(this.peers.values());
     }
 
-    sendMessage(peerId: string, message: any): void {
-        const peer = this.peers.get(peerId);
-        if (peer) peer.connect.send(JSON.stringify(message)).catch(() => {});
+    private buildMessage(json: any, bins?: ArrayBuffer[]): Uint8Array {
+        const msgStr = JSON.stringify(json);
+        const msgBytes = new TextEncoder().encode(msgStr);
+        const byteArrays: Uint8Array[] = [msgBytes];
+        if (bins) {
+            for (const bin of bins) {
+                byteArrays.push(new Uint8Array(bin));
+            }
+        }
+        // 长度+数据
+        const totalLength = byteArrays.reduce((sum, arr) => sum + 4 + arr.length, 0);
+        const buffer = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const arr of byteArrays) {
+            const lengthBytes = new Uint8Array(4);
+            new DataView(lengthBytes.buffer).setUint32(0, arr.length, true);
+            buffer.set(lengthBytes, offset);
+            offset += 4;
+            buffer.set(arr, offset);
+            offset += arr.length;
+        }
+
+        return buffer;
     }
 
-    broadcast(message: any, toplevelId?: string | null): void {
+    sendMessage(peerId: string, message: any, bins?: ArrayBuffer[]): void {
+        const peer = this.peers.get(peerId);
+        if (peer) peer.connect.sendBinary(this.buildMessage(message, bins)).catch(() => {});
+    }
+
+    broadcast(message: any, bins?: ArrayBuffer[], toplevelId?: string | null): void {
         if (!this.connect) return;
-        const msgStr = JSON.stringify(message);
+        const msg = this.buildMessage(message, bins);
         for (const [_id, peer] of this.peers) {
             if (peer.type === "launcher") {
-                this.connect.send(msgStr).catch(() => {});
+                this.connect.sendBinary(msg).catch(() => {});
             } else if (peer.type === "render" && (!toplevelId || peer.toplevelId === toplevelId)) {
-                this.connect.send(msgStr).catch(() => {});
+                this.connect.sendBinary(msg).catch(() => {});
             }
         }
     }

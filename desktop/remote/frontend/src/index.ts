@@ -165,7 +165,7 @@ class App {
 
     private onConnected() {
         this.connect.send(JSON.stringify({ type: "register", clientType: "launcher" }));
-        this.connect.on("data", (_, t) => this.onServerMsg(t()));
+        this.connect.on("data", (bin) => this.onServerMsg(bin));
         this.connect.on("disconnect", () => {
             this.connected = false;
             this.setStatus("Disconnected", false);
@@ -189,9 +189,24 @@ class App {
 
     // ==================== Server messages ====================
 
-    private onServerMsg(raw: string) {
+    private onServerMsg(raw: ArrayBuffer) {
+        console.log(raw);
+
+        const view = new DataView(raw, 0, raw.byteLength);
+        const jsonLen = view.getUint32(0, true);
+        const jsonStr = new TextDecoder().decode(raw.slice(4, 4 + jsonLen));
+        let restBinData = raw.slice(4 + jsonLen); // 余下的部分是二进制数据
+        const bindata: Uint8Array[] = [];
+        while (restBinData.byteLength > 0) {
+            const len = new DataView(restBinData, 0, 4).getUint32(0, true);
+            const chunk = restBinData.slice(4, 4 + len);
+            bindata.push(new Uint8Array(chunk));
+            restBinData = restBinData.slice(4 + len);
+        }
+        console.log(jsonStr, bindata);
+
         try {
-            const m: ServerMsg = JSON.parse(raw);
+            const m: ServerMsg = JSON.parse(jsonStr);
             switch (m.type) {
                 case "toplevelList":
                     if (m.toplevels) {
@@ -213,8 +228,8 @@ class App {
                     if (m.canvasId) this.createCanvas(m.canvasId, m.toplevelId);
                     break;
                 case "canvas":
-                    if (m.canvasId && m.width && m.height && m.data)
-                        this.updateCanvas(m.canvasId, m.width, m.height, m.data);
+                    if (m.canvasId && m.width && m.height && bindata[0])
+                        this.updateCanvas(m.canvasId, m.width, m.height, bindata[0]);
                     break;
                 case "destroyCanvas":
                     if (m.canvasId) this.destroyCanvas(m.canvasId);
@@ -291,7 +306,7 @@ class App {
         this.area(tid)?.appendChild(c);
     }
 
-    private updateCanvas(cid: string, w: number, h: number, data: number[]) {
+    private updateCanvas(cid: string, w: number, h: number, data: Uint8Array) {
         if (w <= 0 || h <= 0 || !data?.length) return;
         const c = this.canvasMap.get(cid);
         if (!c?.isConnected) return;

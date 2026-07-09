@@ -95,14 +95,13 @@ export class RemoteRender implements renderTools {
             canvasId,
             width: canvasData.canvas.width,
             height: canvasData.canvas.height,
-            data: Array.from(imageData.data), // todo 发送二进制
         };
         if (toplevelId) message.toplevelId = toplevelId;
 
         if (peerId) {
-            this.server.sendMessage(peerId, message);
+            this.server.sendMessage(peerId, message, [imageData.data.buffer]);
         } else {
-            this.server.broadcast(message);
+            this.server.broadcast(message, [imageData.data.buffer]);
         }
     }
 

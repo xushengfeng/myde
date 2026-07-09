@@ -1,4 +1,4 @@
-import type {} from "../../src/desktop-api";
+import type {} from "../../../src/desktop-api";
 import { RemoteRender } from "./remote-render";
 import { PeerManager, createConnectionUI } from "./server";
 
