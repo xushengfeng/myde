@@ -26,7 +26,7 @@
         "ini": "^5.0.0",
         "myde-dbus": "^0.4.0",
         "myde-pam-client": "^0.1.0",
-        "myde-remote-connect": "^0.0.2",
+        "myde-remote-connect": "^0.0.3",
         "myde-unix-socket": "^0.2.3",
         "myde-xcb": "^0.1.1",
         "peerjs": "^1.5.5",
