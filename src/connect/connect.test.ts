@@ -1,6 +1,6 @@
 import { LoopbackAdapterManager } from "myde-remote-connect/loopback_adapter_manager";
 import { describe, expect, it } from "vitest";
-import { AnyTarget, buildMessage, Connect, parseMessage } from "./connect";
+import { AnyTarget, buildMessage, Connect, ConnectMap, parseMessage } from "./connect";
 
 async function buildMap(map: [p1: string, p2: string][]) {
     const adapterManager = new LoopbackAdapterManager();
@@ -230,6 +230,42 @@ describe("connect", () => {
                 await testBroadcast(c, id, map);
             }
         });
+    });
+});
+
+describe("connect map", () => {
+    it("should create and destroy pairs correctly", () => {
+        const connectMap = new ConnectMap();
+        connectMap.createPair("A", "B");
+        connectMap.createPair("A", "C");
+        connectMap.createPair("B", "D");
+
+        expect(connectMap.getNeighbors("A")).toEqual(["B", "C"]);
+        expect(connectMap.getNeighbors("B")).toEqual(["A", "D"]);
+        expect(connectMap.getNeighbors("C")).toEqual(["A"]);
+        expect(connectMap.getNeighbors("D")).toEqual(["B"]);
+
+        connectMap.destroyPair("A", "B");
+        expect(connectMap.getNeighbors("A")).toEqual(["C"]);
+        expect(connectMap.getNeighbors("B")).toEqual(["D"]);
+    });
+
+    it("should find paths correctly", () => {
+        const connectMap = new ConnectMap();
+        connectMap.createPair("A", "B");
+        connectMap.createPair("B", "C");
+        connectMap.createPair("C", "D");
+        connectMap.createPair("A", "D");
+
+        const path1 = connectMap.findPath("A", "D");
+        expect(path1[0]).toBe("A");
+        expect(path1.at(-1)).toBe("D");
+        const path2 = connectMap.findPath("B", "D");
+        expect(path2[0]).toBe("B");
+        expect(path2.at(-1)).toBe("D");
+        const path3 = connectMap.findPath("C", "A");
+        expect(path3[0]).toBe("C");
+        expect(path3.at(-1)).toBe("A");
     });
 });
 

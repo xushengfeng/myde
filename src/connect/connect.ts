@@ -15,6 +15,7 @@ export type AnyTargetType = typeof AnyTarget;
 type MetaType = {
     targetId: TargetId[] | AnyTargetType;
     path: TargetId[];
+    pathHint?: { target: TargetId; path: TargetId[] };
 };
 
 export class Connect {
@@ -32,6 +33,9 @@ export class Connect {
     > = new Map();
     private cert: Map<string, { myPrivateKey: Uint8Array; myPublicKey: Uint8Array; remotePublicKey: Uint8Array }> =
         new Map();
+
+    private globalMapHint = new ConnectMap();
+
     private myId: PointDeviceId = crypto.randomUUID() as PointDeviceId;
     constructor(op: {
         id: string;
@@ -107,6 +111,13 @@ export class Connect {
             throw new Error(`Failed to connect to targetId: ${op.targetId}`);
         }
 
+        this.sendTo({
+            targetId: AnyTarget,
+            json: { serverName: "connect.connect", baseId: this.myId, connectId: op.targetId },
+        });
+        // todo 添加包括自己的广播省去一个重复书写
+        this.globalMapHint.createPair(this.myId, op.targetId);
+
         connect.on("data", (data: ArrayBuffer) => {
             // todo
             const { json, bins } = this.parse(data);
@@ -120,9 +131,37 @@ export class Connect {
                 if (meta.path.includes(myid)) return;
                 meta.path.push(myid);
                 const ndata = this.build(json, bins);
-                for (const [id] of this.connection) {
-                    if (id !== op.targetId) this.sendMessage({ targetId: id, message: ndata });
+                let nextId: PointDeviceId | null = null;
+                if (meta.pathHint) {
+                    const thisIndex = meta.pathHint.path.indexOf(myid);
+                    if (thisIndex >= 0) {
+                        nextId = meta.pathHint.path[thisIndex + 1] as unknown as PointDeviceId;
+                    }
                 }
+                for (const [id] of this.connection) {
+                    if (id !== op.targetId && (nextId === null || id === nextId))
+                        this.sendMessage({ targetId: id, message: ndata });
+                }
+            }
+        });
+        connect.on("disconnect", () => {
+            this.connection.delete(op.targetId);
+            this.sendTo({
+                targetId: AnyTarget,
+                json: { serverName: "connect.disconnect", baseId: this.myId, connectId: op.targetId },
+            });
+            this.globalMapHint.destroyPair(this.myId, op.targetId);
+        });
+        this.addHandler(({ json }) => {
+            if (json.serverName === "connect.connect") {
+                const baseId = json.baseId;
+                const connectId = json.connectId;
+                this.globalMapHint.createPair(baseId, connectId);
+            }
+            if (json.serverName === "connect.disconnect") {
+                const baseId = json.baseId;
+                const connectId = json.connectId;
+                this.globalMapHint.destroyPair(baseId, connectId);
             }
         });
     }
@@ -139,8 +178,6 @@ export class Connect {
         if (!conn) {
             throw new Error(`No connection for targetId: ${op.targetId}`);
         }
-
-        // console.log(`send ${this.myId}->${op.targetId}`);
 
         await conn.connect.sendBinary(op.message);
     }
@@ -167,16 +204,99 @@ export class Connect {
         };
     }
     async sendTo(op: { targetId: TargetId[] | AnyTargetType; json: any; bins?: ArrayBuffer[] }) {
-        // todo 寻路而不是遍历所有节点
-        const json = {
-            ...op.json,
-            _: {
-                targetId: op.targetId,
-                path: [this.myId],
-            },
-        };
-        await this.sendMessageToAll({ message: this.build(json, op.bins ?? []) });
+        if (op.targetId.length === 1) {
+            const targetId = op.targetId[0];
+            const path = this.globalMapHint.findPath(this.myId, targetId);
+            const json = {
+                ...op.json,
+                _: {
+                    targetId: op.targetId,
+                    path: [this.myId as unknown as TargetId],
+                    pathHint: { target: targetId, path },
+                } as MetaType,
+            };
+            const index = path.indexOf(this.myId);
+            if (index >= 0) {
+                const nextHop = path[index + 1];
+                if (!nextHop) {
+                    await this.sendMessageToAll({ message: this.build(json, op.bins ?? []) });
+                } else {
+                    await this.sendMessage({
+                        targetId: nextHop as PointDeviceId,
+                        message: this.build(json, op.bins ?? []),
+                    });
+                }
+            } else await this.sendMessageToAll({ message: this.build(json, op.bins ?? []) });
+        } else {
+            const json = {
+                ...op.json,
+                _: {
+                    targetId: op.targetId,
+                    path: [this.myId as unknown as TargetId],
+                } as MetaType,
+            };
+            await this.sendMessageToAll({ message: this.build(json, op.bins ?? []) });
+        }
     }
+}
+
+/** 路径规划 */
+export class ConnectMap {
+    private map: Map<string, Set<string>> = new Map();
+    createPair(a: string, b: string) {
+        const setA = this.map.get(a) || new Set();
+        setA.add(b);
+        this.map.set(a, setA);
+        const setB = this.map.get(b) || new Set();
+        setB.add(a);
+        this.map.set(b, setB);
+    }
+    destroyPair(a: string, b: string) {
+        const setA = this.map.get(a);
+        if (setA) {
+            setA.delete(b);
+            if (setA.size === 0) this.map.delete(a);
+        }
+        const setB = this.map.get(b);
+        if (setB) {
+            setB.delete(a);
+            if (setB.size === 0) this.map.delete(b);
+        }
+    }
+    getNeighbors(id: string): string[] {
+        return Array.from(this.map.get(id) || []);
+    }
+    findPath(from: string, to: string): string[] {
+        if (from === to) return [from];
+        const visited = new Set<string>([from]);
+        const parent = new Map<string, string>();
+        const queue: string[] = [from];
+        while (queue.length > 0) {
+            // biome-ignore lint/style/noNonNullAssertion: len>0
+            const current = queue.shift()!;
+            const neighbors = this.map.get(current) || new Set();
+            for (const neighbor of neighbors) {
+                if (visited.has(neighbor)) continue;
+                visited.add(neighbor);
+                parent.set(neighbor, current);
+                if (neighbor === to) {
+                    const path: string[] = [to];
+                    let node = to;
+                    while (parent.has(node)) {
+                        // biome-ignore lint/style/noNonNullAssertion: has
+                        node = parent.get(node)!;
+                        path.push(node);
+                    }
+                    return path.reverse();
+                }
+                queue.push(neighbor);
+            }
+        }
+        return [];
+    }
+    // todo 权重与智能规划
+    // todo 多目标规划
+    // todo 防止拥挤
 }
 
 export function buildMessage(json: any, bins?: ArrayBuffer[]): ArrayBuffer {
