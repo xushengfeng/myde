@@ -10,6 +10,13 @@ type PointDeviceId = string & { __label: "DeviceId" };
 /** 可达的id */
 type TargetId = string & { __label: "TargetId" };
 
+export const AnyTarget = "anytarget";
+export type AnyTargetType = typeof AnyTarget;
+type MetaType = {
+    targetId: TargetId[] | AnyTargetType;
+    path: TargetId[];
+};
+
 export class Connect {
     private adapter: () => SignalingAdapter;
 
@@ -104,17 +111,17 @@ export class Connect {
             // todo
             const { json, bins } = this.parse(data);
             if ("_" in json) {
-                if (json._.targetId === this.myId)
+                const meta = json._ as MetaType;
+                const myid = this.myId as unknown as TargetId;
+                if (meta.targetId === AnyTarget || meta.targetId.includes(myid))
                     for (const handler of this.messageHandlers) {
                         handler({ fromName: config.remoteDeviceName, json, bins });
                     }
-                else {
-                    if (json._.path.includes(this.myId)) return;
-                    json._.path.push(this.myId);
-                    const ndata = this.build(json, bins);
-                    for (const [id] of this.connection) {
-                        if (id !== op.targetId) this.sendMessage({ targetId: id, message: ndata });
-                    }
+                if (meta.path.includes(myid)) return;
+                meta.path.push(myid);
+                const ndata = this.build(json, bins);
+                for (const [id] of this.connection) {
+                    if (id !== op.targetId) this.sendMessage({ targetId: id, message: ndata });
                 }
             }
         });
@@ -132,6 +139,8 @@ export class Connect {
         if (!conn) {
             throw new Error(`No connection for targetId: ${op.targetId}`);
         }
+
+        // console.log(`send ${this.myId}->${op.targetId}`);
 
         await conn.connect.sendBinary(op.message);
     }
@@ -157,7 +166,7 @@ export class Connect {
             this.messageHandlers.delete(handler);
         };
     }
-    async sendTo(op: { targetId: TargetId; json: any; bins?: ArrayBuffer[] }) {
+    async sendTo(op: { targetId: TargetId[] | AnyTargetType; json: any; bins?: ArrayBuffer[] }) {
         // todo 寻路而不是遍历所有节点
         const json = {
             ...op.json,

@@ -1,6 +1,6 @@
 import { LoopbackAdapterManager } from "myde-remote-connect/loopback_adapter_manager";
 import { describe, expect, it } from "vitest";
-import { buildMessage, Connect, parseMessage } from "./connect";
+import { AnyTarget, buildMessage, Connect, parseMessage } from "./connect";
 
 async function buildMap(map: [p1: string, p2: string][]) {
     const adapterManager = new LoopbackAdapterManager();
@@ -92,12 +92,12 @@ const maps = {
 async function testConnection(a: Connect, b: Connect, aid: string, bid: string) {
     const p = Promise.withResolvers<string>();
     const clean = b.addHandler((args) => {
-        if (args.json._.targetId !== bid) return;
+        // if (args.json._.targetId !== bid) return;
         p.resolve(args.json.message);
     });
     const m = `hello from ${aid} to ${bid}`;
     await a.sendTo({
-        targetId: Connect.targetId(bid),
+        targetId: [Connect.targetId(bid)],
         json: { message: m },
     });
     const timeout = setTimeout(() => {
@@ -163,6 +163,71 @@ describe("connect", () => {
                 for (const [tid, tc] of map) {
                     if (id !== tid) await testConnection(c, tc, id, tid);
                 }
+            }
+        });
+    });
+    describe("广播", () => {
+        function testBroadcast(a: Connect, aid: string, map: Map<string, Connect>) {
+            const ps = Array.from(map.entries())
+                .filter(([id]) => id !== aid)
+                .map(([id, b]) => {
+                    const p = Promise.withResolvers<string>();
+                    const clean = b.addHandler((args) => {
+                        p.resolve(args.json.message);
+                    });
+                    const timeout = setTimeout(() => {
+                        p.reject(new Error(`${id} wait ${aid} but timeout`));
+                    }, 400);
+                    p.promise.finally(() => {
+                        clearTimeout(timeout);
+                    });
+                    return p.promise.finally(clean);
+                });
+            a.sendTo({
+                targetId: AnyTarget,
+                json: { message: `hello from ${aid} to any` },
+            });
+            return Promise.all(ps);
+        }
+        it("2点", async () => {
+            const map = maps[2];
+            expect(map.size).toBe(2);
+            for (const [id, c] of map) {
+                await testBroadcast(c, id, map);
+            }
+        });
+        it("3点串", async () => {
+            const map = maps["3-"];
+            expect(map.size).toBe(3);
+            for (const [id, c] of map) {
+                await testBroadcast(c, id, map);
+            }
+        });
+        it("3点环", async () => {
+            const map = maps["3o"];
+            expect(map.size).toBe(3);
+            for (const [id, c] of map) {
+                await testBroadcast(c, id, map);
+            }
+        });
+        it("4点立方", async () => {
+            const map = maps["4x"];
+            expect(map.size).toBe(4);
+            for (const [id, c] of map) {
+                await testBroadcast(c, id, map);
+            }
+        });
+        it("多束", async () => {
+            const map = maps["<>"];
+            expect(map.size).toBe(7);
+            for (const [id, c] of map) {
+                await testBroadcast(c, id, map);
+            }
+        });
+        it("多环", async () => {
+            const map = maps["-<>-<>-"];
+            for (const [id, c] of map) {
+                await testBroadcast(c, id, map);
             }
         });
     });
