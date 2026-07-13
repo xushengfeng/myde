@@ -337,6 +337,9 @@ export class Connect {
         });
         return p.promise.finally(() => clean());
     }
+    getGlobalMap(): [string, string][] {
+        return this.globalMapHint.exportPairs();
+    }
 }
 
 /** 路径规划 */

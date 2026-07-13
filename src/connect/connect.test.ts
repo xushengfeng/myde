@@ -2,6 +2,10 @@ import { LoopbackAdapterManager } from "myde-remote-connect/loopback_adapter_man
 import { describe, expect, it } from "vitest";
 import { AnyTarget, buildMessage, Connect, ConnectMap, parseMessage } from "./connect";
 
+async function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function buildMap(map: [p1: string, p2: string][]) {
     const adapterManager = new LoopbackAdapterManager();
     const ids = new Set<string>();
@@ -36,6 +40,7 @@ async function buildMap(map: [p1: string, p2: string][]) {
     for (const [p1, p2] of map) {
         await m.get(p1)?.connect({ targetId: Connect.pointDeviceId(p2) });
     }
+    await sleep(10); // 收到连接图信息
     return m;
 }
 
@@ -319,6 +324,62 @@ describe("connect", () => {
                 for (const [tid, tc] of map) {
                     if (id !== tid) await testCallback(c, tc, id, tid);
                 }
+            }
+        });
+    });
+    describe("连接全局图", () => {
+        it("2点", async () => {
+            const map = await maps[2]();
+            for (const [_, c] of map) {
+                const globalMap = c.getGlobalMap();
+                const allPoints = new Set(globalMap.flat());
+                expect(allPoints.size).toBe(map.size);
+                expect(globalMap.length).toBe(1);
+            }
+        });
+        it("3点串", async () => {
+            const map = await maps["3-"]();
+            for (const [_, c] of map) {
+                const globalMap = c.getGlobalMap();
+                const allPoints = new Set(globalMap.flat());
+                expect(allPoints.size).toBe(map.size);
+                expect(globalMap.length).toBe(2);
+            }
+        });
+        it("3点环", async () => {
+            const map = await maps["3o"]();
+            for (const [_, c] of map) {
+                const globalMap = c.getGlobalMap();
+                const allPoints = new Set(globalMap.flat());
+                expect(allPoints.size).toBe(map.size);
+                expect(globalMap.length).toBe(3);
+            }
+        });
+        it("4点立方", async () => {
+            const map = await maps["4x"]();
+            for (const [_, c] of map) {
+                const globalMap = c.getGlobalMap();
+                const allPoints = new Set(globalMap.flat());
+                expect(allPoints.size).toBe(map.size);
+                expect(globalMap.length).toBe(6);
+            }
+        });
+        it("多束", async () => {
+            const map = await maps["<>"]();
+            for (const [_, c] of map) {
+                const globalMap = c.getGlobalMap();
+                const allPoints = new Set(globalMap.flat());
+                expect(allPoints.size).toBe(map.size);
+                expect(globalMap.length).toBe(9);
+            }
+        });
+        it("多环", async () => {
+            const map = await maps["-<>-<>-"]();
+            for (const [_, c] of map) {
+                const globalMap = c.getGlobalMap();
+                const allPoints = new Set(globalMap.flat());
+                expect(allPoints.size).toBe(map.size);
+                expect(globalMap.length).toBe(15);
             }
         });
     });
