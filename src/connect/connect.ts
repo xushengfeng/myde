@@ -127,6 +127,51 @@ export class Connect {
                 this.globalMapHint.destroyPair(baseId, connectId);
             }
         });
+        this.addCallBackHandler(async ({ json }) => {
+            if (json.serverName === "connect.new") {
+                const connect = new SConnect(this.adapter());
+                const connectId = crypto.randomUUID();
+                await connect.init(connectId, json.pointId);
+                this.connectionConfig.set(json.sourceId, {
+                    from: Connect.pointId(connectId),
+                    to: json.pointId,
+                    remoteDeviceName: "unknown",
+                    cert: "",
+                });
+                const pin = connect.updatePIN();
+                connect.on("pairRequest", (rq) => {
+                    rq.waitForPairing().then((pair) => {
+                        // this.
+                    });
+                });
+                connect.on("connectRequest", (rq) => {
+                    const entry = Array.from(this.connectionConfig).find(([_, c]) => c.to === rq.remoteDeviceId);
+                    if (!entry) {
+                        throw new Error(`No connection config for pointId: ${rq.remoteDeviceId}`);
+                    }
+                    const [targetId, config] = entry;
+
+                    const cert = this.cert.get(config.cert);
+                    if (!cert) {
+                        rq.accept();
+                    } else
+                        rq.acceptWithCre({
+                            myPrivateKey: cert.myPrivateKey,
+                            myPublicKey: cert.myPublicKey,
+                            remotePublicKey: cert.remotePublicKey,
+                            createdAt: Date.now(),
+                        });
+
+                    this.connection.set(targetId, {
+                        connect,
+                        ready: true,
+                    });
+
+                    this.bindConnectEvent({ targetId, connect });
+                });
+                return { json: { connectId, pin }, bins: [] };
+            }
+        });
     }
 
     bindConnectEvent(op: { targetId: PointDeviceId; connect: SConnect }) {
@@ -181,6 +226,10 @@ export class Connect {
         if (r.success === false) {
             throw new Error(`Failed to connect to targetId: ${op.targetId}`);
         }
+        this.afterConnect({ targetId: op.targetId, connect });
+    }
+    private afterConnect(op: { targetId: PointDeviceId; connect: SConnect }) {
+        const connect = op.connect;
         this.connection.set(op.targetId, {
             connect,
             ready: true,
@@ -261,7 +310,8 @@ export class Connect {
             | { json: any; bins: ArrayBuffer[] }
             | undefined
             | Promise<{ json: any; bins: ArrayBuffer[] }>
-            | Promise<undefined>,
+            | Promise<undefined>
+            | Promise<{ json: any; bins: ArrayBuffer[] } | undefined>,
     ) {
         return this.addHandler(async (args) => {
             const result = await handler(args);
@@ -339,6 +389,43 @@ export class Connect {
     }
     getGlobalMap(): [string, string][] {
         return this.globalMapHint.exportPairs();
+    }
+    async connect2(op: { targetId: TargetId }) {
+        if (op.targetId === this.myId) return;
+        if (this.connection.has(op.targetId as PointDeviceId)) return;
+        if (this.connectionConfig.has(op.targetId as PointDeviceId)) {
+            await this.connect({ targetId: op.targetId as PointDeviceId });
+        } else {
+            const path = this.globalMapHint.findPath(this.myId, op.targetId);
+            if (path.length < 2) {
+                throw new Error(`No path to targetId: ${op.targetId}`);
+            }
+            const thisConnectId = crypto.randomUUID();
+            const targetConnect = await this.sendToAndReceive({
+                targetId: op.targetId,
+                json: { serverName: "connect.new", pointId: thisConnectId, sourceId: this.myId },
+            });
+            const [targetConnectId, pin] = [
+                targetConnect.json.connectId as PointDeviceId,
+                targetConnect.json.pin as string,
+            ];
+            const connect = new SConnect(this.adapter());
+            await connect.init(thisConnectId, targetConnectId);
+            this.connectionConfig.set(op.targetId as PointDeviceId, {
+                from: Connect.pointId(thisConnectId),
+                to: Connect.pointId(targetConnectId),
+                remoteDeviceName: "unknown",
+                cert: "",
+            });
+            const r = await connect.tryConnect();
+            if (r.success === false) {
+                const x = await connect.pairInit({ myDeviceId: thisConnectId, remoteDeviceId: targetConnectId });
+                x.inputOtherPin(pin);
+                const c = await x.waitForPairing();
+            } else {
+                this.afterConnect({ targetId: op.targetId as PointDeviceId, connect });
+            }
+        }
     }
 }
 

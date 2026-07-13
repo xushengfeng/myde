@@ -40,7 +40,7 @@ async function buildMap(map: [p1: string, p2: string][]) {
     for (const [p1, p2] of map) {
         await m.get(p1)?.connect({ targetId: Connect.pointDeviceId(p2) });
     }
-    await sleep(10); // 收到连接图信息
+    await sleep(50); // 收到连接图信息
     return m;
 }
 
@@ -380,6 +380,20 @@ describe("connect", () => {
                 const allPoints = new Set(globalMap.flat());
                 expect(allPoints.size).toBe(map.size);
                 expect(globalMap.length).toBe(15);
+            }
+        });
+    });
+    describe("介绍连接", () => {
+        it("不用认证渠道", async () => {
+            const map = await buildMap([
+                ["A", "B"],
+                ["B", "C"],
+            ]);
+            await map.get("A")?.connect2({ targetId: Connect.targetId("C") });
+            await sleep(10);
+            for (const [_, c] of map) {
+                const globalMap = c.getGlobalMap();
+                expect(globalMap).toContainEqual(["A", "C"]);
             }
         });
     });
