@@ -29,6 +29,7 @@ export class Connect {
         PointDeviceId,
         {
             connect: SConnect;
+            ready: boolean;
         }
     > = new Map();
     private cert: Map<string, { myPrivateKey: Uint8Array; myPublicKey: Uint8Array; remotePublicKey: Uint8Array }> =
@@ -76,48 +77,43 @@ export class Connect {
             await connect.init(c.from, c.to);
             this.connection.set(targetId, {
                 connect,
+                ready: false,
+            });
+            connect.on("connectRequest", (rq) => {
+                const entry = Array.from(this.connectionConfig).find(([_, c]) => c.to === rq.remoteDeviceId);
+                if (!entry) {
+                    throw new Error(`No connection config for pointId: ${rq.remoteDeviceId}`);
+                }
+                const [targetId, config] = entry;
+
+                // todo 交互
+                const cert = this.cert.get(config.cert);
+                if (!cert) {
+                    rq.accept();
+                } else
+                    rq.acceptWithCre({
+                        myPrivateKey: cert.myPrivateKey,
+                        myPublicKey: cert.myPublicKey,
+                        remotePublicKey: cert.remotePublicKey,
+                        createdAt: Date.now(),
+                    });
+
+                this.connection.set(targetId, {
+                    connect,
+                    ready: true,
+                });
+
+                this.bindConnectEvent({ targetId, connect });
             });
         }
     }
 
-    async connect(op: { targetId: PointDeviceId }) {
+    bindConnectEvent(op: { targetId: PointDeviceId; connect: SConnect }) {
         const config = this.connectionConfig.get(op.targetId);
         if (!config) {
             throw new Error(`No connection config for targetId: ${op.targetId}`);
         }
-        const connect = this.connection.get(op.targetId)?.connect;
-        if (!connect) {
-            throw new Error(`No connection for targetId: ${op.targetId}`);
-        }
-        connect.on("connectRequest", (rq) => {
-            // todo 交互
-            const cert = this.cert.get(config.cert);
-            if (!cert) {
-                console.error(`No cert for ${config.cert}`);
-                rq.reject();
-                return;
-            }
-            rq.accept({
-                myPrivateKey: cert.myPrivateKey,
-                myPublicKey: cert.myPublicKey,
-                remotePublicKey: cert.remotePublicKey,
-                createdAt: Date.now(),
-                myDeviceId: this.myId,
-                remoteDeviceId: op.targetId,
-            });
-        });
-        const r = await connect.tryConnect();
-        if (r.success === false) {
-            throw new Error(`Failed to connect to targetId: ${op.targetId}`);
-        }
-
-        this.sendTo({
-            targetId: AnyTarget,
-            json: { serverName: "connect.connect", baseId: this.myId, connectId: op.targetId },
-        });
-        // todo 添加包括自己的广播省去一个重复书写
-        this.globalMapHint.createPair(this.myId, op.targetId);
-
+        const connect = op.connect;
         connect.on("data", (data: ArrayBuffer) => {
             // todo
             const { json, bins } = this.parse(data);
@@ -138,7 +134,7 @@ export class Connect {
                         nextId = meta.pathHint.path[thisIndex + 1] as unknown as PointDeviceId;
                     }
                 }
-                for (const [id] of this.connection) {
+                for (const id of this.avalableConnections()) {
                     if (id !== op.targetId && (nextId === null || id === nextId))
                         this.sendMessage({ targetId: id, message: ndata });
                 }
@@ -152,6 +148,31 @@ export class Connect {
             });
             this.globalMapHint.destroyPair(this.myId, op.targetId);
         });
+    }
+
+    async connect(op: { targetId: PointDeviceId }) {
+        const connect = this.connection.get(op.targetId)?.connect;
+        if (!connect) {
+            throw new Error(`No connection for targetId: ${op.targetId}`);
+        }
+
+        const r = await connect.tryConnect();
+        if (r.success === false) {
+            throw new Error(`Failed to connect to targetId: ${op.targetId}`);
+        }
+        this.connection.set(op.targetId, {
+            connect,
+            ready: true,
+        });
+        this.sendTo({
+            targetId: AnyTarget,
+            json: { serverName: "connect.connect", baseId: this.myId, connectId: op.targetId },
+        });
+        // todo 添加包括自己的广播省去一个重复书写
+        this.globalMapHint.createPair(this.myId, op.targetId);
+
+        this.bindConnectEvent({ targetId: op.targetId, connect });
+
         this.addHandler(({ json }) => {
             if (json.serverName === "connect.connect") {
                 const baseId = json.baseId;
@@ -178,11 +199,23 @@ export class Connect {
         if (!conn) {
             throw new Error(`No connection for targetId: ${op.targetId}`);
         }
+        if (!conn.ready) {
+            return;
+        }
 
         await conn.connect.sendBinary(op.message);
     }
+    private avalableConnections(): PointDeviceId[] {
+        const ids: PointDeviceId[] = [];
+        for (const [id, conn] of this.connection) {
+            if (conn.ready) {
+                ids.push(id);
+            }
+        }
+        return ids;
+    }
     private async sendMessageToAll(op: { message: ArrayBuffer }) {
-        for (const [id] of this.connection) {
+        for (const id of this.avalableConnections()) {
             await this.sendMessage({ targetId: id, message: op.message });
         }
     }

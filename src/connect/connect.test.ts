@@ -35,7 +35,6 @@ async function buildMap(map: [p1: string, p2: string][]) {
     }
     for (const [p1, p2] of map) {
         await m.get(p1)?.connect({ targetId: Connect.pointDeviceId(p2) });
-        await m.get(p2)?.connect({ targetId: Connect.pointDeviceId(p1) });
     }
     return m;
 }

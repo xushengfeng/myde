@@ -24,8 +24,8 @@ importers:
         specifier: ^0.1.0
         version: 0.1.0
       myde-remote-connect:
-        specifier: ^0.0.3
-        version: 0.0.3
+        specifier: ^0.0.5
+        version: 0.0.5
       myde-unix-socket:
         specifier: ^0.2.3
         version: 0.2.3
@@ -1571,8 +1571,8 @@ packages:
   myde-pam-client@0.1.0:
     resolution: {integrity: sha512-6xzfSvs/L+h0UARuqx23B8TWnj+iOblRUSpTPR/TiMVO/a30CysZaE0XVHIXOnuUIpqv+4QjSK2ZXrgSYubWjA==}
 
-  myde-remote-connect@0.0.3:
-    resolution: {integrity: sha512-pVaOPnJb+Wr7XouvJctUF7VX+DhPdBd1mYFmX1DJbE4gTJuz8DHUxG53HBgtRwiuMyN2b2c6wyolj4f/FJgtPw==}
+  myde-remote-connect@0.0.5:
+    resolution: {integrity: sha512-AcnXxoXZZnUFxBaSD25MmAvJgvLWhD0avSrNxaQ6tSTuGE/n0cU5t3lz/MtXP81hoQCgSjjxmjxBxFpcv8XlkQ==}
 
   myde-unix-socket@0.2.3:
     resolution: {integrity: sha512-UYn5p54Jq+j8T6UJRy11H2jfYIFZXE4z+yHrd+sRMAWVX909SfO/RLkkAwEbVW9yLhl+Y3whPU7b0qQkJ0CRLQ==}
@@ -3545,7 +3545,7 @@ snapshots:
 
   myde-pam-client@0.1.0: {}
 
-  myde-remote-connect@0.0.3:
+  myde-remote-connect@0.0.5:
     dependencies:
       peerjs: 1.5.5
 
