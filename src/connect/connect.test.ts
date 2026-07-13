@@ -41,59 +41,64 @@ async function buildMap(map: [p1: string, p2: string][]) {
 }
 
 const maps = {
-    2: await buildMap([["A", "B"]]),
-    "3-": await buildMap([
-        ["A", "B"],
-        ["B", "C"],
-    ]),
-    "3o": await buildMap([
-        ["A", "B"],
-        ["B", "C"],
-        ["C", "A"],
-    ]),
-    "4x": await buildMap([
-        ["A", "B"],
-        ["B", "C"],
-        ["C", "D"],
-        ["D", "A"],
-        ["A", "C"],
-        ["B", "D"],
-    ]),
-    "<>": await buildMap([
-        ["A", "B"],
-        ["B", "C"],
-        ["B", "D"],
-        ["B", "E"],
-        ["B", "F"],
-        ["C", "G"],
-        ["D", "G"],
-        ["E", "G"],
-        ["F", "G"],
-    ]),
-    "-<>-<>-": await buildMap([
-        ["A", "B"],
-        ["B", "C1"],
-        ["C1", "D"],
-        ["B", "C2"],
-        ["C2", "D"],
-        ["D", "C3"],
-        ["C3", "E"],
-        ["D", "C4"],
-        ["C4", "E"],
-        ["E", "F"],
-        ["F", "C5"],
-        ["C5", "G"],
-        ["F", "C6"],
-        ["C6", "G"],
-        ["G", "H"],
-    ]),
+    2: () => buildMap([["A", "B"]]),
+    "3-": () =>
+        buildMap([
+            ["A", "B"],
+            ["B", "C"],
+        ]),
+    "3o": () =>
+        buildMap([
+            ["A", "B"],
+            ["B", "C"],
+            ["C", "A"],
+        ]),
+    "4x": () =>
+        buildMap([
+            ["A", "B"],
+            ["B", "C"],
+            ["C", "D"],
+            ["D", "A"],
+            ["A", "C"],
+            ["B", "D"],
+        ]),
+    "<>": () =>
+        buildMap([
+            ["A", "B"],
+            ["B", "C"],
+            ["B", "D"],
+            ["B", "E"],
+            ["B", "F"],
+            ["C", "G"],
+            ["D", "G"],
+            ["E", "G"],
+            ["F", "G"],
+        ]),
+    "-<>-<>-": () =>
+        buildMap([
+            ["A", "B"],
+            ["B", "C1"],
+            ["C1", "D"],
+            ["B", "C2"],
+            ["C2", "D"],
+            ["D", "C3"],
+            ["C3", "E"],
+            ["D", "C4"],
+            ["C4", "E"],
+            ["E", "F"],
+            ["F", "C5"],
+            ["C5", "G"],
+            ["F", "C6"],
+            ["C6", "G"],
+            ["G", "H"],
+        ]),
 };
 
 async function testConnection(a: Connect, b: Connect, aid: string, bid: string) {
     const p = Promise.withResolvers<string>();
     const clean = b.addHandler((args) => {
         // if (args.json._.targetId !== bid) return;
-        p.resolve(args.json.message);
+        if (args.json.message) p.resolve(args.json.message);
     });
     const m = `hello from ${aid} to ${bid}`;
     await a.sendTo({
@@ -113,7 +118,7 @@ async function testConnection(a: Connect, b: Connect, aid: string, bid: string) 
 describe("connect", () => {
     describe("发送消息到指定目标，不限直连", () => {
         it("2点", async () => {
-            const map = maps[2];
+            const map = await maps[2]();
             expect(map.size).toBe(2);
             for (const [id, c] of map) {
                 for (const [tid, tc] of map) {
@@ -122,7 +127,7 @@ describe("connect", () => {
             }
         });
         it("3点串", async () => {
-            const map = maps["3-"];
+            const map = await maps["3-"]();
             expect(map.size).toBe(3);
             for (const [id, c] of map) {
                 for (const [tid, tc] of map) {
@@ -131,7 +136,7 @@ describe("connect", () => {
             }
         });
         it("3点环", async () => {
-            const map = maps["3o"];
+            const map = await maps["3o"]();
             expect(map.size).toBe(3);
             for (const [id, c] of map) {
                 for (const [tid, tc] of map) {
@@ -140,7 +145,7 @@ describe("connect", () => {
             }
         });
         it("4点立方", async () => {
-            const map = maps["4x"];
+            const map = await maps["4x"]();
             expect(map.size).toBe(4);
             for (const [id, c] of map) {
                 for (const [tid, tc] of map) {
@@ -149,7 +154,7 @@ describe("connect", () => {
             }
         });
         it("多束", async () => {
-            const map = maps["<>"];
+            const map = await maps["<>"]();
             expect(map.size).toBe(7);
             for (const [id, c] of map) {
                 for (const [tid, tc] of map) {
@@ -158,7 +163,7 @@ describe("connect", () => {
             }
         });
         it("多环", async () => {
-            const map = maps["-<>-<>-"];
+            const map = await maps["-<>-<>-"]();
             for (const [id, c] of map) {
                 for (const [tid, tc] of map) {
                     if (id !== tid) await testConnection(c, tc, id, tid);
@@ -190,42 +195,42 @@ describe("connect", () => {
             return Promise.all(ps);
         }
         it("2点", async () => {
-            const map = maps[2];
+            const map = await maps[2]();
             expect(map.size).toBe(2);
             for (const [id, c] of map) {
                 await testBroadcast(c, id, map);
             }
         });
         it("3点串", async () => {
-            const map = maps["3-"];
+            const map = await maps["3-"]();
             expect(map.size).toBe(3);
             for (const [id, c] of map) {
                 await testBroadcast(c, id, map);
             }
         });
         it("3点环", async () => {
-            const map = maps["3o"];
+            const map = await maps["3o"]();
             expect(map.size).toBe(3);
             for (const [id, c] of map) {
                 await testBroadcast(c, id, map);
             }
         });
         it("4点立方", async () => {
-            const map = maps["4x"];
+            const map = await maps["4x"]();
             expect(map.size).toBe(4);
             for (const [id, c] of map) {
                 await testBroadcast(c, id, map);
             }
         });
         it("多束", async () => {
-            const map = maps["<>"];
+            const map = await maps["<>"]();
             expect(map.size).toBe(7);
             for (const [id, c] of map) {
                 await testBroadcast(c, id, map);
             }
         });
         it("多环", async () => {
-            const map = maps["-<>-<>-"];
+            const map = await maps["-<>-<>-"]();
             for (const [id, c] of map) {
                 await testBroadcast(c, id, map);
             }
