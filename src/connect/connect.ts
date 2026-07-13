@@ -5,10 +5,10 @@ const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
 type PointId = string & { __label: "PointId" };
-/** 直连的id */
-type PointDeviceId = string & { __label: "DeviceId" };
 /** 可达的id */
 type TargetId = string & { __label: "TargetId" };
+/** 直连的id */
+type PointDeviceId = TargetId & { isPoint: true };
 
 export const AnyTarget = "anytarget";
 export type AnyTargetType = typeof AnyTarget;
@@ -138,7 +138,7 @@ export class Connect {
             const { json, bins } = this.parse(data);
             if ("_" in json) {
                 const meta = json._ as MetaType;
-                const myid = this.myId as unknown as TargetId;
+                const myid = this.myId;
                 if (meta.targetId === AnyTarget || meta.targetId.includes(myid))
                     for (const handler of this.messageHandlers) {
                         handler({ fromName: config.remoteDeviceName, json, bins });
@@ -150,7 +150,7 @@ export class Connect {
                 if (meta.pathHint) {
                     const thisIndex = meta.pathHint.path.indexOf(myid);
                     if (thisIndex >= 0) {
-                        nextId = meta.pathHint.path[thisIndex + 1] as unknown as PointDeviceId;
+                        nextId = meta.pathHint.path[thisIndex + 1] as PointDeviceId;
                     }
                 }
                 for (const id of this.avalableConnections()) {
@@ -191,7 +191,7 @@ export class Connect {
         this.globalMapHint.createPair(this.myId, op.targetId);
         // 新节点需要了解已有的网络结构
         this.sendTo({
-            targetId: [op.targetId as unknown as TargetId],
+            targetId: [op.targetId],
             json: {
                 serverName: "connect.globalMap",
                 pairs: this.globalMapHint.exportPairs(),
@@ -253,12 +253,12 @@ export class Connect {
     async sendTo(op: { targetId: TargetId[] | AnyTargetType; json: any; bins?: ArrayBuffer[] }) {
         if (op.targetId.length === 1) {
             const targetId = op.targetId[0];
-            const path = this.globalMapHint.findPath(this.myId, targetId);
+            const path = this.globalMapHint.findPath(this.myId, targetId) as TargetId[];
             const json = {
                 ...op.json,
                 _: {
                     targetId: op.targetId,
-                    path: [this.myId as unknown as TargetId],
+                    path: [this.myId],
                     pathHint: { target: targetId, path },
                 } as MetaType,
             };
@@ -278,7 +278,7 @@ export class Connect {
                 ...op.json,
                 _: {
                     targetId: op.targetId,
-                    path: [this.myId as unknown as TargetId],
+                    path: [this.myId],
                 } as MetaType,
             };
             await this.sendMessageToAll({ message: this.build(json, op.bins ?? []) });
