@@ -235,6 +235,93 @@ describe("connect", () => {
             }
         });
     });
+    describe("回调", () => {
+        async function testCallback(a: Connect, b: Connect, aid: string, bid: string) {
+            const clean = b.addCallBackHandler((args) => {
+                if (args.json.action === "reverse") {
+                    return {
+                        json: { message: args.json.message.split("").reverse().join("") },
+                        bins: [],
+                    };
+                } else if (args.json.action === "multiply") {
+                    return {
+                        json: { message: args.json.message.repeat(2) },
+                        bins: [],
+                    };
+                }
+            });
+            await a.sendTo({
+                targetId: [Connect.targetId(bid)],
+                json: { message: `other` },
+            });
+            const m = a.sendToAndReceive({
+                targetId: Connect.targetId(bid),
+                json: { action: "reverse", message: `hello from ${aid} to ${bid}` },
+            });
+            const m2 = a.sendToAndReceive({
+                targetId: Connect.targetId(bid),
+                json: { action: "multiply", message: `hello from ${aid} to ${bid}` },
+            });
+            const [rm, rm2] = await Promise.all([m, m2]);
+            clean();
+
+            expect(rm.json.message).toEqual(`hello from ${aid} to ${bid}`.split("").reverse().join(""));
+            expect(rm2.json.message).toEqual(`hello from ${aid} to ${bid}`.repeat(2));
+        }
+        it("2点", async () => {
+            const map = await maps[2]();
+            expect(map.size).toBe(2);
+            for (const [id, c] of map) {
+                for (const [tid, tc] of map) {
+                    if (id !== tid) await testCallback(c, tc, id, tid);
+                }
+            }
+        });
+        it("3点串", async () => {
+            const map = await maps["3-"]();
+            expect(map.size).toBe(3);
+            for (const [id, c] of map) {
+                for (const [tid, tc] of map) {
+                    if (id !== tid) await testCallback(c, tc, id, tid);
+                }
+            }
+        });
+        it("3点环", async () => {
+            const map = await maps["3o"]();
+            expect(map.size).toBe(3);
+            for (const [id, c] of map) {
+                for (const [tid, tc] of map) {
+                    if (id !== tid) await testCallback(c, tc, id, tid);
+                }
+            }
+        });
+        it("4点立方", async () => {
+            const map = await maps["4x"]();
+            expect(map.size).toBe(4);
+            for (const [id, c] of map) {
+                for (const [tid, tc] of map) {
+                    if (id !== tid) await testCallback(c, tc, id, tid);
+                }
+            }
+        });
+        it("多束", async () => {
+            const map = await maps["<>"]();
+            expect(map.size).toBe(7);
+            for (const [id, c] of map) {
+                for (const [tid, tc] of map) {
+                    if (id !== tid) await testCallback(c, tc, id, tid);
+                }
+            }
+        });
+        it("多环", async () => {
+            const map = await maps["-<>-<>-"]();
+            for (const [id, c] of map) {
+                for (const [tid, tc] of map) {
+                    if (id !== tid) await testCallback(c, tc, id, tid);
+                }
+            }
+        });
+    });
 });
 
 describe("connect map", () => {

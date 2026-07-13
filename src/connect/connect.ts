@@ -16,6 +16,8 @@ type MetaType = {
     targetId: TargetId[] | AnyTargetType;
     path: TargetId[];
     pathHint?: { target: TargetId; path: TargetId[] };
+    sourceId?: TargetId;
+    messageId?: string;
 };
 
 export class Connect {
@@ -250,6 +252,35 @@ export class Connect {
             this.messageHandlers.delete(handler);
         };
     }
+    addCallBackHandler(
+        handler: (args: {
+            fromName: string;
+            json: any;
+            bins: ArrayBuffer[];
+        }) =>
+            | { json: any; bins: ArrayBuffer[] }
+            | undefined
+            | Promise<{ json: any; bins: ArrayBuffer[] }>
+            | Promise<undefined>,
+    ) {
+        return this.addHandler(async (args) => {
+            const result = await handler(args);
+            if (!result) return;
+            const meta = args.json._ as MetaType;
+            if (!meta.messageId) {
+                console.warn("No messageId in meta, cannot send response");
+                return;
+            }
+            if (!meta.sourceId) {
+                console.warn("No sourceId in meta, cannot send response");
+                return;
+            }
+            result.json._ = {
+                messageId: meta.messageId,
+            };
+            this.sendTo({ targetId: [meta.sourceId], json: result.json, bins: result.bins });
+        });
+    }
     async sendTo(op: { targetId: TargetId[] | AnyTargetType; json: any; bins?: ArrayBuffer[] }) {
         if (op.targetId.length === 1) {
             const targetId = op.targetId[0];
@@ -257,6 +288,7 @@ export class Connect {
             const json = {
                 ...op.json,
                 _: {
+                    ...op.json._,
                     targetId: op.targetId,
                     path: [this.myId],
                     pathHint: { target: targetId, path },
@@ -277,12 +309,33 @@ export class Connect {
             const json = {
                 ...op.json,
                 _: {
+                    ...op.json._,
                     targetId: op.targetId,
                     path: [this.myId],
                 } as MetaType,
             };
             await this.sendMessageToAll({ message: this.build(json, op.bins ?? []) });
         }
+    }
+    async sendToAndReceive(op: {
+        targetId: TargetId;
+        json: any;
+        bins?: ArrayBuffer[];
+    }): Promise<{ json: any; bins: ArrayBuffer[] }> {
+        const messageId = crypto.randomUUID();
+        this.sendTo({
+            targetId: [op.targetId],
+            json: { ...op.json, _: { ...op.json._, messageId, sourceId: this.myId } },
+            bins: op.bins,
+        });
+        const p = Promise.withResolvers<{ json: any; bins: ArrayBuffer[] }>();
+        const clean = this.addHandler((args) => {
+            const meta = args.json._ as MetaType;
+            if (meta.messageId === messageId) {
+                p.resolve({ json: args.json, bins: args.bins });
+            }
+        });
+        return p.promise.finally(() => clean());
     }
 }
 
