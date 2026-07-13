@@ -106,6 +106,25 @@ export class Connect {
                 this.bindConnectEvent({ targetId, connect });
             });
         }
+
+        this.addHandler(({ json }) => {
+            if (json.serverName === "connect.connect") {
+                const baseId = json.baseId;
+                const connectId = json.connectId;
+                this.globalMapHint.createPair(baseId, connectId);
+            }
+            if (json.serverName === "connect.globalMap") {
+                const pairs: [string, string][] = json.pairs;
+                for (const [a, b] of pairs) {
+                    this.globalMapHint.createPair(a, b);
+                }
+            }
+            if (json.serverName === "connect.disconnect") {
+                const baseId = json.baseId;
+                const connectId = json.connectId;
+                this.globalMapHint.destroyPair(baseId, connectId);
+            }
+        });
     }
 
     bindConnectEvent(op: { targetId: PointDeviceId; connect: SConnect }) {
@@ -170,21 +189,16 @@ export class Connect {
         });
         // todo 添加包括自己的广播省去一个重复书写
         this.globalMapHint.createPair(this.myId, op.targetId);
+        // 新节点需要了解已有的网络结构
+        this.sendTo({
+            targetId: [op.targetId as unknown as TargetId],
+            json: {
+                serverName: "connect.globalMap",
+                pairs: this.globalMapHint.exportPairs(),
+            },
+        });
 
         this.bindConnectEvent({ targetId: op.targetId, connect });
-
-        this.addHandler(({ json }) => {
-            if (json.serverName === "connect.connect") {
-                const baseId = json.baseId;
-                const connectId = json.connectId;
-                this.globalMapHint.createPair(baseId, connectId);
-            }
-            if (json.serverName === "connect.disconnect") {
-                const baseId = json.baseId;
-                const connectId = json.connectId;
-                this.globalMapHint.destroyPair(baseId, connectId);
-            }
-        });
     }
     async disconnect(op: { targetId: PointDeviceId }) {
         const connect = this.connection.get(op.targetId)?.connect;
@@ -249,17 +263,16 @@ export class Connect {
                 } as MetaType,
             };
             const index = path.indexOf(this.myId);
-            if (index >= 0) {
-                const nextHop = path[index + 1];
-                if (!nextHop) {
-                    await this.sendMessageToAll({ message: this.build(json, op.bins ?? []) });
-                } else {
-                    await this.sendMessage({
-                        targetId: nextHop as PointDeviceId,
-                        message: this.build(json, op.bins ?? []),
-                    });
-                }
-            } else await this.sendMessageToAll({ message: this.build(json, op.bins ?? []) });
+            const nextHop = path[index + 1];
+            if (index >= 0 && nextHop) {
+                await this.sendMessage({
+                    targetId: nextHop as PointDeviceId,
+                    message: this.build(json, op.bins ?? []),
+                });
+            } else {
+                console.warn(`No next hop found for targetId: ${targetId}`);
+                await this.sendMessageToAll({ message: this.build(json, op.bins ?? []) });
+            }
         } else {
             const json = {
                 ...op.json,
@@ -295,6 +308,17 @@ export class ConnectMap {
             setB.delete(a);
             if (setB.size === 0) this.map.delete(b);
         }
+    }
+    exportPairs(): [string, string][] {
+        const pairs: [string, string][] = [];
+        for (const [a, neighbors] of this.map) {
+            for (const b of neighbors) {
+                if (a < b) {
+                    pairs.push([a, b]);
+                }
+            }
+        }
+        return pairs;
     }
     getNeighbors(id: string): string[] {
         return Array.from(this.map.get(id) || []);
