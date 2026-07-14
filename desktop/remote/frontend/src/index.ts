@@ -1,5 +1,5 @@
-import { SConnect } from "myde-remote-connect";
 import { PeerjsAdapter } from "myde-remote-connect/peerjs_adapter";
+import { Connect } from "../../../../src/connect/connect";
 
 interface ServerMsg {
     type: string;
@@ -29,9 +29,8 @@ function getOrCreateDeviceId(): string {
 }
 
 class App {
-    private connect: SConnect;
+    private connect: Connect;
     private myDeviceId: string;
-    private myPin = "";
     private connected = false;
     private focusedToplevelId: string | null = null;
 
@@ -41,10 +40,14 @@ class App {
 
     constructor() {
         this.myDeviceId = getOrCreateDeviceId();
-        this.connect = new SConnect(new PeerjsAdapter());
+        this.connect = new Connect({ id: this.myDeviceId, adapter: () => new PeerjsAdapter() });
         this.buildUI();
         this.initConnect();
         this.setupGlobalKeys();
+    }
+
+    private buildM(data: object) {
+        return { ...data, serverName: "displayServer" };
     }
 
     // ==================== UI ====================
@@ -121,7 +124,10 @@ class App {
         const run = () => {
             const inp = document.getElementById("cmd") as HTMLInputElement;
             if (inp.value.trim()) {
-                this.connect.send(JSON.stringify({ type: "runApp", command: inp.value.trim() }));
+                this.connect.sendTo({
+                    targetId: "anytarget",
+                    json: this.buildM({ type: "runApp", command: inp.value.trim() }),
+                });
                 inp.value = "";
             }
         };
@@ -140,19 +146,16 @@ class App {
     // ==================== Connect ====================
 
     private async initConnect() {
-        await this.connect.init(this.myDeviceId);
-        this.myPin = this.connect.updatePIN();
+        await this.connect.init();
         document.getElementById("my-id")!.textContent = this.myDeviceId;
-        document.getElementById("my-pin")!.textContent = this.myPin;
     }
 
     private async connectToServer(remoteId: string, remotePin: string) {
-        const p = await this.connect.pairInit({ myDeviceId: this.myDeviceId, remoteDeviceId: remoteId });
-        this.myPin = p.pin;
-        document.getElementById("my-pin")!.textContent = this.myPin;
-        p.inputOtherPin(remotePin);
+        const x = await this.connect.startPairing();
+        const xx = await x.connect(remoteId);
+        xx.inputOtherPin(remotePin);
         try {
-            await p.waitForPairing();
+            await xx.waitForPair();
             this.connected = true;
             this.setStatus("Connected", true);
             document.getElementById("conn")!.classList.add("collapsed");
@@ -164,49 +167,39 @@ class App {
     }
 
     private onConnected() {
-        this.connect.send(JSON.stringify({ type: "register", clientType: "launcher" }));
-        this.connect.on("data", (bin) => this.onServerMsg(bin));
-        this.connect.on("disconnect", () => {
-            this.connected = false;
-            this.setStatus("Disconnected", false);
-            document.getElementById("conn")!.classList.remove("collapsed");
-            setTimeout(() => {
-                const id = (document.getElementById("rid") as HTMLInputElement).value;
-                const pin = (document.getElementById("rpin") as HTMLInputElement).value;
-                if (id && pin) this.connectToServer(id, pin);
-            }, 3000);
-        });
-        this.connect.on("error", (e) => {
-            console.error(e);
-            this.setStatus("Error", false);
-        });
+        this.connect.addHandler((args) => this.onServerMsg(args));
+        // this.connect.on("data", (bin) => this.onServerMsg(bin));
+        // this.connect.on("disconnect", () => {
+        //     this.connected = false;
+        //     this.setStatus("Disconnected", false);
+        //     document.getElementById("conn")!.classList.remove("collapsed");
+        //     setTimeout(() => {
+        //         const id = (document.getElementById("rid") as HTMLInputElement).value;
+        //         const pin = (document.getElementById("rpin") as HTMLInputElement).value;
+        //         if (id && pin) this.connectToServer(id, pin);
+        //     }, 3000);
+        // });
+        // this.connect.on("error", (e) => {
+        //     console.error(e);
+        //     this.setStatus("Error", false);
+        // });
 
         // 重连恢复：为已有窗口请求状态
         for (const tid of this.toplevelEls.keys()) {
-            this.connect.send(JSON.stringify({ type: "requestToplevelState", toplevelId: tid }));
+            this.connect.sendTo({
+                targetId: "anytarget",
+                json: this.buildM({ type: "requestToplevelState", toplevelId: tid }),
+            });
         }
     }
 
     // ==================== Server messages ====================
 
-    private onServerMsg(raw: ArrayBuffer) {
-        console.log(raw);
-
-        const view = new DataView(raw, 0, raw.byteLength);
-        const jsonLen = view.getUint32(0, true);
-        const jsonStr = new TextDecoder().decode(raw.slice(4, 4 + jsonLen));
-        let restBinData = raw.slice(4 + jsonLen); // 余下的部分是二进制数据
-        const bindata: Uint8Array[] = [];
-        while (restBinData.byteLength > 0) {
-            const len = new DataView(restBinData, 0, 4).getUint32(0, true);
-            const chunk = restBinData.slice(4, 4 + len);
-            bindata.push(new Uint8Array(chunk));
-            restBinData = restBinData.slice(4 + len);
-        }
-        console.log(jsonStr, bindata);
-
+    private onServerMsg(args: { fromName: string; json: any; bins: ArrayBuffer[] }) {
+        console.log(args);
+        const bindata = args.bins;
         try {
-            const m: ServerMsg = JSON.parse(jsonStr);
+            const m: ServerMsg = args.json;
             switch (m.type) {
                 case "toplevelList":
                     if (m.toplevels) {
@@ -229,7 +222,7 @@ class App {
                     break;
                 case "canvas":
                     if (m.canvasId && m.width && m.height && bindata[0])
-                        this.updateCanvas(m.canvasId, m.width, m.height, bindata[0]);
+                        this.updateCanvas(m.canvasId, m.width, m.height, new Uint8Array(bindata[0]));
                     break;
                 case "destroyCanvas":
                     if (m.canvasId) this.destroyCanvas(m.canvasId);
@@ -267,7 +260,7 @@ class App {
         tile.className = "tile";
         tile.innerHTML = `<div class="bar"><span>${tid.slice(0, 12)}…</span><button>×</button></div><div class="carea"></div>`;
         tile.querySelector("button")!.onclick = () =>
-            this.connect.send(JSON.stringify({ type: "closeWindow", toplevelId: tid }));
+            this.connect.sendTo({ targetId: "anytarget", json: this.buildM({ type: "closeWindow", toplevelId: tid }) });
         tile.onpointerdown = () => {
             this.focusedToplevelId = tid;
             for (const [id, t] of this.toplevelEls) t.classList.toggle("active", id === tid);
@@ -277,7 +270,10 @@ class App {
         document.getElementById("wins")!.appendChild(tile);
 
         if (this.connected) {
-            this.connect.send(JSON.stringify({ type: "requestToplevelState", toplevelId: tid }));
+            this.connect.sendTo({
+                targetId: "anytarget",
+                json: this.buildM({ type: "requestToplevelState", toplevelId: tid }),
+            });
         }
     }
 
@@ -394,7 +390,7 @@ class App {
     private setupTileInput(area: HTMLElement, tid: string) {
         const send = (ev: any) => {
             ev.toplevelId = tid;
-            this.connect.send(JSON.stringify({ type: "inputEvent", event: ev }));
+            this.connect.sendTo({ targetId: "anytarget", json: this.buildM({ type: "inputEvent", event: ev }) });
         };
         const rel = (e: PointerEvent | WheelEvent) => {
             const r = area.getBoundingClientRect();
@@ -426,21 +422,23 @@ class App {
     private setupGlobalKeys() {
         document.addEventListener("keydown", (e) => {
             if (!this.connected || !this.focusedToplevelId) return;
-            this.connect.send(
-                JSON.stringify({
+            this.connect.sendTo({
+                targetId: "anytarget",
+                json: this.buildM({
                     type: "inputEvent",
                     event: { type: "keydown", code: e.code, key: e.key, toplevelId: this.focusedToplevelId },
                 }),
-            );
+            });
         });
         document.addEventListener("keyup", (e) => {
             if (!this.connected || !this.focusedToplevelId) return;
-            this.connect.send(
-                JSON.stringify({
+            this.connect.sendTo({
+                targetId: "anytarget",
+                json: this.buildM({
                     type: "inputEvent",
                     event: { type: "keyup", code: e.code, key: e.key, toplevelId: this.focusedToplevelId },
                 }),
-            );
+            });
         });
     }
 }

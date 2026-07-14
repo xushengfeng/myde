@@ -1,5 +1,5 @@
-import type { renderTools, renderToolsOn } from "../../src/view/render_tools";
-import type { PeerManager } from "./server";
+import type { Connect } from "../../../src/connect/connect";
+import type { renderTools, renderToolsOn } from "../../../src/wayland/render_tools";
 
 interface CanvasState {
     canvas: OffscreenCanvas;
@@ -31,9 +31,9 @@ export class RemoteRender implements renderTools {
     private toplevels = new Map<string, { surfaceId: string }>();
     private _on: renderToolsOn = {};
     private idGen = 0;
-    private server: PeerManager;
+    private server: Connect;
 
-    constructor(server: PeerManager) {
+    constructor(server: Connect) {
         this.server = server;
     }
 
@@ -55,6 +55,10 @@ export class RemoteRender implements renderTools {
         return undefined;
     }
 
+    private buildM(m: object) {
+        return { serverName: "displayServer", ...m };
+    }
+
     bindCanvas(id: string) {
         const canvas = new OffscreenCanvas(1, 1);
         const context = canvas.getContext("2d");
@@ -64,7 +68,10 @@ export class RemoteRender implements renderTools {
         this.canvasMap.set(id, { canvas, context, width: 1, height: 1 });
 
         const tid = this.findToplevelForCanvas(id);
-        this.server.broadcast({ type: "bindCanvas", canvasId: id, ...(tid ? { toplevelId: tid } : {}) });
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM({ type: "bindCanvas", canvasId: id, ...(tid ? { toplevelId: tid } : {}) }),
+        });
     }
 
     renderCanvas(canvas: OffscreenCanvas, id: string) {
@@ -82,10 +89,10 @@ export class RemoteRender implements renderTools {
         canvasData.context.drawImage(canvas, 0, 0);
 
         const tid = this.findToplevelForCanvas(id);
-        this.sendCanvasData(id, canvasData, undefined, tid);
+        this.sendCanvasData(id, canvasData, tid);
     }
 
-    private sendCanvasData(canvasId: string, canvasData: CanvasState, peerId?: string, toplevelId?: string) {
+    private sendCanvasData(canvasId: string, canvasData: CanvasState, toplevelId?: string) {
         const context = canvasData.canvas.getContext("2d");
         if (!context) return;
 
@@ -98,32 +105,44 @@ export class RemoteRender implements renderTools {
         };
         if (toplevelId) message.toplevelId = toplevelId;
 
-        if (peerId) {
-            this.server.sendMessage(peerId, message, [imageData.data.buffer]);
-        } else {
-            this.server.broadcast(message, [imageData.data.buffer]);
-        }
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM(message),
+            bins: [imageData.data.buffer],
+        });
     }
 
     destroyCanvas(id: string): void {
         this.canvasMap.delete(id);
         const tid = this.findToplevelForCanvas(id);
-        this.server.broadcast({ type: "destroyCanvas", canvasId: id, ...(tid ? { toplevelId: tid } : {}) });
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM({ type: "destroyCanvas", canvasId: id, ...(tid ? { toplevelId: tid } : {}) }),
+        });
     }
 
     setCanvasAnchor(id: string, parentId: string) {
         const tid = this.findToplevelForCanvas(id);
-        this.server.broadcast({ type: "setCanvasAnchor", canvasId: id, parentId, ...(tid ? { toplevelId: tid } : {}) });
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM({ type: "setCanvasAnchor", canvasId: id, parentId, ...(tid ? { toplevelId: tid } : {}) }),
+        });
     }
 
     setCanvasOffset(id: string, x: number, y: number) {
         const tid = this.findToplevelForCanvas(id);
-        this.server.broadcast({ type: "setCanvasOffset", canvasId: id, x, y, ...(tid ? { toplevelId: tid } : {}) });
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM({ type: "setCanvasOffset", canvasId: id, x, y, ...(tid ? { toplevelId: tid } : {}) }),
+        });
     }
 
     setBufferOffset(id: string, x: number, y: number): void {
         const tid = this.findToplevelForCanvas(id);
-        this.server.broadcast({ type: "setBufferOffset", canvasId: id, x, y, ...(tid ? { toplevelId: tid } : {}) });
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM({ type: "setBufferOffset", canvasId: id, x, y, ...(tid ? { toplevelId: tid } : {}) }),
+        });
     }
 
     createXdgSurfaceEle(id: string, canvasId: string) {
@@ -136,7 +155,10 @@ export class RemoteRender implements renderTools {
             offsetY: 0,
         });
 
-        this.server.broadcast({ type: "createXdgSurfaceEle", surfaceId: id, canvasId });
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM({ type: "createXdgSurfaceEle", surfaceId: id, canvasId }),
+        });
     }
 
     getXdgSurfaceEle(id: string) {
@@ -156,10 +178,13 @@ export class RemoteRender implements renderTools {
                 this.sendToplevelListToAll();
             }
 
-            this.server.broadcast({
-                type: "destroyXdgSurfaceEle",
-                surfaceId: id,
-                surfaceType: type,
+            this.server.sendTo({
+                targetId: "anytarget",
+                json: this.buildM({
+                    type: "destroyXdgSurfaceEle",
+                    surfaceId: id,
+                    surfaceType: type,
+                }),
             });
 
             this.surfaceMap.delete(id);
@@ -181,13 +206,16 @@ export class RemoteRender implements renderTools {
             surface.offsetY = offsetY;
         }
 
-        this.server.broadcast({
-            type: "setXdgSurfaceGeo",
-            surfaceId: id,
-            width,
-            height,
-            offsetX,
-            offsetY,
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM({
+                type: "setXdgSurfaceGeo",
+                surfaceId: id,
+                width,
+                height,
+                offsetX,
+                offsetY,
+            }),
         });
     }
 
@@ -204,12 +232,18 @@ export class RemoteRender implements renderTools {
             this.sendToplevelListToAll();
         }
 
-        this.server.broadcast({ type: "asToplevel", surfaceId: id });
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM({ type: "asToplevel", surfaceId: id }),
+        });
     }
 
     addPopupToXdgSurface(popupId: string, toplevelId: string) {
         this.popupMap.set(popupId, { popupId, parentId: toplevelId, x: 0, y: 0 });
-        this.server.broadcast({ type: "addPopupToXdgSurface", popupId, toplevelId });
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM({ type: "addPopupToXdgSurface", popupId, toplevelId }),
+        });
     }
 
     setPopupPosi(popupId: string, x: number, y: number) {
@@ -218,24 +252,25 @@ export class RemoteRender implements renderTools {
             popup.x = x;
             popup.y = y;
         }
-        this.server.broadcast({ type: "setPopupPosi", popupId, x, y });
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM({ type: "setPopupPosi", popupId, x, y }),
+        });
     }
 
     public getToplevels(): Array<{ id: string; surfaceId: string }> {
         return Array.from(this.toplevels.entries()).map(([id, { surfaceId }]) => ({ id, surfaceId }));
     }
 
-    private sendToplevelList(peerId: string) {
-        const list = this.getToplevels();
-        this.server.sendMessage(peerId, { type: "toplevelList", toplevels: list });
-    }
-
     private sendToplevelListToAll() {
         const list = this.getToplevels();
-        this.server.broadcast({ type: "toplevelList", toplevels: list });
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM({ type: "toplevelList", toplevels: list }),
+        });
     }
 
-    sendStateForToplevel(peerId: string, toplevelId: string) {
+    sendStateForToplevel(toplevelId: string) {
         console.log(`Sending state for toplevel ${toplevelId}`);
 
         const toplevel = this.toplevels.get(toplevelId);
@@ -246,33 +281,45 @@ export class RemoteRender implements renderTools {
 
         for (const [id, state] of this.surfaceMap) {
             if (id === toplevelId) {
-                this.server.sendMessage(peerId, { type: "bindCanvas", canvasId: state.canvasId, toplevelId });
+                this.server.sendTo({
+                    targetId: "anytarget",
+                    json: this.buildM({ type: "bindCanvas", canvasId: state.canvasId, toplevelId }),
+                });
 
                 const canvasState = this.canvasMap.get(state.canvasId);
                 if (canvasState && canvasState.width > 0 && canvasState.height > 0) {
-                    this.sendCanvasData(state.canvasId, canvasState, peerId, toplevelId);
+                    this.sendCanvasData(state.canvasId, canvasState, toplevelId);
                 }
 
-                this.server.sendMessage(peerId, {
-                    type: "createXdgSurfaceEle",
-                    surfaceId: id,
-                    canvasId: state.canvasId,
-                    toplevelId,
+                this.server.sendTo({
+                    targetId: "anytarget",
+                    json: this.buildM({
+                        type: "createXdgSurfaceEle",
+                        surfaceId: id,
+                        canvasId: state.canvasId,
+                        toplevelId,
+                    }),
                 });
 
                 if (state.isToplevel) {
-                    this.server.sendMessage(peerId, { type: "asToplevel", surfaceId: id, toplevelId });
+                    this.server.sendTo({
+                        targetId: "anytarget",
+                        json: this.buildM({ type: "asToplevel", surfaceId: id, toplevelId }),
+                    });
                 }
 
                 if (state.width > 0 && state.height > 0) {
-                    this.server.sendMessage(peerId, {
-                        type: "setXdgSurfaceGeo",
-                        surfaceId: id,
-                        width: state.width,
-                        height: state.height,
-                        offsetX: state.offsetX,
-                        offsetY: state.offsetY,
-                        toplevelId,
+                    this.server.sendTo({
+                        targetId: "anytarget",
+                        json: this.buildM({
+                            type: "setXdgSurfaceGeo",
+                            surfaceId: id,
+                            width: state.width,
+                            height: state.height,
+                            offsetX: state.offsetX,
+                            offsetY: state.offsetY,
+                            toplevelId,
+                        }),
                     });
                 }
             }
@@ -280,23 +327,25 @@ export class RemoteRender implements renderTools {
 
         for (const [id, state] of this.popupMap) {
             if (state.parentId === toplevelId) {
-                this.server.sendMessage(peerId, {
-                    type: "addPopupToXdgSurface",
-                    popupId: state.popupId,
-                    toplevelId,
+                this.server.sendTo({
+                    targetId: "anytarget",
+                    json: this.buildM({
+                        type: "addPopupToXdgSurface",
+                        popupId: state.popupId,
+                        toplevelId,
+                    }),
                 });
-                this.server.sendMessage(peerId, {
-                    type: "setPopupPosi",
-                    popupId: state.popupId,
-                    x: state.x,
-                    y: state.y,
-                    toplevelId,
+                this.server.sendTo({
+                    targetId: "anytarget",
+                    json: this.buildM({
+                        type: "setPopupPosi",
+                        popupId: state.popupId,
+                        x: state.x,
+                        y: state.y,
+                        toplevelId,
+                    }),
                 });
             }
         }
-    }
-
-    sendToplevelListToPeer(peerId: string) {
-        this.sendToplevelList(peerId);
     }
 }
