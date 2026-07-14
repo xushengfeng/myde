@@ -90,32 +90,7 @@ export class Connect {
                 connect,
                 ready: false,
             });
-            connect.on("connectRequest", (rq) => {
-                const entry = Array.from(this.connectionConfig).find(([_, c]) => c.to === rq.remoteDeviceId);
-                if (!entry) {
-                    throw new Error(`No connection config for pointId: ${rq.remoteDeviceId}`);
-                }
-                const [targetId, config] = entry;
-
-                // todo 交互
-                const cert = this.cert.get(config.cert);
-                if (!cert) {
-                    rq.accept();
-                } else
-                    rq.acceptWithCre({
-                        myPrivateKey: cert.myPrivateKey,
-                        myPublicKey: cert.myPublicKey,
-                        remotePublicKey: cert.remotePublicKey,
-                        createdAt: Date.now(),
-                    });
-
-                this.connection.set(targetId, {
-                    connect,
-                    ready: true,
-                });
-
-                this.bindConnectEvent({ targetId, connect });
-            });
+            this.connectInit(connect);
         }
 
         this.addHandler(({ json }) => {
@@ -153,33 +128,37 @@ export class Connect {
                         // this.
                     });
                 });
-                connect.on("connectRequest", (rq) => {
-                    const entry = Array.from(this.connectionConfig).find(([_, c]) => c.to === rq.remoteDeviceId);
-                    if (!entry) {
-                        throw new Error(`No connection config for pointId: ${rq.remoteDeviceId}`);
-                    }
-                    const [targetId, config] = entry;
-
-                    const cert = this.cert.get(config.cert);
-                    if (!cert) {
-                        rq.accept();
-                    } else
-                        rq.acceptWithCre({
-                            myPrivateKey: cert.myPrivateKey,
-                            myPublicKey: cert.myPublicKey,
-                            remotePublicKey: cert.remotePublicKey,
-                            createdAt: Date.now(),
-                        });
-
-                    this.connection.set(targetId, {
-                        connect,
-                        ready: true,
-                    });
-
-                    this.bindConnectEvent({ targetId, connect });
-                });
+                this.connectInit(connect);
                 return { json: { connectId, pin }, bins: [] };
             }
+        });
+    }
+    private connectInit(connect: SConnect) {
+        connect.on("connectRequest", (rq) => {
+            const entry = Array.from(this.connectionConfig).find(([_, c]) => c.to === rq.remoteDeviceId);
+            if (!entry) {
+                throw new Error(`No connection config for pointId: ${rq.remoteDeviceId}`);
+            }
+            const [targetId, config] = entry;
+
+            // todo 交互
+            const cert = this.cert.get(config.cert);
+            if (!cert) {
+                rq.accept();
+            } else
+                rq.acceptWithCre({
+                    myPrivateKey: cert.myPrivateKey,
+                    myPublicKey: cert.myPublicKey,
+                    remotePublicKey: cert.remotePublicKey,
+                    createdAt: Date.now(),
+                });
+
+            this.connection.set(targetId, {
+                connect,
+                ready: true,
+            });
+
+            this.afterConnect({ targetId, connect });
         });
     }
 
@@ -279,52 +258,10 @@ export class Connect {
                 connect,
                 ready: true,
             });
-            // todo
-            this.bindConnectEvent({ targetId: r.targetId as PointDeviceId, connect });
+            this.connectInit(connect);
+            this.afterConnect({ targetId: r.targetId as PointDeviceId, connect });
         };
         return x;
-    }
-
-    bindConnectEvent(op: { targetId: PointDeviceId; connect: SConnect }) {
-        const config = this.connectionConfig.get(op.targetId);
-        if (!config) {
-            throw new Error(`No connection config for targetId: ${op.targetId}`);
-        }
-        const connect = op.connect;
-        connect.on("data", (data: ArrayBuffer) => {
-            // todo
-            const { json, bins } = this.parse(data);
-            if ("_" in json) {
-                const meta = json._ as MetaType;
-                const myid = this.myId;
-                if (meta.targetId === AnyTarget || meta.targetId.includes(myid))
-                    for (const handler of this.messageHandlers) {
-                        handler({ fromName: config.remoteDeviceName, json, bins });
-                    }
-                if (meta.path.includes(myid)) return;
-                meta.path.push(myid);
-                const ndata = this.build(json, bins);
-                let nextId: PointDeviceId | null = null;
-                if (meta.pathHint) {
-                    const thisIndex = meta.pathHint.path.indexOf(myid);
-                    if (thisIndex >= 0) {
-                        nextId = meta.pathHint.path[thisIndex + 1] as PointDeviceId;
-                    }
-                }
-                for (const id of this.avalableConnections()) {
-                    if (id !== op.targetId && (nextId === null || id === nextId))
-                        this.sendMessage({ targetId: id, message: ndata });
-                }
-            }
-        });
-        connect.on("disconnect", () => {
-            this.connection.delete(op.targetId);
-            this.sendTo({
-                targetId: AnyTarget,
-                json: { serverName: "connect.disconnect", baseId: this.myId, connectId: op.targetId },
-            });
-            this.globalMapHint.destroyPair(this.myId, op.targetId);
-        });
     }
 
     async connect(op: { targetId: PointDeviceId }) {
@@ -360,7 +297,45 @@ export class Connect {
             },
         });
 
-        this.bindConnectEvent({ targetId: op.targetId, connect });
+        const config = this.connectionConfig.get(op.targetId);
+        if (!config) {
+            throw new Error(`No connection config for targetId: ${op.targetId}`);
+        }
+
+        connect.on("data", (data: ArrayBuffer) => {
+            // todo
+            const { json, bins } = this.parse(data);
+            if ("_" in json) {
+                const meta = json._ as MetaType;
+                const myid = this.myId;
+                if (meta.targetId === AnyTarget || meta.targetId.includes(myid))
+                    for (const handler of this.messageHandlers) {
+                        handler({ fromName: config.remoteDeviceName, json, bins });
+                    }
+                if (meta.path.includes(myid)) return;
+                meta.path.push(myid);
+                const ndata = this.build(json, bins);
+                let nextId: PointDeviceId | null = null;
+                if (meta.pathHint) {
+                    const thisIndex = meta.pathHint.path.indexOf(myid);
+                    if (thisIndex >= 0) {
+                        nextId = meta.pathHint.path[thisIndex + 1] as PointDeviceId;
+                    }
+                }
+                for (const id of this.avalableConnections()) {
+                    if (id !== op.targetId && (nextId === null || id === nextId))
+                        this.sendMessage({ targetId: id, message: ndata });
+                }
+            }
+        });
+        connect.on("disconnect", () => {
+            this.connection.delete(op.targetId);
+            this.sendTo({
+                targetId: AnyTarget,
+                json: { serverName: "connect.disconnect", baseId: this.myId, connectId: op.targetId },
+            });
+            this.globalMapHint.destroyPair(this.myId, op.targetId);
+        });
     }
     async disconnect(op: { targetId: PointDeviceId }) {
         const connect = this.connection.get(op.targetId)?.connect;
