@@ -420,10 +420,51 @@ describe("connect", () => {
                 ["A", "B"],
                 ["B", "C"],
             ]);
+            for (const [_, c] of map) {
+                const globalMap = c.getGlobalMap();
+                expect(globalMap).not.toContainEqual(["A", "C"]);
+            }
             await map.get("A")?.connect2({ targetId: Connect.targetId("C") });
             await sleep(10);
             for (const [_, c] of map) {
                 const globalMap = c.getGlobalMap();
+                expect(globalMap).toContainEqual(["A", "C"]);
+            }
+        });
+        async function pairConnect(a: Connect, b: Connect) {
+            const ac = await a.startPairing();
+            const bc = await b.startPairing();
+
+            const ap = Promise.withResolvers<PairResult>();
+
+            const br = await bc.connect(ac.pointId);
+            ac.onPair((rq) => {
+                rq.waitForPair().then((pair) => {
+                    ap.resolve(pair);
+                });
+            });
+            br.inputOtherPin(ac.pin);
+            await Promise.all([ap.promise, br.waitForPair()]);
+        }
+        it("认证渠道", async () => {
+            const adapterManager = new UntrustedLoopbackAdapterManager();
+            const a = new Connect({ id: "A", adapter: () => adapterManager.newAdapter() });
+            const b = new Connect({ id: "B", adapter: () => adapterManager.newAdapter() });
+            const c = new Connect({ id: "C", adapter: () => adapterManager.newAdapter() });
+            await a.init();
+            await b.init();
+            await c.init();
+            await pairConnect(a, b);
+            await pairConnect(b, c);
+            for (const x of [a, b, c]) {
+                const globalMap = x.getGlobalMap();
+                expect(globalMap).not.toContainEqual(["A", "C"]);
+            }
+            await sleep(10);
+            await a.connect2({ targetId: Connect.targetId("C") });
+            await sleep(10);
+            for (const x of [a, b, c]) {
+                const globalMap = x.getGlobalMap();
                 expect(globalMap).toContainEqual(["A", "C"]);
             }
         });

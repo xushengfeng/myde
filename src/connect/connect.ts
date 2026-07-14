@@ -125,7 +125,19 @@ export class Connect {
                 const pin = connect.updatePIN();
                 connect.on("pairRequest", (rq) => {
                     rq.waitForPairing().then((pair) => {
-                        // this.
+                        const certId = crypto.randomUUID();
+                        this.cert.set(certId, {
+                            myPrivateKey: pair.myPrivateKey,
+                            myPublicKey: pair.myPublicKey,
+                            remotePublicKey: pair.remotePublicKey,
+                        });
+                        this.connectionConfig.set(json.sourceId, {
+                            from: Connect.pointId(connectId),
+                            to: json.pointId,
+                            remoteDeviceName: "unknown",
+                            cert: certId,
+                        });
+                        this.afterConnect({ targetId: json.sourceId, connect });
                     });
                 });
                 this.connectInit(connect);
@@ -508,6 +520,20 @@ export class Connect {
                 const x = await connect.pairInit({ myDeviceId: thisConnectId, remoteDeviceId: targetConnectId });
                 x.inputOtherPin(pin);
                 const c = await x.waitForPairing();
+                const certId = crypto.randomUUID();
+                this.cert.set(certId, {
+                    myPrivateKey: c.myPrivateKey,
+                    myPublicKey: c.myPublicKey,
+                    remotePublicKey: c.remotePublicKey,
+                });
+                this.connectionConfig.set(op.targetId as PointDeviceId, {
+                    from: Connect.pointId(thisConnectId),
+                    to: Connect.pointId(targetConnectId),
+                    remoteDeviceName: "unknown",
+                    cert: certId,
+                });
+                this.connectInit(connect);
+                this.afterConnect({ targetId: op.targetId as PointDeviceId, connect });
             } else {
                 this.afterConnect({ targetId: op.targetId as PointDeviceId, connect });
             }
