@@ -1,6 +1,6 @@
-import { LoopbackAdapterManager } from "myde-remote-connect/loopback_adapter_manager";
+import { LoopbackAdapterManager, UntrustedLoopbackAdapterManager } from "myde-remote-connect/loopback_adapter_manager";
 import { describe, expect, it } from "vitest";
-import { AnyTarget, buildMessage, Connect, ConnectMap, parseMessage } from "./connect";
+import { AnyTarget, buildMessage, Connect, ConnectMap, type PairResult, parseMessage } from "./connect";
 
 async function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -118,6 +118,37 @@ async function testConnection(a: Connect, b: Connect, aid: string, bid: string) 
     clearTimeout(timeout);
     expect(msg).toBe(m);
 }
+
+describe("认证", () => {
+    it("没有认证的渠道", async () => {
+        const adapterManager = new UntrustedLoopbackAdapterManager();
+        const a = new Connect({ id: "A", adapter: () => adapterManager.newAdapter() });
+        const b = new Connect({ id: "B", adapter: () => adapterManager.newAdapter() });
+        await a.init();
+        await b.init();
+        const ac = await a.startPairing();
+        const bc = await b.startPairing();
+
+        const ap = Promise.withResolvers<PairResult>();
+
+        const br = await bc.connect(ac.pointId);
+        ac.onPair((rq) => {
+            rq.waitForPair().then((pair) => {
+                ap.resolve(pair);
+            });
+        });
+        br.inputOtherPin(ac.pin);
+        const [arr, brr] = await Promise.all([ap.promise, br.waitForPair()]);
+        expect(arr.targetId).toBe("B");
+        expect(brr.targetId).toBe("A");
+        expect(arr.from).toBe(brr.to);
+        expect(arr.to).toBe(brr.from);
+        expect(arr.myPublicKey).toEqual(brr.remotePublicKey);
+        expect(arr.remotePublicKey).toEqual(brr.myPublicKey);
+        await sleep(50);
+        await testConnection(a, b, "A", "B");
+    });
+});
 
 describe("connect", () => {
     describe("发送消息到指定目标，不限直连", () => {

@@ -4,6 +4,15 @@ import type { SignalingAdapter } from "myde-remote-connect/types";
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
+export type PairResult = {
+    myPrivateKey: Uint8Array;
+    myPublicKey: Uint8Array;
+    remotePublicKey: Uint8Array;
+    from: string;
+    to: string;
+    targetId: string;
+};
+
 type PointId = string & { __label: "PointId" };
 /** 可达的id */
 type TargetId = string & { __label: "TargetId" };
@@ -172,6 +181,108 @@ export class Connect {
                 return { json: { connectId, pin }, bins: [] };
             }
         });
+    }
+
+    /** 用于不信任的渠道，如网络连接，需要PIN码配对 */
+    async startPairing() {
+        const connect = new SConnect(this.adapter());
+        const connectId = crypto.randomUUID();
+        await connect.init(connectId);
+
+        type PairRequestArg = {
+            reject: () => void;
+            waitForPair: () => Promise<PairResult>;
+        };
+        type PairRequestHandler = (a: PairRequestArg) => void;
+
+        let h: PairRequestHandler = () => {};
+        connect.on("pairRequest", (rq) => {
+            h({
+                reject: () => rq.reject(),
+                waitForPair: async () => {
+                    const cert = await rq.waitForPairing();
+                    const targetId = (await askMeta()).targetId;
+                    const r = {
+                        myPrivateKey: cert.myPrivateKey,
+                        myPublicKey: cert.myPublicKey,
+                        remotePublicKey: cert.remotePublicKey,
+                        from: connectId,
+                        to: rq.remoteDeviceId,
+                        targetId,
+                    };
+                    afterConnect(r);
+                    return r;
+                },
+            });
+        });
+        const x = {
+            connect: async (remoteId: string) => {
+                const p = await connect.pairInit({ myDeviceId: connectId, remoteDeviceId: remoteId });
+                return {
+                    inputOtherPin: (pin: string) => {
+                        p.inputOtherPin(pin);
+                    },
+                    waitForPair: async () => {
+                        const cert = await p.waitForPairing();
+                        const targetId = (await askMeta()).targetId;
+                        const r = {
+                            myPrivateKey: cert.myPrivateKey,
+                            myPublicKey: cert.myPublicKey,
+                            remotePublicKey: cert.remotePublicKey,
+                            from: connectId,
+                            to: remoteId,
+                            targetId,
+                        };
+                        afterConnect(r);
+                        return r;
+                    },
+                } as Omit<PairRequestArg, "reject"> & { inputOtherPin: (pin: string) => void };
+            },
+            pointId: connectId,
+            pin: connect.updatePIN(),
+            onPair: (handle: PairRequestHandler) => {
+                h = handle;
+            },
+        };
+
+        const metaRq = Promise.withResolvers<{
+            targetId: string;
+        }>();
+        connect.on("data", (data: ArrayBuffer) => {
+            const { json } = this.parse(data);
+            if (json.type === "askMeta") {
+                connect.sendBinary(this.build({ type: "reMeta", myId: this.myId }, []));
+            }
+            if (json.type === "reMeta") {
+                metaRq.resolve({ targetId: json.myId });
+            }
+        });
+
+        const askMeta = () => {
+            connect.sendBinary(this.build({ type: "askMeta" }, []));
+            return metaRq.promise;
+        };
+        const afterConnect = (r: PairResult) => {
+            const certId = crypto.randomUUID();
+            this.connectionConfig.set(r.targetId as PointDeviceId, {
+                from: Connect.pointId(r.from),
+                to: Connect.pointId(r.to),
+                remoteDeviceName: "unknown",
+                cert: certId,
+            });
+            this.cert.set(certId, {
+                myPrivateKey: r.myPrivateKey,
+                myPublicKey: r.myPublicKey,
+                remotePublicKey: r.remotePublicKey,
+            });
+            this.connection.set(r.targetId as PointDeviceId, {
+                connect,
+                ready: true,
+            });
+            // todo
+            this.bindConnectEvent({ targetId: r.targetId as PointDeviceId, connect });
+        };
+        return x;
     }
 
     bindConnectEvent(op: { targetId: PointDeviceId; connect: SConnect }) {
