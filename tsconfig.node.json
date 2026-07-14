@@ -24,6 +24,7 @@
     "src/main/*",
     "src/preload/*",
     "src/desktop-api.ts",
+    "src/connect/**/*.ts",
     "src/sys_api/**/*.ts",
     "src/setting/**/*.ts",
     "src/wayland/**/*.ts",

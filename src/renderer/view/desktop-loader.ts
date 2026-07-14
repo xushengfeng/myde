@@ -3,9 +3,9 @@ const { dbusIO } = require("myde-dbus") as typeof import("myde-dbus");
 const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
 import { addStyle, initDKH, pack } from "dkh-ui";
-import { _myde } from "../../desktop-api";
 import { PeerjsAdapter } from "myde-remote-connect/peerjs_adapter";
-import { SConnect } from "myde-remote-connect/sconnect";
+import { Connect } from "../../connect/connect";
+import { _myde } from "../../desktop-api";
 import type { nowConfig } from "../../setting/config";
 import { setting } from "../../setting/setting";
 import { tray } from "../../sys_api/appIndicator";
@@ -55,7 +55,7 @@ async function loadDesktop(p: string) {
         },
         defaultSetting: { version: "0.0.1", "icon.theme": "breeze" },
     });
-    myde.MConnect = new SConnect(new PeerjsAdapter());
+    myde.MConnect = (id: string) => new Connect({ id, adapter: () => new PeerjsAdapter() });
     myde.MSysApi.media = new mpris(await newDBusIO());
     myde.MSysApi.notification = new notification(await newDBusIO());
     myde.MSysApi.tray = new tray(await newDBusIO());

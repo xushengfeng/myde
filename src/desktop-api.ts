@@ -1,5 +1,5 @@
+import type { Connect } from "./connect/connect";
 import { mapKeyCode } from "./input_map/web2x";
-import type { SConnect } from "myde-remote-connect/sconnect";
 import type { nowConfig } from "./setting/config";
 import type { setting } from "./setting/setting";
 import type { tray } from "./sys_api/appIndicator";
@@ -46,7 +46,7 @@ export const _myde = {
         renderToolsHtmlEl,
     },
     MSetting: undefined as unknown as setting<nowConfig>,
-    MConnect: undefined as unknown as SConnect,
+    MConnect: undefined as unknown as (id: string) => Connect,
 };
 export type DesktopApi = typeof _myde;
 export type { DesktopIconConfig } from "./sys_api/application";
