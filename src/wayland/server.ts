@@ -888,7 +888,6 @@ class WaylandClient {
             const canvas = surface.data.canvas;
             // biome-ignore lint/style/noNonNullAssertion: 忽略小概率
             const ctx = canvas.getContext("2d")!;
-            ctx.globalCompositeOperation = "copy"; // drawImageData时不混合而是替换
             const buffer = data.buffer;
             const bufferId = buffer?.id;
             const bufferObj = this.getObjectOption(bufferId)?.data;
@@ -991,28 +990,12 @@ class WaylandClient {
                 // todo 有区别，但现在先不处理
                 if (damageList.length) {
                     for (const damage of damageList) {
+                        const dw = Math.min(canvas.width, damage.width);
+                        const dh = Math.min(canvas.height, damage.height);
                         if (image instanceof VideoFrame) {
-                            ctx.drawImage(
-                                image,
-                                damage.x,
-                                damage.y,
-                                Math.min(canvas.width, damage.width),
-                                Math.min(canvas.height, damage.height),
-                                damage.x,
-                                damage.y,
-                                Math.min(canvas.width, damage.width),
-                                Math.min(canvas.height, damage.height),
-                            );
-                        } else
-                            ctx.putImageData(
-                                image,
-                                0,
-                                0,
-                                damage.x,
-                                damage.y,
-                                Math.min(canvas.width, damage.width),
-                                Math.min(canvas.height, damage.height),
-                            );
+                            ctx.clearRect(damage.x, damage.y, dw, dh);
+                            ctx.drawImage(image, damage.x, damage.y, dw, dh, damage.x, damage.y, dw, dh);
+                        } else ctx.putImageData(image, 0, 0, damage.x, damage.y, dw, dh);
                     }
                 } else {
                     if (image instanceof VideoFrame) {
