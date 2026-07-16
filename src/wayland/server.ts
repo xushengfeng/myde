@@ -564,6 +564,7 @@ class WaylandClient {
 
     readonly id: string;
     private socket: USocket;
+    readonly pid: number | undefined;
     private decodeRestCache: { data: Uint8Array; fds: number[] } = { data: new Uint8Array(0), fds: [] };
     private opa = this.newOp();
     private displayId = waylandObjectId(1, "wl_display");
@@ -641,6 +642,7 @@ class WaylandClient {
     constructor({ id, socket, render }: { id: string; socket: USocket; render: renderTools }) {
         this.id = id;
         this.socket = socket;
+        this.pid = socket.pid;
         this.objects = new Map();
         this.obj2 = {
             windows: new Map(),
