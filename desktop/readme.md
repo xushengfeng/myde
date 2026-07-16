@@ -134,19 +134,19 @@ const devices = input.getDevices();
 const device = input.getDevice("/dev/input/event0");
 
 // 监听单个设备事件
-const keyboard = devices.find(d => d.type === "keyboard");
+const keyboard = devices.find((d) => d.type === "keyboard");
 if (keyboard) {
     keyboard.on("keyDown", (event) => {
         console.log(`${keyboard.name} 按键按下: code=${event.code}`);
     });
-    
+
     keyboard.on("keyUp", (event) => {
         console.log(`${keyboard.name} 按键释放: code=${event.code}`);
     });
 }
 
 // 监听鼠标设备
-const mouse = devices.find(d => d.type === "mouse");
+const mouse = devices.find((d) => d.type === "mouse");
 if (mouse) {
     mouse.on("relative", (event) => {
         console.log(`${mouse.name} 移动: code=${event.code} value=${event.value}`);
@@ -154,7 +154,7 @@ if (mouse) {
 }
 
 // 监听触屏设备
-const touchscreen = devices.find(d => d.type === "touchscreen");
+const touchscreen = devices.find((d) => d.type === "touchscreen");
 if (touchscreen) {
     touchscreen.on("absolute", (event) => {
         console.log(`${touchscreen.name} 触摸: code=${event.code} value=${event.value}`);
@@ -181,6 +181,7 @@ input.on("deviceRemoved", (device) => {
 ```
 
 设备类型 (`device.type`)：
+
 - `"keyboard"` - 键盘
 - `"mouse"` - 鼠标
 - `"touchpad"` - 触控板
@@ -190,12 +191,14 @@ input.on("deviceRemoved", (device) => {
 - `"unknown"` - 未知设备
 
 事件类型（通过 `event.type` 区分）：
+
 - `EV_KEY` (1): 按键事件，value=1按下，value=0释放，value=2长按
 - `EV_REL` (2): 相对移动事件（鼠标），event.code 区分轴向
 - `EV_ABS` (3): 绝对位置事件（触屏、触控板、数位板），event.code 区分轴向
 - `EV_SYN` (0): 同步事件，表示一帧事件结束
 
 每个设备可监听的事件：
+
 - `"event"` - 所有原始事件
 - `"key"` / `"keyDown"` / `"keyUp"` / `"keyRepeat"` - 按键事件
 - `"relative"` - 相对移动
@@ -204,6 +207,12 @@ input.on("deviceRemoved", (device) => {
 - `"error"` - 读取错误
 
 权限要求：用户需要在 `input` 组中才能读取 `/dev/input/event*`，否则设备列表为空
+
+### appControl
+
+`getPidTree`获取所有进程树，包括pid、ppid、名称、内存使用
+
+`getPid`返回一个对象可以进行进一步控制，如`setPriority`调节优先级，或者用`suspend`挂起应用，甚至可以用`kill`关闭应用
 
 ## MUtils
 

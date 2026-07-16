@@ -2,6 +2,7 @@ import type { Connect } from "./connect/connect";
 import { mapKeyCode } from "./input_map/web2x";
 import type { nowConfig } from "./setting/config";
 import type { setting } from "./setting/setting";
+import { getPid, getPidTree } from "./sys_api/app_control";
 import type { tray } from "./sys_api/appIndicator";
 import { getDesktopEntries, getDesktopEntry, getDesktopIcon, refreshDesktopEntries } from "./sys_api/application";
 import type { blue } from "./sys_api/blue";
@@ -38,6 +39,10 @@ export const _myde = {
         network: undefined as unknown as network,
         display: undefined as unknown as display,
         input: undefined as unknown as InputManager,
+        appControl: {
+            getPidTree,
+            getPid,
+        },
     },
     MInputMap: {
         mapKeyCode,
