@@ -573,7 +573,7 @@ class WaylandClient {
     private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
     private nextObjectId: number = 0xff000000;
     private obj2: Partial<{
-        focusSurface: WaylandObjectId | null;
+        focusSurface: WaylandObjectId2<"wl_surface"> | null;
         focusSurfaceType: "main" | "popup" | null;
         textInputV1: {
             focus: WaylandObjectId | null;
@@ -2045,7 +2045,7 @@ class WaylandClient {
     }
     keyboard = {
         // todo Surface管理
-        focusSurface: (id: WaylandObjectId) => {
+        focusSurface: (id: WaylandObjectId2<"wl_surface">) => {
             for (const k of this.getKeyboards()) {
                 this.sendMessageImm(k, "wl_keyboard.enter", { serial: 0, surface: id, keys: new Uint32Array([]) });
                 this.sendMessageImm(k, "wl_keyboard.modifiers", {
@@ -2057,7 +2057,7 @@ class WaylandClient {
                 });
             }
         },
-        blurSurface: (id: WaylandObjectId) => {
+        blurSurface: (id: WaylandObjectId2<"wl_surface">) => {
             for (const k of this.getKeyboards())
                 this.sendMessageImm(k, "wl_keyboard.leave", { serial: 0, surface: id });
         },

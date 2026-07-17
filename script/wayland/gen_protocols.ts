@@ -211,8 +211,8 @@ function argsMap(
         .map(
             (arg) =>
                 `${arg.summary ? `        /** ${arg.summary}*/\n` : ""}        ${arg.name}${arg.allowNull ? "?" : ""}: ${
-                    arg.type === "new_id"
-                        ? `${map[arg.type]}<${arg.interface ? `"${arg.interface}"` : "string"}>`
+                    arg.type === "new_id" || arg.type === "object"
+                        ? `${arg.interface ? `WaylandObjectId2<"${arg.interface}">` : "WaylandObjectId2<string>"}`
                         : map[arg.type] || "any"
                 };`,
         )

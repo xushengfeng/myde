@@ -125,7 +125,7 @@ export enum WaylandEventOpcode {
 export type WaylandEventObj = {
     "wl_display.error": {
         /** object where the error occurred*/
-        object_id: number;
+        object_id: WaylandObjectId2<string>;
         /** error code*/
         code: number;
         /** error description*/
@@ -193,13 +193,13 @@ export type WaylandEventObj = {
         /** serial number of the enter event*/
         serial: number;
         /** client surface entered*/
-        surface: number;
+        surface: WaylandObjectId2<"wl_surface">;
         /** surface-local x coordinate*/
         x: number;
         /** surface-local y coordinate*/
         y: number;
         /** source data_offer object*/
-        id?: number;
+        id?: WaylandObjectId2<"wl_data_offer">;
     };
     "wl_data_device.leave": {};
     "wl_data_device.motion": {
@@ -213,15 +213,15 @@ export type WaylandEventObj = {
     "wl_data_device.drop": {};
     "wl_data_device.selection": {
         /** selection data_offer object*/
-        id?: number;
+        id?: WaylandObjectId2<"wl_data_offer">;
     };
     "wl_surface.enter": {
         /** output entered by the surface*/
-        output: number;
+        output: WaylandObjectId2<"wl_output">;
     };
     "wl_surface.leave": {
         /** output left by the surface*/
-        output: number;
+        output: WaylandObjectId2<"wl_output">;
     };
     "wl_surface.preferred_buffer_scale": {
         /** preferred scaling factor*/
@@ -243,7 +243,7 @@ export type WaylandEventObj = {
         /** serial number of the enter event*/
         serial: number;
         /** surface entered by the pointer*/
-        surface: number;
+        surface: WaylandObjectId2<"wl_surface">;
         /** surface-local x coordinate*/
         surface_x: number;
         /** surface-local y coordinate*/
@@ -253,7 +253,7 @@ export type WaylandEventObj = {
         /** serial number of the leave event*/
         serial: number;
         /** surface left by the pointer*/
-        surface: number;
+        surface: WaylandObjectId2<"wl_surface">;
     };
     "wl_pointer.motion": {
         /** timestamp with millisecond granularity*/
@@ -322,7 +322,7 @@ export type WaylandEventObj = {
         /** serial number of the enter event*/
         serial: number;
         /** surface gaining keyboard focus*/
-        surface: number;
+        surface: WaylandObjectId2<"wl_surface">;
         /** the keys currently logically down*/
         keys: ArrayBufferView;
     };
@@ -330,7 +330,7 @@ export type WaylandEventObj = {
         /** serial number of the leave event*/
         serial: number;
         /** surface that lost keyboard focus*/
-        surface: number;
+        surface: WaylandObjectId2<"wl_surface">;
     };
     "wl_keyboard.key": {
         /** serial number of the key event*/
@@ -480,7 +480,7 @@ export type WaylandEventObj = {
         flags: number;
     };
     "zwp_text_input_v1.enter": {
-        surface: number;
+        surface: WaylandObjectId2<"wl_surface">;
     };
     "zwp_text_input_v1.leave": {};
     "zwp_text_input_v1.modifiers_map": {
@@ -619,17 +619,17 @@ export type WaylandRequestObj = {
     };
     "wl_data_device.start_drag": {
         /** data source for the eventual transfer*/
-        source?: number;
+        source?: WaylandObjectId2<"wl_data_source">;
         /** surface where the drag originates*/
-        origin: number;
+        origin: WaylandObjectId2<"wl_surface">;
         /** drag-and-drop icon surface*/
-        icon?: number;
+        icon?: WaylandObjectId2<"wl_surface">;
         /** serial number of the implicit grab on the origin*/
         serial: number;
     };
     "wl_data_device.set_selection": {
         /** data source for the selection*/
-        source?: number;
+        source?: WaylandObjectId2<"wl_data_source">;
         /** serial number of the event that triggered this request*/
         serial: number;
     };
@@ -642,12 +642,12 @@ export type WaylandRequestObj = {
         /** data device to create*/
         id: WaylandObjectId2<"wl_data_device">;
         /** seat associated with the data device*/
-        seat: number;
+        seat: WaylandObjectId2<"wl_seat">;
     };
     "wl_surface.destroy": {};
     "wl_surface.attach": {
         /** buffer of surface contents*/
-        buffer?: number;
+        buffer?: WaylandObjectId2<"wl_buffer">;
         /** surface-local x coordinate*/
         x: number;
         /** surface-local y coordinate*/
@@ -669,11 +669,11 @@ export type WaylandRequestObj = {
     };
     "wl_surface.set_opaque_region": {
         /** opaque region of the surface*/
-        region?: number;
+        region?: WaylandObjectId2<"wl_region">;
     };
     "wl_surface.set_input_region": {
         /** input region of the surface*/
-        region?: number;
+        region?: WaylandObjectId2<"wl_region">;
     };
     "wl_surface.commit": {};
     "wl_surface.set_buffer_transform": {
@@ -717,7 +717,7 @@ export type WaylandRequestObj = {
         /** serial number of the enter event*/
         serial: number;
         /** pointer surface*/
-        surface?: number;
+        surface?: WaylandObjectId2<"wl_surface">;
         /** surface-local x coordinate*/
         hotspot_x: number;
         /** surface-local y coordinate*/
@@ -752,9 +752,9 @@ export type WaylandRequestObj = {
         /** the new sub-surface object ID*/
         id: WaylandObjectId2<"wl_subsurface">;
         /** the surface to be turned into a sub-surface*/
-        surface: number;
+        surface: WaylandObjectId2<"wl_surface">;
         /** the parent surface*/
-        parent: number;
+        parent: WaylandObjectId2<"wl_surface">;
     };
     "wl_subsurface.destroy": {};
     "wl_subsurface.set_position": {
@@ -765,11 +765,11 @@ export type WaylandRequestObj = {
     };
     "wl_subsurface.place_above": {
         /** the reference surface*/
-        sibling: number;
+        sibling: WaylandObjectId2<"wl_surface">;
     };
     "wl_subsurface.place_below": {
         /** the reference surface*/
-        sibling: number;
+        sibling: WaylandObjectId2<"wl_surface">;
     };
     "wl_subsurface.set_sync": {};
     "wl_subsurface.set_desync": {};
@@ -779,7 +779,7 @@ export type WaylandRequestObj = {
     };
     "xdg_wm_base.get_xdg_surface": {
         id: WaylandObjectId2<"xdg_surface">;
-        surface: number;
+        surface: WaylandObjectId2<"wl_surface">;
     };
     "xdg_wm_base.pong": {
         /** serial of the ping event*/
@@ -837,8 +837,8 @@ export type WaylandRequestObj = {
     };
     "xdg_surface.get_popup": {
         id: WaylandObjectId2<"xdg_popup">;
-        parent?: number;
-        positioner: number;
+        parent?: WaylandObjectId2<"xdg_surface">;
+        positioner: WaylandObjectId2<"xdg_positioner">;
     };
     "xdg_surface.set_window_geometry": {
         x: number;
@@ -852,7 +852,7 @@ export type WaylandRequestObj = {
     };
     "xdg_toplevel.destroy": {};
     "xdg_toplevel.set_parent": {
-        parent?: number;
+        parent?: WaylandObjectId2<"xdg_toplevel">;
     };
     "xdg_toplevel.set_title": {
         title: string;
@@ -862,7 +862,7 @@ export type WaylandRequestObj = {
     };
     "xdg_toplevel.show_window_menu": {
         /** the wl_seat of the user event*/
-        seat: number;
+        seat: WaylandObjectId2<"wl_seat">;
         /** the serial of the user event*/
         serial: number;
         /** the x position to pop up the window menu at*/
@@ -872,13 +872,13 @@ export type WaylandRequestObj = {
     };
     "xdg_toplevel.move": {
         /** the wl_seat of the user event*/
-        seat: number;
+        seat: WaylandObjectId2<"wl_seat">;
         /** the serial of the user event*/
         serial: number;
     };
     "xdg_toplevel.resize": {
         /** the wl_seat of the user event*/
-        seat: number;
+        seat: WaylandObjectId2<"wl_seat">;
         /** the serial of the user event*/
         serial: number;
         /** which edge or corner is being dragged*/
@@ -895,19 +895,19 @@ export type WaylandRequestObj = {
     "xdg_toplevel.set_maximized": {};
     "xdg_toplevel.unset_maximized": {};
     "xdg_toplevel.set_fullscreen": {
-        output?: number;
+        output?: WaylandObjectId2<"wl_output">;
     };
     "xdg_toplevel.unset_fullscreen": {};
     "xdg_toplevel.set_minimized": {};
     "xdg_popup.destroy": {};
     "xdg_popup.grab": {
         /** the wl_seat of the user event*/
-        seat: number;
+        seat: WaylandObjectId2<"wl_seat">;
         /** the serial of the user event*/
         serial: number;
     };
     "xdg_popup.reposition": {
-        positioner: number;
+        positioner: WaylandObjectId2<"xdg_positioner">;
         /** reposition request token*/
         token: number;
     };
@@ -916,7 +916,7 @@ export type WaylandRequestObj = {
         /** the new viewport interface id*/
         id: WaylandObjectId2<"wp_viewport">;
         /** the surface*/
-        surface: number;
+        surface: WaylandObjectId2<"wl_surface">;
     };
     "wp_viewport.destroy": {};
     "wp_viewport.set_source": {
@@ -945,7 +945,7 @@ export type WaylandRequestObj = {
     };
     "zwp_linux_dmabuf_v1.get_surface_feedback": {
         id: WaylandObjectId2<"zwp_linux_dmabuf_feedback_v1">;
-        surface: number;
+        surface: WaylandObjectId2<"wl_surface">;
     };
     "zwp_linux_buffer_params_v1.destroy": {};
     "zwp_linux_buffer_params_v1.add": {
@@ -986,11 +986,11 @@ export type WaylandRequestObj = {
     };
     "zwp_linux_dmabuf_feedback_v1.destroy": {};
     "zwp_text_input_v1.activate": {
-        seat: number;
-        surface: number;
+        seat: WaylandObjectId2<"wl_seat">;
+        surface: WaylandObjectId2<"wl_surface">;
     };
     "zwp_text_input_v1.deactivate": {
-        seat: number;
+        seat: WaylandObjectId2<"wl_seat">;
     };
     "zwp_text_input_v1.show_input_panel": {};
     "zwp_text_input_v1.hide_input_panel": {};
