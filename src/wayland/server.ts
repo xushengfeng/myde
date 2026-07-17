@@ -43,6 +43,10 @@ type WaylandSurfaceData = {
     damageBufferList?: { x: number; y: number; width: number; height: number }[];
     callback?: WaylandObjectId2<"wl_callback">;
     inputRegion?: WaylandData["wl_region"]["rects"];
+    viewport?: {
+        source?: { x: number; y: number; width: number; height: number };
+        destination?: { width: number; height: number };
+    };
 };
 
 type WaylandData = {
@@ -93,6 +97,9 @@ type WaylandData = {
             modifier_hi: number;
             modifier_lo: number;
         }[];
+    };
+    wp_viewport: {
+        surface: WaylandObjectId2<"wl_surface">;
     };
 };
 
@@ -1005,7 +1012,27 @@ class WaylandClient {
                 if (image instanceof VideoFrame) {
                     image.close();
                 }
-                this.wlSurface.renderWlSurface(surfaceId, canvas);
+                if (data.viewport && (data.viewport.destination || data.viewport.source)) {
+                    const source = data.viewport.source;
+                    const destination = data.viewport.destination;
+                    let dwidth = 1;
+                    let dheight = 1;
+                    if (!destination && source) {
+                        dwidth = source.width;
+                        dheight = source.height;
+                    } else if (destination) {
+                        dwidth = destination.width;
+                        dheight = destination.height;
+                    }
+                    const ncanvas = new OffscreenCanvas(dwidth, dheight);
+                    const sctx = ncanvas.getContext("2d");
+                    if (source) {
+                        sctx?.drawImage(canvas, source.x, source.y, source.width, source.height, 0, 0, dwidth, dheight);
+                    } else {
+                        sctx?.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, dwidth, dheight);
+                    }
+                    this.wlSurface.renderWlSurface(surfaceId, ncanvas);
+                } else this.wlSurface.renderWlSurface(surfaceId, canvas);
             }
 
             requestAnimationFrame(() => {
@@ -1486,6 +1513,90 @@ class WaylandClient {
             const bufferId = x.args.buffer_id;
             const buffer = this.getObject(bufferId);
             buffer.data = { type: "dmabuf", planes, width: x.args.width, height: x.args.height, format: x.args.format };
+        });
+
+        isOp("wp_viewporter.get_viewport", (x) => {
+            const viewportId = x.args.id;
+            const surfaceId = x.args.surface;
+            const surface = this.getObject(surfaceId);
+            if (!surface) {
+                console.error(`Surface ${surfaceId} not found for get_viewport`);
+                return;
+            }
+            if (surface.data.current.viewport) {
+                if (surface.data.current.viewport.source || surface.data.current.viewport.destination) {
+                    this.postError("wp_viewporter", x.id, "viewport_exists", "Surface already has a viewport");
+                    return;
+                }
+            }
+            surface.data.pending.viewport = {};
+            const viewport = this.getObject(viewportId);
+            viewport.data = { surface: surfaceId };
+        });
+        isOp("wp_viewport.set_source", (x) => {
+            const viewport = this.getObject(x.id);
+            const surfaceId = viewport.data.surface;
+            const surface = this.getObject(surfaceId);
+            const viewportData = surface.data.pending.viewport;
+            if (viewportData) {
+                if (x.args.width === -1 && x.args.height === -1 && x.args.x === -1 && x.args.y === -1) {
+                    viewportData.source = undefined;
+                    return;
+                } else if (x.args.width <= 0 || x.args.height <= 0 || x.args.x < 0 || x.args.y < 0) {
+                    this.postError("wp_viewport", x.id, "bad_value", "Invalid source rectangle");
+                    return;
+                } else if (
+                    x.args.x + x.args.width > surface.data.canvas.width ||
+                    x.args.y + x.args.height > surface.data.canvas.height
+                ) {
+                    this.postError(
+                        "wp_viewport",
+                        x.id,
+                        "out_of_buffer",
+                        "Source rectangle exceeds surface buffer bounds",
+                    );
+                    return;
+                }
+                viewportData.source = {
+                    x: x.args.x,
+                    y: x.args.y,
+                    width: x.args.width,
+                    height: x.args.height,
+                };
+            }
+        });
+        isOp("wp_viewport.set_destination", (x) => {
+            const viewport = this.getObject(x.id);
+            const surfaceId = viewport.data.surface;
+            const surface = this.getObject(surfaceId);
+            const viewportData = surface.data.pending.viewport;
+            if (viewportData) {
+                if (x.args.width === -1 && x.args.height === -1) {
+                    viewportData.destination = undefined;
+                    return;
+                } else if (x.args.width <= 0 || x.args.height <= 0) {
+                    this.postError("wp_viewport", x.id, "bad_value", "Invalid destination rectangle");
+                    return;
+                } else if (
+                    Number.isSafeInteger(x.args.width) === false ||
+                    Number.isSafeInteger(x.args.height) === false
+                ) {
+                    this.postError("wp_viewport", x.id, "bad_size", "Width or height is not a safe integer");
+                    return;
+                }
+                viewportData.destination = {
+                    width: x.args.width,
+                    height: x.args.height,
+                };
+            }
+        });
+        isOp("wp_viewport.destroy", (x) => {
+            const viewport = this.getObject(x.id);
+            const surfaceId = viewport.data.surface;
+            const surface = this.getObject(surfaceId);
+            if (surface) {
+                delete surface.data.pending.viewport;
+            }
         });
 
         isOp("zwp_text_input_manager_v1.create_text_input", (x) => {
