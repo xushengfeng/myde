@@ -45,7 +45,7 @@ export class WaylandDecoder {
 
     readFixed(): number {
         const fixedValue = this.readInt();
-        return fixedValue / 65536; // 转换为浮点数
+        return fixedValue / 256;
     }
 
     readString(): string {
