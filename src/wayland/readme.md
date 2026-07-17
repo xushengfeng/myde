@@ -35,6 +35,10 @@
     - zwp_linux_buffer_params_v1 部分
     - zwp_linux_dmabuf_feedback_v1
 
+- viewporter
+    - wp_viewporter
+    - wp_viewport
+
 - text-input-unstable-v1
     - zwp_text_input_v1 部分
     - zwp_text_input_manager_v1
