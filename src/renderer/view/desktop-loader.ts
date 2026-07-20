@@ -62,8 +62,9 @@ async function loadDesktop(p: string) {
     myde.MSysApi.power = new power(await newDBusIO(true));
     myde.MSysApi.blue = new blue(await newDBusIO(true));
     myde.MSysApi.network = new network(await newDBusIO(true));
-    myde.MSysApi.input = new InputManager(fs);
-    await myde.MSysApi.input.init();
+    // 影响了fs promise正常工作
+    // myde.MSysApi.input = new InputManager(inputFs);
+    // await myde.MSysApi.input.init();
     const packageData = fs.readFileSync(packagePath, "utf-8");
     const packageJson = JSON.parse(packageData);
     const mainPath = `${dirPath}/${packageJson.main || "index.js"}`;
