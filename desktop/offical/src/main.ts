@@ -278,13 +278,14 @@ const planteData: Plant[] = [
         posi: "top",
         items: [
             { id: "showAllView" },
-            { id: "clock" },
+            { id: "blank" },
             { id: "mediaControl" },
             { id: "tray" },
             { id: "blue" },
             { id: "network" },
             { id: "power" },
             { id: "notifications" },
+            { id: "clock" },
         ],
         glow: true,
     },
@@ -855,6 +856,9 @@ const ob = new ResizeObserver((e) => {
 
 ob.observe(windowEl.el);
 
+tools.registerTool("blank", () => {
+    return view().style({ flexGrow: 1 });
+});
 tools.registerTool("showAllView", () => {
     const showAllViewBtn = button("≡").on("click", () => {
         viewAllShowing = !viewAllShowing;
@@ -1409,7 +1413,7 @@ for (const p of planteData) {
         backdropFilter: "blur(10px)",
     });
     if (p.glow) {
-        plantEl.style(d === "x" ? { width: "100%" } : { height: "100%" });
+        plantEl.style(d === "x" ? { width: "100%", borderRadius: 0 } : { height: "100%", borderRadius: 0 });
     } else {
         plantEl.style(
             d === "x" ? { left: "50%", transform: "translateX(-50%)" } : { top: "50%", transform: "translateY(-50%)" },
