@@ -1,4 +1,4 @@
-import { MockApp, type MockAppConfig } from "./base";
+import { MockApp } from "./base";
 
 interface Ball {
     x: number;
@@ -13,17 +13,10 @@ export class BouncingBallApp extends MockApp {
     private balls: Ball[] = [];
     private colors = ["#ff6b6b", "#4ecdc4", "#45b7d1", "#96ceb4", "#feca57", "#ff9ff3", "#54a0ff"];
 
-    constructor(config: MockAppConfig) {
-        super(config);
-    }
-
     init(): void {
         this.balls = [];
         for (let i = 0; i < 5; i++) {
-            this.addBall(
-                Math.random() * (this.width - 100) + 50,
-                Math.random() * (this.height - 100) + 50
-            );
+            this.addBall(Math.random() * (this.width - 100) + 50, Math.random() * (this.height - 100) + 50);
         }
     }
 

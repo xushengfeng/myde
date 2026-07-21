@@ -1,8 +1,14 @@
 import { addStyle, initDKH, pack } from "dkh-ui";
-import { setupMydeMock, MockVfsStore, type MockConfig, createMockClient, setGlobalRenderTools } from "../../../../test/mock";
-import { mockApps, createMockApp, getMockAppIcon, getMockAppList } from "../../../../test/mock/apps";
-import { MockRenderTools } from "../../../../test/mock/render-tools";
 import type { renderTools } from "../../../../src/wayland/render_tools";
+import {
+    createMockClient,
+    type MockConfig,
+    MockVfsStore,
+    setGlobalRenderTools,
+    setupMydeMock,
+} from "../../../../test/mock";
+import { createMockApp, getMockAppIcon, getMockAppList } from "../../../../test/mock/apps";
+import { MockRenderTools } from "../../../../test/mock/render-tools";
 
 type DesktopEntry = {
     name: string;
@@ -62,15 +68,17 @@ export function getMockVfsStore() {
 // 注册mock应用到桌面条目
 function registerMockApps() {
     const appList = getMockAppList();
-    mockData.desktopEntries.push(...appList.map(app => ({
-        name: app.name,
-        nameLocal: app.name,
-        comment: "",
-        commentLocal: "",
-        icon: app.icon,
-        exec: app.id,
-        desktopFile: `${app.id}.desktop`,
-    })));
+    mockData.desktopEntries.push(
+        ...appList.map((app) => ({
+            name: app.name,
+            nameLocal: app.name,
+            comment: "",
+            commentLocal: "",
+            icon: app.icon,
+            exec: app.id,
+            desktopFile: `${app.id}.desktop`,
+        })),
+    );
 }
 
 // 加载壁纸并启动
@@ -123,7 +131,7 @@ async function init() {
                     clients,
                     on(event: string, cb: (...args: any[]) => void) {
                         if (!listeners.has(event)) listeners.set(event, new Set());
-                        listeners.get(event)!.add(cb);
+                        listeners.get(event)?.add(cb);
                         return mockServer;
                     },
                     off(event: string, cb: (...args: any[]) => void) {
@@ -131,7 +139,9 @@ async function init() {
                         return mockServer;
                     },
                     emit(event: string, ...args: any[]) {
-                        listeners.get(event)?.forEach((cb) => cb(...args));
+                        listeners.get(event)?.forEach((cb) => {
+                            cb(...args);
+                        });
                     },
                     destroy() {
                         clients.clear();
@@ -153,7 +163,7 @@ async function init() {
                         const result = createMockApp(exec, mockClient, render);
                         if (result) {
                             // 在客户端上触发windowCreated事件，传递renderId
-                            mockClient.emit("windowCreated", result.app["windowId"], result.renderId);
+                            mockClient.emit("windowCreated", result.app.windowId, result.renderId);
                         }
                         return {} as any;
                     },

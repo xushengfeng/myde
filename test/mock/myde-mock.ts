@@ -1,7 +1,7 @@
 import type { DesktopApi } from "../../src/desktop-api";
-import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools";
 import type { Item } from "../../src/sys_api/app_control";
-import { MockRenderTools } from "./render-tools";
+import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools";
+import type { MockRenderTools } from "./render-tools";
 
 let globalRenderTools: MockRenderTools | null = null;
 
@@ -114,15 +114,16 @@ export function createMockClient(): MockWaylandClient {
         setLogConfig: (_config) => {},
         on(event: string, cb: (...args: any[]) => void) {
             if (!listeners.has(event)) listeners.set(event, new Set());
-            listeners.get(event)!.add(cb);
+            listeners.get(event)?.add(cb);
             return client;
         },
         onSync(event: string, cb: (...args: any[]) => any) {
             if (!listeners.has(event)) listeners.set(event, new Set());
-            listeners.get(event)!.add(cb);
+            listeners.get(event)?.add(cb);
             return client;
         },
         emit(event: string, ...args: any[]) {
+            // biome-ignore  lint/suspicious/useIterableCallbackReturn:''
             listeners.get(event)?.forEach((cb) => cb(...args));
         },
         keyboard: {
@@ -141,7 +142,7 @@ export function createMockClient(): MockWaylandClient {
 }
 
 export function createMockWindow(id: string): MockWaylandWindow {
-    let title = "";
+    const title = "";
     let width = 0;
     let height = 0;
     let actived = false;
@@ -191,8 +192,8 @@ export function createMockWindow(id: string): MockWaylandWindow {
                 }
                 return undefined;
             },
-            sendPointerEvent(type, p) {},
-            sendScrollEvent(op) {},
+            sendPointerEvent(_type, _p) {},
+            sendScrollEvent(_op) {},
         },
         getPreview() {
             return canvas;
@@ -241,7 +242,7 @@ function createMockEventEmitter() {
     return {
         on(event: string, cb: (...args: any[]) => void) {
             if (!listeners.has(event)) listeners.set(event, new Set());
-            listeners.get(event)!.add(cb);
+            listeners.get(event)?.add(cb);
             return this;
         },
         off(event: string, cb: (...args: any[]) => void) {
@@ -249,6 +250,7 @@ function createMockEventEmitter() {
             return this;
         },
         emit(event: string, ...args: any[]) {
+            // biome-ignore  lint/suspicious/useIterableCallbackReturn:''
             listeners.get(event)?.forEach((cb) => cb(...args));
         },
     };
@@ -298,7 +300,7 @@ function createMockTray(log: (...args: any[]) => void) {
             log("tray.init");
         },
         tarysService: new Map(),
-        on(event: string, cb: (...args: any[]) => void) {
+        on(_event: string, _cb: (...args: any[]) => void) {
             return this;
         },
     } as any;
@@ -312,7 +314,7 @@ function createMockPower(log: (...args: any[]) => void) {
         getDevices() {
             return [];
         },
-        on(event: string, cb: (...args: any[]) => void) {
+        on(_event: string, _cb: (...args: any[]) => void) {
             return this;
         },
     } as any;
@@ -329,7 +331,7 @@ function createMockBlue(log: (...args: any[]) => void) {
         getDevices() {
             return [];
         },
-        on(event: string, cb: (...args: any[]) => void) {
+        on(_event: string, _cb: (...args: any[]) => void) {
             return this;
         },
     } as any;
@@ -346,7 +348,7 @@ function createMockNetwork(log: (...args: any[]) => void) {
         getWifiDevices() {
             return [];
         },
-        on(event: string, cb: (...args: any[]) => void) {
+        on(_event: string, _cb: (...args: any[]) => void) {
             return this;
         },
     } as any;
@@ -620,7 +622,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
                 clients,
                 on(event: string, cb: (...args: any[]) => void) {
                     if (!listeners.has(event)) listeners.set(event, new Set());
-                    listeners.get(event)!.add(cb);
+                    listeners.get(event)?.add(cb);
                     return mockServer;
                 },
                 off(event: string, cb: (...args: any[]) => void) {
@@ -628,6 +630,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
                     return mockServer;
                 },
                 emit(event: string, ...args: any[]) {
+                    // biome-ignore  lint/suspicious/useIterableCallbackReturn:''
                     listeners.get(event)?.forEach((cb) => cb(...args));
                 },
                 destroy() {
@@ -706,8 +709,10 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
             renderToolsHtmlEl: class {
                 constructor() {
                     if (globalRenderTools) {
+                        // biome-ignore lint/correctness/noConstructorReturn:''
                         return globalRenderTools;
                     }
+                    // biome-ignore lint/correctness/noConstructorReturn:''
                     return createMockRenderTools();
                 }
             } as any,

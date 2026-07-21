@@ -6,8 +6,6 @@ export class MockRenderTools implements renderTools {
     private _on: renderToolsOn = {};
     private idGen = 0;
 
-    constructor() {}
-
     on(op?: renderToolsOn): void {
         if (op) {
             this._on = { ...this._on, ...op };
@@ -31,7 +29,7 @@ export class MockRenderTools implements renderTools {
     renderCanvas(canvas: OffscreenCanvas, id: string): void {
         const info = this.canvasMap.get(id);
         if (!info) return;
-        
+
         info.canvas.width = canvas.width;
         info.canvas.height = canvas.height;
         const ctx = info.canvas.getContext("2d");
@@ -139,11 +137,11 @@ export class MockRenderTools implements renderTools {
     }
 
     destroy(): void {
-        for (const [id, info] of this.xdgElMap) {
+        for (const [, info] of this.xdgElMap) {
             info.element.remove();
         }
         this.xdgElMap.clear();
-        for (const [id, info] of this.canvasMap) {
+        for (const [, info] of this.canvasMap) {
             info.container.remove();
         }
         this.canvasMap.clear();

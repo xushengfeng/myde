@@ -1,4 +1,4 @@
-import { MockApp, type MockAppConfig } from "./base";
+import { MockApp } from "./base";
 
 interface Point {
     x: number;
@@ -10,10 +10,6 @@ export class MouseTrailApp extends MockApp {
     private points: Point[] = [];
     private isDrawing = false;
     private hue = 0;
-
-    constructor(config: MockAppConfig) {
-        super(config);
-    }
 
     init(): void {
         this.points = [];
@@ -28,7 +24,7 @@ export class MouseTrailApp extends MockApp {
         if (this.points.length < 2) return;
 
         const now = Date.now();
-        this.points = this.points.filter(p => now - p.timestamp < 3000);
+        this.points = this.points.filter((p) => now - p.timestamp < 3000);
 
         for (let i = 1; i < this.points.length; i++) {
             const prev = this.points[i - 1];

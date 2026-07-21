@@ -1,4 +1,4 @@
-import { MockApp, type MockAppConfig } from "./base";
+import { MockApp } from "./base";
 
 interface Shape {
     x: number;
@@ -18,10 +18,6 @@ export class RotatingShapeApp extends MockApp {
     private speedMultiplier = 1;
     private centerX = 0;
     private centerY = 0;
-
-    constructor(config: MockAppConfig) {
-        super(config);
-    }
 
     init(): void {
         this.centerX = this.width / 2;
