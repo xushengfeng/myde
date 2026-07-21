@@ -40,6 +40,12 @@
 
 使用`test/electron_app`可以创建单脚本控制主进程和渲染进程的特殊应用，适用于wayland api和系统api相关
 
+### Mock
+
+`test/mock`提供myde全局变量的mock实现，用于桌面开发者快速开发参考界面，无需真实dbus/系统服务。
+
+详细用法见[test/mock/readme.md](test/mock/readme.md)
+
 ## 常用开发流程
 
 ### 新增wayland协议
