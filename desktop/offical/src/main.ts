@@ -4,6 +4,8 @@ import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../sr
 import type { mprisPlayer } from "../../../src/sys_api/mpris";
 import { txt, dynamicList } from "dkh-ui";
 import type { blueDevice } from "../../../src/sys_api/blue";
+import { AnimationGear, timingFunction } from "myde-ui";
+import { aLineText } from "./ui";
 
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
 const fs = MSysApi.fs;
@@ -76,26 +78,39 @@ class Tools {
                     borderRadius: "12px",
                 })
                 .addInto(this.tipEl)
-                .bindSet((s: "show" | "hide" | "toggle") => {
+                .bindSet((s) => {
                     if (s === "show") {
-                        el.style({ display: "block" });
                         show = true;
                     } else if (s === "hide") {
-                        el.style({ display: "none" });
                         show = false;
                     } else {
-                        el.style({ display: show ? "none" : "block" });
                         show = !show;
                     }
                 })
                 .bindGet(() => show);
             return el;
         })().sv("hide");
+        const gear = new AnimationGear<{ show: number }>(
+            { show: 0 },
+            { transition: { duration: 280, map: (x) => timingFunction.easeOut(x) } },
+        );
+        gear.addState("show", { show: 1 }, ["hide"]);
+        gear.addState("hide", { show: 0 }, ["show"]);
+        gear.setUpdateCallback((state) => {
+            if (state.show === 0) {
+                tipel.style({ display: "none" });
+            } else {
+                tipel.style({ display: "block", opacity: `${state.show}`, scale: `${state.show}` });
+            }
+        });
+        gear.moveTo("hide", 0);
         // todo 回收
         window.addEventListener("pointerdown", (e) => {
             const target = e.target as HTMLElement;
             if (tipel.gv === true && !tipel.el.contains(target)) {
+                e.stopImmediatePropagation();
                 tipel.sv("hide");
+                gear.moveTo("hide");
             }
         });
         return {
@@ -104,9 +119,20 @@ class Tools {
                     tipEl: tipel.el,
                     showTip: (s) => {
                         const state = s?.state || "toggle";
-                        if (state === "show") tipel.sv("show");
-                        else if (state === "hide") tipel.sv("hide");
-                        else tipel.sv("toggle");
+                        if (state === "show") {
+                            tipel.sv("show");
+                            gear.moveTo("show");
+                        } else if (state === "hide") {
+                            tipel.sv("hide");
+                            gear.moveTo("hide");
+                        } else {
+                            tipel.sv("toggle");
+                            if (tipel.gv === true) {
+                                gear.moveTo("show");
+                            } else {
+                                gear.moveTo("hide");
+                            }
+                        }
                         const anchorname = `--${crypto.randomUUID()}`;
                         const anchorEl = s?.anchorEl ? pack(s.anchorEl) : el;
                         anchorEl.style({
@@ -119,18 +145,22 @@ class Tools {
                             ...(showA === "left"
                                 ? {
                                       positionArea: "left center",
+                                      transformOrigin: "right center",
                                   }
                                 : showA === "right"
                                   ? {
                                         positionArea: "right center",
+                                        transformOrigin: "left center",
                                     }
                                   : showA === "top"
                                     ? {
                                           positionArea: "top center",
+                                          transformOrigin: "bottom center",
                                       }
                                     : showA === "bottom"
                                       ? {
                                             positionArea: "bottom center",
+                                            transformOrigin: "top center",
                                         }
                                       : {}),
                         });
@@ -696,7 +726,7 @@ server.server.on("clientClose", (client, clientId) => {
     }
 });
 
-const mainEl = view().style({ width: "100vw", height: "100vh" }).addInto();
+const mainEl = view().style({ width: "100vw", height: "100vh", fontFamily: "sans-serif" }).addInto();
 
 const bg = image(fs.readFileAsDataURLSync("/assets/wallpaper/1.svg"), "wallpaper").style({
     width: "100%",
@@ -833,10 +863,53 @@ tools.registerTool("showAllView", () => {
     return showAllViewBtn;
 });
 
-tools.registerTool("startMenuFullScreen", () => {
+tools.registerTool("startMenuFullScreen", ({ tipEl, showTip }) => {
     const iconConfig: DesktopIconConfig = {
         theme: setting.get("icon.theme"),
     };
+    const menu = view("x", "wrap")
+        .style({
+            width: "80vw",
+            height: "80vh",
+            padding: "20px",
+            borderRadius: "20px",
+            overflowY: "scroll",
+        })
+        .addInto(mainEl);
+    MSysApi.getDesktopEntries().then(async (apps) => {
+        for (const app of apps) {
+            await scheduler.yield();
+            const appEl = view("y")
+                .style({
+                    width: "80px",
+                    height: "80px",
+                    alignItems: "center",
+                    justifyContent: "flex-start",
+                })
+                .addInto(menu);
+            const iconView = view().addInto(appEl);
+            iconView.add(
+                appLauncher(
+                    async () => (await MSysApi.getDesktopIcon(app.icon, iconConfig)) || "",
+                    app.name,
+                    app.exec,
+                ).style({
+                    width: "40px",
+                    height: "40px",
+                }),
+            );
+            appEl.add(
+                txt(app.nameLocal).style({
+                    fontSize: "12px",
+                    maxWidth: "80%",
+                    overflow: "hidden",
+                    textAlign: "center",
+                }),
+            );
+        }
+    });
+    tipEl.innerHTML = "";
+    menu.addInto(tipEl);
     const startMenuBtn = view()
         .style({
             width: "48px",
@@ -845,55 +918,7 @@ tools.registerTool("startMenuFullScreen", () => {
             background: "#00aaff",
         })
         .on("click", async () => {
-            const menu = view("x", "wrap")
-                .style({
-                    position: "absolute",
-                    left: 0,
-                    top: 0,
-                    width: "100%",
-                    height: "100%",
-                    padding: "20px",
-                    background: "rgba(255, 255, 255, 0.4)",
-                    backdropFilter: "blur(24px)",
-                    zIndex: 1000,
-                    overflowY: "scroll",
-                })
-                .addInto(mainEl);
-            menu.on("click", (_, el) => {
-                if (el.el === menu.el) {
-                    menu.remove();
-                }
-            });
-            for (const app of await MSysApi.getDesktopEntries()) {
-                await scheduler.yield();
-                const appEl = view("y")
-                    .style({
-                        width: "80px",
-                        height: "80px",
-                        alignItems: "center",
-                        justifyContent: "flex-start",
-                    })
-                    .addInto(menu);
-                const iconView = view().addInto(appEl);
-                iconView.add(
-                    appLauncher(
-                        async () => (await MSysApi.getDesktopIcon(app.icon, iconConfig)) || "",
-                        app.name,
-                        app.exec,
-                    ).style({
-                        width: "40px",
-                        height: "40px",
-                    }),
-                );
-                appEl.add(
-                    txt(app.nameLocal).style({
-                        fontSize: "12px",
-                        maxWidth: "80%",
-                        overflow: "hidden",
-                        textAlign: "center",
-                    }),
-                );
-            }
+            showTip({ state: "toggle" });
         });
     return startMenuBtn;
 });
@@ -915,6 +940,8 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
     const appsEl = view().style({
         display: "flex",
         flexDirection: "inherit",
+        maxWidth: "800px",
+        overflowX: "auto",
     });
     const a = showA;
 
@@ -963,6 +990,23 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
         }
     });
     const nowApps = new Map<string, { iconEl: ElType<HTMLElement>; clients: Set<WaylandClient> }>();
+    const preview = view()
+        .style({ display: "flex" })
+        .on("pointerenter", () => {
+            autoHide.moveTo("reset");
+        })
+        .on("pointerleave", () => {
+            autoHide.moveTo("hide");
+        })
+        .addInto(tipEl);
+    const autoHide = new AnimationGear({ v: 0 }, { transition: { duration: 400 } });
+    autoHide.setUpdateCallback((v) => {
+        if (v.v === 1) {
+            showTip({ state: "hide" });
+        }
+    });
+    autoHide.addState("reset", { v: 0 }, ["hide"]);
+    autoHide.addState("hide", { v: 1 }, ["reset"]);
     async function addAppIcon(c: WaylandClient) {
         const appid = c.getAppid();
         if (!appid) return;
@@ -989,26 +1033,12 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
                 jump2Win(ViewData.winId(c.id, allWin[nextIndex][0]));
             }
         });
-        const timer = new Timer(400);
-        timer.on(() => {
-            preview.remove();
-            showTip({ state: "hide" });
-        });
-        const preview = view()
-            .style({ display: "flex" })
-            .on("pointerenter", () => {
-                timer.reset();
-            })
-            .on("pointerleave", () => {
-                timer.start();
-            });
         appEl
             .on("pointerenter", () => {
                 const data = nowApps.get(appid);
                 if (!data) return;
-                timer.reset();
-                if (!timer.end) return;
-                preview.addInto(tipEl);
+                autoHide.moveTo("reset");
+                preview.clear();
                 if (a === "left" || a === "right") {
                     preview.style({ flexDirection: "column" });
                 } else {
@@ -1041,7 +1071,7 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
                 showTip({ state: "show", anchorEl: appEl.el });
             })
             .on("pointerleave", () => {
-                timer.start();
+                autoHide.moveTo("hide");
             });
     }
     for (const [_id, c] of server.server.clients) {
@@ -1224,7 +1254,7 @@ tools.registerTool("tray", ({ tipEl, showTip }) => {
                             .style({ width: "16px", height: "16px", objectFit: "cover" })
                             .addInto(itemEl);
                     }
-                    txt(item.label).addInto(itemEl);
+                    aLineText().sv(item.label).addInto(itemEl);
                     itemEl.on("click", () => {
                         item.click();
                         menuEl.remove();
@@ -1262,7 +1292,9 @@ tools.registerTool("power", ({ tipEl, showTip }) => {
                     const name = (await t.getModel()) || "Unknown";
                     const percentage = await t.getPercentage();
                     const status = await t.getState();
-                    view("x").addInto(list).add(`${name}: ${percentage}% (${status})`);
+                    view("x")
+                        .addInto(list)
+                        .add(aLineText().sv(`${name}: ${percentage}% (${status})`));
                 }
                 showTip({ state: "show", anchorEl: el.el });
             });
@@ -1296,11 +1328,15 @@ tools.registerTool("blue", ({ tipEl, showTip }) => {
                 }
                 for (const d of c) {
                     const name = (await d.getName()) || "Unknown";
-                    view("x").addInto(list).add(`🔗 ${name}`);
+                    view("x")
+                        .addInto(list)
+                        .add(aLineText().sv(`🔗 ${name}`));
                 }
                 for (const d of uc) {
                     const name = (await d.getName()) || "Unknown";
-                    view("x").addInto(list).add(`🔌 ${name}`);
+                    view("x")
+                        .addInto(list)
+                        .add(aLineText().sv(`🔌 ${name}`));
                 }
                 showTip({ state: "show", anchorEl: el.el });
             });
@@ -1324,7 +1360,9 @@ tools.registerTool("network", ({ tipEl, showTip }) => {
                 const activeWifi = await MSysApi.network.getActiveWifiConnection();
                 if (activeWifi) {
                     const name = activeWifi.id;
-                    view("x").style({ whiteSpace: "pre" }).addInto(list).add(`🔗 ${name}`);
+                    view("x")
+                        .addInto(list)
+                        .add(aLineText().sv(`🔗 ${name}`));
                 }
 
                 const devices = MSysApi.network.getWifiDevices();
@@ -1332,7 +1370,9 @@ tools.registerTool("network", ({ tipEl, showTip }) => {
                 for (const n of await devices[0].getAccessPoints()) {
                     const name = (await n.getSsid()) || "Unknown";
                     if (name === activeWifi?.id) continue;
-                    view("x").style({ whiteSpace: "pre" }).addInto(list).add(`${name}`);
+                    view("x")
+                        .addInto(list)
+                        .add(aLineText().sv(`${name}`));
                 }
                 showTip({ state: "show", anchorEl: el.el });
             });

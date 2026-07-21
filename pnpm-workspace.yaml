@@ -9,6 +9,7 @@ minimumReleaseAgeExclude:
   - myde-xcb@0.1.0
   - myde-xcb@0.1.1
   - myde-remote-connect@0.0.5
+  - myde-ui@0.0.4
 
 onlyBuiltDependencies:
   - '@biomejs/biome'
