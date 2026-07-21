@@ -5,7 +5,7 @@ import type { mprisPlayer } from "../../../src/sys_api/mpris";
 import { txt, dynamicList } from "dkh-ui";
 import type { blueDevice } from "../../../src/sys_api/blue";
 import { AnimationGear, timingFunction } from "myde-ui";
-import { aLineText } from "./ui";
+import { aLineText, uPasswdInput } from "./ui";
 
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
 const fs = MSysApi.fs;
@@ -796,26 +796,31 @@ stateLock.on("lock", ({ nextTrigger, leave }) => {
     });
 });
 stateLock.on("passwd", ({ nextTrigger, leave }) => {
-    const inputEl = input("password");
+    const inputEl = uPasswdInput();
+    inputEl.placeholder("请输入密码");
+    inputEl.el.style({ width: "150px", height: "24px" });
     const timer = new Timer(30000);
     let cheking = false;
-    toolTip.clear().add([
-        inputEl,
-        button("确认进入").on("click", async () => {
-            if (cheking) return;
-            cheking = true;
-            inputEl.attr({ disabled: true });
-            const r = await myde.MSysApi.verifyUserPassword(inputEl.gv);
-            if (r) nextTrigger("out");
-            else {
-                inputEl.sv("");
-                inputEl.attr({ disabled: false, placeholder: "密码错误，请重试" }); // todo pam code
-                cheking = false;
-            }
-        }),
-    ]);
+    async function check() {
+        if (cheking) return;
+        cheking = true;
+        inputEl.disable(true);
+        const r = await myde.MSysApi.verifyUserPassword(inputEl.el.gv);
+        if (r) nextTrigger("out");
+        else {
+            inputEl.clear();
+            inputEl.disable(false);
+            inputEl.placeholder("密码错误，请重试"); // todo pam code
+            cheking = false;
+        }
+    }
 
-    inputEl.on("input", () => {
+    toolTip.clear().add([inputEl.el, button("确认进入").on("click", check)]);
+
+    inputEl.el.on("change", () => {
+        check();
+    });
+    inputEl.el.on("input", () => {
         timer.reset();
         timer.start();
     });
