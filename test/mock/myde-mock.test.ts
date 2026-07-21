@@ -25,9 +25,7 @@ describe("myde mock", () => {
     });
 
     it("自定义MSysApi实现", () => {
-        const customEntries = [
-            { name: "TestApp", exec: "test-app", icon: "test-icon" },
-        ];
+        const customEntries = [{ name: "TestApp", exec: "test-app", icon: "test-icon" }];
 
         const myde = createMockMyde({
             sysApi: {

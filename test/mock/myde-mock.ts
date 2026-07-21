@@ -1,15 +1,36 @@
 import type { DesktopApi } from "../../src/desktop-api";
 import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools";
 import type { Item } from "../../src/sys_api/app_control";
+import { MockRenderTools } from "./render-tools";
+
+let globalRenderTools: MockRenderTools | null = null;
+
+export function setGlobalRenderTools(renderTools: MockRenderTools): void {
+    globalRenderTools = renderTools;
+}
+
+export function getGlobalRenderTools(): MockRenderTools | null {
+    return globalRenderTools;
+}
 
 export interface MockWaylandWindow {
-    focus(): void;
+    focus(): boolean;
     blur(): void;
     setWinBoxData(data: { width: number; height: number }): void;
-    point: {
-        sendPointerEvent(event: string, x: number, y: number, button?: number): void;
-    };
+    setSize(w: number, h: number): void;
+    maximize(width: number, height: number): void;
+    unmaximize(width: number, height: number): void;
+    minimize(): void;
     close(): void;
+    point: {
+        renderId(): string;
+        inWin(p: { x: number; y: number }): boolean;
+        updatePointerFocus(p: { x: number; y: number }): { x: number; y: number } | undefined;
+        sendPointerEvent(type: "move" | "down" | "up", p: { x: number; y: number; button: number }): void;
+        sendScrollEvent(op: { p: { deltaX: number; deltaY: number; deltaZ: number } }): void;
+    };
+    getPreview(): OffscreenCanvas;
+    getTitle(): string;
 }
 
 export interface MockWaylandClient {
@@ -17,7 +38,8 @@ export interface MockWaylandClient {
     win(id: string): MockWaylandWindow | undefined;
     setLogConfig(config: { receive: string[]; send: string[] }): void;
     on(event: string, cb: (...args: any[]) => void): MockWaylandClient;
-    onSync(event: string, cb: () => void): MockWaylandClient;
+    onSync(event: string, cb: (...args: any[]) => any): MockWaylandClient;
+    emit(event: string, ...args: any[]): void;
     keyboard: {
         sendKey(code: number, state: string): void;
     };
@@ -56,6 +78,9 @@ export interface MockConfig {
 type SettingInitReturn = ReturnType<DesktopApi["MSetting"]["init"]>;
 
 function createMockRenderTools(): renderTools {
+    if (globalRenderTools) {
+        return globalRenderTools;
+    }
     return {
         on(_op?: renderToolsOn): void {},
         idScope(): (id: unknown) => string {
@@ -92,10 +117,13 @@ export function createMockClient(): MockWaylandClient {
             listeners.get(event)!.add(cb);
             return client;
         },
-        onSync(event: string, cb: () => void) {
+        onSync(event: string, cb: (...args: any[]) => any) {
             if (!listeners.has(event)) listeners.set(event, new Set());
             listeners.get(event)!.add(cb);
             return client;
+        },
+        emit(event: string, ...args: any[]) {
+            listeners.get(event)?.forEach((cb) => cb(...args));
         },
         keyboard: {
             sendKey: (_code, _state) => {},
@@ -113,15 +141,73 @@ export function createMockClient(): MockWaylandClient {
 }
 
 export function createMockWindow(id: string): MockWaylandWindow {
-    return {
-        focus() {},
-        blur() {},
-        setWinBoxData(_data) {},
-        point: {
-            sendPointerEvent(_event, _x, _y, _button) {},
+    let title = "";
+    let width = 0;
+    let height = 0;
+    let actived = false;
+    let renderId = `render-${id}`;
+    const canvas = new OffscreenCanvas(1, 1);
+
+    const window: MockWaylandWindow = {
+        focus() {
+            if (actived) return false;
+            actived = true;
+            return true;
+        },
+        blur() {
+            actived = false;
+        },
+        setWinBoxData(data) {
+            width = data.width;
+            height = data.height;
+        },
+        setSize(w, h) {
+            width = w;
+            height = h;
+        },
+        maximize(w, h) {
+            width = w;
+            height = h;
+            actived = true;
+        },
+        unmaximize(w, h) {
+            width = w;
+            height = h;
+        },
+        minimize() {
+            actived = false;
         },
         close() {},
+        point: {
+            renderId() {
+                return renderId;
+            },
+            inWin(p) {
+                return p.x >= 0 && p.x < width && p.y >= 0 && p.y < height;
+            },
+            updatePointerFocus(p) {
+                if (p.x >= 0 && p.x < width && p.y >= 0 && p.y < height) {
+                    return { x: p.x, y: p.y };
+                }
+                return undefined;
+            },
+            sendPointerEvent(type, p) {},
+            sendScrollEvent(op) {},
+        },
+        getPreview() {
+            return canvas;
+        },
+        getTitle() {
+            return title;
+        },
     };
+
+    // 添加设置renderId的方法
+    (window as any).setRenderId = (id: string) => {
+        renderId = id;
+    };
+
+    return window;
 }
 
 function createMockSettingInstance(): SettingInitReturn {
@@ -171,10 +257,18 @@ function createMockEventEmitter() {
 function createMockMedia(log: (...args: any[]) => void) {
     const emitter = createMockEventEmitter();
     return {
-        async init() { log("media.init"); },
-        onNewPlayer(cb: (player: any) => void) { emitter.on("new-player", cb); },
-        offNewPlayer(cb: (player: any) => void) { emitter.off("new-player", cb); },
-        getPlayers() { return []; },
+        async init() {
+            log("media.init");
+        },
+        onNewPlayer(cb: (player: any) => void) {
+            emitter.on("new-player", cb);
+        },
+        offNewPlayer(cb: (player: any) => void) {
+            emitter.off("new-player", cb);
+        },
+        getPlayers() {
+            return [];
+        },
         emit: emitter.emit,
     } as any;
 }
@@ -182,63 +276,109 @@ function createMockMedia(log: (...args: any[]) => void) {
 function createMockNotification(log: (...args: any[]) => void) {
     const emitter = createMockEventEmitter();
     return {
-        async init() { log("notification.init"); },
-        on(event: string, cb: (...args: any[]) => void) { emitter.on(event, cb); },
-        off(event: string, cb: (...args: any[]) => void) { emitter.off(event, cb); },
-        getNotifications() { return []; },
+        async init() {
+            log("notification.init");
+        },
+        on(event: string, cb: (...args: any[]) => void) {
+            emitter.on(event, cb);
+        },
+        off(event: string, cb: (...args: any[]) => void) {
+            emitter.off(event, cb);
+        },
+        getNotifications() {
+            return [];
+        },
         emit: emitter.emit,
     } as any;
 }
 
 function createMockTray(log: (...args: any[]) => void) {
     return {
-        async init() { log("tray.init"); },
+        async init() {
+            log("tray.init");
+        },
         tarysService: new Map(),
-        on(event: string, cb: (...args: any[]) => void) { return this; },
+        on(event: string, cb: (...args: any[]) => void) {
+            return this;
+        },
     } as any;
 }
 
 function createMockPower(log: (...args: any[]) => void) {
     return {
-        async init() { log("power.init"); },
-        getDevices() { return []; },
-        on(event: string, cb: (...args: any[]) => void) { return this; },
+        async init() {
+            log("power.init");
+        },
+        getDevices() {
+            return [];
+        },
+        on(event: string, cb: (...args: any[]) => void) {
+            return this;
+        },
     } as any;
 }
 
 function createMockBlue(log: (...args: any[]) => void) {
     return {
-        async init() { log("blue.init"); },
-        async isPowered() { return false; },
-        getDevices() { return []; },
-        on(event: string, cb: (...args: any[]) => void) { return this; },
+        async init() {
+            log("blue.init");
+        },
+        async isPowered() {
+            return false;
+        },
+        getDevices() {
+            return [];
+        },
+        on(event: string, cb: (...args: any[]) => void) {
+            return this;
+        },
     } as any;
 }
 
 function createMockNetwork(log: (...args: any[]) => void) {
     return {
-        async init() { log("network.init"); },
-        async getActiveWifiConnection() { return null; },
-        getWifiDevices() { return []; },
-        on(event: string, cb: (...args: any[]) => void) { return this; },
+        async init() {
+            log("network.init");
+        },
+        async getActiveWifiConnection() {
+            return null;
+        },
+        getWifiDevices() {
+            return [];
+        },
+        on(event: string, cb: (...args: any[]) => void) {
+            return this;
+        },
     } as any;
 }
 
 function createMockDisplay(log: (...args: any[]) => void) {
     const emitter = createMockEventEmitter();
     return {
-        onMessage(type: string, handler: (data: any) => void) { emitter.on(type, handler); },
-        send(type: string, data: any) { log("display.send", type, data); },
+        onMessage(type: string, handler: (data: any) => void) {
+            emitter.on(type, handler);
+        },
+        send(type: string, data: any) {
+            log("display.send", type, data);
+        },
     } as any;
 }
 
 function createMockInput(log: (...args: any[]) => void) {
     const emitter = createMockEventEmitter();
     return {
-        async init() { log("input.init"); },
-        on(event: string, cb: (...args: any[]) => void) { emitter.on(event, cb); },
-        off(event: string, cb: (...args: any[]) => void) { emitter.off(event, cb); },
-        getDevices() { return []; },
+        async init() {
+            log("input.init");
+        },
+        on(event: string, cb: (...args: any[]) => void) {
+            emitter.on(event, cb);
+        },
+        off(event: string, cb: (...args: any[]) => void) {
+            emitter.off(event, cb);
+        },
+        getDevices() {
+            return [];
+        },
     } as any;
 }
 
@@ -299,12 +439,25 @@ function createMockVfs(verbose: boolean, store?: MockVfsStore): DesktopApi["MSys
     const getMime = (p: string) => {
         const ext = p.split(".").pop()?.toLowerCase() || "";
         const mimes: Record<string, string> = {
-            svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-            gif: "image/gif", webp: "image/webp", ico: "image/x-icon",
-            mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg",
-            mp4: "video/mp4", webm: "video/webm",
-            pdf: "application/pdf", zip: "application/zip",
-            txt: "text/plain", html: "text/html", css: "text/css", js: "application/javascript", json: "application/json",
+            svg: "image/svg+xml",
+            png: "image/png",
+            jpg: "image/jpeg",
+            jpeg: "image/jpeg",
+            gif: "image/gif",
+            webp: "image/webp",
+            ico: "image/x-icon",
+            mp3: "audio/mpeg",
+            wav: "audio/wav",
+            ogg: "audio/ogg",
+            mp4: "video/mp4",
+            webm: "video/webm",
+            pdf: "application/pdf",
+            zip: "application/zip",
+            txt: "text/plain",
+            html: "text/html",
+            css: "text/css",
+            js: "application/javascript",
+            json: "application/json",
         };
         return mimes[ext] || "application/octet-stream";
     };
@@ -490,7 +643,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
                     return {} as any;
                 },
                 server: mockServer,
-            };
+            } as any;
         },
         fs: createMockVfs(verbose, vfsStore),
         login: (state: "suspend" | "hibernate" | "shutdown" | "restart") => {
@@ -550,8 +703,11 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         MSysApi: { ...defaultSysApi, ...sysApiOverrides },
         MInputMap: { ...defaultInputMap, ...inputMapOverrides },
         MUtils: {
-            renderToolsHtmlEl: class MockRenderTools {
+            renderToolsHtmlEl: class {
                 constructor() {
+                    if (globalRenderTools) {
+                        return globalRenderTools;
+                    }
                     return createMockRenderTools();
                 }
             } as any,
