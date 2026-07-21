@@ -284,6 +284,7 @@ const planteData: Plant[] = [
             { id: "blue" },
             { id: "network" },
             { id: "power" },
+            { id: "login" },
             { id: "notifications" },
             { id: "clock" },
         ],
@@ -741,7 +742,7 @@ const windowElWarp = view().style({
 
 const toolsBottom = view();
 const toolsTop = view()
-    .style({ position: "absolute", top: 0, left: 0 })
+    .style({ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" })
     .class(
         addClass(
             { pointerEvents: "none" },
@@ -855,6 +856,55 @@ const ob = new ResizeObserver((e) => {
 });
 
 ob.observe(windowEl.el);
+
+async function confirm(text: string) {
+    const p = Promise.withResolvers<boolean>();
+    const el = view().style({
+        background: "rgba(255, 255, 255, 0.6)",
+        borderRadius: "14px",
+        padding: "14px",
+        backdropFilter: "blur(10px)",
+        position: "absolute",
+        left: "50%",
+        transform: "translateX(-50%)",
+        minWidth: "100px",
+    });
+    el.add(view().add(text));
+    el.add(
+        view("x")
+            .style({ width: "100%" })
+            .add([
+                button("是")
+                    .style({ textAlign: "center", flex: 1 })
+                    .on("click", () => {
+                        p.resolve(true);
+                        gear.moveTo("hide");
+                    }),
+                button("否")
+                    .style({ textAlign: "center", flex: 1 })
+                    .on("click", () => {
+                        p.resolve(false);
+                        gear.moveTo("hide");
+                    }),
+            ]),
+    );
+    const gear = new AnimationGear({ v: 0 }, { transition: { duration: 200, map: timingFunction.easeOut } });
+    gear.addState("show", { v: 1 }, ["hide"]);
+    gear.addState("hide", { v: 0 }, ["show"]);
+    gear.moveTo("hide", 0);
+    gear.moveTo("show");
+
+    gear.setUpdateCallback((v) => {
+        if (v.v === 0) {
+            el.remove();
+        } else {
+            toolsTop.add(el);
+            el.style({ top: "40%", opacity: `${v.v}` });
+        }
+    });
+
+    return p.promise;
+}
 
 tools.registerTool("blank", () => {
     return view().style({ flexGrow: 1 });
@@ -1117,6 +1167,43 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
         bindC(c);
     });
     return appsEl;
+});
+
+tools.registerTool("login", ({ tipEl, showTip }) => {
+    const el = view().add("电源");
+
+    view("x")
+        .style({ gap: "4px" })
+        .add([
+            button()
+                .add("锁屏")
+                .on("click", () => {
+                    state.setState("lock");
+                }),
+            button()
+                .add("关机")
+                .on("click", async () => {
+                    const t = await confirm("确认 关机？");
+                    if (t) MSysApi.login("shutdown");
+                }),
+            button()
+                .add("重启")
+                .on("click", async () => {
+                    const t = await confirm("确认 重启？");
+                    if (t) MSysApi.login("restart");
+                }),
+            button()
+                .add("挂起")
+                .on("click", async () => {
+                    const t = await confirm("确认 挂起？");
+                    if (t) MSysApi.login("suspend");
+                }),
+        ])
+        .addInto(tipEl);
+    el.on("click", () => {
+        showTip({ state: "toggle" });
+    });
+    return el;
 });
 
 const notifications = new Map<string, { title: string; content: string; id: string }>();
