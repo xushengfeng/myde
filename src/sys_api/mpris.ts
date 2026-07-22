@@ -1,10 +1,15 @@
 import { type DBusTypes, dbusClient, type dbusInterface, type dbusIO } from "myde-dbus";
+import { EventEmitter } from "../event-emitter/event-emitter";
 
-export class mpris {
+export type MprisEvents = {
+    "new-player": [mprisPlayer];
+};
+
+export class mpris extends EventEmitter<MprisEvents> {
     private io: dbusIO;
-    private onMap = new Map<string, Set<(...args: any[]) => unknown>>(); // todo 类型 提取为一个lib
 
     constructor(dbus: dbusIO) {
+        super();
         this.io = dbus;
     }
 
@@ -28,16 +33,7 @@ export class mpris {
     private async emitNewPlayer(name: string) {
         const player = new mprisPlayer(this.io);
         await player.init(name);
-        for (const callback of this.onMap.get("new-player") ?? []) {
-            callback(player);
-        }
-    }
-    onNewPlayer(callback: (player: mprisPlayer) => unknown) {
-        const eventName = "new-player";
-        if (!this.onMap.has(eventName)) {
-            this.onMap.set(eventName, new Set());
-        }
-        this.onMap.get(eventName)?.add(callback);
+        this.emit("new-player", player);
     }
 }
 

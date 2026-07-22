@@ -1283,7 +1283,7 @@ tools.registerTool("mediaControl", ({ tipEl, showTip }) => {
         })
         .addInto(time);
 
-    MSysApi.media.onNewPlayer((p) => {
+    MSysApi.media.on("new-player", (p) => {
         mediaControl.set(p.getServerName(), p);
         update(p.getServerName());
         p.onMetaChange(() => update(p.getServerName()));

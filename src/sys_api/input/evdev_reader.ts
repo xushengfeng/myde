@@ -1,4 +1,5 @@
 import type { InputDevice, InputEvent } from "../input";
+import { EventEmitter } from "../../event-emitter/event-emitter";
 
 export interface FsLike {
     openSync(path: string, flags: string | number): number;
@@ -18,46 +19,28 @@ export interface FsLike {
     };
 }
 
-export interface EvdevReaderEvents {
+export type EvdevReaderEvents = {
     event: [InputEvent];
     error: [Error];
     close: [];
-}
+};
 
-export class EvdevReader {
+export class EvdevReader extends EventEmitter<EvdevReaderEvents> {
     private fd: number = -1;
     private readonly EVENT_SIZE = 24;
     private device: InputDevice;
     private fs: FsLike;
-    private listeners = new Map<string, Set<(args: unknown) => void>>();
     private running = false;
     private readBuffer: Buffer;
 
     constructor(device: InputDevice, fs: FsLike) {
+        super();
         this.device = device;
         this.fs = fs;
         // 增加缓冲区大小到 1024 个事件 (约 24KB)。
         // 之前只有 16 个事件，导致高回报率的鼠标稍微快速移动就会填满缓冲区，
-        // 从而被切分成多个极小的读取碎片，产生每次重新进入 libuv 线程池的调度开销，表现出明显的“掉帧”、“卡顿”或“不跟手”感。
+        // 从而被切分成多个极小的读取碎片，产生每次重新进入 libuv 线程池的调度开销，表现出明显的"掉帧"、"卡顿"或"不跟手"感。
         this.readBuffer = Buffer.alloc(this.EVENT_SIZE * 1024);
-    }
-
-    on<K extends keyof EvdevReaderEvents>(event: K, listener: (...args: EvdevReaderEvents[K]) => void): void {
-        let set = this.listeners.get(event as string);
-        if (!set) {
-            set = new Set();
-            this.listeners.set(event as string, set);
-        }
-        set.add(listener as (args: unknown) => void);
-    }
-
-    private emit<K extends keyof EvdevReaderEvents>(event: K, ...args: EvdevReaderEvents[K]): void {
-        const set = this.listeners.get(event as string);
-        if (set) {
-            for (const listener of set) {
-                (listener as (...a: EvdevReaderEvents[K]) => void)(...args);
-            }
-        }
     }
 
     open(): void {

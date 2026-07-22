@@ -1,4 +1,5 @@
 import type { USocket } from "myde-unix-socket";
+import { EventEmitter } from "../event-emitter/event-emitter";
 
 interface Screen {
     name: string;
@@ -27,9 +28,8 @@ interface DisplayMessage {
     [key: string]: unknown;
 }
 
-export class display {
+export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
     private socket: USocket | null = null;
-    private messageHandlers: Map<string, (data: DisplayMessage) => void> = new Map();
     private pendingRequests: Map<string, { resolve: (value: unknown) => void; reject: (reason: Error) => void }> =
         new Map();
     private buffer: ArrayBuffer = new ArrayBuffer(0);
@@ -127,10 +127,7 @@ export class display {
         }
 
         // Notify message handlers
-        const handler = this.messageHandlers.get(type);
-        if (handler) {
-            handler(message);
-        }
+        this.emit(type, message);
     }
 
     private send(data: object): void {
@@ -165,14 +162,6 @@ export class display {
                 }
             }, 5000);
         });
-    }
-
-    onMessage(type: string, handler: (data: DisplayMessage) => void): void {
-        this.messageHandlers.set(type, handler);
-    }
-
-    offMessage(type: string): void {
-        this.messageHandlers.delete(type);
     }
 
     async setWindowSize(width: number, height: number): Promise<void> {

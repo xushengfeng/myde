@@ -4,7 +4,6 @@ export class blue {
     private dbus: dbusIO;
     private client: dbusClient;
     private devices = new Map<string, blueDevice>();
-    private onMap = new Map<string, Set<(...args: unknown[]) => unknown>>();
 
     constructor(dbus: dbusIO) {
         this.dbus = dbus;

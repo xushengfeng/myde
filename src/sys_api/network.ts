@@ -4,7 +4,6 @@ export class network {
     private dbus: dbusIO;
     private client: dbusClient;
     private wifiDevices = new Map<string, wifiDevice>();
-    private onMap = new Map<string, Set<(...args: unknown[]) => unknown>>();
 
     constructor(dbus: dbusIO) {
         this.dbus = dbus;

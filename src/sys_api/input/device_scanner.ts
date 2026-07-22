@@ -1,4 +1,5 @@
 import type { InputDeviceType } from "../input";
+import { EventEmitter } from "../../event-emitter/event-emitter";
 
 export interface FsLike {
     readFileSync(path: string, options: { encoding: string } | string): string;
@@ -12,37 +13,19 @@ export interface DeviceEntry {
     type: InputDeviceType;
 }
 
-export interface DeviceScannerEvents {
+export type DeviceScannerEvents = {
     deviceAdded: [DeviceEntry];
     deviceRemoved: [DeviceEntry];
-}
+};
 
-export class DeviceScanner {
+export class DeviceScanner extends EventEmitter<DeviceScannerEvents> {
     private devices = new Map<string, DeviceEntry>();
     private watcher: { close(): void } | null = null;
     private fs: FsLike;
-    private listeners = new Map<string, Set<(args: unknown) => void>>();
 
     constructor(fs: FsLike) {
+        super();
         this.fs = fs;
-    }
-
-    on<K extends keyof DeviceScannerEvents>(event: K, listener: (...args: DeviceScannerEvents[K]) => void): void {
-        let set = this.listeners.get(event as string);
-        if (!set) {
-            set = new Set();
-            this.listeners.set(event as string, set);
-        }
-        set.add(listener as (args: unknown) => void);
-    }
-
-    private emit<K extends keyof DeviceScannerEvents>(event: K, ...args: DeviceScannerEvents[K]): void {
-        const set = this.listeners.get(event as string);
-        if (set) {
-            for (const listener of set) {
-                (listener as (...a: DeviceScannerEvents[K]) => void)(...args);
-            }
-        }
     }
 
     async scan(): Promise<DeviceEntry[]> {

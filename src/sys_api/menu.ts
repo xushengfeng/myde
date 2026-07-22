@@ -20,7 +20,6 @@ export class dbusMenu {
     private serverName: string;
     private objectPath: string;
     private mainInterface: dbusInterface | undefined;
-    private onMap = new Map<string, Set<(...args: unknown[]) => unknown>>(); // todo 类型 提取为一个lib
 
     constructor(dbus: dbusClient, op: { serverName: string; objectPath: string }) {
         this.serverName = op.serverName;

@@ -4,7 +4,6 @@ export class power {
     private dbus: dbusIO;
     private client: dbusClient;
     private devices = new Map<string, powerDevice>();
-    private onMap = new Map<string, Set<(...args: unknown[]) => unknown>>(); // todo 类型 提取为一个lib
 
     constructor(dbus: dbusIO) {
         this.dbus = dbus;

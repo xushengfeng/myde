@@ -32,6 +32,7 @@
     "src/input_map/**/*.ts",
     "src/input_codes/**/*.ts",
     "src/remote_connect/**/*.ts",
+    "src/event-emitter/**/*.ts",
     "src/vite-env.d.ts",
     "lib/**/*.ts"
   ]

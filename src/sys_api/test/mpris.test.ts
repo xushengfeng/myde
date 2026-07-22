@@ -20,7 +20,7 @@ describe("临时保持测试", async () => {
         const player = new mpris(dbus);
         await player.init();
         const l: string[] = [];
-        player.onNewPlayer(async (p) => {
+        player.on("new-player", async (p) => {
             l.push(await p.identity());
         });
         await wait(3000);
@@ -31,7 +31,7 @@ describe("临时保持测试", async () => {
         const dbus = new dbusIO({ socket });
         const player = new mpris(dbus);
         await player.init();
-        player.onNewPlayer(async (p) => {
+        player.on("new-player", async (p) => {
             p.play();
         });
         await wait(1000);
@@ -41,7 +41,7 @@ describe("临时保持测试", async () => {
         const dbus = new dbusIO({ socket });
         const player = new mpris(dbus);
         await player.init();
-        player.onNewPlayer(async (p) => {
+        player.on("new-player", async (p) => {
             p.pause();
         });
         await wait(1000);
@@ -51,7 +51,7 @@ describe("临时保持测试", async () => {
         const dbus = new dbusIO({ socket });
         const player = new mpris(dbus);
         await player.init();
-        player.onNewPlayer(async (p) => {
+        player.on("new-player", async (p) => {
             const time = await p.getCurrentTime();
             const duration = await p.duration();
             console.log(time, duration);
@@ -63,7 +63,7 @@ describe("临时保持测试", async () => {
         const dbus = new dbusIO({ socket });
         const player = new mpris(dbus);
         await player.init();
-        player.onNewPlayer(async (p) => {
+        player.on("new-player", async (p) => {
             p.onMetaChange(() => {
                 console.log("media change");
             });

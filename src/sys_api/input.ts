@@ -1,6 +1,6 @@
 import { type DeviceEntry, DeviceScanner, type FsLike as ScannerFs } from "./input/device_scanner";
 import { EvdevReader, type FsLike as ReaderFs } from "./input/evdev_reader";
-import { EventEmitter } from "./input/event_emitter";
+import { EventEmitter } from "../event-emitter/event-emitter";
 
 export type InputDeviceType = "keyboard" | "mouse" | "touchpad" | "touchscreen" | "tablet" | "gamepad" | "unknown";
 
@@ -12,7 +12,7 @@ export interface InputEvent {
     timestamp: number;
 }
 
-export interface InputDeviceEvents {
+export type InputDeviceEvents = {
     event: [InputEvent];
     key: [InputEvent];
     keyDown: [InputEvent];
@@ -22,9 +22,9 @@ export interface InputDeviceEvents {
     absolute: [InputEvent];
     sync: [InputEvent];
     error: [Error];
-}
+};
 
-export interface InputManagerEvents {
+export type InputManagerEvents = {
     event: [InputEvent];
     key: [InputEvent];
     keyDown: [InputEvent];
@@ -36,7 +36,7 @@ export interface InputManagerEvents {
     error: [Error];
     deviceAdded: [InputDevice];
     deviceRemoved: [InputDevice];
-}
+};
 
 export type FsLike = ScannerFs & ReaderFs;
 
