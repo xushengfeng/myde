@@ -262,7 +262,9 @@ class PowerAdapter {
 
         this.registry.register<string>("power.battery", {
             get: async () => {
+                console.log("p");
                 for (const t of this.power.getDevices()) {
+                    console.log(t);
                     if (
                         (await t.getPowerSupply()) &&
                         ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")
@@ -1852,41 +1854,6 @@ tools.registerTool("tray", ({ tipEl, showTip }) => {
             });
         }
     });
-
-    return el;
-});
-
-tools.registerTool("power", ({ tipEl, showTip }) => {
-    const el = view("x");
-
-    MSysApi.power
-        .init()
-        .then(async () => {
-            for (const t of MSysApi.power.getDevices()) {
-                if (
-                    (await t.getPowerSupply()) &&
-                    ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")
-                ) {
-                    el.clear().add(`🔋${await t.getPercentage()}%`);
-                }
-            }
-            const list = view("y").addInto(tipEl);
-            el.on("click", async () => {
-                list.clear();
-                for (const t of MSysApi.power.getDevices()) {
-                    const name = (await t.getModel()) || "Unknown";
-                    const percentage = await t.getPercentage();
-                    const status = await t.getState();
-                    view("x")
-                        .addInto(list)
-                        .add(aLineText().sv(`${name}: ${percentage}% (${status})`));
-                }
-                showTip({ state: "show", anchorEl: el.el });
-            });
-        })
-        .catch((e) => {
-            console.error("power init error", e);
-        });
 
     return el;
 });
