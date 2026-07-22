@@ -56,6 +56,9 @@ export abstract class MockApp {
 
         this.window.setWinBoxData({ width: this.width, height: this.height + TITLE_BAR_HEIGHT });
 
+        // 设置appid
+        this.client.setAppid(this.config.id);
+
         // 创建wayland surface
         if (this.renderTools) {
             this.surfaceId = `surface-${this.windowId}`;

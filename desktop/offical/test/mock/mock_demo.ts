@@ -156,6 +156,12 @@ async function init() {
                         const mockClient = createMockClient();
                         clients.set(clientId, mockClient);
 
+                        // 监听客户端的close事件，触发server的clientClose事件
+                        mockClient.on("close", () => {
+                            clients.delete(clientId);
+                            mockServer.emit("clientClose", mockClient, clientId);
+                        });
+
                         // 触发newClient事件
                         mockServer.emit("newClient", mockClient, clientId);
 

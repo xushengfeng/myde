@@ -36,6 +36,8 @@ export interface MockWaylandWindow {
 export interface MockWaylandClient {
     getWindows(): Map<string, MockWaylandWindow>;
     win(id: string): MockWaylandWindow | undefined;
+    getAppid(): string;
+    setAppid(appid: string): void;
     setLogConfig(config: { receive: string[]; send: string[] }): void;
     on(event: string, cb: (...args: any[]) => void): MockWaylandClient;
     onSync(event: string, cb: (...args: any[]) => any): MockWaylandClient;
@@ -107,10 +109,17 @@ function createMockRenderTools(): renderTools {
 export function createMockClient(): MockWaylandClient {
     const windows = new Map<string, MockWaylandWindow>();
     const listeners = new Map<string, Set<(...args: any[]) => void>>();
+    let appid = "";
 
     const client: MockWaylandClient = {
         getWindows: () => windows,
         win: (id: string) => windows.get(id),
+        getAppid: () => appid,
+        setAppid: (id: string) => {
+            appid = id;
+            // 触发appid事件
+            listeners.get("appid")?.forEach((cb) => cb(id));
+        },
         setLogConfig: (_config) => {},
         on(event: string, cb: (...args: any[]) => void) {
             if (!listeners.has(event)) listeners.set(event, new Set());
@@ -134,6 +143,8 @@ export function createMockClient(): MockWaylandClient {
             sendButton: (_button, _state) => {},
         },
         close() {
+            // 触发close事件
+            listeners.get("close")?.forEach((cb) => cb());
             windows.clear();
             listeners.clear();
         },
