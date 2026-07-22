@@ -272,6 +272,120 @@ class ViewData {
 
 const viewData = new ViewData();
 
+interface WindowCenterConfig {
+    enabled: boolean;
+    viewport: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+}
+
+class WindowCenterManager {
+    private config: WindowCenterConfig = {
+        enabled: true,
+        viewport: { x: 0, y: 0, width: 0, height: 0 }
+    };
+    private windowElements = new Map<string, HTMLElement>();
+    private pausedWindows = new Set<string>();
+    private resizeObserver: ResizeObserver | null = null;
+
+    constructor() {
+        this.initResizeObserver();
+    }
+
+    private initResizeObserver() {
+        this.resizeObserver = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                const windowId = entry.target.getAttribute('data-window-id');
+                if (windowId && !this.pausedWindows.has(windowId)) {
+                    this.centerWindow(windowId);
+                }
+            }
+        });
+    }
+
+    setViewport(x: number, y: number, width: number, height: number) {
+        this.config.viewport = { x, y, width, height };
+        this.recenterAll();
+    }
+
+    setViewportFromElement(element: HTMLElement) {
+        const rect = element.getBoundingClientRect();
+        this.setViewport(rect.left, rect.top, rect.width, rect.height);
+    }
+
+    addWindow(windowId: string, element: HTMLElement) {
+        element.setAttribute('data-window-id', windowId);
+        this.windowElements.set(windowId, element);
+        this.resizeObserver?.observe(element);
+        if (this.config.enabled) {
+            this.centerWindow(windowId);
+        }
+    }
+
+    removeWindow(windowId: string) {
+        const element = this.windowElements.get(windowId);
+        if (element) {
+            this.resizeObserver?.unobserve(element);
+            this.windowElements.delete(windowId);
+            this.pausedWindows.delete(windowId);
+        }
+    }
+
+    pauseCentering(windowId: string) {
+        this.pausedWindows.add(windowId);
+    }
+
+    resumeCentering(windowId: string) {
+        this.pausedWindows.delete(windowId);
+        if (this.config.enabled) {
+            this.centerWindow(windowId);
+        }
+    }
+
+    isPaused(windowId: string): boolean {
+        return this.pausedWindows.has(windowId);
+    }
+
+    setEnabled(enabled: boolean) {
+        this.config.enabled = enabled;
+        if (enabled) {
+            this.recenterAll();
+        }
+    }
+
+    isEnabled(): boolean {
+        return this.config.enabled;
+    }
+
+    centerWindow(windowId: string) {
+        const element = this.windowElements.get(windowId);
+        if (!element) return;
+
+        const windowWidth = element.offsetWidth;
+        const windowHeight = element.offsetHeight;
+
+        const centerX = this.config.viewport.x + (this.config.viewport.width - windowWidth) / 2;
+        const centerY = this.config.viewport.y + (this.config.viewport.height - windowHeight) / 2;
+
+        element.style.left = `${Math.round(centerX)}px`;
+        element.style.top = `${Math.round(centerY)}px`;
+    }
+
+    private recenterAll() {
+        if (!this.config.enabled) return;
+        for (const windowId of this.windowElements.keys()) {
+            if (!this.pausedWindows.has(windowId)) {
+                this.centerWindow(windowId);
+            }
+        }
+    }
+}
+
+const windowCenterManager = new WindowCenterManager();
+
 const planteData: Plant[] = [
     {
         id: "0",
@@ -496,17 +610,18 @@ function viewAll(s: boolean) {
     }
 }
 
-function addWindow(v: View, el: HTMLElement) {
+function addWindow(v: View, el: HTMLElement, windowId?: string) {
     const pel = newViewEl(v);
     pel.add(el);
     setViewScorll({ x: v.ox, y: v.oy });
 
     pack(el).style({
         position: "absolute",
-        top: "50%",
-        left: "50%",
-        transform: "translate(-50%,-50%)",
     });
+
+    if (windowId) {
+        windowCenterManager.addWindow(windowId, el);
+    }
 }
 
 function jump2Win(winid: MWinId) {
@@ -641,7 +756,7 @@ server.server.on("newClient", (client, clientId) => {
         viewData.moveWinToView(wid, v);
         viewData.bindWinidClientid(wid, clientId, windowId);
         // biome-ignore lint/style/noNonNullAssertion: 刚刚创建的，一定有
-        addWindow(v, render.getXdgSurfaceEle(renderId)!);
+        addWindow(v, render.getXdgSurfaceEle(renderId)!, wid);
         viewData.focusWin(wid);
         client.win(windowId)?.setWinBoxData({ width: 800, height: 600 });
         client.win(windowId)?.focus();
@@ -658,6 +773,9 @@ server.server.on("newClient", (client, clientId) => {
         const winEl = render.getXdgSurfaceEle(xwin.point.renderId());
         if (!winEl) return;
         const rect = winEl.getBoundingClientRect();
+
+        const wid = ViewData.winId(clientId, windowId);
+        windowCenterManager.pauseCentering(wid);
 
         // todo track point
         const startX = mousePos.x;
@@ -719,6 +837,19 @@ server.server.on("newClient", (client, clientId) => {
             top: "0px",
         });
         xwin.unmaximize(width, height);
+    });
+    client.on("windowResized", (windowId, width, height) => {
+        const wid = ViewData.winId(clientId, windowId);
+        const winEl = render.getXdgSurfaceEle(client.win(windowId)?.point.renderId() ?? "");
+        if (winEl) {
+            pack(winEl).style({
+                width: `${width}px`,
+                height: `${height}px`,
+            });
+            if (windowCenterManager.isEnabled() && !windowCenterManager.isPaused(wid)) {
+                windowCenterManager.centerWindow(wid);
+            }
+        }
     });
 });
 server.server.on("clientClose", (client, clientId) => {
@@ -857,10 +988,14 @@ const ob = new ResizeObserver((e) => {
         const rect = entry.contentRect;
         viewWidth.setValue(`${rect.width}px`);
         viewHeight.setValue(`${rect.height}px`);
+        windowCenterManager.setViewport(0, 0, rect.width, rect.height);
     }
 });
 
 ob.observe(windowEl.el);
+
+const initRect = windowEl.el.getBoundingClientRect();
+windowCenterManager.setViewport(0, 0, initRect.width, initRect.height);
 
 async function confirm(text: string) {
     const p = Promise.withResolvers<boolean>();
