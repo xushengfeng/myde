@@ -80,6 +80,12 @@
 
 如果是开发新桌面，需要在项目根目录的`package.json`里添加相关script
 
+## 通用工具
+
+创建事件发射器时，使用`src/event-emitter/event-emitter.ts`提供的`EventEmitter`类。支持类型安全的`on`/`off`/`once`/`emit`、`request`/`respond`请求响应模式、`waitFor` Promise等待，以及`AbortSignal`清理。
+
+`request`/`respond`在交互上很方便，`waitFor`方便写测试，但是要注意双向事件会出现死锁问题。
+
 ## 其他
 
 不用阅读`docs`文件夹
