@@ -7,6 +7,221 @@ import type { blueDevice } from "../../../src/sys_api/blue";
 import { AnimationGear, timingFunction } from "myde-ui";
 import { aLineText, uPasswdInput } from "./ui";
 
+// ========== Registry 和 ControlNode ==========
+
+interface BindingSource<T> {
+    get: () => T | Promise<T>;
+    subscribe: (cb: (value: T) => void) => () => void;
+    set?: (value: T) => Promise<void>;
+}
+
+interface ListSource {
+    getIds: () => string[] | Promise<string[]>;
+    subscribe: (cb: () => void) => () => void;
+    getChild: (id: string) => ListItemData | Promise<ListItemData>;
+}
+
+interface ListItemData {
+    id: string;
+    label: string;
+    subtitle?: string;
+    icon?: string;
+    status?: "connected" | "paired" | "saved" | "available" | "disabled";
+    action?: () => Promise<void>;
+}
+
+interface ControlNode {
+    id: string;
+    type: string;
+    el: ElType<any>;
+    unmount?(): void;
+}
+
+type RegistryListener = (id: string) => void;
+
+class Registry {
+    private sources = new Map<string, BindingSource<any>>();
+    private listSources = new Map<string, ListSource>();
+    private listeners = new Set<RegistryListener>();
+
+    register<T>(id: string, source: BindingSource<T>): void {
+        this.sources.set(id, source);
+        for (const cb of this.listeners) cb(id);
+    }
+
+    registerList(id: string, source: ListSource): void {
+        this.listSources.set(id, source);
+        for (const cb of this.listeners) cb(id);
+    }
+
+    onRegistered(cb: RegistryListener): () => void {
+        this.listeners.add(cb);
+        return () => this.listeners.delete(cb);
+    }
+
+    get<T>(id: string): BindingSource<T> | undefined {
+        return this.sources.get(id);
+    }
+
+    getListSource(id: string): ListSource | undefined {
+        return this.listSources.get(id);
+    }
+}
+
+function createToggle(registry: Registry, id: string): ControlNode {
+    const toggle = check(id, ["on", "off"]);
+    let unsub: (() => void) | undefined;
+
+    function bind(source: BindingSource<boolean>) {
+        // 初始化
+        const initVal = source.get();
+        if (initVal instanceof Promise) {
+            initVal.then((v) => toggle.sv(v));
+        } else {
+            toggle.sv(initVal);
+        }
+
+        // 订阅变化
+        unsub = source.subscribe((v) => toggle.sv(v));
+
+        // 用户操作
+        toggle.el.addEventListener("change", () => {
+            source.set?.(toggle.gv);
+        });
+    }
+
+    // 尝试绑定现有 source
+    const source = registry.get<boolean>(id);
+    if (source) {
+        bind(source);
+    }
+
+    // 监听后续注册
+    const off = registry.onRegistered((registeredId) => {
+        if (registeredId === id) {
+            const s = registry.get<boolean>(id);
+            if (s) bind(s);
+        }
+    });
+
+    return {
+        id,
+        type: "toggle",
+        el: toggle as any,
+        unmount: () => {
+            unsub?.();
+            off();
+        },
+    };
+}
+
+function createListItem(data: ListItemData): ControlNode {
+    const item = view("x");
+    if (data.icon) item.add(txt().sv(data.icon));
+    item.add(txt().sv(data.label));
+    if (data.subtitle) item.add(txt().sv(data.subtitle));
+
+    if (data.action) {
+        item.el.style.cursor = "pointer";
+        item.on("click", () => data.action?.());
+    }
+
+    return { id: data.id, type: "list-item", el: item };
+}
+
+function createDynamicList(
+    registry: Registry,
+    sourceId: string,
+    map: (id: string, data: ListItemData) => ControlNode,
+): ControlNode {
+    const container = view("y");
+    let unsub: (() => void) | undefined;
+
+    function bind(source: ListSource) {
+        async function render() {
+            const ids = await source.getIds();
+            container.clear();
+            for (const id of ids) {
+                const data = await source.getChild(id);
+                container.add(map(id, data).el);
+            }
+        }
+
+        render();
+        unsub = source.subscribe(() => render());
+    }
+
+    // 尝试绑定现有 source
+    const source = registry.getListSource(sourceId);
+    if (source) {
+        bind(source);
+    }
+
+    // 监听后续注册
+    const off = registry.onRegistered((registeredId) => {
+        if (registeredId === sourceId) {
+            const s = registry.getListSource(sourceId);
+            if (s) bind(s);
+        }
+    });
+
+    return {
+        id: sourceId,
+        type: "dynamic-list",
+        el: container,
+        unmount: () => {
+            unsub?.();
+            off();
+        },
+    };
+}
+
+// ========== 蓝牙适配器 ==========
+
+class BluetoothAdapter {
+    constructor(
+        private blue: blue,
+        private registry: Registry,
+    ) {}
+
+    async init(): Promise<void> {
+        await this.blue.init();
+
+        this.registry.register<boolean>("blue.power", {
+            get: () => this.blue.isPowered(),
+            subscribe: (cb) => {
+                // TODO: 监听 D-Bus PropertiesChanged
+                return () => {};
+            },
+            set: (v) => this.blue.setPowered(v),
+        });
+
+        this.registry.registerList("blue.devices", {
+            getIds: () => this.blue.getDevices().map((d) => d.getPath()),
+            subscribe: (cb) => {
+                // TODO: 监听设备添加/移除
+                return () => {};
+            },
+            getChild: async (path: string): Promise<ListItemData> => {
+                const device = this.blue.getDevices().find((d) => d.getPath() === path);
+                if (!device) return { id: path, label: "Unknown", status: "disabled" };
+                return {
+                    id: path,
+                    label: (await device.getName()) || "Unknown",
+                    icon: "bluetooth",
+                    status: await this.getDeviceStatus(device),
+                };
+            },
+        });
+    }
+
+    private async getDeviceStatus(device: blueDevice): Promise<ListItemData["status"]> {
+        if (await device.isConnected()) return "connected";
+        if (await device.isTrusted()) return "paired";
+        return "available";
+    }
+}
+
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
 const fs = MSysApi.fs;
 
@@ -285,7 +500,7 @@ interface WindowCenterConfig {
 class WindowCenterManager {
     private config: WindowCenterConfig = {
         enabled: true,
-        viewport: { x: 0, y: 0, width: 0, height: 0 }
+        viewport: { x: 0, y: 0, width: 0, height: 0 },
     };
     private windowElements = new Map<string, HTMLElement>();
     private pausedWindows = new Set<string>();
@@ -298,7 +513,7 @@ class WindowCenterManager {
     private initResizeObserver() {
         this.resizeObserver = new ResizeObserver((entries) => {
             for (const entry of entries) {
-                const windowId = entry.target.getAttribute('data-window-id');
+                const windowId = entry.target.getAttribute("data-window-id");
                 if (windowId && !this.pausedWindows.has(windowId)) {
                     this.centerWindow(windowId);
                 }
@@ -317,7 +532,7 @@ class WindowCenterManager {
     }
 
     addWindow(windowId: string, element: HTMLElement) {
-        element.setAttribute('data-window-id', windowId);
+        element.setAttribute("data-window-id", windowId);
         this.windowElements.set(windowId, element);
         this.resizeObserver?.observe(element);
         if (this.config.enabled) {
@@ -1537,44 +1752,34 @@ tools.registerTool("power", ({ tipEl, showTip }) => {
     return el;
 });
 
-tools.registerTool("blue", ({ tipEl, showTip }) => {
-    const el = view("x");
+// 蓝牙 - 使用 Registry
+const blueRegistry = new Registry();
+const blueAdapter = new BluetoothAdapter(MSysApi.blue, blueRegistry);
+MSysApi.blue
+    .init()
+    .then(() => blueAdapter.init())
+    .catch((e) => console.error("blue init error", e));
 
-    MSysApi.blue
-        .init()
-        .then(async () => {
-            el.add("蓝牙");
-            const mel = view("y").addInto(tipEl);
-            el.on("click", async () => {
-                mel.clear();
-                const s = check("bluetooth", ["on", "off"]).addInto(mel);
-                const state = await MSysApi.blue.isPowered();
-                s.sv(state);
-                const list = view("y").addInto(mel);
-                const c: blueDevice[] = [];
-                const uc: blueDevice[] = [];
-                for (const d of MSysApi.blue.getDevices()) {
-                    if (await d.isConnected()) c.push(d);
-                    else if (await d.isTrusted()) uc.push(d);
-                }
-                for (const d of c) {
-                    const name = (await d.getName()) || "Unknown";
-                    view("x")
-                        .addInto(list)
-                        .add(aLineText().sv(`🔗 ${name}`));
-                }
-                for (const d of uc) {
-                    const name = (await d.getName()) || "Unknown";
-                    view("x")
-                        .addInto(list)
-                        .add(aLineText().sv(`🔌 ${name}`));
-                }
-                showTip({ state: "show", anchorEl: el.el });
-            });
-        })
-        .catch((e) => {
-            console.error("blue init error", e);
-        });
+// UI 对象池
+const uipool = {
+    "blue.toggle": () => createToggle(blueRegistry, "blue.power"),
+    "blue.devices": () => createDynamicList(blueRegistry, "blue.devices", (id, data) => createListItem(data)),
+};
+
+tools.registerTool("blue", ({ tipEl, showTip }) => {
+    const el = view("x").add("蓝牙");
+    const mel = view("y").addInto(tipEl);
+
+    const toggle = uipool["blue.toggle"]();
+    mel.add(toggle.el);
+
+    const deviceList = uipool["blue.devices"]();
+    mel.add(deviceList.el);
+
+    el.on("click", () => {
+        showTip({ state: "show", anchorEl: el.el });
+    });
+
     return el;
 });
 
