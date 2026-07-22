@@ -77,12 +77,6 @@ export abstract class MockApp {
 
         this.client.getWindows().set(this.windowId, this.window);
 
-        this.client.on("windowClosed", (id: string) => {
-            if (id === this.windowId) {
-                this.destroy();
-            }
-        });
-
         this.client.on("windowResized", (id: string, width: number, height: number) => {
             if (id === this.windowId) {
                 this.resize(width, height - TITLE_BAR_HEIGHT);
@@ -266,7 +260,14 @@ export abstract class MockApp {
             this.renderTools.destroyCanvas(this.surfaceId);
         }
         if (this.client && this.windowId) {
+            // 触发windowClosed事件
+            this.client.emit("windowClosed", this.windowId);
             this.client.getWindows().delete(this.windowId);
+            
+            // 如果所有窗口都关闭了，触发close事件
+            if (this.client.getWindows().size === 0) {
+                this.client.emit("close");
+            }
         }
     }
 }
