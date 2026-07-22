@@ -4,6 +4,8 @@ import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../sr
 import type { mprisPlayer } from "../../../src/sys_api/mpris";
 import { txt, dynamicList } from "dkh-ui";
 import type { blue, blueDevice } from "../../../src/sys_api/blue";
+import type { power } from "../../../src/sys_api/power";
+import type { network, accessPoint } from "../../../src/sys_api/network";
 import { AnimationGear, timingFunction } from "myde-ui";
 import { aLineText, uPasswdInput } from "./ui";
 
@@ -186,6 +188,21 @@ function createDynamicList(
     return { id: sourceId, type: "dynamic-list", el: container, unmount: unsub };
 }
 
+function createIndicator(registry: Registry, id: string): ControlNode {
+    const source = registry.get<string>(id);
+    const label = txt();
+
+    const initVal = source.get();
+    if (initVal instanceof Promise) {
+        initVal.then((v) => label.sv(v));
+    } else {
+        label.sv(initVal);
+    }
+
+    const unsub = source.subscribe((v) => label.sv(v));
+    return { id, type: "indicator", el: label as unknown as ElType<HTMLElement>, unmount: unsub };
+}
+
 // ========== 蓝牙适配器 ==========
 
 class BluetoothAdapter {
@@ -199,7 +216,7 @@ class BluetoothAdapter {
 
         this.registry.register<boolean>("blue.power", {
             get: () => this.blue.isPowered(),
-            subscribe: (cb) => {
+            subscribe: (_cb) => {
                 // TODO: 监听 D-Bus PropertiesChanged
                 return () => {};
             },
@@ -208,7 +225,7 @@ class BluetoothAdapter {
 
         this.registry.registerList("blue.devices", {
             getIds: () => this.blue.getDevices().map((d) => d.getPath()),
-            subscribe: (cb) => {
+            subscribe: (_cb) => {
                 // TODO: 监听设备添加/移除
                 return () => {};
             },
@@ -229,6 +246,118 @@ class BluetoothAdapter {
         if (await device.isConnected()) return "connected";
         if (await device.isTrusted()) return "paired";
         return "available";
+    }
+}
+
+// ========== 电源适配器 ==========
+
+class PowerAdapter {
+    constructor(
+        private power: power,
+        private registry: Registry,
+    ) {}
+
+    async init(): Promise<void> {
+        await this.power.init();
+
+        this.registry.register<string>("power.battery", {
+            get: async () => {
+                for (const t of this.power.getDevices()) {
+                    if (
+                        (await t.getPowerSupply()) &&
+                        ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")
+                    ) {
+                        return `🔋${await t.getPercentage()}%`;
+                    }
+                }
+                return "🔋--";
+            },
+            subscribe: (_cb) => {
+                // TODO: 监听属性变化
+                return () => {};
+            },
+        });
+
+        this.registry.registerList("power.devices", {
+            getIds: () => this.power.getDevices().map((_, i) => `power-${i}`),
+            subscribe: (_cb) => {
+                // TODO: 监听设备添加/移除
+                return () => {};
+            },
+            getChild: async (id: string): Promise<ListItemData> => {
+                const index = Number.parseInt(id.replace("power-", ""), 10);
+                const device = this.power.getDevices()[index];
+                if (!device) return { id, label: "Unknown", status: "disabled" };
+                const name = (await device.getModel()) || "Unknown";
+                const percentage = await device.getPercentage();
+                const status = await device.getState();
+                return {
+                    id,
+                    label: `${name}: ${percentage}%`,
+                    subtitle: status,
+                    icon: "battery",
+                };
+            },
+        });
+    }
+}
+
+// ========== WiFi 适配器 ==========
+
+class WifiAdapter {
+    constructor(
+        private network: network,
+        private registry: Registry,
+    ) {}
+
+    async init(): Promise<void> {
+        await this.network.init();
+
+        this.registry.register<boolean>("wifi.enabled", {
+            get: () => this.network.isWirelessEnabled(),
+            subscribe: (_cb) => {
+                // TODO: 监听属性变化
+                return () => {};
+            },
+            set: (v) => this.network.setWirelessEnabled(v),
+        });
+
+        const wifiDevice = this.network.getWifiDevices()[0];
+        if (!wifiDevice) return;
+
+        this.registry.registerList("wifi.accessPoints", {
+            getIds: async () => {
+                const aps = await wifiDevice.getAccessPoints();
+                const ids: string[] = [];
+                for (const ap of aps) {
+                    ids.push(await ap.getHwAddress());
+                }
+                return ids;
+            },
+            subscribe: (_cb) => {
+                // TODO: 监听接入点变化
+                return () => {};
+            },
+            getChild: async (id: string): Promise<ListItemData> => {
+                const aps = await wifiDevice.getAccessPoints();
+                let targetAp: accessPoint | undefined;
+                for (const ap of aps) {
+                    if ((await ap.getHwAddress()) === id) {
+                        targetAp = ap;
+                        break;
+                    }
+                }
+                if (!targetAp) return { id, label: "Unknown", status: "disabled" };
+                const ssid = (await targetAp.getSsid()) || "Hidden";
+                const active = await this.network.getActiveWifiConnection();
+                return {
+                    id,
+                    label: ssid,
+                    icon: "wifi",
+                    status: active?.id === ssid ? "connected" : "available",
+                };
+            },
+        });
     }
 }
 
@@ -1762,6 +1891,22 @@ tools.registerTool("power", ({ tipEl, showTip }) => {
     return el;
 });
 
+// 电源 - 使用 Registry
+const powerRegistry = new Registry();
+const powerAdapter = new PowerAdapter(MSysApi.power, powerRegistry);
+MSysApi.power
+    .init()
+    .then(() => powerAdapter.init())
+    .catch((e) => console.error("power init error", e));
+
+// WiFi - 使用 Registry
+const wifiRegistry = new Registry();
+const wifiAdapter = new WifiAdapter(MSysApi.network, wifiRegistry);
+MSysApi.network
+    .init()
+    .then(() => wifiAdapter.init())
+    .catch((e) => console.error("network init error", e));
+
 // 蓝牙 - 使用 Registry
 const blueRegistry = new Registry();
 const blueAdapter = new BluetoothAdapter(MSysApi.blue, blueRegistry);
@@ -1772,9 +1917,53 @@ MSysApi.blue
 
 // UI 对象池
 const uipool = {
+    "power.battery": () => createIndicator(powerRegistry, "power.battery"),
+    "power.devices": () => createDynamicList(powerRegistry, "power.devices", (_id, data) => createListItem(data)),
+    "wifi.toggle": () => createToggle(wifiRegistry, "wifi.enabled"),
+    "wifi.accessPoints": () =>
+        createDynamicList(wifiRegistry, "wifi.accessPoints", (_id, data) => createListItem(data)),
     "blue.toggle": () => createToggle(blueRegistry, "blue.power"),
-    "blue.devices": () => createDynamicList(blueRegistry, "blue.devices", (id, data) => createListItem(data)),
+    "blue.devices": () => createDynamicList(blueRegistry, "blue.devices", (_id, data) => createListItem(data)),
 };
+
+tools.registerTool("power", ({ tipEl, showTip }) => {
+    const el = view("x");
+    const mel = view("y").addInto(tipEl);
+
+    // 顶部显示电池状态
+    const batteryIndicator = uipool["power.battery"]();
+    el.add(batteryIndicator.el);
+
+    // 弹出框显示详情
+    const batteryInfo = uipool["power.battery"]();
+    mel.add(batteryInfo.el);
+
+    const deviceList = uipool["power.devices"]();
+    mel.add(deviceList.el);
+
+    el.on("click", () => {
+        showTip({ state: "show", anchorEl: el.el });
+    });
+
+    return el;
+});
+
+tools.registerTool("network", ({ tipEl, showTip }) => {
+    const el = view("x").add("网络");
+    const mel = view("y").addInto(tipEl);
+
+    const toggle = uipool["wifi.toggle"]();
+    mel.add(toggle.el);
+
+    const apList = uipool["wifi.accessPoints"]();
+    mel.add(apList.el);
+
+    el.on("click", () => {
+        showTip({ state: "show", anchorEl: el.el });
+    });
+
+    return el;
+});
 
 tools.registerTool("blue", ({ tipEl, showTip }) => {
     const el = view("x").add("蓝牙");
@@ -1789,43 +1978,6 @@ tools.registerTool("blue", ({ tipEl, showTip }) => {
     el.on("click", () => {
         showTip({ state: "show", anchorEl: el.el });
     });
-
-    return el;
-});
-
-tools.registerTool("network", ({ tipEl, showTip }) => {
-    const el = view("x");
-
-    MSysApi.network
-        .init()
-        .then(async () => {
-            el.add("网络");
-            const list = view("y").addInto(tipEl);
-            el.on("click", async () => {
-                list.clear();
-                const activeWifi = await MSysApi.network.getActiveWifiConnection();
-                if (activeWifi) {
-                    const name = activeWifi.id;
-                    view("x")
-                        .addInto(list)
-                        .add(aLineText().sv(`🔗 ${name}`));
-                }
-
-                const devices = MSysApi.network.getWifiDevices();
-
-                for (const n of await devices[0].getAccessPoints()) {
-                    const name = (await n.getSsid()) || "Unknown";
-                    if (name === activeWifi?.id) continue;
-                    view("x")
-                        .addInto(list)
-                        .add(aLineText().sv(`${name}`));
-                }
-                showTip({ state: "show", anchorEl: el.el });
-            });
-        })
-        .catch((e) => {
-            console.error("network init error", e);
-        });
 
     return el;
 });
