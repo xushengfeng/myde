@@ -225,3 +225,107 @@ describe("EventEmitter", () => {
         expect(callOrder).toEqual([1, 2, 3]);
     });
 });
+
+describe("EventEmitter request/respond", () => {
+    it("should return result from responder", async () => {
+        type MyEvents = Record<string, any[]>;
+        type MyRequestEvents = {
+            query: { args: [string]; result: number };
+        };
+        const emitter = new EventEmitter<MyEvents, MyRequestEvents>();
+
+        emitter.respond("query", (name: string) => name.length);
+
+        const results = await emitter.request("query", "hello");
+
+        expect(results).toEqual([5]);
+    });
+
+    it("should return results from multiple responders", async () => {
+        type MyEvents = Record<string, any[]>;
+        type MyRequestEvents = {
+            query: { args: [number]; result: number };
+        };
+        const emitter = new EventEmitter<MyEvents, MyRequestEvents>();
+
+        emitter.respond("query", (n: number) => n * 2);
+        emitter.respond("query", (n: number) => n * 3);
+
+        const results = await emitter.request("query", 5);
+
+        expect(results).toEqual([10, 15]);
+    });
+
+    it("should return empty array when no responders", async () => {
+        type MyEvents = Record<string, any[]>;
+        type MyRequestEvents = {
+            query: { args: [string]; result: number };
+        };
+        const emitter = new EventEmitter<MyEvents, MyRequestEvents>();
+
+        const results = await emitter.request("query", "hello");
+
+        expect(results).toEqual([]);
+    });
+
+    it("should cleanup responder with returned function", async () => {
+        type MyEvents = Record<string, any[]>;
+        type MyRequestEvents = {
+            query: { args: [string]; result: number };
+        };
+        const emitter = new EventEmitter<MyEvents, MyRequestEvents>();
+
+        const cleanup = emitter.respond("query", (name: string) => name.length);
+        cleanup();
+
+        const results = await emitter.request("query", "hello");
+
+        expect(results).toEqual([]);
+    });
+
+    it("should cleanup responder with signal", async () => {
+        type MyEvents = Record<string, any[]>;
+        type MyRequestEvents = {
+            query: { args: [string]; result: number };
+        };
+        const emitter = new EventEmitter<MyEvents, MyRequestEvents>();
+        const controller = new AbortController();
+
+        emitter.respond("query", (name: string) => name.length, { signal: controller.signal });
+        controller.abort();
+
+        const results = await emitter.request("query", "hello");
+
+        expect(results).toEqual([]);
+    });
+
+    it("should not add responder if signal is already aborted", async () => {
+        type MyEvents = Record<string, any[]>;
+        type MyRequestEvents = {
+            query: { args: [string]; result: number };
+        };
+        const emitter = new EventEmitter<MyEvents, MyRequestEvents>();
+        const controller = new AbortController();
+
+        controller.abort();
+        emitter.respond("query", (name: string) => name.length, { signal: controller.signal });
+
+        const results = await emitter.request("query", "hello");
+
+        expect(results).toEqual([]);
+    });
+
+    it("should reject on responder error", async () => {
+        type MyEvents = Record<string, any[]>;
+        type MyRequestEvents = {
+            query: { args: [string]; result: number };
+        };
+        const emitter = new EventEmitter<MyEvents, MyRequestEvents>();
+
+        emitter.respond("query", () => {
+            throw new Error("test error");
+        });
+
+        await expect(emitter.request("query", "hello")).rejects.toThrow("test error");
+    });
+});

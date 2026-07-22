@@ -1,6 +1,10 @@
 export type EventMap = Record<string, any[]>;
 
+export type RequestEventMap = Record<string, { args: any[]; result: any }>;
+
 export type EventHandler<T extends any[]> = (...args: T) => void;
+
+export type RequestHandler<TArgs extends any[], TResult> = (...args: TArgs) => TResult;
 
 export interface EventEmitterOptions {
     signal?: AbortSignal;
@@ -11,8 +15,9 @@ interface ListenerEntry<T extends any[]> {
     once: boolean;
 }
 
-export class EventEmitter<T extends EventMap = EventMap> {
+export class EventEmitter<T extends EventMap = EventMap, R extends RequestEventMap = RequestEventMap> {
     private listeners = new Map<keyof T, ListenerEntry<any[]>[]>();
+    private responders = new Map<keyof R, Set<RequestHandler<any[], any>>>();
 
     on<K extends keyof T>(event: K, handler: EventHandler<T[K]>, options?: EventEmitterOptions): () => void {
         if (!this.listeners.has(event)) {
@@ -126,5 +131,54 @@ export class EventEmitter<T extends EventMap = EventMap> {
 
     hasListeners<K extends keyof T>(event: K): boolean {
         return this.listenerCount(event) > 0;
+    }
+
+    respond<K extends keyof R>(event: K, handler: RequestHandler<R[K]["args"], R[K]["result"]>, options?: EventEmitterOptions): () => void {
+        if (!this.responders.has(event)) {
+            this.responders.set(event, new Set());
+        }
+        this.responders.get(event)!.add(handler);
+
+        const cleanup = () => {
+            this.responders.get(event)?.delete(handler);
+        };
+
+        if (options?.signal) {
+            if (options.signal.aborted) {
+                cleanup();
+                return cleanup;
+            }
+            options.signal.addEventListener("abort", cleanup, { once: true });
+        }
+
+        return cleanup;
+    }
+
+    request<K extends keyof R>(event: K, ...args: R[K]["args"]): Promise<R[K]["result"][]> {
+        return new Promise((resolve, reject) => {
+            const responders = this.responders.get(event);
+            if (!responders || responders.size === 0) {
+                resolve([]);
+                return;
+            }
+
+            const results: R[K]["result"][] = [];
+            const errors: Error[] = [];
+
+            for (const handler of responders) {
+                try {
+                    const result = handler(...args);
+                    results.push(result);
+                } catch (error) {
+                    errors.push(error instanceof Error ? error : new Error(String(error)));
+                }
+            }
+
+            if (errors.length > 0) {
+                reject(errors[0]);
+            } else {
+                resolve(results);
+            }
+        });
     }
 }
