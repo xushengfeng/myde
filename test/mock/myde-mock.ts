@@ -1,7 +1,22 @@
 import type { DesktopApi } from "../../src/desktop-api";
+import { EventEmitter } from "../../src/event-emitter/event-emitter";
 import type { Item } from "../../src/sys_api/app_control";
+import type { tray } from "../../src/sys_api/appIndicator";
+import type { blue } from "../../src/sys_api/blue";
+import type { display } from "../../src/sys_api/display";
+import type { InputManager } from "../../src/sys_api/input";
+import type { MprisEvents, mpris } from "../../src/sys_api/mpris";
+import type { network } from "../../src/sys_api/network";
+import type { NotificationEvents, notification } from "../../src/sys_api/notification";
+import type { power } from "../../src/sys_api/power";
 import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools";
 import type { MockRenderTools } from "./render-tools";
+
+/**
+ * 提取类的公共成员（排除构造函数和private成员）
+ * TypeScript的keyof自动排除private成员，所以Omit<T, 'constructor'>即可
+ */
+type MockType<T> = Omit<T, "constructor">;
 
 let globalRenderTools: MockRenderTools | null = null;
 
@@ -248,76 +263,58 @@ function createMockSettingInstance(): SettingInitReturn {
     } as SettingInitReturn;
 }
 
-function createMockEventEmitter() {
-    const listeners = new Map<string, Set<(...args: any[]) => void>>();
-    return {
-        on(event: string, cb: (...args: any[]) => void) {
-            if (!listeners.has(event)) listeners.set(event, new Set());
-            listeners.get(event)?.add(cb);
-            return this;
-        },
-        off(event: string, cb: (...args: any[]) => void) {
-            listeners.get(event)?.delete(cb);
-            return this;
-        },
-        emit(event: string, ...args: any[]) {
-            // biome-ignore  lint/suspicious/useIterableCallbackReturn:''
-            listeners.get(event)?.forEach((cb) => cb(...args));
-        },
-    };
+function createMockEventEmitter<T extends Record<string, any[]>>(): EventEmitter<T> {
+    return new EventEmitter<T>();
 }
 
-function createMockMedia(log: (...args: any[]) => void) {
-    const emitter = createMockEventEmitter();
+function createMockMedia(log: (...args: any[]) => void): MockType<mpris> {
+    const emitter = createMockEventEmitter<MprisEvents>();
     return {
         async init() {
             log("media.init");
         },
-        onNewPlayer(cb: (player: any) => void) {
-            emitter.on("new-player", cb);
-        },
-        offNewPlayer(cb: (player: any) => void) {
-            emitter.off("new-player", cb);
-        },
-        getPlayers() {
-            return [];
-        },
-        emit: emitter.emit,
-    } as any;
+        on: emitter.on.bind(emitter),
+        off: emitter.off.bind(emitter),
+        once: emitter.once.bind(emitter),
+        emit: emitter.emit.bind(emitter),
+        waitFor: emitter.waitFor.bind(emitter),
+        removeAllListeners: emitter.removeAllListeners.bind(emitter),
+        listenerCount: emitter.listenerCount.bind(emitter),
+        hasListeners: emitter.hasListeners.bind(emitter),
+        respond: emitter.respond.bind(emitter),
+        request: emitter.request.bind(emitter),
+    };
 }
 
-function createMockNotification(log: (...args: any[]) => void) {
-    const emitter = createMockEventEmitter();
+function createMockNotification(log: (...args: any[]) => void): MockType<notification> {
+    const emitter = createMockEventEmitter<NotificationEvents>();
     return {
         async init() {
             log("notification.init");
         },
-        on(event: string, cb: (...args: any[]) => void) {
-            emitter.on(event, cb);
-        },
-        off(event: string, cb: (...args: any[]) => void) {
-            emitter.off(event, cb);
-        },
-        getNotifications() {
-            return [];
-        },
-        emit: emitter.emit,
-    } as any;
+        on: emitter.on.bind(emitter),
+        off: emitter.off.bind(emitter),
+        once: emitter.once.bind(emitter),
+        emit: emitter.emit.bind(emitter),
+        waitFor: emitter.waitFor.bind(emitter),
+        removeAllListeners: emitter.removeAllListeners.bind(emitter),
+        listenerCount: emitter.listenerCount.bind(emitter),
+        hasListeners: emitter.hasListeners.bind(emitter),
+        respond: emitter.respond.bind(emitter),
+        request: emitter.request.bind(emitter),
+    };
 }
 
-function createMockTray(log: (...args: any[]) => void) {
+function createMockTray(log: (...args: any[]) => void): MockType<tray> {
     return {
         async init() {
             log("tray.init");
         },
         tarysService: new Map(),
-        on(_event: string, _cb: (...args: any[]) => void) {
-            return this;
-        },
-    } as any;
+    };
 }
 
-function createMockPower(log: (...args: any[]) => void) {
+function createMockPower(log: (...args: any[]) => void): MockType<power> {
     return {
         async init() {
             log("power.init");
@@ -325,13 +322,10 @@ function createMockPower(log: (...args: any[]) => void) {
         getDevices() {
             return [];
         },
-        on(_event: string, _cb: (...args: any[]) => void) {
-            return this;
-        },
-    } as any;
+    };
 }
 
-function createMockBlue(log: (...args: any[]) => void) {
+function createMockBlue(log: (...args: any[]) => void): MockType<blue> {
     return {
         async init() {
             log("blue.init");
@@ -339,16 +333,25 @@ function createMockBlue(log: (...args: any[]) => void) {
         async isPowered() {
             return false;
         },
+        async getAdapterName() {
+            return "mock-adapter";
+        },
+        async setPowered(_powered: boolean) {
+            log("blue.setPowered", _powered);
+        },
+        async startDiscovery() {
+            log("blue.startDiscovery");
+        },
+        async stopDiscovery() {
+            log("blue.stopDiscovery");
+        },
         getDevices() {
             return [];
         },
-        on(_event: string, _cb: (...args: any[]) => void) {
-            return this;
-        },
-    } as any;
+    };
 }
 
-function createMockNetwork(log: (...args: any[]) => void) {
+function createMockNetwork(log: (...args: any[]) => void): MockType<network> {
     return {
         async init() {
             log("network.init");
@@ -356,43 +359,94 @@ function createMockNetwork(log: (...args: any[]) => void) {
         async getActiveWifiConnection() {
             return null;
         },
+        async getState() {
+            return 0;
+        },
+        async isNetworkingEnabled() {
+            return true;
+        },
+        async isWirelessEnabled() {
+            return true;
+        },
+        async setWirelessEnabled(_enabled: boolean) {
+            log("network.setWirelessEnabled", _enabled);
+        },
         getWifiDevices() {
             return [];
         },
-        on(_event: string, _cb: (...args: any[]) => void) {
-            return this;
-        },
-    } as any;
+    };
 }
 
-function createMockDisplay(log: (...args: any[]) => void) {
-    const emitter = createMockEventEmitter();
+function createMockDisplay(log: (...args: any[]) => void): MockType<display> {
+    const emitter = createMockEventEmitter<Record<string, [any]>>();
     return {
-        onMessage(type: string, handler: (data: any) => void) {
-            emitter.on(type, handler);
+        setType(type: "desktop" | "window") {
+            log("display.setType", type);
         },
-        send(type: string, data: any) {
-            log("display.send", type, data);
+        getType() {
+            return "desktop" as const;
         },
-    } as any;
+        async connect(_op: { socketPath: string; mus: any }) {
+            log("display.connect", _op);
+        },
+        async setWindowSize(_width: number, _height: number) {
+            log("display.setWindowSize", _width, _height);
+        },
+        async renderToScreen(_screenIndex: number, _rects: any[], _transforms?: any[]) {
+            log("display.renderToScreen", _screenIndex, _rects, _transforms);
+        },
+        async getScreens() {
+            return [];
+        },
+        async setInputEnabled(_enabled: boolean) {
+            log("display.setInputEnabled", _enabled);
+            return false;
+        },
+        async ping() {
+            log("display.ping");
+        },
+        disconnect() {
+            log("display.disconnect");
+        },
+        on: emitter.on.bind(emitter),
+        off: emitter.off.bind(emitter),
+        once: emitter.once.bind(emitter),
+        emit: emitter.emit.bind(emitter),
+        waitFor: emitter.waitFor.bind(emitter),
+        removeAllListeners: emitter.removeAllListeners.bind(emitter),
+        listenerCount: emitter.listenerCount.bind(emitter),
+        hasListeners: emitter.hasListeners.bind(emitter),
+        respond: emitter.respond.bind(emitter),
+        request: emitter.request.bind(emitter),
+    };
 }
 
-function createMockInput(log: (...args: any[]) => void) {
-    const emitter = createMockEventEmitter();
+function createMockInput(log: (...args: any[]) => void): MockType<InputManager> {
+    const emitter = createMockEventEmitter<any>();
     return {
         async init() {
             log("input.init");
         },
-        on(event: string, cb: (...args: any[]) => void) {
-            emitter.on(event, cb);
-        },
-        off(event: string, cb: (...args: any[]) => void) {
-            emitter.off(event, cb);
-        },
+        on: emitter.on.bind(emitter),
+        off: emitter.off.bind(emitter),
+        once: emitter.once.bind(emitter),
+        emit: emitter.emit.bind(emitter),
+        waitFor: emitter.waitFor.bind(emitter),
+        removeAllListeners: emitter.removeAllListeners.bind(emitter),
+        listenerCount: emitter.listenerCount.bind(emitter),
+        hasListeners: emitter.hasListeners.bind(emitter),
+        respond: emitter.respond.bind(emitter),
+        request: emitter.request.bind(emitter),
         getDevices() {
             return [];
         },
-    } as any;
+        getDevice(_path: string) {
+            return undefined;
+        },
+        destroy() {
+            log("input.destroy");
+        },
+    };
 }
 
 export class MockVfsStore {
@@ -442,7 +496,7 @@ export class MockVfsStore {
     }
 }
 
-function createMockVfs(verbose: boolean, store?: MockVfsStore): DesktopApi["MSysApi"]["fs"] {
+function createMockVfs(verbose: boolean, store?: MockVfsStore): MockType<DesktopApi["MSysApi"]["fs"]> {
     const log = (method: string, ...args: unknown[]) => {
         if (verbose) console.log(`[Mock:fs] ${method}`, ...args);
     };
@@ -567,7 +621,7 @@ function createMockVfs(verbose: boolean, store?: MockVfsStore): DesktopApi["MSys
             log("readdirWithTypes", _p);
             return [];
         },
-    } as any;
+    };
 }
 
 export function createMockMyde(config: MockConfig = {}): DesktopApi {
@@ -584,7 +638,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         if (verbose) console.log(`[Mock] ${method}`, ...args);
     };
 
-    const defaultSysApi: DesktopApi["MSysApi"] = {
+    const defaultSysApi = {
         getDesktopEntry: async (id: string, lans?: string[]) => {
             log("getDesktopEntry", id, lans);
             return {
@@ -730,7 +784,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         },
         MSetting: settingOverride || defaultSetting,
         MConnect: connectOverride || defaultConnect,
-    };
+    } as DesktopApi;
 }
 
 export function setupMydeMock(config: MockConfig = {}): void {
