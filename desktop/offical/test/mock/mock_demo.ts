@@ -6,6 +6,16 @@ import {
     MockVfsStore,
     setGlobalRenderTools,
     setupMydeMock,
+    MockBlueManager,
+    MockBlueDevice,
+    MockNetworkManager,
+    MockWifiDevice,
+    MockAccessPoint,
+    MockPowerManager,
+    MockPowerDevice,
+    MockNotificationManager,
+    MockMprisManager,
+    MockMprisPlayer,
 } from "../../../../test/mock";
 import { createMockApp, getMockAppIcon, getMockAppList } from "../../../../test/mock/apps";
 import { MockRenderTools } from "../../../../test/mock/render-tools";
@@ -29,6 +39,13 @@ const mockData = {
     validPasswords: new Set<string>(),
     vfsStore: new MockVfsStore(),
 };
+
+// 创建设备管理器
+const blueManager = new MockBlueManager(console.log);
+const networkManager = new MockNetworkManager(console.log);
+const powerManager = new MockPowerManager(console.log);
+const notificationManager = new MockNotificationManager(console.log);
+const mprisManager = new MockMprisManager(console.log);
 
 let clientIdCounter = 0;
 
@@ -65,6 +82,138 @@ export function getMockVfsStore() {
     return mockData.vfsStore;
 }
 
+// 获取设备管理器
+export function getMockBlueManager() {
+    return blueManager;
+}
+
+export function getMockNetworkManager() {
+    return networkManager;
+}
+
+export function getMockPowerManager() {
+    return powerManager;
+}
+
+export function getMockNotificationManager() {
+    return notificationManager;
+}
+
+export function getMockMprisManager() {
+    return mprisManager;
+}
+
+// 添加蓝牙设备
+export function addMockBlueDevice(path: string, name: string, address: string, connected = false, trusted = false) {
+    const device = new MockBlueDevice(path, name, address, connected, trusted);
+    blueManager.addDevice(device);
+    return device;
+}
+
+// 添加WiFi设备
+export function addMockWifiDevice(path: string, iface = "wlan0", state = 30) {
+    const device = new MockWifiDevice(path, iface, state);
+    networkManager.addWifiDevice(device);
+    return device;
+}
+
+// 添加WiFi接入点
+export function addMockAccessPoint(wifiDevice: MockWifiDevice, path: string, ssid: string, strength = 80) {
+    const ap = new MockAccessPoint(path, ssid, strength);
+    wifiDevice.addAccessPoint(ap);
+    return ap;
+}
+
+// 添加电源设备
+export function addMockPowerDevice(
+    path: string,
+    percentage = 100,
+    state = "Charging",
+    type = "Battery",
+    model = "mock-battery",
+) {
+    const device = new MockPowerDevice(path, percentage, state, false, type, model);
+    powerManager.addDevice(device);
+    return device;
+}
+
+// 发送通知
+export function sendMockNotification(appName: string, summary: string, body: string, appIcon = "icon") {
+    return notificationManager.sendNotification({
+        app_name: appName,
+        replaces_id: 0,
+        app_icon: appIcon,
+        summary,
+        body,
+        actions: [],
+        hints: {},
+        expire_timeout: 5000,
+    });
+}
+
+// 添加音乐播放器
+export function addMockMprisPlayer(name: string, identity: string) {
+    const player = new MockMprisPlayer(name, identity);
+    mprisManager.addPlayer(player);
+    return player;
+}
+
+// 初始化示例数据
+function initMockData() {
+    // 蓝牙设备示例
+    addMockBlueDevice("/org/bluez/dev1", "WH-1000XM5", "AA:BB:CC:11:22:33", true, true);
+    addMockBlueDevice("/org/bluez/dev2", "Galaxy Buds Pro", "DD:EE:FF:44:55:66", false, true);
+    addMockBlueDevice("/org/bluez/dev3", "Magic Mouse", "11:22:33:AA:BB:CC", false, false);
+
+    // WiFi设备和接入点示例
+    const wifiDev = addMockWifiDevice("/org/freedesktop/NetworkManager/Devices/1", "wlan0", 100);
+    const homeAp = addMockAccessPoint(wifiDev, "/org/freedesktop/AccessPoint/1", "HomeWiFi", 90);
+    addMockAccessPoint(wifiDev, "/org/freedesktop/AccessPoint/2", "OfficeNetwork", 75);
+    addMockAccessPoint(wifiDev, "/org/freedesktop/AccessPoint/3", "CoffeeShop_Guest", 45);
+
+    // 设置活跃接入点和连接
+    wifiDev.setActiveAccessPoint(homeAp);
+    homeAp.setActive(true);
+    networkManager.setState(70);
+    networkManager.setActiveConnection({
+        path: "/org/freedesktop/NetworkManager/Connection/1",
+        id: "HomeWiFi",
+        type: "802-11-wireless",
+        state: 2,
+        specificObject: "/org/freedesktop/AccessPoint/1",
+        devicePath: "/org/freedesktop/NetworkManager/Devices/1",
+    });
+
+    // 电源设备示例
+    addMockPowerDevice("/org/freedesktop/UPower/devices/battery_BAT0", 85, "Discharging", "Battery", "Laptop Battery");
+    addMockPowerDevice("/org/freedesktop/UPower/devices/line_power_AC", 100, "Charging", "Line Power", "AC Adapter");
+
+    // 通知示例
+    sendMockNotification("系统更新", "系统更新可用", "有新的系统更新可用，点击查看详情。", "system-software-update");
+    sendMockNotification("蓝牙", "设备已连接", "WH-1000XM5 已成功连接。", "bluetooth");
+
+    // 音乐播放器示例
+    const spotify = addMockMprisPlayer("spotify", "Spotify");
+    spotify.setMetadata({
+        "xesam:title": "Bohemian Rhapsody",
+        "xesam:artist": ["Queen"],
+        "xesam:album": "A Night at the Opera",
+        "mpris:artUrl": "file:///mock/cover/queen.jpg",
+        "mpris:length": BigInt(354000000),
+    });
+    spotify.setDuration(354);
+    spotify.setPlaybackStatus("Playing");
+
+    const vlc = addMockMprisPlayer("vlc", "VLC Media Player");
+    vlc.setMetadata({
+        "xesam:title": "Local Video File",
+        "xesam:artist": [],
+        "xesam:album": "",
+    });
+    vlc.setDuration(0);
+    vlc.setPlaybackStatus("Paused");
+}
+
 // 注册mock应用到桌面条目
 function registerMockApps() {
     const appList = getMockAppList();
@@ -86,6 +235,9 @@ async function init() {
     // 注册mock应用
     registerMockApps();
 
+    // 初始化示例数据
+    initMockData();
+
     // 通过fetch加载壁纸
     const resp = await fetch(new URL("../../assets/wallpaper/1.svg", import.meta.url));
     const wallpaper = await resp.arrayBuffer();
@@ -99,6 +251,11 @@ async function init() {
     const mockConfig: MockConfig = {
         verbose: true,
         vfsStore: mockData.vfsStore,
+        blueManager,
+        networkManager,
+        powerManager,
+        notificationManager,
+        mprisManager,
         sysApi: {
             getDesktopEntries: async () => mockData.desktopEntries as any,
             getDesktopEntry: async (id: string) => {

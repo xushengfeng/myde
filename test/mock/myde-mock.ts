@@ -7,7 +7,7 @@ import type { display } from "../../src/sys_api/display";
 import type { InputManager } from "../../src/sys_api/input";
 import type { MprisEvents, mpris } from "../../src/sys_api/mpris";
 import type { network } from "../../src/sys_api/network";
-import type { NotificationEvents, notification } from "../../src/sys_api/notification";
+import type { NotificationData, NotificationEvents, notification } from "../../src/sys_api/notification";
 import type { power } from "../../src/sys_api/power";
 import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools";
 import type { MockRenderTools } from "./render-tools";
@@ -90,6 +90,16 @@ export interface MockConfig {
     connect?: DesktopApi["MConnect"];
     /** 自定义vfs文件存储 */
     vfsStore?: MockVfsStore;
+    /** 蓝牙管理器 */
+    blueManager?: MockBlueManager;
+    /** 网络管理器 */
+    networkManager?: MockNetworkManager;
+    /** 电源管理器 */
+    powerManager?: MockPowerManager;
+    /** 通知管理器 */
+    notificationManager?: MockNotificationManager;
+    /** MPRIS管理器 */
+    mprisManager?: MockMprisManager;
 }
 
 type SettingInitReturn = ReturnType<DesktopApi["MSetting"]["init"]>;
@@ -267,42 +277,225 @@ function createMockEventEmitter<T extends Record<string, any[]>>(): EventEmitter
     return new EventEmitter<T>();
 }
 
+export class MockMprisPlayer {
+    private name: string;
+    private identity: string;
+    private playbackStatus: "Playing" | "Paused" | "Stopped" = "Stopped";
+    private currentMetadata: Record<string, any> = {};
+    private currentTime = 0;
+    private trackDuration = 0;
+    private metaChangeCallbacks: Array<() => unknown> = [];
+    private statusChangeCallbacks: Array<() => unknown> = [];
+
+    constructor(name: string, identity: string) {
+        this.name = name;
+        this.identity = identity;
+    }
+
+    async init(_name: string) {}
+    async identityFn() {
+        return this.identity;
+    }
+    getServerName() {
+        return this.name;
+    }
+
+    play() {
+        this.playbackStatus = "Playing";
+        this.notifyStatusChange();
+    }
+
+    pause() {
+        this.playbackStatus = "Paused";
+        this.notifyStatusChange();
+    }
+
+    stop() {
+        this.playbackStatus = "Stopped";
+        this.notifyStatusChange();
+    }
+
+    next() {
+        this.notifyMetaChange();
+    }
+
+    previous() {
+        this.notifyMetaChange();
+    }
+
+    async getCurrentTime() {
+        return this.currentTime;
+    }
+    setCurrentTime(s: number) {
+        this.currentTime = s;
+    }
+
+    async metadata() {
+        return this.currentMetadata;
+    }
+    async duration() {
+        return this.trackDuration;
+    }
+    async paused() {
+        return this.playbackStatus === "Paused" || this.playbackStatus === "Stopped";
+    }
+    async title() {
+        return this.currentMetadata["xesam:title"] || "";
+    }
+    async artist() {
+        return this.currentMetadata["xesam:artist"] || [];
+    }
+    async artCover() {
+        return this.currentMetadata["mpris:artUrl"] || "";
+    }
+
+    onMetaChange(callback: () => unknown) {
+        this.metaChangeCallbacks.push(callback);
+    }
+
+    onStatusChange(callback: () => unknown) {
+        this.statusChangeCallbacks.push(callback);
+    }
+
+    setIdentity(identity: string) {
+        this.identity = identity;
+    }
+    setPlaybackStatus(status: "Playing" | "Paused" | "Stopped") {
+        this.playbackStatus = status;
+        this.notifyStatusChange();
+    }
+
+    setMetadata(metadata: Record<string, any>) {
+        this.currentMetadata = metadata;
+        this.notifyMetaChange();
+    }
+
+    setDuration(duration: number) {
+        this.trackDuration = duration;
+    }
+
+    private notifyMetaChange() {
+        for (const cb of this.metaChangeCallbacks) {
+            cb();
+        }
+    }
+
+    private notifyStatusChange() {
+        for (const cb of this.statusChangeCallbacks) {
+            cb();
+        }
+    }
+}
+
+export class MockMprisManager {
+    private players = new Map<string, MockMprisPlayer>();
+    private emitter = createMockEventEmitter<MprisEvents>();
+    private log: (...args: any[]) => void;
+
+    constructor(log: (...args: any[]) => void) {
+        this.log = log;
+    }
+
+    addPlayer(player: MockMprisPlayer) {
+        this.players.set(player.getServerName(), player);
+        this.emitter.emit("new-player", player as any);
+    }
+
+    removePlayer(name: string) {
+        this.players.delete(name);
+    }
+
+    getPlayer(name: string) {
+        return this.players.get(name);
+    }
+
+    getPlayers() {
+        return Array.from(this.players.values());
+    }
+
+    createMock(): MockType<mpris> {
+        const manager = this;
+        return {
+            async init() {
+                manager.log("media.init");
+            },
+            on: manager.emitter.on.bind(manager.emitter),
+            off: manager.emitter.off.bind(manager.emitter),
+            once: manager.emitter.once.bind(manager.emitter),
+            emit: manager.emitter.emit.bind(manager.emitter),
+            waitFor: manager.emitter.waitFor.bind(manager.emitter),
+            removeAllListeners: manager.emitter.removeAllListeners.bind(manager.emitter),
+            listenerCount: manager.emitter.listenerCount.bind(manager.emitter),
+            hasListeners: manager.emitter.hasListeners.bind(manager.emitter),
+            respond: manager.emitter.respond.bind(manager.emitter),
+            request: manager.emitter.request.bind(manager.emitter),
+        };
+    }
+}
+
 function createMockMedia(log: (...args: any[]) => void): MockType<mpris> {
-    const emitter = createMockEventEmitter<MprisEvents>();
-    return {
-        async init() {
-            log("media.init");
-        },
-        on: emitter.on.bind(emitter),
-        off: emitter.off.bind(emitter),
-        once: emitter.once.bind(emitter),
-        emit: emitter.emit.bind(emitter),
-        waitFor: emitter.waitFor.bind(emitter),
-        removeAllListeners: emitter.removeAllListeners.bind(emitter),
-        listenerCount: emitter.listenerCount.bind(emitter),
-        hasListeners: emitter.hasListeners.bind(emitter),
-        respond: emitter.respond.bind(emitter),
-        request: emitter.request.bind(emitter),
-    };
+    const manager = new MockMprisManager(log);
+    return manager.createMock();
+}
+
+export class MockNotificationManager {
+    private notifications = new Map<number, NotificationData>();
+    private nextId = 1;
+    private emitter = createMockEventEmitter<NotificationEvents>();
+    private log: (...args: any[]) => void;
+
+    constructor(log: (...args: any[]) => void) {
+        this.log = log;
+    }
+
+    sendNotification(data: Omit<NotificationData, "id">): number {
+        const id = data.replaces_id === 0 ? this.nextId++ : data.replaces_id;
+        if (data.replaces_id === 0) this.nextId++;
+        const notification: NotificationData = { ...data, id };
+        this.notifications.set(id, notification);
+        this.emitter.emit("new", notification);
+        return id;
+    }
+
+    removeNotification(id: number) {
+        this.notifications.delete(id);
+    }
+
+    clearNotifications() {
+        this.notifications.clear();
+    }
+
+    getNotifications() {
+        return Array.from(this.notifications.values());
+    }
+
+    getNotification(id: number) {
+        return this.notifications.get(id);
+    }
+
+    createMock(): MockType<notification> {
+        const manager = this;
+        return {
+            async init() {
+                manager.log("notification.init");
+            },
+            on: manager.emitter.on.bind(manager.emitter),
+            off: manager.emitter.off.bind(manager.emitter),
+            once: manager.emitter.once.bind(manager.emitter),
+            emit: manager.emitter.emit.bind(manager.emitter),
+            waitFor: manager.emitter.waitFor.bind(manager.emitter),
+            removeAllListeners: manager.emitter.removeAllListeners.bind(manager.emitter),
+            listenerCount: manager.emitter.listenerCount.bind(manager.emitter),
+            hasListeners: manager.emitter.hasListeners.bind(manager.emitter),
+            respond: manager.emitter.respond.bind(manager.emitter),
+            request: manager.emitter.request.bind(manager.emitter),
+        };
+    }
 }
 
 function createMockNotification(log: (...args: any[]) => void): MockType<notification> {
-    const emitter = createMockEventEmitter<NotificationEvents>();
-    return {
-        async init() {
-            log("notification.init");
-        },
-        on: emitter.on.bind(emitter),
-        off: emitter.off.bind(emitter),
-        once: emitter.once.bind(emitter),
-        emit: emitter.emit.bind(emitter),
-        waitFor: emitter.waitFor.bind(emitter),
-        removeAllListeners: emitter.removeAllListeners.bind(emitter),
-        listenerCount: emitter.listenerCount.bind(emitter),
-        hasListeners: emitter.hasListeners.bind(emitter),
-        respond: emitter.respond.bind(emitter),
-        request: emitter.request.bind(emitter),
-    };
+    const manager = new MockNotificationManager(log);
+    return manager.createMock();
 }
 
 function createMockTray(log: (...args: any[]) => void): MockType<tray> {
@@ -314,67 +507,421 @@ function createMockTray(log: (...args: any[]) => void): MockType<tray> {
     };
 }
 
+export class MockPowerDevice {
+    private path: string;
+    private percentage: number;
+    private state: string;
+    private powerSupply: boolean;
+    private type: string;
+    private model: string;
+
+    constructor(
+        path: string,
+        percentage = 100,
+        state = "Charging",
+        powerSupply = true,
+        type = "Battery",
+        model = "mock-battery",
+    ) {
+        this.path = path;
+        this.percentage = percentage;
+        this.state = state;
+        this.powerSupply = powerSupply;
+        this.type = type;
+        this.model = model;
+    }
+
+    async init() {}
+    async getPercentage() {
+        return this.percentage;
+    }
+    async getState() {
+        return this.state;
+    }
+    async getPowerSupply() {
+        return this.powerSupply;
+    }
+    async getType() {
+        return this.type;
+    }
+    async getModel() {
+        return this.model;
+    }
+    getPath() {
+        return this.path;
+    }
+
+    setPercentage(percentage: number) {
+        this.percentage = percentage;
+    }
+    setState(state: string) {
+        this.state = state;
+    }
+    setType(type: string) {
+        this.type = type;
+    }
+    setModel(model: string) {
+        this.model = model;
+    }
+}
+
+export class MockPowerManager {
+    private devices = new Map<string, MockPowerDevice>();
+    private log: (...args: any[]) => void;
+
+    constructor(log: (...args: any[]) => void) {
+        this.log = log;
+    }
+
+    addDevice(device: MockPowerDevice) {
+        this.devices.set(device.getPath(), device);
+    }
+
+    removeDevice(path: string) {
+        this.devices.delete(path);
+    }
+
+    getDevice(path: string) {
+        return this.devices.get(path);
+    }
+
+    createMock(): MockType<power> {
+        const manager = this;
+        return {
+            async init() {
+                manager.log("power.init");
+            },
+            getDevices() {
+                return Array.from(manager.devices.values()) as any;
+            },
+        };
+    }
+}
+
 function createMockPower(log: (...args: any[]) => void): MockType<power> {
-    return {
-        async init() {
-            log("power.init");
-        },
-        getDevices() {
-            return [];
-        },
-    };
+    const manager = new MockPowerManager(log);
+    return manager.createMock();
+}
+
+export class MockBlueDevice {
+    private path: string;
+    private name: string;
+    private address: string;
+    private connected: boolean;
+    private trusted: boolean;
+
+    constructor(path: string, name: string, address: string, connected = false, trusted = false) {
+        this.path = path;
+        this.name = name;
+        this.address = address;
+        this.connected = connected;
+        this.trusted = trusted;
+    }
+
+    async init() {}
+    async getName() {
+        return this.name;
+    }
+    async getAddress() {
+        return this.address;
+    }
+    async isConnected() {
+        return this.connected;
+    }
+    async isTrusted() {
+        return this.trusted;
+    }
+    async connect() {
+        this.connected = true;
+    }
+    async disconnect() {
+        this.connected = false;
+    }
+    async pair() {
+        this.trusted = true;
+    }
+    async remove() {}
+    getPath() {
+        return this.path;
+    }
+
+    setName(name: string) {
+        this.name = name;
+    }
+    setConnected(connected: boolean) {
+        this.connected = connected;
+    }
+    setTrusted(trusted: boolean) {
+        this.trusted = trusted;
+    }
+}
+
+export class MockBlueManager {
+    private devices = new Map<string, MockBlueDevice>();
+    private powered = false;
+    private adapterName = "mock-adapter";
+    private discovering = false;
+    private log: (...args: any[]) => void;
+
+    constructor(log: (...args: any[]) => void) {
+        this.log = log;
+    }
+
+    addDevice(device: MockBlueDevice) {
+        this.devices.set(device.getPath(), device);
+    }
+
+    removeDevice(path: string) {
+        this.devices.delete(path);
+    }
+
+    getDevice(path: string) {
+        return this.devices.get(path);
+    }
+
+    setPowered(powered: boolean) {
+        this.powered = powered;
+    }
+    setAdapterName(name: string) {
+        this.adapterName = name;
+    }
+
+    createMock(): MockType<blue> {
+        const manager = this;
+        return {
+            async init() {
+                manager.log("blue.init");
+            },
+            async isPowered() {
+                return manager.powered;
+            },
+            async getAdapterName() {
+                return manager.adapterName;
+            },
+            async setPowered(powered: boolean) {
+                manager.log("blue.setPowered", powered);
+                manager.powered = powered;
+            },
+            async startDiscovery() {
+                manager.log("blue.startDiscovery");
+                manager.discovering = true;
+            },
+            async stopDiscovery() {
+                manager.log("blue.stopDiscovery");
+                manager.discovering = false;
+            },
+            getDevices() {
+                return Array.from(manager.devices.values()) as any;
+            },
+        };
+    }
 }
 
 function createMockBlue(log: (...args: any[]) => void): MockType<blue> {
-    return {
-        async init() {
-            log("blue.init");
-        },
-        async isPowered() {
-            return false;
-        },
-        async getAdapterName() {
-            return "mock-adapter";
-        },
-        async setPowered(_powered: boolean) {
-            log("blue.setPowered", _powered);
-        },
-        async startDiscovery() {
-            log("blue.startDiscovery");
-        },
-        async stopDiscovery() {
-            log("blue.stopDiscovery");
-        },
-        getDevices() {
-            return [];
-        },
-    };
+    const manager = new MockBlueManager(log);
+    return manager.createMock();
+}
+
+export class MockAccessPoint {
+    private path: string;
+    private ssid: string;
+    private strength: number;
+    private frequency: number;
+    private hwAddress: string;
+    private maxBitrate: number;
+    private active: boolean;
+
+    constructor(
+        path: string,
+        ssid: string,
+        strength = 80,
+        frequency = 2437,
+        hwAddress = "00:11:22:33:44:55",
+        maxBitrate = 54000,
+    ) {
+        this.path = path;
+        this.ssid = ssid;
+        this.strength = strength;
+        this.frequency = frequency;
+        this.hwAddress = hwAddress;
+        this.maxBitrate = maxBitrate;
+        this.active = false;
+    }
+
+    async init() {}
+    async getSsid() {
+        return this.ssid;
+    }
+    async getStrength() {
+        return this.strength;
+    }
+    async getFrequency() {
+        return this.frequency;
+    }
+    async getHwAddress() {
+        return this.hwAddress;
+    }
+    async getMaxBitrate() {
+        return this.maxBitrate;
+    }
+    async isActive() {
+        return this.active;
+    }
+    getPath() {
+        return this.path;
+    }
+
+    setSsid(ssid: string) {
+        this.ssid = ssid;
+    }
+    setStrength(strength: number) {
+        this.strength = strength;
+    }
+    setActive(active: boolean) {
+        this.active = active;
+    }
+}
+
+export class MockWifiDevice {
+    private path: string;
+    private iface: string;
+    private state: number;
+    private deviceType: number;
+    private accessPoints: Map<string, MockAccessPoint> = new Map();
+    private activeAp: MockAccessPoint | null = null;
+
+    constructor(path: string, iface = "wlan0", state = 30, deviceType = 2) {
+        this.path = path;
+        this.iface = iface;
+        this.state = state;
+        this.deviceType = deviceType;
+    }
+
+    async init() {}
+    async getInterface() {
+        return this.iface;
+    }
+    async getState() {
+        return this.state;
+    }
+    async getDeviceType() {
+        return this.deviceType;
+    }
+    async getAccessPoints() {
+        return Array.from(this.accessPoints.values()) as any;
+    }
+    async requestScan() {}
+    async getActiveAccessPoint() {
+        return this.activeAp as any;
+    }
+    async getSavedConnections() {
+        return [];
+    }
+    async connect(_ssid: string) {}
+    async disconnect() {}
+    getPath() {
+        return this.path;
+    }
+
+    addAccessPoint(ap: MockAccessPoint) {
+        this.accessPoints.set(ap.getPath(), ap);
+    }
+
+    removeAccessPoint(path: string) {
+        this.accessPoints.delete(path);
+        if (this.activeAp?.getPath() === path) {
+            this.activeAp = null;
+        }
+    }
+
+    setActiveAccessPoint(ap: MockAccessPoint | null) {
+        this.activeAp = ap;
+    }
+
+    setState(state: number) {
+        this.state = state;
+    }
+    setInterface(iface: string) {
+        this.iface = iface;
+    }
+}
+
+export class MockNetworkManager {
+    private wifiDevices = new Map<string, MockWifiDevice>();
+    private networkingEnabled = true;
+    private wirelessEnabled = true;
+    private state = 70;
+    private activeConnection: {
+        path: string;
+        id: string;
+        type: string;
+        state: number;
+        specificObject: string;
+        devicePath: string;
+    } | null = null;
+    private log: (...args: any[]) => void;
+
+    constructor(log: (...args: any[]) => void) {
+        this.log = log;
+    }
+
+    addWifiDevice(device: MockWifiDevice) {
+        this.wifiDevices.set(device.getPath(), device);
+    }
+
+    removeWifiDevice(path: string) {
+        this.wifiDevices.delete(path);
+    }
+
+    getWifiDevice(path: string) {
+        return this.wifiDevices.get(path);
+    }
+
+    setNetworkingEnabled(enabled: boolean) {
+        this.networkingEnabled = enabled;
+    }
+    setWirelessEnabled(enabled: boolean) {
+        this.wirelessEnabled = enabled;
+    }
+    setState(state: number) {
+        this.state = state;
+    }
+    setActiveConnection(conn: typeof this.activeConnection) {
+        this.activeConnection = conn;
+    }
+
+    createMock(): MockType<network> {
+        const manager = this;
+        return {
+            async init() {
+                manager.log("network.init");
+            },
+            async getActiveWifiConnection() {
+                return manager.activeConnection as any;
+            },
+            async getState() {
+                return manager.state;
+            },
+            async isNetworkingEnabled() {
+                return manager.networkingEnabled;
+            },
+            async isWirelessEnabled() {
+                return manager.wirelessEnabled;
+            },
+            async setWirelessEnabled(enabled: boolean) {
+                manager.log("network.setWirelessEnabled", enabled);
+                manager.wirelessEnabled = enabled;
+            },
+            getWifiDevices() {
+                return Array.from(manager.wifiDevices.values()) as any;
+            },
+        };
+    }
 }
 
 function createMockNetwork(log: (...args: any[]) => void): MockType<network> {
-    return {
-        async init() {
-            log("network.init");
-        },
-        async getActiveWifiConnection() {
-            return null;
-        },
-        async getState() {
-            return 0;
-        },
-        async isNetworkingEnabled() {
-            return true;
-        },
-        async isWirelessEnabled() {
-            return true;
-        },
-        async setWirelessEnabled(_enabled: boolean) {
-            log("network.setWirelessEnabled", _enabled);
-        },
-        getWifiDevices() {
-            return [];
-        },
-    };
+    const manager = new MockNetworkManager(log);
+    return manager.createMock();
 }
 
 function createMockDisplay(log: (...args: any[]) => void): MockType<display> {
@@ -632,6 +1179,11 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         setting: settingOverride,
         connect: connectOverride,
         vfsStore,
+        blueManager,
+        networkManager,
+        powerManager,
+        notificationManager,
+        mprisManager,
     } = config;
 
     const log = (method: string, ...args: unknown[]) => {
@@ -717,16 +1269,16 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         login: (state: "suspend" | "hibernate" | "shutdown" | "restart") => {
             log("login", state);
         },
-        media: createMockMedia(log),
-        notification: createMockNotification(log),
+        media: mprisManager ? mprisManager.createMock() : createMockMedia(log),
+        notification: notificationManager ? notificationManager.createMock() : createMockNotification(log),
         verifyUserPassword: async (_password: string) => {
             log("verifyUserPassword");
             return false;
         },
         tray: createMockTray(log),
-        power: createMockPower(log),
-        blue: createMockBlue(log),
-        network: createMockNetwork(log),
+        power: powerManager ? powerManager.createMock() : createMockPower(log),
+        blue: blueManager ? blueManager.createMock() : createMockBlue(log),
+        network: networkManager ? networkManager.createMock() : createMockNetwork(log),
         display: createMockDisplay(log),
         input: createMockInput(log),
         appControl: {
