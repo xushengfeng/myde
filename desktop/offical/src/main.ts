@@ -3,7 +3,7 @@ import { addClass, button, check, ele, type ElType, image, input, p, pack, setPr
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
 import type { mprisPlayer } from "../../../src/sys_api/mpris";
 import { txt, dynamicList } from "dkh-ui";
-import type { blueDevice } from "../../../src/sys_api/blue";
+import type { blue, blueDevice } from "../../../src/sys_api/blue";
 import { AnimationGear, timingFunction } from "myde-ui";
 import { aLineText, uPasswdInput } from "./ui";
 
@@ -33,86 +33,121 @@ interface ListItemData {
 interface ControlNode {
     id: string;
     type: string;
-    el: ElType<any>;
+    el: ElType<HTMLElement>;
     unmount?(): void;
 }
 
-type RegistryListener = (id: string) => void;
-
 class Registry {
-    private sources = new Map<string, BindingSource<any>>();
+    private sources = new Map<string, BindingSource<unknown>>();
     private listSources = new Map<string, ListSource>();
-    private listeners = new Set<RegistryListener>();
+    private pendingBinds = new Map<string, Set<(source: unknown) => void>>();
 
     register<T>(id: string, source: BindingSource<T>): void {
-        this.sources.set(id, source);
-        for (const cb of this.listeners) cb(id);
+        this.sources.set(id, source as BindingSource<unknown>);
+        const pending = this.pendingBinds.get(id);
+        if (pending) {
+            for (const cb of pending) cb(source);
+            this.pendingBinds.delete(id);
+        }
     }
 
     registerList(id: string, source: ListSource): void {
         this.listSources.set(id, source);
-        for (const cb of this.listeners) cb(id);
+        const pending = this.pendingBinds.get(id);
+        if (pending) {
+            for (const cb of pending) cb(source);
+            this.pendingBinds.delete(id);
+        }
     }
 
-    onRegistered(cb: RegistryListener): () => void {
-        this.listeners.add(cb);
-        return () => this.listeners.delete(cb);
+    get<T>(id: string): BindingSource<T> {
+        const source = this.sources.get(id);
+        if (source) return source as BindingSource<T>;
+
+        let currentValue: T | undefined;
+        let realSource: BindingSource<T> | undefined;
+        const subscribers = new Set<(value: T) => void>();
+
+        if (!this.pendingBinds.has(id)) this.pendingBinds.set(id, new Set());
+        const pending = this.pendingBinds.get(id);
+        if (pending)
+            pending.add((s: unknown) => {
+                realSource = s as BindingSource<T>;
+                const val = realSource.get();
+                if (val instanceof Promise) {
+                    val.then((v) => {
+                        currentValue = v;
+                        for (const cb of subscribers) cb(v);
+                    });
+                } else {
+                    currentValue = val;
+                    for (const cb of subscribers) cb(val);
+                }
+            });
+
+        return {
+            get: () => currentValue as T,
+            subscribe: (cb) => {
+                subscribers.add(cb);
+                return () => subscribers.delete(cb);
+            },
+            set: (v) => realSource?.set?.(v) ?? Promise.resolve(),
+        };
     }
 
-    get<T>(id: string): BindingSource<T> | undefined {
-        return this.sources.get(id);
-    }
+    getListSource(id: string): ListSource {
+        const source = this.listSources.get(id);
+        if (source) return source;
 
-    getListSource(id: string): ListSource | undefined {
-        return this.listSources.get(id);
+        let realSource: ListSource | undefined;
+        let ids: string[] = [];
+        const subscribers = new Set<() => void>();
+
+        if (!this.pendingBinds.has(id)) this.pendingBinds.set(id, new Set());
+        const pending = this.pendingBinds.get(id);
+        if (pending)
+            pending.add((s: unknown) => {
+                realSource = s as ListSource;
+                const result = realSource.getIds();
+                if (result instanceof Promise) {
+                    result.then((newIds) => {
+                        ids = newIds;
+                        for (const cb of subscribers) cb();
+                    });
+                } else {
+                    ids = result;
+                    for (const cb of subscribers) cb();
+                }
+            });
+
+        return {
+            getIds: () => ids,
+            subscribe: (cb) => {
+                subscribers.add(cb);
+                return () => subscribers.delete(cb);
+            },
+            getChild: (childId) => realSource?.getChild(childId) ?? Promise.resolve({ id: childId, label: "Unknown" }),
+        };
     }
 }
 
 function createToggle(registry: Registry, id: string): ControlNode {
-    const toggle = check(id, ["on", "off"]);
-    let unsub: (() => void) | undefined;
-
-    function bind(source: BindingSource<boolean>) {
-        // 初始化
-        const initVal = source.get();
-        if (initVal instanceof Promise) {
-            initVal.then((v) => toggle.sv(v));
-        } else {
-            toggle.sv(initVal);
-        }
-
-        // 订阅变化
-        unsub = source.subscribe((v) => toggle.sv(v));
-
-        // 用户操作
-        toggle.el.addEventListener("change", () => {
-            source.set?.(toggle.gv);
-        });
-    }
-
-    // 尝试绑定现有 source
     const source = registry.get<boolean>(id);
-    if (source) {
-        bind(source);
+    const toggle = check(id, ["on", "off"]);
+
+    const initVal = source.get();
+    if (initVal instanceof Promise) {
+        initVal.then((v) => toggle.sv(v));
+    } else {
+        toggle.sv(initVal);
     }
 
-    // 监听后续注册
-    const off = registry.onRegistered((registeredId) => {
-        if (registeredId === id) {
-            const s = registry.get<boolean>(id);
-            if (s) bind(s);
-        }
+    const unsub = source.subscribe((v) => toggle.sv(v));
+    toggle.el.addEventListener("change", () => {
+        source.set?.(toggle.gv);
     });
 
-    return {
-        id,
-        type: "toggle",
-        el: toggle as any,
-        unmount: () => {
-            unsub?.();
-            off();
-        },
-    };
+    return { id, type: "toggle", el: toggle as unknown as ElType<HTMLElement>, unmount: unsub };
 }
 
 function createListItem(data: ListItemData): ControlNode {
@@ -134,46 +169,21 @@ function createDynamicList(
     sourceId: string,
     map: (id: string, data: ListItemData) => ControlNode,
 ): ControlNode {
-    const container = view("y");
-    let unsub: (() => void) | undefined;
-
-    function bind(source: ListSource) {
-        async function render() {
-            const ids = await source.getIds();
-            container.clear();
-            for (const id of ids) {
-                const data = await source.getChild(id);
-                container.add(map(id, data).el);
-            }
-        }
-
-        render();
-        unsub = source.subscribe(() => render());
-    }
-
-    // 尝试绑定现有 source
     const source = registry.getListSource(sourceId);
-    if (source) {
-        bind(source);
+    const container = view("y");
+
+    async function render() {
+        const ids = await source.getIds();
+        container.clear();
+        for (const id of ids) {
+            const data = await source.getChild(id);
+            container.add(map(id, data).el);
+        }
     }
 
-    // 监听后续注册
-    const off = registry.onRegistered((registeredId) => {
-        if (registeredId === sourceId) {
-            const s = registry.getListSource(sourceId);
-            if (s) bind(s);
-        }
-    });
-
-    return {
-        id: sourceId,
-        type: "dynamic-list",
-        el: container,
-        unmount: () => {
-            unsub?.();
-            off();
-        },
-    };
+    render();
+    const unsub = source.subscribe(() => render());
+    return { id: sourceId, type: "dynamic-list", el: container, unmount: unsub };
 }
 
 // ========== 蓝牙适配器 ==========
