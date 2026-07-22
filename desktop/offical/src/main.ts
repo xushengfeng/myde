@@ -777,12 +777,12 @@ server.server.on("newClient", (client, clientId) => {
         const wid = ViewData.winId(clientId, windowId);
         windowCenterManager.pauseCentering(wid);
 
-        // todo track point
         const startX = mousePos.x;
         const startY = mousePos.y;
 
-        const origLeft = rect.left;
-        const origTop = rect.top;
+        const parentRect = winEl.parentElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
+        const origLeft = rect.left - parentRect.left;
+        const origTop = rect.top - parentRect.top;
 
         function onPointerMove() {
             const newLeft = Math.round(mousePos.x - startX + origLeft);
