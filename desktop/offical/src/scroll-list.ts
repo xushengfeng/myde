@@ -362,14 +362,30 @@ export function dynamicScrollList<T>(options: {
 
     let touchStartPos = 0;
     let touchStartScroll = 0;
+    let snapTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function snapToNearest() {
+        const targetPage = Math.round(currentScroll / itemSize);
+        scrollToPage(targetPage, true);
+    }
 
     container.el.addEventListener("wheel", (e) => {
         e.preventDefault();
         const delta = vertical ? e.deltaY : e.deltaX || e.deltaY;
 
         if (snap) {
-            if (delta > 0) nextPage();
-            else if (delta < 0) prevPage();
+            // deltaMode=1 是行模式（鼠标滚轮），deltaY绝对值大通常也是鼠标滚轮
+            const isMouseWheel = e.deltaMode === 1 || Math.abs(delta) >= 100;
+            if (isMouseWheel) {
+                if (delta > 0) nextPage();
+                else if (delta < 0) prevPage();
+            } else {
+                // 触控板：正常滚动内容
+                smoothScrollTo(smoothScrollTarget + delta);
+                // 停止时吸附
+                if (snapTimer) clearTimeout(snapTimer);
+                snapTimer = setTimeout(snapToNearest, 150);
+            }
         } else {
             smoothScrollTo(smoothScrollTarget + delta);
         }
