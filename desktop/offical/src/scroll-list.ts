@@ -273,6 +273,49 @@ export function dynamicScrollList<T>(options: {
         scrollTo(currentPage * itemSize, animate);
     }
 
+    function smoothScrollTo(target: number) {
+        smoothScrollTarget = Math.max(0, Math.min(target, getMaxScroll()));
+        if (!isSmoothScrolling) {
+            isSmoothScrolling = true;
+            scrollGear.moveTo({ scroll: smoothScrollTarget }, { duration: 120, map: timingFunction.linear }, () => {
+                isSmoothScrolling = false;
+            });
+        } else {
+            scrollGear.moveTo({ scroll: smoothScrollTarget }, { duration: 120, map: timingFunction.linear });
+        }
+    }
+
+    function stopInertia() {
+        if (inertiaAnimId !== null) {
+            clearTimeout(inertiaAnimId);
+            inertiaAnimId = null;
+        }
+    }
+
+    function stopSmoothScroll() {
+        isSmoothScrolling = false;
+    }
+
+    function startInertia(initialVelocity: number) {
+        stopInertia();
+        let velocity = initialVelocity;
+        const animate = () => {
+            if (Math.abs(velocity) < minVelocity) {
+                inertiaAnimId = null;
+                if (snap) {
+                    const targetPage = Math.round(currentScroll / itemSize);
+                    scrollToPage(targetPage, true);
+                }
+                return;
+            }
+            velocity *= friction;
+            const newScroll = Math.max(0, Math.min(currentScroll + velocity, getMaxScroll()));
+            scrollGear.moveTo({ scroll: newScroll }, 0);
+            inertiaAnimId = setTimeout(animate, 16);
+        };
+        animate();
+    }
+
     function setList(newItems: T[], disableAnimation?: boolean) {
         const oldItems = items;
         items = newItems;
@@ -303,6 +346,21 @@ export function dynamicScrollList<T>(options: {
         scrollToPage(page, true);
     }
 
+    // 平滑滚动状态
+    let smoothScrollTarget = currentScroll;
+    let isSmoothScrolling = false;
+
+    // 触控惯性状态
+    let touchVelocity = 0;
+    let lastTouchTime = 0;
+    let lastTouchPos = 0;
+    let inertiaAnimId: ReturnType<typeof setTimeout> | null = null;
+    const friction = 0.9;
+    const minVelocity = 2;
+
+    let touchStartPos = 0;
+    let touchStartScroll = 0;
+
     container.el.addEventListener("wheel", (e) => {
         e.preventDefault();
         const delta = vertical ? e.deltaY : e.deltaX || e.deltaY;
@@ -311,24 +369,32 @@ export function dynamicScrollList<T>(options: {
             if (delta > 0) nextPage();
             else if (delta < 0) prevPage();
         } else {
-            scrollTo(currentScroll + delta, false);
+            smoothScrollTo(smoothScrollTarget + delta);
         }
     });
 
-    let touchStartPos = 0;
-    let touchStartScroll = 0;
-
     container.el.addEventListener("touchstart", (e) => {
+        stopInertia();
+        stopSmoothScroll();
         touchStartPos = vertical ? e.touches[0].clientY : e.touches[0].clientX;
         touchStartScroll = currentScroll;
+        lastTouchPos = touchStartPos;
+        lastTouchTime = Date.now();
+        touchVelocity = 0;
     });
 
     container.el.addEventListener("touchmove", (e) => {
         e.preventDefault();
         const pos = vertical ? e.touches[0].clientY : e.touches[0].clientX;
-        if (!snap) {
-            scrollTo(touchStartScroll + (touchStartPos - pos), false);
+        const now = Date.now();
+        const dt = now - lastTouchTime;
+        if (dt > 0) {
+            touchVelocity = (lastTouchPos - pos) / dt;
         }
+        lastTouchPos = pos;
+        lastTouchTime = now;
+
+        scrollTo(touchStartScroll + (touchStartPos - pos), false);
     });
 
     container.el.addEventListener("touchend", (e) => {
@@ -337,6 +403,11 @@ export function dynamicScrollList<T>(options: {
             const delta = touchStartPos - pos;
             if (Math.abs(delta) > 20) {
                 delta > 0 ? nextPage() : prevPage();
+            }
+        } else {
+            const velocity = touchVelocity * 1000;
+            if (Math.abs(velocity) > minVelocity) {
+                startInertia(velocity);
             }
         }
     });
@@ -378,6 +449,9 @@ export function carousel<T>(options: {
     let startPos = 0;
     let startScroll = 0;
     let currentDragScroll = 0;
+    let dragVelocity = 0;
+    let lastDragPos = 0;
+    let lastDragTime = 0;
     const vertical = isVertical(direction);
 
     list.el.el.addEventListener("mousedown", (e) => {
@@ -385,12 +459,22 @@ export function carousel<T>(options: {
         startPos = vertical ? e.clientY : e.clientX;
         startScroll = list.getCurrentPage() * itemSize;
         currentDragScroll = startScroll;
+        lastDragPos = startPos;
+        lastDragTime = Date.now();
+        dragVelocity = 0;
         list.el.el.style.cursor = "grabbing";
     });
 
     window.addEventListener("mousemove", (e) => {
         if (!isDragging) return;
         const pos = vertical ? e.clientY : e.clientX;
+        const now = Date.now();
+        const dt = now - lastDragTime;
+        if (dt > 0) {
+            dragVelocity = (lastDragPos - pos) / dt;
+        }
+        lastDragPos = pos;
+        lastDragTime = now;
         currentDragScroll = startScroll + (startPos - pos);
         list.scrollTo(currentDragScroll);
     });
@@ -399,9 +483,15 @@ export function carousel<T>(options: {
         if (!isDragging) return;
         isDragging = false;
         list.el.el.style.cursor = "";
-        // 根据当前拖拽位置计算应该吸附到哪个页面
-        const targetPage = Math.round(currentDragScroll / itemSize);
-        list.scrollToPage(targetPage, true);
+        const velocity = dragVelocity * 1000;
+        if (Math.abs(velocity) > 100) {
+            const targetScroll = currentDragScroll + velocity * 0.3;
+            const targetPage = Math.round(targetScroll / itemSize);
+            list.scrollToPage(Math.max(0, Math.min(targetPage, list.getTotalPages() - 1)), true);
+        } else {
+            const targetPage = Math.round(currentDragScroll / itemSize);
+            list.scrollToPage(targetPage, true);
+        }
     });
 
     return list;
