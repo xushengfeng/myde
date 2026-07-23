@@ -26,6 +26,7 @@ export function dynamicScrollList<T>(options: {
     onScroll?: (index: number, progress: number) => void;
     bufferSize?: number;
     animationDuration?: number;
+    dragByMouse?: boolean;
 }) {
     const {
         itemSize,
@@ -37,6 +38,7 @@ export function dynamicScrollList<T>(options: {
         onScroll,
         bufferSize = 5,
         animationDuration = 300,
+        dragByMouse: dragbymouse = false,
     } = options;
 
     const vertical = isVertical(direction);
@@ -373,19 +375,23 @@ export function dynamicScrollList<T>(options: {
         }
     });
 
-    container.el.addEventListener("touchstart", (e) => {
+    container.el.addEventListener("pointerdown", (e) => {
+        if (!dragbymouse && e.pointerType === "mouse") return;
         stopInertia();
         stopSmoothScroll();
-        touchStartPos = vertical ? e.touches[0].clientY : e.touches[0].clientX;
+        touchStartPos = vertical ? e.clientY : e.clientX;
         touchStartScroll = currentScroll;
         lastTouchPos = touchStartPos;
         lastTouchTime = Date.now();
         touchVelocity = 0;
+        container.el.setPointerCapture(e.pointerId);
     });
 
-    container.el.addEventListener("touchmove", (e) => {
+    container.el.addEventListener("pointermove", (e) => {
+        if (!dragbymouse && e.pointerType === "mouse") return;
+        if (!container.el.hasPointerCapture(e.pointerId)) return;
         e.preventDefault();
-        const pos = vertical ? e.touches[0].clientY : e.touches[0].clientX;
+        const pos = vertical ? e.clientY : e.clientX;
         const now = Date.now();
         const dt = now - lastTouchTime;
         if (dt > 0) {
@@ -397,12 +403,17 @@ export function dynamicScrollList<T>(options: {
         scrollTo(touchStartScroll + (touchStartPos - pos), false);
     });
 
-    container.el.addEventListener("touchend", (e) => {
+    container.el.addEventListener("pointerup", (e) => {
+        if (!dragbymouse && e.pointerType === "mouse") return;
         if (snap) {
-            const pos = vertical ? e.changedTouches[0].clientY : e.changedTouches[0].clientX;
-            const delta = touchStartPos - pos;
-            if (Math.abs(delta) > 20) {
-                delta > 0 ? nextPage() : prevPage();
+            const velocity = touchVelocity * 1000;
+            if (Math.abs(velocity) > minVelocity) {
+                const projectedScroll = currentScroll + velocity * 0.3;
+                const targetPage = Math.round(projectedScroll / itemSize);
+                scrollToPage(Math.max(0, Math.min(targetPage, items.length - 1)), true);
+            } else {
+                const targetPage = Math.round(currentScroll / itemSize);
+                scrollToPage(targetPage, true);
             }
         } else {
             const velocity = touchVelocity * 1000;
@@ -443,55 +454,7 @@ export function carousel<T>(options: {
         snap: true,
         onScroll,
         bufferSize: 1,
-    });
-
-    let isDragging = false;
-    let startPos = 0;
-    let startScroll = 0;
-    let currentDragScroll = 0;
-    let dragVelocity = 0;
-    let lastDragPos = 0;
-    let lastDragTime = 0;
-    const vertical = isVertical(direction);
-
-    list.el.el.addEventListener("mousedown", (e) => {
-        isDragging = true;
-        startPos = vertical ? e.clientY : e.clientX;
-        startScroll = list.getCurrentPage() * itemSize;
-        currentDragScroll = startScroll;
-        lastDragPos = startPos;
-        lastDragTime = Date.now();
-        dragVelocity = 0;
-        list.el.el.style.cursor = "grabbing";
-    });
-
-    window.addEventListener("mousemove", (e) => {
-        if (!isDragging) return;
-        const pos = vertical ? e.clientY : e.clientX;
-        const now = Date.now();
-        const dt = now - lastDragTime;
-        if (dt > 0) {
-            dragVelocity = (lastDragPos - pos) / dt;
-        }
-        lastDragPos = pos;
-        lastDragTime = now;
-        currentDragScroll = startScroll + (startPos - pos);
-        list.scrollTo(currentDragScroll);
-    });
-
-    window.addEventListener("mouseup", () => {
-        if (!isDragging) return;
-        isDragging = false;
-        list.el.el.style.cursor = "";
-        const velocity = dragVelocity * 1000;
-        if (Math.abs(velocity) > 100) {
-            const targetScroll = currentDragScroll + velocity * 0.3;
-            const targetPage = Math.round(targetScroll / itemSize);
-            list.scrollToPage(Math.max(0, Math.min(targetPage, list.getTotalPages() - 1)), true);
-        } else {
-            const targetPage = Math.round(currentDragScroll / itemSize);
-            list.scrollToPage(targetPage, true);
-        }
+        dragByMouse: true,
     });
 
     return list;
