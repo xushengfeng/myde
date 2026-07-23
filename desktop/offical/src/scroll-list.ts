@@ -7,6 +7,15 @@ function isVertical(dir: Direction) {
     return dir === "up" || dir === "down";
 }
 
+interface AnimatedElement<T> {
+    el: ReturnType<typeof view>;
+    index: number;
+    gear: AnimationGear<{ show: number }>;
+    moveGear: AnimationGear<{ pos: number }>;
+    state: "normal" | "moving";
+    data: T;
+}
+
 export function dynamicScrollList<T>(options: {
     itemSize: number;
     containerSize: number;
@@ -16,6 +25,7 @@ export function dynamicScrollList<T>(options: {
     snap?: boolean;
     onScroll?: (index: number, progress: number) => void;
     bufferSize?: number;
+    animationDuration?: number;
 }) {
     const {
         itemSize,
@@ -26,12 +36,13 @@ export function dynamicScrollList<T>(options: {
         snap = false,
         onScroll,
         bufferSize = 5,
+        animationDuration = 300,
     } = options;
 
     const vertical = isVertical(direction);
 
     let items: T[] = [];
-    const renderedEls = new Map<string, { el: ReturnType<typeof view>; index: number }>();
+    const renderedEls = new Map<string, AnimatedElement<T>>();
     let currentPage = 0;
     let currentScroll = 0;
 
@@ -53,6 +64,144 @@ export function dynamicScrollList<T>(options: {
         };
     }
 
+    function createAnimatedElement(data: T, index: number): AnimatedElement<T> {
+        const el = renderItem(data, index);
+        const gear = new AnimationGear<{ show: number }>(
+            { show: 0 },
+            { transition: { duration: animationDuration, map: timingFunction.easeOut } },
+        );
+
+        el.style({
+            position: "absolute",
+            [vertical ? "left" : "top"]: "0",
+            [vertical ? "width" : "height"]: "100%",
+            [vertical ? "height" : "width"]: `${itemSize}px`,
+            [vertical ? "top" : "left"]: `${index * itemSize - currentScroll}px`,
+        });
+
+        gear.setUpdateCallback((state) => {
+            el.style({
+                opacity: `${state.show}`,
+                filter: `blur(${10 * (1 - state.show)}px)`,
+            });
+        });
+        gear.moveTo({ show: 0 }, 0);
+
+        const moveGear = new AnimationGear<{ pos: number }>(
+            { pos: index * itemSize - currentScroll },
+            { transition: { duration: animationDuration, map: timingFunction.easeInOut } },
+        );
+
+        moveGear.setUpdateCallback((state) => {
+            el.style({
+                [vertical ? "top" : "left"]: `${state.pos}px`,
+            });
+        });
+
+        return { el, index, gear, moveGear, state: "normal", data };
+    }
+
+    function animateEnter(item: AnimatedElement<T>, noAnimation?: boolean) {
+        item.gear.moveTo({ show: 1 }, { duration: noAnimation ? 0 : animationDuration, map: timingFunction.easeOut });
+    }
+
+    function animateExit(item: AnimatedElement<T>, onComplete: () => void, noAnimation?: boolean) {
+        item.gear.moveTo(
+            { show: 0 },
+            { duration: noAnimation ? 0 : animationDuration, map: timingFunction.easeIn },
+            onComplete,
+        );
+    }
+
+    function animateMove(item: AnimatedElement<T>, newIndex: number) {
+        const targetPosition = newIndex * itemSize - currentScroll;
+        const currentPosition = parseFloat(item.el.el.style[vertical ? "top" : "left"]) || 0;
+        const distance = targetPosition - currentPosition;
+
+        if (Math.abs(distance) < 1) return;
+
+        item.state = "moving";
+        item.index = newIndex;
+
+        const gear = item.gear;
+        gear.moveTo({ show: 1 }, 0);
+
+        const moveGear = item.moveGear;
+
+        moveGear.moveTo({ pos: targetPosition }, { duration: animationDuration, map: timingFunction.easeInOut }, () => {
+            item.state = "normal";
+        });
+    }
+
+    function diffAndUpdateVisibleItems(oldItems: T[], noAnimation: boolean) {
+        const { start, end } = getVisibleRange();
+
+        // 构建旧列表的 key -> index 映射
+        const oldKeys = new Map<string, number>();
+        for (let i = 0; i < oldItems.length; i++) {
+            const key = keyExtractor(oldItems[i], i);
+            oldKeys.set(key, i);
+        }
+
+        // 构建新列表的 key -> index 映射
+        const newKeys = new Map<string, number>();
+        for (let i = 0; i < items.length; i++) {
+            const key = keyExtractor(items[i], i);
+            newKeys.set(key, i);
+        }
+
+        // 处理新增和移动的元素（只处理可见范围）
+        const vOldKeys: typeof oldKeys = new Map();
+        const vNewKeys: typeof newKeys = new Map();
+        for (const [k, v] of oldKeys) {
+            if (start <= v && v <= end) vOldKeys.set(k, v);
+        }
+        for (const [k, v] of newKeys) {
+            if (start <= v && v <= end) vNewKeys.set(k, v);
+        }
+        for (const [k, v] of newKeys) {
+            if (!oldKeys.has(k)) {
+                // 新增
+                if (start <= v && v <= end) {
+                    const newItem = createAnimatedElement(items[v], v);
+                    renderedEls.set(k, newItem);
+                    container.add(newItem.el);
+                    animateEnter(newItem, noAnimation);
+                }
+            }
+        }
+        for (const [k] of vOldKeys) {
+            if (!newKeys.has(k)) {
+                // 移除
+                const el = renderedEls.get(k);
+                if (!el) continue;
+                animateExit(
+                    el,
+                    () => {
+                        el.el.remove();
+                        renderedEls.delete(k);
+                    },
+                    noAnimation,
+                );
+            }
+        }
+        for (const [k, v] of oldKeys) {
+            const newV = newKeys.get(k);
+            if (newV !== undefined && newV !== v) {
+                if ((start <= v && v <= end) || (start <= newV && newV <= end)) {
+                    // move
+                    const rel = renderedEls.get(k);
+                    if (rel) {
+                        animateMove(rel, newV);
+                    } else {
+                        const el = createAnimatedElement(oldItems[v], v);
+                        if (el) animateMove(el, newV);
+                    }
+                }
+            }
+        }
+    }
+
     function updateVisibleItems() {
         const { start, end } = getVisibleRange();
 
@@ -71,16 +220,10 @@ export function dynamicScrollList<T>(options: {
 
             const id = keyExtractor(data, i);
             if (!renderedEls.has(id)) {
-                const el = renderItem(data, i);
-                el.style({
-                    position: "absolute",
-                    [vertical ? "left" : "top"]: "0",
-                    [vertical ? "width" : "height"]: "100%",
-                    [vertical ? "height" : "width"]: `${itemSize}px`,
-                    [vertical ? "top" : "left"]: `${i * itemSize - currentScroll}px`,
-                });
-                renderedEls.set(id, { el, index: i });
-                container.add(el);
+                const newItem = createAnimatedElement(data, i);
+                renderedEls.set(id, newItem);
+                container.add(newItem.el);
+                newItem.gear.moveTo({ show: 1 }, 0);
             }
         }
     }
@@ -88,12 +231,16 @@ export function dynamicScrollList<T>(options: {
     scrollGear.setUpdateCallback((state) => {
         currentScroll = state.scroll;
 
-        // 更新所有元素位置
+        // 更新所有元素位置（仅对非动画中的元素）
         const renderedArray = Array.from(renderedEls.values());
         for (const item of renderedArray) {
-            item.el.style({
-                [vertical ? "top" : "left"]: `${item.index * itemSize - currentScroll}px`,
-            });
+            if (item.state === "moving") {
+                // todo gear添加判断方法
+                item.moveGear.moveTo({ pos: item.index * itemSize - currentScroll });
+            } else
+                item.el.style({
+                    [vertical ? "top" : "left"]: `${item.index * itemSize - currentScroll}px`,
+                });
         }
 
         // 更新可见元素
@@ -126,21 +273,15 @@ export function dynamicScrollList<T>(options: {
         scrollTo(currentPage * itemSize, animate);
     }
 
-    function setList(newItems: T[]) {
+    function setList(newItems: T[], disableAnimation?: boolean) {
+        const oldItems = items;
         items = newItems;
         if (currentPage >= items.length) {
             currentPage = Math.max(0, items.length - 1);
         }
 
-        // 清除所有元素
-        const renderedArray = Array.from(renderedEls.values());
-        for (const item of renderedArray) {
-            item.el.remove();
-        }
-        renderedEls.clear();
-
-        // 重新渲染
-        updateVisibleItems();
+        // 使用 diff 算法更新可见元素
+        diffAndUpdateVisibleItems(oldItems, Boolean(disableAnimation));
 
         // 更新滚动位置
         if (snap) {

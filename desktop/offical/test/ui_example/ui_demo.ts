@@ -47,7 +47,60 @@ const scrollList = dynamicScrollList<string>({
 
 scrollListDemo.add(scrollList.el.style({ width: "300px" }));
 
-scrollList.setList(scrollData);
+scrollList.setList(scrollData, true);
+
+// 动态滚动列表测试，数据动画
+const scrollListDataDemo = view()
+    .style({
+        marginTop: "20px",
+    })
+    .addInto();
+
+scrollListDataDemo.add(txt("动态滚动列表测试（垂直向下）"));
+
+const scrollDataData = Array.from({ length: 300 }, (_, i) => `项目 ${i + 1}`);
+
+const scrollDataList = dynamicScrollList<string>({
+    itemSize: 30,
+    containerSize: 200,
+    direction: "down",
+    renderItem: (item) => {
+        return view("x")
+            .style({
+                alignItems: "center",
+                padding: "0 10px",
+                background: "#f5f5f5",
+            })
+            .add(txt(item));
+    },
+    keyExtractor: (item) => item,
+});
+
+scrollListDataDemo.add(scrollDataList.el.style({ width: "300px" }));
+
+scrollDataList.setList(scrollDataData, true);
+
+const ndata = [
+    "000",
+    scrollDataData[1],
+    scrollDataData[3],
+    "nn",
+    scrollData[4],
+    scrollDataData[299],
+    ...scrollDataData.slice(5, 299),
+];
+
+let scrollDataChange = false;
+scrollListDataDemo.add(
+    button("改变").on("click", () => {
+        if (scrollDataChange) {
+            scrollDataList.setList(scrollDataData);
+        } else {
+            scrollDataList.setList(ndata);
+        }
+        scrollDataChange = !scrollDataChange;
+    }),
+);
 
 // 横向滚动列表测试
 const hListDemo = view()
@@ -76,7 +129,10 @@ const hList = dynamicScrollList<string>({
 });
 
 hListDemo.add(hList.el);
-hList.setList(Array.from({ length: 20 }, (_, i) => `卡片 ${i + 1}`));
+hList.setList(
+    Array.from({ length: 20 }, (_, i) => `卡片 ${i + 1}`),
+    true,
+);
 
 // Carousel测试（垂直，带指示器）
 const carouselDemo = view()
@@ -178,4 +234,4 @@ carouselControls.add(
     }),
 );
 
-carouselView.setList(carouselItems);
+carouselView.setList(carouselItems, true);
