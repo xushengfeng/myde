@@ -236,26 +236,31 @@ export function carousel<T>(options: {
     let isDragging = false;
     let startPos = 0;
     let startScroll = 0;
+    let currentDragScroll = 0;
     const vertical = isVertical(direction);
 
     list.el.el.addEventListener("mousedown", (e) => {
         isDragging = true;
         startPos = vertical ? e.clientY : e.clientX;
         startScroll = list.getCurrentPage() * itemSize;
+        currentDragScroll = startScroll;
         list.el.el.style.cursor = "grabbing";
     });
 
     window.addEventListener("mousemove", (e) => {
         if (!isDragging) return;
         const pos = vertical ? e.clientY : e.clientX;
-        list.scrollTo(startScroll + (startPos - pos));
+        currentDragScroll = startScroll + (startPos - pos);
+        list.scrollTo(currentDragScroll);
     });
 
     window.addEventListener("mouseup", () => {
         if (!isDragging) return;
         isDragging = false;
         list.el.el.style.cursor = "";
-        list.scrollToPage(list.getCurrentPage(), true);
+        // 根据当前拖拽位置计算应该吸附到哪个页面
+        const targetPage = Math.round(currentDragScroll / itemSize);
+        list.scrollToPage(targetPage, true);
     });
 
     return list;
