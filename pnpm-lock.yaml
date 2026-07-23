@@ -27,8 +27,8 @@ importers:
         specifier: ^0.0.5
         version: 0.0.5
       myde-ui:
-        specifier: 0.0.4
-        version: 0.0.4
+        specifier: 0.0.5
+        version: 0.0.5
       myde-unix-socket:
         specifier: ^0.2.3
         version: 0.2.3
@@ -1577,8 +1577,8 @@ packages:
   myde-remote-connect@0.0.5:
     resolution: {integrity: sha512-AcnXxoXZZnUFxBaSD25MmAvJgvLWhD0avSrNxaQ6tSTuGE/n0cU5t3lz/MtXP81hoQCgSjjxmjxBxFpcv8XlkQ==}
 
-  myde-ui@0.0.4:
-    resolution: {integrity: sha512-3a3vL1kKC84Mx0RavLESNO2OuSxOMR8uv/CvjMaeepNcIkfIda4MZ1/0aA35wdTfgryARoM4q7GcsIBBrRx/+A==}
+  myde-ui@0.0.5:
+    resolution: {integrity: sha512-kYfb2jCgTBEEtQIhZtiNsOMs0CfZfdeGaqVfaYmo6Lsk22hM0XwPTLLc4hTXsaMzC0ZQqTDKM9eaD0UX+9Y4mg==}
 
   myde-unix-socket@0.2.3:
     resolution: {integrity: sha512-UYn5p54Jq+j8T6UJRy11H2jfYIFZXE4z+yHrd+sRMAWVX909SfO/RLkkAwEbVW9yLhl+Y3whPU7b0qQkJ0CRLQ==}
@@ -3555,7 +3555,7 @@ snapshots:
     dependencies:
       peerjs: 1.5.5
 
-  myde-ui@0.0.4: {}
+  myde-ui@0.0.5: {}
 
   myde-unix-socket@0.2.3: {}
 
