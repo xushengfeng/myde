@@ -9,5 +9,11 @@ export default defineConfig({
             formats: ["es"],
             fileName: () => `index.js`,
         },
+        rollupOptions: {
+            output: {
+                inlineDynamicImports: true,
+                manualChunks: undefined,
+            },
+        },
     },
 });
