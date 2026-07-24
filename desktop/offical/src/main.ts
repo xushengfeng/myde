@@ -7,7 +7,7 @@ import type { blue, blueDevice } from "../../../src/sys_api/blue";
 import type { power } from "../../../src/sys_api/power";
 import type { network, accessPoint } from "../../../src/sys_api/network";
 import { AnimationGear, timingFunction } from "myde-ui";
-import { aLineText, uPasswdInput } from "./ui";
+import { aLineText, bButton, iItem, ui, uPasswdInput } from "./ui";
 
 // ========== Registry 和 ControlNode ==========
 
@@ -428,11 +428,17 @@ class Tools {
                     position: "fixed",
                     width: "fit-content",
                     height: "fit-content",
-                    padding: "6px",
-                    background: "rgba(255,255,255,0.8)",
-                    backdropFilter: "blur(12px)",
-                    borderRadius: "12px",
                 })
+                .style(
+                    tool.selfBackground
+                        ? {}
+                        : {
+                              padding: "6px",
+                              background: "rgba(255,255,255,0.8)",
+                              backdropFilter: "blur(12px)",
+                              borderRadius: "12px",
+                          },
+                )
                 .addInto(this.tipEl)
                 .bindSet((s) => {
                     if (s === "show") {
@@ -1665,42 +1671,50 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
     return appsEl;
 });
 
-tools.registerTool("login", ({ tipEl, showTip }) => {
-    const el = view().add("电源");
+tools.registerTool(
+    "login",
+    ({ tipEl, showTip }) => {
+        const el = view().add("电源");
 
-    view("x")
-        .style({ gap: "4px" })
-        .add([
-            button()
-                .add("锁屏")
-                .on("click", () => {
-                    state.setState("lock");
-                }),
-            button()
-                .add("关机")
-                .on("click", async () => {
-                    const t = await confirm("确认 关机？");
-                    if (t) MSysApi.login("shutdown");
-                }),
-            button()
-                .add("重启")
-                .on("click", async () => {
-                    const t = await confirm("确认 重启？");
-                    if (t) MSysApi.login("restart");
-                }),
-            button()
-                .add("挂起")
-                .on("click", async () => {
-                    const t = await confirm("确认 挂起？");
-                    if (t) MSysApi.login("suspend");
-                }),
+        ui.bar([
+            ui.barItem().add(
+                iItem({ type: "h", size: "oneLine" }).add(
+                    bButton("锁屏", () => {
+                        state.setState("lock");
+                    }),
+                ),
+            ),
+            ui.barItem().add([
+                iItem({ type: "h", size: "oneLine" }).add(
+                    bButton("关机", async () => {
+                        const t = await confirm("确认 关机？");
+                        if (t) MSysApi.login("shutdown");
+                    }),
+                ),
+                iItem({ type: "h", size: "oneLine" }).add(
+                    bButton("重启", async () => {
+                        const t = await confirm("确认 重启？");
+                        if (t) MSysApi.login("restart");
+                    }),
+                ),
+                iItem({ type: "h", size: "oneLine" }).add(
+                    bButton("挂起", async () => {
+                        const t = await confirm("确认 挂起？");
+                        if (t) MSysApi.login("suspend");
+                    }),
+                ),
+            ]),
         ])
-        .addInto(tipEl);
-    el.on("click", () => {
-        showTip({ state: "toggle" });
-    });
-    return el;
-});
+            .el.style({ width: "100px" })
+            .addInto(tipEl);
+
+        el.on("click", () => {
+            showTip({ state: "toggle" });
+        });
+        return el;
+    },
+    { selfBackground: true },
+);
 
 const notifications = new Map<string, { title: string; content: string; id: string }>();
 tools.registerTool("notifications", ({ tipEl, showTip }) => {
@@ -1893,61 +1907,67 @@ const uipool = {
     "blue.devices": () => createDynamicList(blueRegistry, "blue.devices", (_id, data) => createListItem(data)),
 };
 
-tools.registerTool("power", ({ tipEl, showTip }) => {
-    const el = view("x");
-    const mel = view("y").addInto(tipEl);
+tools.registerTool(
+    "power",
+    ({ tipEl, showTip }) => {
+        const el = view("x");
 
-    // 顶部显示电池状态
-    const batteryIndicator = uipool["power.battery"]();
-    el.add(batteryIndicator.el);
+        // 顶部显示电池状态
+        const batteryIndicator = uipool["power.battery"]();
+        el.add(batteryIndicator.el);
 
-    // 弹出框显示详情
-    const batteryInfo = uipool["power.battery"]();
-    mel.add(batteryInfo.el);
+        // 弹出框显示详情
+        const batteryInfo = uipool["power.battery"]();
+        const deviceList = uipool["power.devices"]();
 
-    const deviceList = uipool["power.devices"]();
-    mel.add(deviceList.el);
+        ui.bar([
+            // todo 性能方案
+            ui.barItem().add(batteryInfo.el),
+            ui.barItem().add(deviceList.el),
+        ]).el.addInto(tipEl);
 
-    el.on("click", () => {
-        showTip({ state: "show", anchorEl: el.el });
-    });
+        el.on("click", () => {
+            showTip({ state: "show", anchorEl: el.el });
+        });
 
-    return el;
-});
+        return el;
+    },
+    { selfBackground: true },
+);
 
-tools.registerTool("network", ({ tipEl, showTip }) => {
-    const el = view("x").add("网络");
-    const mel = view("y").addInto(tipEl);
+tools.registerTool(
+    "network",
+    ({ tipEl, showTip }) => {
+        const el = view("x").add("网络");
+        const toggle = uipool["wifi.toggle"]();
+        const apList = uipool["wifi.accessPoints"]();
+        ui.bar([ui.barItem().add(toggle.el), ui.barItem().add(apList.el)]).el.addInto(tipEl);
 
-    const toggle = uipool["wifi.toggle"]();
-    mel.add(toggle.el);
+        el.on("click", () => {
+            showTip({ state: "show", anchorEl: el.el });
+        });
 
-    const apList = uipool["wifi.accessPoints"]();
-    mel.add(apList.el);
+        return el;
+    },
+    { selfBackground: true },
+);
 
-    el.on("click", () => {
-        showTip({ state: "show", anchorEl: el.el });
-    });
+tools.registerTool(
+    "blue",
+    ({ tipEl, showTip }) => {
+        const el = view("x").add("蓝牙");
+        const toggle = uipool["blue.toggle"]();
+        const deviceList = uipool["blue.devices"]();
+        ui.bar([ui.barItem().add(toggle.el), ui.barItem().add(deviceList.el)]).el.addInto(tipEl);
 
-    return el;
-});
+        el.on("click", () => {
+            showTip({ state: "show", anchorEl: el.el });
+        });
 
-tools.registerTool("blue", ({ tipEl, showTip }) => {
-    const el = view("x").add("蓝牙");
-    const mel = view("y").addInto(tipEl);
-
-    const toggle = uipool["blue.toggle"]();
-    mel.add(toggle.el);
-
-    const deviceList = uipool["blue.devices"]();
-    mel.add(deviceList.el);
-
-    el.on("click", () => {
-        showTip({ state: "show", anchorEl: el.el });
-    });
-
-    return el;
-});
+        return el;
+    },
+    { selfBackground: true },
+);
 
 const wino = { t: 0, l: 0, r: 0, b: 0 };
 for (const p of planteData) {

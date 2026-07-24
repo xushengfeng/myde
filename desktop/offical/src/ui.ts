@@ -1,4 +1,4 @@
-import { type ElType, view } from "dkh-ui";
+import { button, type ElType, view } from "dkh-ui";
 import { AnimationGear } from "myde-ui";
 
 export const sSize = {
@@ -248,6 +248,15 @@ export function xView(els: ElType<HTMLElement>[]) {
     return {
         el,
     };
+}
+
+export function bButton(txt: string, onClick: () => void) {
+    return button()
+        .style({ width: "100%", height: "100%" })
+        .add(aLineText().sv(txt))
+        .on("click", () => {
+            onClick();
+        });
 }
 
 export const ui = {
