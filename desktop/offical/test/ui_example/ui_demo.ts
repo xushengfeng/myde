@@ -1,22 +1,154 @@
-import { view, txt, button, addStyle } from "dkh-ui";
-import { uPasswdInput } from "../../src/ui";
-import { dynamicScrollList, carousel } from "../../src/scroll-list";
+import { addStyle, button, initDKH, txt, view } from "dkh-ui";
+import { carousel, dynamicScrollList } from "../../src/scroll-list";
+import { iItem, sSize, ui } from "../../src/ui";
 
-addStyle({ body: { userSelect: "none" } });
+addStyle({ body: { userSelect: "none", padding: "8px" } });
+initDKH({ pureStyle: true });
 
 // 原有密码输入组件测试
-const i = uPasswdInput();
+const i = ui.passwd();
 i.placeholder("input your p");
 const p = i.el.style({
     width: "200px",
-    height: "24px",
-    background: "#eee",
 });
 const r = view();
 view().add(["passwd", p, r]).addInto();
 p.on("change", () => {
     r.clear().add(p.gv);
 });
+
+// 下拉弹窗
+// 内部有子元素
+// 测试不同背景下的半透明模糊背景可读性
+const bgTestSectionP = view("x", "wrap")
+    .style({
+        marginTop: "30px",
+    })
+    .addInto();
+bgTestSectionP.add(txt("测试半透明模糊背景在不同背景下的可读性"));
+const bgTestSection = view("x", "wrap").addInto(bgTestSectionP);
+
+function createPopupWithBackground(bgStyle: Record<string, string>, label: string) {
+    const container = view().style({
+        position: "relative",
+        width: "300px",
+        height: "300px",
+        overflow: "hidden",
+        ...bgStyle,
+    });
+
+    container.add(
+        txt(label).style({
+            position: "absolute",
+            top: "10px",
+            left: "10px",
+            fontSize: "14px",
+            color: bgStyle.color || "#000",
+            zIndex: 1,
+        }),
+    );
+
+    const list = dynamicScrollList<string>({
+        itemSize: sSize.item,
+        containerSize: 100,
+        direction: "down",
+        keyExtractor: (x) => x,
+        renderItem: (k) => {
+            if (k === "1") {
+                return iItem({ type: "h", size: "item" }).style({ backgroundColor: "#fff" }).add(k);
+            }
+            return iItem({ type: "h", size: "item" }).add(k);
+        },
+    });
+
+    const popup = ui.bar([
+        ui.barItem().add(iItem({ type: "h", size: "oneLine" }).add(txt("测试文本"))),
+        ui.barItem().add(list.el.style({ width: "100%" })),
+    ]);
+    list.setList(["1", "2", "3", "4"]);
+    popup.el.style({
+        color: "#000",
+        width: "200px",
+        position: "absolute",
+        top: "50%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+    });
+
+    container.add(popup.el);
+    return container;
+}
+
+// 1. 白色背景
+const whiteBgPopup = createPopupWithBackground(
+    {
+        background: "#ffffff",
+        color: "#333333",
+    },
+    "白色背景",
+);
+bgTestSection.add(whiteBgPopup);
+
+// 2. 黑色背景
+const blackBgPopup = createPopupWithBackground(
+    {
+        background: "#000000",
+        color: "#ffffff",
+    },
+    "黑色背景",
+);
+bgTestSection.add(blackBgPopup);
+
+// 3. 纯色背景（蓝色）
+const solidBgPopup = createPopupWithBackground(
+    {
+        background: "#2196F3",
+        color: "#ffffff",
+    },
+    "纯色背景（蓝色）",
+);
+bgTestSection.add(solidBgPopup);
+
+// 4. 复杂图案背景（红绿拼接）
+const gradientBgPopup = createPopupWithBackground(
+    {
+        background: "linear-gradient(to right, #ff0000 50%, #00ff00 50%)",
+        color: "#ffffff",
+    },
+    "红绿拼接背景",
+);
+bgTestSection.add(gradientBgPopup);
+
+// 5. 复杂图案背景（条纹）
+const stripedBgPopup = createPopupWithBackground(
+    {
+        background: `repeating-linear-gradient(
+            45deg,
+            #f0f0f0,
+            #f0f0f0 10px,
+            #e0e0e0 10px,
+            #e0e0e0 20px
+        )`,
+        color: "#333333",
+    },
+    "条纹背景",
+);
+bgTestSection.add(stripedBgPopup);
+
+// 6. 复杂图案背景（点状）
+const dottedBgPopup = createPopupWithBackground(
+    {
+        background: `
+            radial-gradient(circle at 25% 25%, #ff6b6b 6px, transparent 2px),
+            radial-gradient(circle at 75% 75%, #4ecdc4 6px, transparent 2px),
+            #f8f9fa
+        `,
+        backgroundSize: "50px 50px",
+        color: "#333333",
+    },
+    "点状图案背景",
+);
+bgTestSection.add(dottedBgPopup);
 
 // 动态滚动列表测试（垂直向下）
 const scrollListDemo = view()

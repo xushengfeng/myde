@@ -1,6 +1,41 @@
-import { view } from "dkh-ui";
+import { type ElType, view } from "dkh-ui";
 import { AnimationGear } from "myde-ui";
 
+export const sSize = {
+    /* 一行 */
+    oneLine: 32,
+    /* 复杂信息一行 */
+    item: 48,
+    /* 小组件开关 */
+    xItem: 64,
+};
+
+export const sSize2 = {
+    paddingx: 6,
+    radius1: 10,
+    padding: 8,
+    radius2: 18,
+};
+
+export const gGlassStyle = {
+    bg: {
+        backdropFilter: "blur(12px)",
+        background: "rgba(245, 245, 245, 0.8)",
+        boxShadow: "0 0 4px #00000011",
+    },
+    itemInBg: {
+        backgroundColor: "#ffffff88",
+    },
+    justItem: {
+        backdropFilter: "blur(12px)",
+        backgroundColor: "rgb(250.88, 250.88, 250.88, 0.9066)",
+        boxShadow: "0 0 4px #00000011",
+    },
+} as const;
+
+function px(n: number) {
+    return `${n}px`;
+}
 export function aLineText() {
     const textEl = view().style({
         whiteSpace: "nowrap",
@@ -181,3 +216,51 @@ export function uPasswdInput() {
         },
     };
 }
+
+export function iItem(op: { type: "h" | "v" | "sq"; size: "oneLine" | "item" | "xItem" }) {
+    const el = view().style({ borderRadius: `${sSize2.radius1}px` });
+    const s = `${sSize[op.size]}px`;
+    if (op.type === "h") {
+        return el.style({ height: s });
+    } else if (op.type === "v") {
+        return el.style({ width: s });
+    } else if (op.type === "sq") {
+        return el.style({ width: s, height: s });
+    }
+    return el;
+}
+
+export function uToggleItem() {
+    const el = view().style({});
+}
+
+export function xView(els: ElType<HTMLElement>[]) {
+    const el = view("y").style({
+        gap: `${sSize2.padding}px`,
+        padding: `${sSize2.padding}px`,
+        borderRadius: `${sSize2.radius2}px`,
+        ...gGlassStyle.bg,
+    });
+    el.add(els);
+    return {
+        el,
+    };
+}
+
+export const ui = {
+    passwd: () => {
+        const x = uPasswdInput();
+        x.el.style({
+            height: px(sSize.oneLine),
+            borderRadius: px(sSize2.radius1),
+            padding: px(sSize2.paddingx),
+            boxSizing: "border-box",
+            ...gGlassStyle.justItem,
+        });
+        return x;
+    },
+    /** 在复杂背景下的容器 */
+    bar: (els: ElType<HTMLElement>[]) => xView(els),
+    /** 在复杂背景下的容器项目 */
+    barItem: () => view().style({ borderRadius: `${sSize2.radius1}px`, ...gGlassStyle.itemInBg, overflow: "hidden" }),
+};
