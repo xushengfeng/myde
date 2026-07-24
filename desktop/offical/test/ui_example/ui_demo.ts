@@ -1,11 +1,19 @@
 import { addStyle, button, initDKH, txt, view } from "dkh-ui";
 import { carousel, dynamicScrollList } from "../../src/scroll-list";
-import { iItem, sSize, ui } from "../../src/ui";
+import { aLineText, iItem, sSize, ui } from "../../src/ui";
 
 addStyle({ body: { userSelect: "none", padding: "8px" } });
 initDKH({ pureStyle: true });
 
-// 原有密码输入组件测试
+// 单行文本
+aLineText()
+    .sv("中文1iIlmg")
+    .addInto(view().style({ border: "solid 1px", width: "100px" }).addInto());
+aLineText()
+    .sv("长长长长长长长长长长长长长长长长")
+    .addInto(view().style({ border: "solid 1px", width: "100px" }).addInto());
+
+// 密码输入组件测试
 const i = ui.passwd();
 i.placeholder("input your p");
 const p = i.el.style({

@@ -41,6 +41,9 @@ export function aLineText() {
         whiteSpace: "nowrap",
         textOverflow: "ellipsis",
         overflow: "hidden",
+        // biome-ignore lint/suspicious/noTsIgnore: css
+        // @ts-ignore
+        textBoxTrim: "trim-both",
         width: "100%",
     });
     const wrapEl = view().style({
@@ -231,7 +234,7 @@ export function iItem(op: { type: "h" | "v" | "sq"; size: "oneLine" | "item" | "
 }
 
 export function uToggleItem() {
-    const el = view().style({});
+    view().style({});
 }
 
 export function xView(els: ElType<HTMLElement>[]) {
