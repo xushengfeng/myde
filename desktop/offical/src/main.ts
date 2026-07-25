@@ -14,8 +14,14 @@ import { aLineText, bButton, iItem, ui, uPasswdInput } from "./ui";
 // 特殊的id类型，表示可以用registry.get获取
 type id<T extends string = string> = string & { __brand: T };
 
-interface BindingSource<T> {
+interface BindingSourceRegister<T> {
     get: () => T | Promise<T>;
+    subscribe: (cb: (value: T) => void) => () => void;
+    set?: (value: T) => Promise<void>;
+}
+
+interface BindingSource<T> {
+    get: () => Promise<T>;
     subscribe: (cb: (value: T) => void) => () => void;
     set?: (value: T) => Promise<void>;
 }
@@ -59,11 +65,11 @@ type IdArrayRegistryKeys = "power.devices" | "wifi.accessPoints" | "blue.devices
  * 一般先register再get，这里可以先get，直到数据register挂上来
  */
 class Registry<T = RegistrySchema> {
-    private sources = new Map<string, BindingSource<unknown>>();
+    private sources = new Map<string, BindingSourceRegister<unknown>>();
     private pendingBinds = new Map<string, Set<(source: unknown) => void>>();
 
-    register<K extends keyof T & string>(id: K, source: BindingSource<T[K]>): void {
-        this.sources.set(id, source as BindingSource<unknown>);
+    register<K extends keyof T & string>(id: K, source: BindingSourceRegister<T[K]>): void {
+        this.sources.set(id, source as BindingSourceRegister<unknown>);
         const pending = this.pendingBinds.get(id);
         if (pending) {
             for (const cb of pending) cb(source);
@@ -72,32 +78,32 @@ class Registry<T = RegistrySchema> {
     }
 
     get<K extends keyof T & string>(id: K): BindingSource<T[K]> {
-        const source = this.sources.get(id);
-        if (source) return source as BindingSource<T[K]>;
+        const source = this.sources.get(id) as BindingSourceRegister<T[K]> | undefined;
+        if (source) {
+            return {
+                get: () => Promise.resolve(source.get()),
+                subscribe: (cb) => source.subscribe(cb),
+                set: source.set,
+            };
+        }
 
         let currentValue: T[K] | undefined;
-        let realSource: BindingSource<T[K]> | undefined;
+        let realSource: BindingSourceRegister<T[K]> | undefined;
         const subscribers = new Set<(value: T[K]) => void>();
 
         if (!this.pendingBinds.has(id)) this.pendingBinds.set(id, new Set());
         const pending = this.pendingBinds.get(id);
         if (pending)
             pending.add((s: unknown) => {
-                realSource = s as BindingSource<T[K]>;
-                const val = realSource.get();
-                if (val instanceof Promise) {
-                    val.then((v) => {
-                        currentValue = v;
-                        for (const cb of subscribers) cb(v);
-                    });
-                } else {
-                    currentValue = val as T[K];
-                    for (const cb of subscribers) cb(val as T[K]);
-                }
+                realSource = s as BindingSourceRegister<T[K]>;
+                Promise.resolve(realSource.get()).then((v) => {
+                    currentValue = v;
+                    for (const cb of subscribers) cb(v);
+                });
             });
 
         return {
-            get: () => currentValue as T[K],
+            get: () => Promise.resolve(currentValue as T[K]),
             subscribe: (cb) => {
                 subscribers.add(cb);
                 return () => subscribers.delete(cb);
@@ -111,12 +117,7 @@ function createToggle(registry: Registry, id: BooleanRegistryKeys): ControlNode 
     const source = registry.get(id);
     const toggle = check(id, ["on", "off"]);
 
-    const initVal = source.get();
-    if (initVal instanceof Promise) {
-        initVal.then((v) => toggle.sv(v));
-    } else {
-        toggle.sv(initVal);
-    }
+    source.get().then((v) => toggle.sv(v));
 
     const unsub = source.subscribe((v) => toggle.sv(v));
     toggle.el.addEventListener("change", () => {
@@ -167,12 +168,7 @@ function createIndicator(registry: Registry, id: NumericRegistryKeys): ControlNo
     const source = registry.get(id);
     const label = txt();
 
-    const initVal = source.get();
-    if (initVal instanceof Promise) {
-        initVal.then((v) => label.sv(String(v)));
-    } else {
-        label.sv(String(initVal));
-    }
+    source.get().then((v) => label.sv(String(v)));
 
     const unsub = source.subscribe((v) => label.sv(String(v)));
     return { id, type: "indicator", el: label as unknown as ElType<HTMLElement>, unmount: unsub };
