@@ -1,4 +1,4 @@
-import { addClass, button, check, ele, type ElType, image, input, p, pack, setProperty, view } from "dkh-ui";
+import { addClass, button, check, ele, type ElType, image, p, pack, setProperty, view } from "dkh-ui";
 
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
 import type { mprisPlayer } from "../../../src/sys_api/mpris";
@@ -11,16 +11,13 @@ import { aLineText, bButton, iItem, ui, uPasswdInput } from "./ui";
 
 // ========== Registry 和 ControlNode ==========
 
+// 特殊的id类型，表示可以用registry.get获取
+type id<T extends string = string> = string & { __brand: T };
+
 interface BindingSource<T> {
     get: () => T | Promise<T>;
     subscribe: (cb: (value: T) => void) => () => void;
     set?: (value: T) => Promise<void>;
-}
-
-interface ListSource {
-    getIds: () => string[] | Promise<string[]>;
-    subscribe: (cb: () => void) => () => void;
-    getChild: (id: string) => ListItemData | Promise<ListItemData>;
 }
 
 interface ListItemData {
@@ -39,12 +36,33 @@ interface ControlNode {
     unmount?(): void;
 }
 
-class Registry {
+// RegistrySchema 定义所有键值对类型
+interface RegistrySchema {
+    "power.battery": number;
+    "power.devices": id<"power.devices[]">[];
+    "power.devices[]": ListItemData;
+    "wifi.enabled": boolean;
+    "wifi.accessPoints": id<"wifi.accessPoints[]">[];
+    "wifi.accessPoints[]": ListItemData;
+    "blue.power": boolean;
+    "blue.devices": id<"blue.devices[]">[];
+    "blue.devices[]": ListItemData;
+}
+
+// 具体的键类型
+type BooleanRegistryKeys = "wifi.enabled" | "blue.power";
+type NumericRegistryKeys = "power.battery";
+type IdArrayRegistryKeys = "power.devices" | "wifi.accessPoints" | "blue.devices";
+
+/**
+ * 响应式数据编程
+ * 一般先register再get，这里可以先get，直到数据register挂上来
+ */
+class Registry<T = RegistrySchema> {
     private sources = new Map<string, BindingSource<unknown>>();
-    private listSources = new Map<string, ListSource>();
     private pendingBinds = new Map<string, Set<(source: unknown) => void>>();
 
-    register<T>(id: string, source: BindingSource<T>): void {
+    register<K extends keyof T & string>(id: K, source: BindingSource<T[K]>): void {
         this.sources.set(id, source as BindingSource<unknown>);
         const pending = this.pendingBinds.get(id);
         if (pending) {
@@ -53,28 +71,19 @@ class Registry {
         }
     }
 
-    registerList(id: string, source: ListSource): void {
-        this.listSources.set(id, source);
-        const pending = this.pendingBinds.get(id);
-        if (pending) {
-            for (const cb of pending) cb(source);
-            this.pendingBinds.delete(id);
-        }
-    }
-
-    get<T>(id: string): BindingSource<T> {
+    get<K extends keyof T & string>(id: K): BindingSource<T[K]> {
         const source = this.sources.get(id);
-        if (source) return source as BindingSource<T>;
+        if (source) return source as BindingSource<T[K]>;
 
-        let currentValue: T | undefined;
-        let realSource: BindingSource<T> | undefined;
-        const subscribers = new Set<(value: T) => void>();
+        let currentValue: T[K] | undefined;
+        let realSource: BindingSource<T[K]> | undefined;
+        const subscribers = new Set<(value: T[K]) => void>();
 
         if (!this.pendingBinds.has(id)) this.pendingBinds.set(id, new Set());
         const pending = this.pendingBinds.get(id);
         if (pending)
             pending.add((s: unknown) => {
-                realSource = s as BindingSource<T>;
+                realSource = s as BindingSource<T[K]>;
                 const val = realSource.get();
                 if (val instanceof Promise) {
                     val.then((v) => {
@@ -82,13 +91,13 @@ class Registry {
                         for (const cb of subscribers) cb(v);
                     });
                 } else {
-                    currentValue = val;
-                    for (const cb of subscribers) cb(val);
+                    currentValue = val as T[K];
+                    for (const cb of subscribers) cb(val as T[K]);
                 }
             });
 
         return {
-            get: () => currentValue as T,
+            get: () => currentValue as T[K],
             subscribe: (cb) => {
                 subscribers.add(cb);
                 return () => subscribers.delete(cb);
@@ -96,45 +105,10 @@ class Registry {
             set: (v) => realSource?.set?.(v) ?? Promise.resolve(),
         };
     }
-
-    getListSource(id: string): ListSource {
-        const source = this.listSources.get(id);
-        if (source) return source;
-
-        let realSource: ListSource | undefined;
-        let ids: string[] = [];
-        const subscribers = new Set<() => void>();
-
-        if (!this.pendingBinds.has(id)) this.pendingBinds.set(id, new Set());
-        const pending = this.pendingBinds.get(id);
-        if (pending)
-            pending.add((s: unknown) => {
-                realSource = s as ListSource;
-                const result = realSource.getIds();
-                if (result instanceof Promise) {
-                    result.then((newIds) => {
-                        ids = newIds;
-                        for (const cb of subscribers) cb();
-                    });
-                } else {
-                    ids = result;
-                    for (const cb of subscribers) cb();
-                }
-            });
-
-        return {
-            getIds: () => ids,
-            subscribe: (cb) => {
-                subscribers.add(cb);
-                return () => subscribers.delete(cb);
-            },
-            getChild: (childId) => realSource?.getChild(childId) ?? Promise.resolve({ id: childId, label: "Unknown" }),
-        };
-    }
 }
 
-function createToggle(registry: Registry, id: string): ControlNode {
-    const source = registry.get<boolean>(id);
+function createToggle(registry: Registry, id: BooleanRegistryKeys): ControlNode {
+    const source = registry.get(id);
     const toggle = check(id, ["on", "off"]);
 
     const initVal = source.get();
@@ -168,17 +142,18 @@ function createListItem(data: ListItemData): ControlNode {
 
 function createDynamicList(
     registry: Registry,
-    sourceId: string,
+    sourceId: IdArrayRegistryKeys,
     map: (id: string, data: ListItemData) => ControlNode,
+    getChild: (id: string) => ListItemData | Promise<ListItemData>,
 ): ControlNode {
-    const source = registry.getListSource(sourceId);
+    const source = registry.get(sourceId);
     const container = view("y");
 
     async function render() {
-        const ids = await source.getIds();
+        const ids = await source.get();
         container.clear();
         for (const id of ids) {
-            const data = await source.getChild(id);
+            const data = await getChild(id);
             container.add(map(id, data).el);
         }
     }
@@ -188,18 +163,18 @@ function createDynamicList(
     return { id: sourceId, type: "dynamic-list", el: container, unmount: unsub };
 }
 
-function createIndicator(registry: Registry, id: string): ControlNode {
-    const source = registry.get<string>(id);
+function createIndicator(registry: Registry, id: NumericRegistryKeys): ControlNode {
+    const source = registry.get(id);
     const label = txt();
 
     const initVal = source.get();
     if (initVal instanceof Promise) {
-        initVal.then((v) => label.sv(v));
+        initVal.then((v) => label.sv(String(v)));
     } else {
-        label.sv(initVal);
+        label.sv(String(initVal));
     }
 
-    const unsub = source.subscribe((v) => label.sv(v));
+    const unsub = source.subscribe((v) => label.sv(String(v)));
     return { id, type: "indicator", el: label as unknown as ElType<HTMLElement>, unmount: unsub };
 }
 
@@ -214,7 +189,7 @@ class BluetoothAdapter {
     async init(): Promise<void> {
         await this.blue.init();
 
-        this.registry.register<boolean>("blue.power", {
+        this.registry.register("blue.power", {
             get: () => this.blue.isPowered(),
             subscribe: (_cb) => {
                 // TODO: 监听 D-Bus PropertiesChanged
@@ -223,23 +198,24 @@ class BluetoothAdapter {
             set: (v) => this.blue.setPowered(v),
         });
 
-        this.registry.registerList("blue.devices", {
-            getIds: () => this.blue.getDevices().map((d) => d.getPath()),
+        this.registry.register("blue.devices", {
+            get: () => this.blue.getDevices().map((d) => d.getPath() as id<"blue.devices[]">),
             subscribe: (_cb) => {
                 // TODO: 监听设备添加/移除
                 return () => {};
             },
-            getChild: async (path: string): Promise<ListItemData> => {
-                const device = this.blue.getDevices().find((d) => d.getPath() === path);
-                if (!device) return { id: path, label: "Unknown", status: "disabled" };
-                return {
-                    id: path,
-                    label: (await device.getName()) || "Unknown",
-                    icon: "bluetooth",
-                    status: await this.getDeviceStatus(device),
-                };
-            },
         });
+    }
+
+    async getChild(path: string): Promise<ListItemData> {
+        const device = this.blue.getDevices().find((d) => d.getPath() === path);
+        if (!device) return { id: path, label: "Unknown", status: "disabled" };
+        return {
+            id: path,
+            label: (await device.getName()) || "Unknown",
+            icon: "bluetooth",
+            status: await this.getDeviceStatus(device),
+        };
     }
 
     private async getDeviceStatus(device: blueDevice): Promise<ListItemData["status"]> {
@@ -260,17 +236,17 @@ class PowerAdapter {
     async init(): Promise<void> {
         await this.power.init();
 
-        this.registry.register<string>("power.battery", {
+        this.registry.register("power.battery", {
             get: async () => {
                 for (const t of this.power.getDevices()) {
                     if (
                         (await t.getPowerSupply()) &&
                         ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")
                     ) {
-                        return `🔋${await t.getPercentage()}%`;
+                        return await t.getPercentage();
                     }
                 }
-                return "🔋--";
+                return 0;
             },
             subscribe: (_cb) => {
                 // TODO: 监听属性变化
@@ -278,27 +254,28 @@ class PowerAdapter {
             },
         });
 
-        this.registry.registerList("power.devices", {
-            getIds: () => this.power.getDevices().map((_, i) => `power-${i}`),
+        this.registry.register("power.devices", {
+            get: () => this.power.getDevices().map((_, i) => `power-${i}` as id<"power.devices[]">),
             subscribe: (_cb) => {
                 // TODO: 监听设备添加/移除
                 return () => {};
             },
-            getChild: async (id: string): Promise<ListItemData> => {
-                const index = Number.parseInt(id.replace("power-", ""), 10);
-                const device = this.power.getDevices()[index];
-                if (!device) return { id, label: "Unknown", status: "disabled" };
-                const name = (await device.getModel()) || "Unknown";
-                const percentage = await device.getPercentage();
-                const status = await device.getState();
-                return {
-                    id,
-                    label: `${name}: ${percentage}%`,
-                    subtitle: status,
-                    icon: "battery",
-                };
-            },
         });
+    }
+
+    async getChild(id: string): Promise<ListItemData> {
+        const index = Number.parseInt(id.replace("power-", ""), 10);
+        const device = this.power.getDevices()[index];
+        if (!device) return { id, label: "Unknown", status: "disabled" };
+        const name = (await device.getModel()) || "Unknown";
+        const percentage = await device.getPercentage();
+        const status = await device.getState();
+        return {
+            id,
+            label: `${name}: ${percentage}%`,
+            subtitle: status,
+            icon: "battery",
+        };
     }
 }
 
@@ -313,7 +290,7 @@ class WifiAdapter {
     async init(): Promise<void> {
         await this.network.init();
 
-        this.registry.register<boolean>("wifi.enabled", {
+        this.registry.register("wifi.enabled", {
             get: () => this.network.isWirelessEnabled(),
             subscribe: (_cb) => {
                 // TODO: 监听属性变化
@@ -325,12 +302,12 @@ class WifiAdapter {
         const wifiDevice = this.network.getWifiDevices()[0];
         if (!wifiDevice) return;
 
-        this.registry.registerList("wifi.accessPoints", {
-            getIds: async () => {
+        this.registry.register("wifi.accessPoints", {
+            get: async () => {
                 const aps = await wifiDevice.getAccessPoints();
-                const ids: string[] = [];
+                const ids: id<"wifi.accessPoints[]">[] = [];
                 for (const ap of aps) {
-                    ids.push(await ap.getHwAddress());
+                    ids.push((await ap.getHwAddress()) as id<"wifi.accessPoints[]">);
                 }
                 return ids;
             },
@@ -338,26 +315,29 @@ class WifiAdapter {
                 // TODO: 监听接入点变化
                 return () => {};
             },
-            getChild: async (id: string): Promise<ListItemData> => {
-                const aps = await wifiDevice.getAccessPoints();
-                let targetAp: accessPoint | undefined;
-                for (const ap of aps) {
-                    if ((await ap.getHwAddress()) === id) {
-                        targetAp = ap;
-                        break;
-                    }
-                }
-                if (!targetAp) return { id, label: "Unknown", status: "disabled" };
-                const ssid = (await targetAp.getSsid()) || "Hidden";
-                const active = await this.network.getActiveWifiConnection();
-                return {
-                    id,
-                    label: ssid,
-                    icon: "wifi",
-                    status: active?.id === ssid ? "connected" : "available",
-                };
-            },
         });
+    }
+
+    async getChild(id: string): Promise<ListItemData> {
+        const wifiDevice = this.network.getWifiDevices()[0];
+        if (!wifiDevice) return { id, label: "Unknown", status: "disabled" };
+        const aps = await wifiDevice.getAccessPoints();
+        let targetAp: accessPoint | undefined;
+        for (const ap of aps) {
+            if ((await ap.getHwAddress()) === id) {
+                targetAp = ap;
+                break;
+            }
+        }
+        if (!targetAp) return { id, label: "Unknown", status: "disabled" };
+        const ssid = (await targetAp.getSsid()) || "Hidden";
+        const active = await this.network.getActiveWifiConnection();
+        return {
+            id,
+            label: ssid,
+            icon: "wifi",
+            status: active?.id === ssid ? "connected" : "available",
+        };
     }
 }
 
@@ -1870,25 +1850,25 @@ tools.registerTool("tray", ({ tipEl, showTip }) => {
     return el;
 });
 
+// 全局 Registry 实例
+const registry = new Registry<RegistrySchema>();
+
 // 电源 - 使用 Registry
-const powerRegistry = new Registry();
-const powerAdapter = new PowerAdapter(MSysApi.power, powerRegistry);
+const powerAdapter = new PowerAdapter(MSysApi.power, registry);
 MSysApi.power
     .init()
     .then(() => powerAdapter.init())
     .catch((e) => console.error("power init error", e));
 
 // WiFi - 使用 Registry
-const wifiRegistry = new Registry();
-const wifiAdapter = new WifiAdapter(MSysApi.network, wifiRegistry);
+const wifiAdapter = new WifiAdapter(MSysApi.network, registry);
 MSysApi.network
     .init()
     .then(() => wifiAdapter.init())
     .catch((e) => console.error("network init error", e));
 
 // 蓝牙 - 使用 Registry
-const blueRegistry = new Registry();
-const blueAdapter = new BluetoothAdapter(MSysApi.blue, blueRegistry);
+const blueAdapter = new BluetoothAdapter(MSysApi.blue, registry);
 MSysApi.blue
     .init()
     .then(() => blueAdapter.init())
@@ -1896,13 +1876,30 @@ MSysApi.blue
 
 // UI 对象池
 const uipool = {
-    "power.battery": () => createIndicator(powerRegistry, "power.battery"),
-    "power.devices": () => createDynamicList(powerRegistry, "power.devices", (_id, data) => createListItem(data)),
-    "wifi.toggle": () => createToggle(wifiRegistry, "wifi.enabled"),
+    "power.battery": () => createIndicator(registry, "power.battery"),
+    "power.devices": () =>
+        createDynamicList(
+            registry,
+            "power.devices",
+            (_id, data) => createListItem(data),
+            (id) => powerAdapter.getChild(id),
+        ),
+    "wifi.toggle": () => createToggle(registry, "wifi.enabled"),
     "wifi.accessPoints": () =>
-        createDynamicList(wifiRegistry, "wifi.accessPoints", (_id, data) => createListItem(data)),
-    "blue.toggle": () => createToggle(blueRegistry, "blue.power"),
-    "blue.devices": () => createDynamicList(blueRegistry, "blue.devices", (_id, data) => createListItem(data)),
+        createDynamicList(
+            registry,
+            "wifi.accessPoints",
+            (_id, data) => createListItem(data),
+            (id) => wifiAdapter.getChild(id),
+        ),
+    "blue.toggle": () => createToggle(registry, "blue.power"),
+    "blue.devices": () =>
+        createDynamicList(
+            registry,
+            "blue.devices",
+            (_id, data) => createListItem(data),
+            (id) => blueAdapter.getChild(id),
+        ),
 };
 
 tools.registerTool(
