@@ -23,6 +23,7 @@ interface BindingSourceRegister<T> {
 interface BindingSource<T> {
     get: () => Promise<T>;
     subscribe: (cb: (value: T) => void) => () => void;
+    getAndSubscribe: (cb: (value: T, isFirst: boolean) => void) => () => void;
     set?: (value: T) => Promise<void>;
 }
 
@@ -83,6 +84,12 @@ class Registry<T = RegistrySchema> {
             return {
                 get: () => Promise.resolve(source.get()),
                 subscribe: (cb) => source.subscribe(cb),
+                getAndSubscribe: (cb) => {
+                    // 获取当前值（第一次）
+                    Promise.resolve(source.get()).then((v) => cb(v, true));
+                    // 订阅后续变化
+                    return source.subscribe((v) => cb(v, false));
+                },
                 set: source.set,
             };
         }
@@ -108,6 +115,13 @@ class Registry<T = RegistrySchema> {
                 subscribers.add(cb);
                 return () => subscribers.delete(cb);
             },
+            getAndSubscribe: (cb) => {
+                // 获取当前值（第一次）
+                Promise.resolve(currentValue as T[K]).then((v) => cb(v, true));
+                // 订阅后续变化
+                subscribers.add((v) => cb(v, false));
+                return () => subscribers.delete((v) => cb(v, false));
+            },
             set: (v) => realSource?.set?.(v) ?? Promise.resolve(),
         };
     }
@@ -117,9 +131,8 @@ function createToggle(registry: Registry, id: BooleanRegistryKeys): ControlNode 
     const source = registry.get(id);
     const toggle = check(id, ["on", "off"]);
 
-    source.get().then((v) => toggle.sv(v));
+    const unsub = source.getAndSubscribe((v) => toggle.sv(v));
 
-    const unsub = source.subscribe((v) => toggle.sv(v));
     toggle.el.addEventListener("change", () => {
         source.set?.(toggle.gv);
     });
@@ -150,17 +163,13 @@ function createDynamicList(
     const source = registry.get(sourceId);
     const container = view("y");
 
-    async function render() {
-        const ids = await source.get();
+    const unsub = source.getAndSubscribe(async (ids) => {
         container.clear();
         for (const id of ids) {
             const data = await getChild(id);
             container.add(map(id, data).el);
         }
-    }
-
-    render();
-    const unsub = source.subscribe(() => render());
+    });
     return { id: sourceId, type: "dynamic-list", el: container, unmount: unsub };
 }
 
@@ -168,9 +177,7 @@ function createIndicator(registry: Registry, id: NumericRegistryKeys): ControlNo
     const source = registry.get(id);
     const label = txt();
 
-    source.get().then((v) => label.sv(String(v)));
-
-    const unsub = source.subscribe((v) => label.sv(String(v)));
+    const unsub = source.getAndSubscribe((v) => label.sv(String(v)));
     return { id, type: "indicator", el: label as unknown as ElType<HTMLElement>, unmount: unsub };
 }
 
