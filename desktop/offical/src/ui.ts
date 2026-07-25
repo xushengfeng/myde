@@ -44,6 +44,7 @@ export function aLineText() {
         // biome-ignore lint/suspicious/noTsIgnore: css
         // @ts-ignore
         textBoxTrim: "trim-both",
+        userSelect: "none",
         width: "100%",
     });
     const wrapEl = view().style({
