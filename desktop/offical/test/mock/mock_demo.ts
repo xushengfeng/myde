@@ -189,29 +189,40 @@ function initMockData() {
     addMockPowerDevice("/org/freedesktop/UPower/devices/line_power_AC", 100, "Charging", "Line Power", "AC Adapter");
 
     // 通知示例
-    sendMockNotification("系统更新", "系统更新可用", "有新的系统更新可用，点击查看详情。", "system-software-update");
-    sendMockNotification("蓝牙", "设备已连接", "WH-1000XM5 已成功连接。", "bluetooth");
+    setTimeout(() => {
+        sendMockNotification(
+            "系统更新",
+            "系统更新可用",
+            "有新的系统更新可用，点击查看详情。",
+            "system-software-update",
+        );
+    }, 1000);
+    setTimeout(() => {
+        sendMockNotification("蓝牙", "设备已连接", "WH-1000XM5 已成功连接。", "bluetooth");
+    }, 2000);
 
-    // 音乐播放器示例
-    const spotify = addMockMprisPlayer("spotify", "Spotify");
-    spotify.setMetadata({
-        "xesam:title": "Bohemian Rhapsody",
-        "xesam:artist": ["Queen"],
-        "xesam:album": "A Night at the Opera",
-        "mpris:artUrl": "file:///mock/cover/queen.jpg",
-        "mpris:length": BigInt(354000000),
-    });
-    spotify.setDuration(354);
-    spotify.setPlaybackStatus("Playing");
+    setTimeout(() => {
+        // 音乐播放器示例
+        const spotify = addMockMprisPlayer("org.mpris.MediaPlayer2.spotify.xx", "Spotify");
+        spotify.setMetadata({
+            "xesam:title": "Bohemian Rhapsody",
+            "xesam:artist": ["Queen"],
+            "xesam:album": "A Night at the Opera",
+            "mpris:artUrl": "file:///mock/cover/queen.jpg",
+            "mpris:length": BigInt(354000000),
+        });
+        spotify.setDuration(354);
+        spotify.setPlaybackStatus("Playing");
 
-    const vlc = addMockMprisPlayer("vlc", "VLC Media Player");
-    vlc.setMetadata({
-        "xesam:title": "Local Video File",
-        "xesam:artist": [],
-        "xesam:album": "",
-    });
-    vlc.setDuration(0);
-    vlc.setPlaybackStatus("Paused");
+        const vlc = addMockMprisPlayer("org.mpris.MediaPlayer2.vlc", "VLC Media Player");
+        vlc.setMetadata({
+            "xesam:title": "Local Video File",
+            "xesam:artist": [],
+            "xesam:album": "",
+        });
+        vlc.setDuration(0);
+        vlc.setPlaybackStatus("Paused");
+    }, 3000);
 }
 
 // 注册mock应用到桌面条目

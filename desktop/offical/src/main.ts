@@ -262,9 +262,7 @@ class PowerAdapter {
 
         this.registry.register<string>("power.battery", {
             get: async () => {
-                console.log("p");
                 for (const t of this.power.getDevices()) {
-                    console.log(t);
                     if (
                         (await t.getPowerSupply()) &&
                         ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")
