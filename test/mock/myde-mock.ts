@@ -2,6 +2,7 @@ import type { DesktopApi } from "../../src/desktop-api";
 import { EventEmitter } from "../../src/event-emitter/event-emitter";
 import type { Item } from "../../src/sys_api/app_control";
 import type { tray } from "../../src/sys_api/appIndicator";
+import type { MenuItem } from "../../src/sys_api/menu";
 import type { blue } from "../../src/sys_api/blue";
 import type { display } from "../../src/sys_api/display";
 import type { InputManager } from "../../src/sys_api/input";
@@ -100,6 +101,8 @@ export interface MockConfig {
     notificationManager?: MockNotificationManager;
     /** MPRIS管理器 */
     mprisManager?: MockMprisManager;
+    /** 托盘管理器 */
+    trayManager?: MockTrayManager;
 }
 
 type SettingInitReturn = ReturnType<DesktopApi["MSetting"]["init"]>;
@@ -275,6 +278,52 @@ function createMockSettingInstance(): SettingInitReturn {
 
 function createMockEventEmitter<T extends Record<string, any[]>>(): EventEmitter<T> {
     return new EventEmitter<T>();
+}
+
+export class MockTrayItem {
+    private name: string;
+    private titleValue: string;
+    private itemIsMenuValue: boolean;
+    private iconName: string;
+    private menuLayout: MenuItem[];
+
+    constructor(name: string, title: string, iconName = "application-default-icon", itemIsMenu = false) {
+        this.name = name;
+        this.titleValue = title;
+        this.iconName = iconName;
+        this.itemIsMenuValue = itemIsMenu;
+        this.menuLayout = [];
+    }
+
+    async init() {}
+    async title() {
+        return this.titleValue;
+    }
+    async itemIsMenu() {
+        return this.itemIsMenuValue;
+    }
+    async getIcon(_op?: { size?: number; scale?: number; theme?: string }) {
+        return this.iconName;
+    }
+    async getMenu() {
+        return this.menuLayout;
+    }
+    getPath() {
+        return this.name;
+    }
+
+    setTitle(title: string) {
+        this.titleValue = title;
+    }
+    setItemIsMenu(itemIsMenu: boolean) {
+        this.itemIsMenuValue = itemIsMenu;
+    }
+    setIconName(iconName: string) {
+        this.iconName = iconName;
+    }
+    setMenuLayout(layout: MenuItem[]) {
+        this.menuLayout = layout;
+    }
 }
 
 export class MockMprisPlayer {
@@ -498,13 +547,44 @@ function createMockNotification(log: (...args: any[]) => void): MockType<notific
     return manager.createMock();
 }
 
+export class MockTrayManager {
+    private items = new Map<string, MockTrayItem>();
+    private log: (...args: any[]) => void;
+
+    constructor(log: (...args: any[]) => void) {
+        this.log = log;
+    }
+
+    addItem(item: MockTrayItem) {
+        this.items.set(item.getPath(), item);
+    }
+
+    removeItem(path: string) {
+        this.items.delete(path);
+    }
+
+    getItem(path: string) {
+        return this.items.get(path);
+    }
+
+    getItems() {
+        return Array.from(this.items.values());
+    }
+
+    createMock(): MockType<tray> {
+        const manager = this;
+        return {
+            async init() {
+                manager.log("tray.init");
+            },
+            tarysService: manager.items as any,
+        };
+    }
+}
+
 function createMockTray(log: (...args: any[]) => void): MockType<tray> {
-    return {
-        async init() {
-            log("tray.init");
-        },
-        tarysService: new Map(),
-    };
+    const manager = new MockTrayManager(log);
+    return manager.createMock();
 }
 
 export class MockPowerDevice {
@@ -1184,6 +1264,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         powerManager,
         notificationManager,
         mprisManager,
+        trayManager,
     } = config;
 
     const log = (method: string, ...args: unknown[]) => {
@@ -1275,7 +1356,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
             log("verifyUserPassword");
             return false;
         },
-        tray: createMockTray(log),
+        tray: trayManager ? trayManager.createMock() : createMockTray(log),
         power: powerManager ? powerManager.createMock() : createMockPower(log),
         blue: blueManager ? blueManager.createMock() : createMockBlue(log),
         network: networkManager ? networkManager.createMock() : createMockNetwork(log),

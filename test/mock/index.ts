@@ -19,4 +19,6 @@ export {
     MockNotificationManager,
     MockMprisPlayer,
     MockMprisManager,
+    MockTrayItem,
+    MockTrayManager,
 } from "./myde-mock";

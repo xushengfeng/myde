@@ -1,5 +1,6 @@
 import { addStyle, initDKH, pack } from "dkh-ui";
 import type { renderTools } from "../../../../src/wayland/render_tools";
+import type { MenuItem } from "../../../../src/sys_api/menu";
 import {
     createMockClient,
     type MockConfig,
@@ -16,6 +17,8 @@ import {
     MockNotificationManager,
     MockMprisManager,
     MockMprisPlayer,
+    MockTrayManager,
+    MockTrayItem,
 } from "../../../../test/mock";
 import { createMockApp, getMockAppIcon, getMockAppList } from "../../../../test/mock/apps";
 import { MockRenderTools } from "../../../../test/mock/render-tools";
@@ -46,6 +49,7 @@ const networkManager = new MockNetworkManager(console.log);
 const powerManager = new MockPowerManager(console.log);
 const notificationManager = new MockNotificationManager(console.log);
 const mprisManager = new MockMprisManager(console.log);
+const trayManager = new MockTrayManager(console.log);
 
 let clientIdCounter = 0;
 
@@ -103,6 +107,10 @@ export function getMockMprisManager() {
     return mprisManager;
 }
 
+export function getMockTrayManager() {
+    return trayManager;
+}
+
 // 添加蓝牙设备
 export function addMockBlueDevice(path: string, name: string, address: string, connected = false, trusted = false) {
     const device = new MockBlueDevice(path, name, address, connected, trusted);
@@ -158,6 +166,13 @@ export function addMockMprisPlayer(name: string, identity: string) {
     return player;
 }
 
+// 添加托盘项
+export function addMockTrayItem(path: string, title: string, iconName = "application-default-icon", itemIsMenu = false) {
+    const item = new MockTrayItem(path, title, iconName, itemIsMenu);
+    trayManager.addItem(item);
+    return item;
+}
+
 // 初始化示例数据
 function initMockData() {
     // 蓝牙设备示例
@@ -187,6 +202,59 @@ function initMockData() {
     // 电源设备示例
     addMockPowerDevice("/org/freedesktop/UPower/devices/battery_BAT0", 85, "Discharging", "Battery", "Laptop Battery");
     addMockPowerDevice("/org/freedesktop/UPower/devices/line_power_AC", 100, "Charging", "Line Power", "AC Adapter");
+
+    // 托盘项示例
+    const telegram = addMockTrayItem("org.kde.StatusNotifierItem/telegram", "Telegram", "telegram", false);
+    telegram.setMenuLayout([
+        { id: 1, type: "standard", label: "打开 Telegram", click: () => console.log("打开 Telegram") },
+        { id: 2, type: "standard", label: "新消息", click: () => console.log("新消息") },
+        { id: 3, type: "separator", label: "", click: () => {} },
+        {
+            id: 4,
+            type: "standard",
+            label: "状态",
+            click: () => console.log("状态"),
+            children: [
+                { id: 41, type: "standard", label: "在线", toggleType: "radio", toggleState: true, click: () => console.log("在线") },
+                { id: 42, type: "standard", label: "离开", toggleType: "radio", toggleState: false, click: () => console.log("离开") },
+                { id: 43, type: "standard", label: "忙碌", toggleType: "radio", toggleState: false, click: () => console.log("忙碌") },
+                { id: 44, type: "standard", label: "隐身", toggleType: "radio", toggleState: false, click: () => console.log("隐身") },
+            ],
+        },
+        { id: 5, type: "separator", label: "", click: () => {} },
+        { id: 6, type: "standard", label: "通知", toggleType: "checkmark", toggleState: true, click: () => console.log("通知") },
+        { id: 7, type: "standard", label: "声音", toggleType: "checkmark", toggleState: false, click: () => console.log("声音") },
+        { id: 8, type: "separator", label: "", click: () => {} },
+        { id: 9, type: "standard", label: "设置", click: () => console.log("设置") },
+        { id: 10, type: "standard", label: "退出", click: () => console.log("退出") },
+    ]);
+
+    // Discord 没有菜单内容（边界测试）
+    addMockTrayItem("org.kde.StatusNotifierItem/discord", "Discord", "discord", false);
+
+    const obs = addMockTrayItem("org.kde.StatusNotifierItem/obs", "OBS Studio", "obs", true);
+    obs.setMenuLayout([
+        { id: 1, type: "standard", label: "开始录制", click: () => console.log("开始录制") },
+        { id: 2, type: "standard", label: "开始直播", click: () => console.log("开始直播") },
+        { id: 3, type: "separator", label: "", click: () => {} },
+        {
+            id: 4,
+            type: "standard",
+            label: "场景",
+            click: () => console.log("场景"),
+            children: [
+                { id: 41, type: "standard", label: "游戏", click: () => console.log("游戏场景") },
+                { id: 42, type: "standard", label: "聊天", click: () => console.log("聊天场景") },
+                { id: 43, type: "standard", label: "全屏", click: () => console.log("全屏场景") },
+            ],
+        },
+        { id: 5, type: "separator", label: "", click: () => {} },
+        { id: 6, type: "standard", label: "静音麦克风", toggleType: "checkmark", toggleState: false, click: () => console.log("静音麦克风") },
+        { id: 7, type: "standard", label: "桌面音频", toggleType: "checkmark", toggleState: true, click: () => console.log("桌面音频") },
+        { id: 8, type: "separator", label: "", click: () => {} },
+        { id: 9, type: "standard", label: "设置", click: () => console.log("设置") },
+        { id: 10, type: "standard", label: "退出", click: () => console.log("退出") },
+    ]);
 
     // 通知示例
     setTimeout(() => {
@@ -267,6 +335,7 @@ async function init() {
         powerManager,
         notificationManager,
         mprisManager,
+        trayManager,
         sysApi: {
             getDesktopEntries: async () => mockData.desktopEntries as any,
             getDesktopEntry: async (id: string) => {
