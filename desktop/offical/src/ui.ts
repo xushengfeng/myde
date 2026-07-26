@@ -49,7 +49,6 @@ export function aLineText() {
     });
     const wrapEl = view().style({
         overflow: "hidden",
-        width: "100%",
     });
     wrapEl.add(textEl);
     return wrapEl

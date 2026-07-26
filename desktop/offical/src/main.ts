@@ -1,4 +1,4 @@
-import { addClass, button, check, ele, type ElType, image, p, pack, setProperty, view } from "dkh-ui";
+import { addClass, button, check, ele, type ElType, image, p, pack, setProperty, spacer, view } from "dkh-ui";
 
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
 import type { mprisPlayer } from "../../../src/sys_api/mpris";
@@ -7,7 +7,8 @@ import type { blue, blueDevice } from "../../../src/sys_api/blue";
 import type { power } from "../../../src/sys_api/power";
 import type { network, accessPoint } from "../../../src/sys_api/network";
 import { AnimationGear, timingFunction } from "myde-ui";
-import { aLineText, bButton, iItem, ui, uPasswdInput } from "./ui";
+import { aLineText, bButton, iItem, sSize, sSize2, ui, uPasswdInput } from "./ui";
+import { dynamicScrollList } from "./scroll-list";
 
 // ========== Registry 和 ControlNode ==========
 
@@ -47,7 +48,18 @@ interface ControlNode {
 interface RegistrySchema {
     "power.battery": number;
     "power.devices": id<"power.devices[]">[];
-    "power.devices[]": ListItemData;
+    "power.devices[]": {
+        name: string;
+        percentage: number;
+        status:
+            | "Charging"
+            | "Discharging"
+            | "Empty"
+            | "Fully charged"
+            | "Pending charge"
+            | "Pending discharge"
+            | "Unknown";
+    };
     "wifi.enabled": boolean;
     "wifi.accessPoints": id<"wifi.accessPoints[]">[];
     "wifi.accessPoints[]": ListItemData;
@@ -258,27 +270,28 @@ class PowerAdapter {
         });
 
         this.registry.register("power.devices", {
-            get: () => this.power.getDevices().map((_, i) => `power-${i}` as id<"power.devices[]">),
+            get: () => this.power.getDevices().map((device) => `power.devices.${device.path}` as id<"power.devices[]">),
             subscribe: (_cb) => {
                 // TODO: 监听设备添加/移除
                 return () => {};
             },
         });
-    }
 
-    async getChild(id: string): Promise<ListItemData> {
-        const index = Number.parseInt(id.replace("power-", ""), 10);
-        const device = this.power.getDevices()[index];
-        if (!device) return { id, label: "Unknown", status: "disabled" };
-        const name = (await device.getModel()) || "Unknown";
-        const percentage = await device.getPercentage();
-        const status = await device.getState();
-        return {
-            id,
-            label: `${name}: ${percentage}%`,
-            subtitle: status,
-            icon: "battery",
-        };
+        // todo 监听
+        for (const device of this.power.getDevices()) {
+            const name = (await device.getModel()) || "Unknown";
+            const percentage = await device.getPercentage();
+            const status = await device.getState();
+
+            const id = `power.devices.${device.path}` as "power.devices[]";
+            // todo 可以绑定id<"power.devices[]">
+            this.registry.register(id, {
+                get: () => ({ name, percentage, status }),
+                subscribe: () => {
+                    return () => {};
+                },
+            });
+        }
     }
 }
 
@@ -1887,13 +1900,47 @@ MSysApi.blue
 // UI 对象池
 const uipool = {
     "power.battery": () => createIndicator(rawRegistry, "power.battery"),
-    "power.devices": () =>
-        createDynamicList(
-            rawRegistry,
-            "power.devices",
-            (_id, data) => createListItem(data),
-            (id) => powerAdapter.getChild(id),
-        ),
+    "power.devices": () => {
+        const source = rawRegistry.get("power.devices");
+        const us: (() => void)[] = [];
+        const container = dynamicScrollList<string>({
+            itemSize: sSize.item,
+            containerSize: sSize.item * 4,
+            direction: "down",
+            keyExtractor: (x) => x,
+            renderItem: (k) => {
+                const el = iItem({ type: "h", size: "item" }).style({
+                    display: "flex",
+                    alignItems: "center",
+                    padding: `${sSize2.padding}px`,
+                    gap: `${sSize2.padding}px`,
+                });
+                const s = rawRegistry.get(k as "power.devices[]").getAndSubscribe((v) => {
+                    el.clear().add([
+                        aLineText().sv(v.name),
+                        spacer(),
+                        aLineText().sv(v.percentage.toString()).style({ flexShrink: 0 }),
+                    ]);
+                });
+                us.push(s);
+                return el;
+            },
+        });
+
+        const unsub = source.getAndSubscribe(async (ids) => {
+            // todo 不可能要判断
+            if (ids) container.setList(ids);
+        });
+        return {
+            id: "power.devices",
+            type: "dynamic-list",
+            el: container.el.style({ width: "200px" }),
+            unmount: () => {
+                unsub();
+                for (const s of us) s();
+            },
+        };
+    },
     "wifi.toggle": () => createToggle(rawRegistry, "wifi.enabled"),
     "wifi.accessPoints": () =>
         createDynamicList(

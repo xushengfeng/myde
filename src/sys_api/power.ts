@@ -40,7 +40,7 @@ export class power {
 
 export class powerDevice {
     private client: dbusClient;
-    private path: string;
+    path: string;
     // @ts-expect-error
     private infc: dbusInterface;
     constructor(client: dbusClient, path: string) {
