@@ -1854,24 +1854,31 @@ tools.registerTool("tray", ({ tipEl, showTip }) => {
 });
 
 // 全局 Registry 实例
-const registry = new Registry<RegistrySchema>();
+
+// 硬件
+const rawRegistry = new Registry<RegistrySchema>();
+// 桌面注册，如桌面自定义通知
+const _desktopRegistry = new Registry();
+// 聚合硬件和桌面注册，广播出去，接收其他广播
+// 事件中枢，可以被脚本、ai控制
+const _hubRegistry = new Registry<RegistrySchema>();
 
 // 电源 - 使用 Registry
-const powerAdapter = new PowerAdapter(MSysApi.power, registry);
+const powerAdapter = new PowerAdapter(MSysApi.power, rawRegistry);
 MSysApi.power
     .init()
     .then(() => powerAdapter.init())
     .catch((e) => console.error("power init error", e));
 
 // WiFi - 使用 Registry
-const wifiAdapter = new WifiAdapter(MSysApi.network, registry);
+const wifiAdapter = new WifiAdapter(MSysApi.network, rawRegistry);
 MSysApi.network
     .init()
     .then(() => wifiAdapter.init())
     .catch((e) => console.error("network init error", e));
 
 // 蓝牙 - 使用 Registry
-const blueAdapter = new BluetoothAdapter(MSysApi.blue, registry);
+const blueAdapter = new BluetoothAdapter(MSysApi.blue, rawRegistry);
 MSysApi.blue
     .init()
     .then(() => blueAdapter.init())
@@ -1879,26 +1886,26 @@ MSysApi.blue
 
 // UI 对象池
 const uipool = {
-    "power.battery": () => createIndicator(registry, "power.battery"),
+    "power.battery": () => createIndicator(rawRegistry, "power.battery"),
     "power.devices": () =>
         createDynamicList(
-            registry,
+            rawRegistry,
             "power.devices",
             (_id, data) => createListItem(data),
             (id) => powerAdapter.getChild(id),
         ),
-    "wifi.toggle": () => createToggle(registry, "wifi.enabled"),
+    "wifi.toggle": () => createToggle(rawRegistry, "wifi.enabled"),
     "wifi.accessPoints": () =>
         createDynamicList(
-            registry,
+            rawRegistry,
             "wifi.accessPoints",
             (_id, data) => createListItem(data),
             (id) => wifiAdapter.getChild(id),
         ),
-    "blue.toggle": () => createToggle(registry, "blue.power"),
+    "blue.toggle": () => createToggle(rawRegistry, "blue.power"),
     "blue.devices": () =>
         createDynamicList(
-            registry,
+            rawRegistry,
             "blue.devices",
             (_id, data) => createListItem(data),
             (id) => blueAdapter.getChild(id),
