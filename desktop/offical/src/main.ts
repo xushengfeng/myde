@@ -106,7 +106,7 @@ class Registry<T = RegistrySchema> {
             };
         }
 
-        let currentValue: T[K] | undefined;
+        const currentValue = Promise.withResolvers<T[K]>();
         let realSource: BindingSourceRegister<T[K]> | undefined;
         const subscribers = new Set<(value: T[K]) => void>();
 
@@ -116,20 +116,20 @@ class Registry<T = RegistrySchema> {
             pending.add((s: unknown) => {
                 realSource = s as BindingSourceRegister<T[K]>;
                 Promise.resolve(realSource.get()).then((v) => {
-                    currentValue = v;
+                    currentValue.resolve(v);
                     for (const cb of subscribers) cb(v);
                 });
             });
 
         return {
-            get: () => Promise.resolve(currentValue as T[K]),
+            get: () => currentValue.promise,
             subscribe: (cb) => {
                 subscribers.add(cb);
                 return () => subscribers.delete(cb);
             },
             getAndSubscribe: (cb) => {
                 // 获取当前值（第一次）
-                Promise.resolve(currentValue as T[K]).then((v) => cb(v, true));
+                currentValue.promise.then((v) => cb(v, true));
                 // 订阅后续变化
                 subscribers.add((v) => cb(v, false));
                 return () => subscribers.delete((v) => cb(v, false));
@@ -1928,8 +1928,7 @@ const uipool = {
         });
 
         const unsub = source.getAndSubscribe(async (ids) => {
-            // todo 不可能要判断
-            if (ids) container.setList(ids);
+            container.setList(ids);
         });
         return {
             id: "power.devices",
