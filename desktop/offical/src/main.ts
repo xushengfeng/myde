@@ -1237,6 +1237,301 @@ async function confirm(text: string) {
     return p.promise;
 }
 
+// 全局 Registry 实例
+
+// 硬件
+const rawRegistry = new Registry<RegistrySchema>();
+// 桌面注册，如桌面自定义通知
+const _desktopRegistry = new Registry();
+// 聚合硬件和桌面注册，广播出去，接收其他广播
+// 事件中枢，可以被脚本、ai控制
+const _hubRegistry = new Registry<RegistrySchema>();
+
+MSysApi.power
+    .init()
+    .then(async () => {
+        const power = MSysApi.power;
+        const registry = rawRegistry;
+        await power.init();
+
+        // 获取初始电量数据
+        let batteryPercentage = 0;
+        for (const t of power.getDevices()) {
+            if ((await t.getPowerSupply()) && ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")) {
+                batteryPercentage = await t.getPercentage();
+                break;
+            }
+        }
+        registry.setData("power.battery", batteryPercentage);
+
+        // TODO: 监听属性变化并调用 registry.setData("power.battery", newValue)
+
+        registry.setData(
+            "power.devices",
+            power.getDevices().map((device) => `power.devices.${device.path}` as id<"power.devices[]">),
+        );
+
+        // TODO: 监听设备添加/移除并调用 registry.setData("power.devices", newDevices)
+
+        // todo 监听
+        for (const device of power.getDevices()) {
+            const name = (await device.getModel()) || "Unknown";
+            const percentage = await device.getPercentage();
+            const status = await device.getState();
+
+            const id = `power.devices.${device.path}` as "power.devices[]";
+            // todo 可以绑定id<"power.devices[]">
+            registry.setData(id, { name, percentage, status });
+        }
+    })
+    .catch((e) => console.error("power init error", e));
+
+MSysApi.network
+    .init()
+    .then(async () => {
+        const network = MSysApi.network;
+        const registry = rawRegistry;
+        await network.init();
+
+        // 设置初始无线网络状态
+        registry.setData("wifi.enabled", await network.isWirelessEnabled());
+
+        registry.setSetCallback("wifi.enabled", (v) => network.setWirelessEnabled(v));
+
+        // TODO: 监听属性变化并调用 registry.setData("wifi.enabled", newValue)
+
+        const wifiDevice = network.getWifiDevices()[0];
+        if (!wifiDevice) return;
+
+        const aps = await wifiDevice.getAccessPoints();
+        let c = "";
+        const ids: string[] = [];
+        for (const ap of aps) {
+            const ssid = await ap.getSsid();
+            if (!ssid) continue;
+            if (await ap.isActive()) {
+                c = ssid;
+                continue;
+            }
+            ids.push(ssid);
+        }
+        registry.setData(
+            "wifi.accessPoints",
+            Array.from(new Set(c ? [c, ...ids] : ids)).map(
+                (i) => `wifi.accessPoints.${i}` as id<"wifi.accessPoints[]">,
+            ),
+        );
+
+        // TODO: 监听接入点变化并调用 registry.setData("wifi.accessPoints", newAccessPoints)
+
+        for (const ap of await wifiDevice.getAccessPoints()) {
+            const ssid = await ap.getSsid();
+            if (!ssid) continue;
+
+            // 获取初始接入点状态
+            const active = await network.getActiveWifiConnection();
+            registry.setData(`wifi.accessPoints.${ssid}` as "wifi.accessPoints[]", {
+                ssid: ssid,
+                connected: active?.id === ssid,
+            });
+
+            // TODO: 监听接入点状态变化并调用 registry.setData(...)
+        }
+    })
+    .catch((e) => console.error("network init error", e));
+
+MSysApi.blue
+    .init()
+    .then(async () => {
+        const blue = MSysApi.blue;
+        const registry = rawRegistry;
+        await blue.init();
+
+        registry.setData("blue.power", await blue.isPowered());
+        registry.setSetCallback("blue.power", (v) => blue.setPowered(v));
+
+        // TODO: 监听 D-Bus PropertiesChanged 并调用 registry.setData("blue.power", newValue)
+
+        const c: string[] = [];
+        const l: string[] = [];
+        // connect变化时也更新
+        for (const d of blue.getDevices()) {
+            if (await d.isTrusted()) {
+                if (await d.isConnected()) c.push(await d.getAddress());
+                else l.push(await d.getAddress());
+            }
+        }
+        registry.setData(
+            "blue.devices",
+            c.concat(l).map((i) => `blue.devices.${i}` as id<"blue.devices[]">),
+        );
+
+        // TODO: 监听设备添加/移除并调用 registry.setData("blue.devices", newDevices)
+
+        for (const d of blue.getDevices()) {
+            const name = await d.getName();
+            const connected = await d.isConnected();
+            registry.setData(`blue.devices.${await d.getAddress()}` as "blue.devices[]", {
+                name,
+                connected,
+            });
+
+            // TODO: 监听设备状态变化并调用 registry.setData(...)
+        }
+    })
+    .catch((e) => console.error("blue init error", e));
+
+const notifications = new Map<string, { title: string; content: string; id: string }>();
+
+MSysApi.notification
+    .init()
+    .then(() => {
+        const registry = rawRegistry;
+        MSysApi.notification.on("new", (n) => {
+            const id = crypto.randomUUID();
+            notifications.set(id, { content: n.body, title: n.summary, id });
+
+            registry.setData("notification.list", Array.from(notifications.keys()) as id<"notification.list[]">[]);
+
+            registry.setData(`notification.list.${id}` as "notification.list[]", {
+                title: n.summary,
+                content: n.body,
+            });
+            registry.setSetCallback(`notification.list.${id}.delete` as "notification.list[].delete", () => {
+                notifications.delete(id);
+                registry.setData("notification.list", Array.from(notifications.keys()) as id<"notification.list[]">[]);
+                return Promise.resolve();
+            });
+        });
+    })
+    .catch((e) => console.error("notification init error", e));
+// UI 对象池
+const uipool = {
+    "power.battery": () => createIndicator(rawRegistry, "power.battery"),
+    "power.devices": () => {
+        const source = rawRegistry.get("power.devices");
+        const us: (() => void)[] = [];
+        const container = dynamicScrollList<string>({
+            itemSize: sSize.item,
+            containerSize: sSize.item * 4,
+            direction: "down",
+            keyExtractor: (x) => x,
+            renderItem: (k) => {
+                const el = iItem({ type: "h", size: "item" }).style({
+                    display: "flex",
+                    alignItems: "center",
+                    padding: `${sSize2.padding}px`,
+                    gap: `${sSize2.padding}px`,
+                });
+                const s = rawRegistry.get(k as "power.devices[]").getAndSubscribe((v) => {
+                    el.clear().add([
+                        aLineText().sv(v.name),
+                        spacer(),
+                        aLineText().sv(v.percentage.toString()).style({ flexShrink: 0 }),
+                    ]);
+                });
+                us.push(s);
+                return el;
+            },
+        });
+
+        const unsub = source.getAndSubscribe(async (ids) => {
+            container.setList(ids);
+        });
+        return {
+            id: "power.devices",
+            type: "dynamic-list",
+            el: container.el.style({ width: "200px" }),
+            unmount: () => {
+                unsub();
+                for (const s of us) s();
+            },
+        };
+    },
+    "wifi.toggle": () => createToggle(rawRegistry, "wifi.enabled"),
+    "wifi.accessPoints": () => {
+        const source = rawRegistry.get("wifi.accessPoints");
+        const us: (() => void)[] = [];
+        const container = dynamicScrollList<string>({
+            itemSize: sSize.item,
+            containerSize: sSize.item * 4,
+            direction: "down",
+            keyExtractor: (x) => x,
+            renderItem: (k) => {
+                const el = iItem({ type: "h", size: "item" }).style({
+                    display: "flex",
+                    alignItems: "center",
+                    padding: `${sSize2.padding}px`,
+                    gap: `${sSize2.padding}px`,
+                });
+                const s = rawRegistry.get(k as "wifi.accessPoints[]").getAndSubscribe((v) => {
+                    el.clear().add([
+                        aLineText().sv(v.ssid),
+                        spacer(),
+                        aLineText().sv(v.connected.toString()).style({ flexShrink: 0 }),
+                    ]);
+                });
+                us.push(s);
+                return el;
+            },
+        });
+
+        const unsub = source.getAndSubscribe(async (ids) => {
+            container.setList(ids);
+        });
+        return {
+            id: "wifi.devices",
+            type: "dynamic-list",
+            el: container.el.style({ width: "200px" }),
+            unmount: () => {
+                unsub();
+                for (const s of us) s();
+            },
+        };
+    },
+    "blue.toggle": () => createToggle(rawRegistry, "blue.power"),
+    "blue.devices": () => {
+        const source = rawRegistry.get("blue.devices");
+        const us: (() => void)[] = [];
+        const container = dynamicScrollList<string>({
+            itemSize: sSize.item,
+            containerSize: sSize.item * 4,
+            direction: "down",
+            keyExtractor: (x) => x,
+            renderItem: (k) => {
+                const el = iItem({ type: "h", size: "item" }).style({
+                    display: "flex",
+                    alignItems: "center",
+                    padding: `${sSize2.padding}px`,
+                    gap: `${sSize2.padding}px`,
+                });
+                const s = rawRegistry.get(k as "blue.devices[]").getAndSubscribe((v) => {
+                    el.clear().add([
+                        aLineText().sv(v.name),
+                        spacer(),
+                        aLineText().sv(v.connected.toString()).style({ flexShrink: 0 }),
+                    ]);
+                });
+                us.push(s);
+                return el;
+            },
+        });
+
+        const unsub = source.getAndSubscribe(async (ids) => {
+            container.setList(ids);
+        });
+        return {
+            id: "blue.devices",
+            type: "dynamic-list",
+            el: container.el.style({ width: "200px" }),
+            unmount: () => {
+                unsub();
+                for (const s of us) s();
+            },
+        };
+    },
+};
+
 tools.registerTool("blank", () => {
     return view().style({ flexGrow: 1 });
 });
@@ -1664,301 +1959,6 @@ tools.registerTool("tray", ({ tipEl, showTip }) => {
 
     return el;
 });
-
-// 全局 Registry 实例
-
-// 硬件
-const rawRegistry = new Registry<RegistrySchema>();
-// 桌面注册，如桌面自定义通知
-const _desktopRegistry = new Registry();
-// 聚合硬件和桌面注册，广播出去，接收其他广播
-// 事件中枢，可以被脚本、ai控制
-const _hubRegistry = new Registry<RegistrySchema>();
-
-MSysApi.power
-    .init()
-    .then(async () => {
-        const power = MSysApi.power;
-        const registry = rawRegistry;
-        await power.init();
-
-        // 获取初始电量数据
-        let batteryPercentage = 0;
-        for (const t of power.getDevices()) {
-            if ((await t.getPowerSupply()) && ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")) {
-                batteryPercentage = await t.getPercentage();
-                break;
-            }
-        }
-        registry.setData("power.battery", batteryPercentage);
-
-        // TODO: 监听属性变化并调用 registry.setData("power.battery", newValue)
-
-        registry.setData(
-            "power.devices",
-            power.getDevices().map((device) => `power.devices.${device.path}` as id<"power.devices[]">),
-        );
-
-        // TODO: 监听设备添加/移除并调用 registry.setData("power.devices", newDevices)
-
-        // todo 监听
-        for (const device of power.getDevices()) {
-            const name = (await device.getModel()) || "Unknown";
-            const percentage = await device.getPercentage();
-            const status = await device.getState();
-
-            const id = `power.devices.${device.path}` as "power.devices[]";
-            // todo 可以绑定id<"power.devices[]">
-            registry.setData(id, { name, percentage, status });
-        }
-    })
-    .catch((e) => console.error("power init error", e));
-
-MSysApi.network
-    .init()
-    .then(async () => {
-        const network = MSysApi.network;
-        const registry = rawRegistry;
-        await network.init();
-
-        // 设置初始无线网络状态
-        registry.setData("wifi.enabled", await network.isWirelessEnabled());
-
-        registry.setSetCallback("wifi.enabled", (v) => network.setWirelessEnabled(v));
-
-        // TODO: 监听属性变化并调用 registry.setData("wifi.enabled", newValue)
-
-        const wifiDevice = network.getWifiDevices()[0];
-        if (!wifiDevice) return;
-
-        const aps = await wifiDevice.getAccessPoints();
-        let c = "";
-        const ids: string[] = [];
-        for (const ap of aps) {
-            const ssid = await ap.getSsid();
-            if (!ssid) continue;
-            if (await ap.isActive()) {
-                c = ssid;
-                continue;
-            }
-            ids.push(ssid);
-        }
-        registry.setData(
-            "wifi.accessPoints",
-            Array.from(new Set(c ? [c, ...ids] : ids)).map(
-                (i) => `wifi.accessPoints.${i}` as id<"wifi.accessPoints[]">,
-            ),
-        );
-
-        // TODO: 监听接入点变化并调用 registry.setData("wifi.accessPoints", newAccessPoints)
-
-        for (const ap of await wifiDevice.getAccessPoints()) {
-            const ssid = await ap.getSsid();
-            if (!ssid) continue;
-
-            // 获取初始接入点状态
-            const active = await network.getActiveWifiConnection();
-            registry.setData(`wifi.accessPoints.${ssid}` as "wifi.accessPoints[]", {
-                ssid: ssid,
-                connected: active?.id === ssid,
-            });
-
-            // TODO: 监听接入点状态变化并调用 registry.setData(...)
-        }
-    })
-    .catch((e) => console.error("network init error", e));
-
-MSysApi.blue
-    .init()
-    .then(async () => {
-        const blue = MSysApi.blue;
-        const registry = rawRegistry;
-        await blue.init();
-
-        registry.setData("blue.power", await blue.isPowered());
-        registry.setSetCallback("blue.power", (v) => blue.setPowered(v));
-
-        // TODO: 监听 D-Bus PropertiesChanged 并调用 registry.setData("blue.power", newValue)
-
-        const c: string[] = [];
-        const l: string[] = [];
-        // connect变化时也更新
-        for (const d of blue.getDevices()) {
-            if (await d.isTrusted()) {
-                if (await d.isConnected()) c.push(await d.getAddress());
-                else l.push(await d.getAddress());
-            }
-        }
-        registry.setData(
-            "blue.devices",
-            c.concat(l).map((i) => `blue.devices.${i}` as id<"blue.devices[]">),
-        );
-
-        // TODO: 监听设备添加/移除并调用 registry.setData("blue.devices", newDevices)
-
-        for (const d of blue.getDevices()) {
-            const name = await d.getName();
-            const connected = await d.isConnected();
-            registry.setData(`blue.devices.${await d.getAddress()}` as "blue.devices[]", {
-                name,
-                connected,
-            });
-
-            // TODO: 监听设备状态变化并调用 registry.setData(...)
-        }
-    })
-    .catch((e) => console.error("blue init error", e));
-
-const notifications = new Map<string, { title: string; content: string; id: string }>();
-
-MSysApi.notification
-    .init()
-    .then(() => {
-        const registry = rawRegistry;
-        MSysApi.notification.on("new", (n) => {
-            const id = crypto.randomUUID();
-            notifications.set(id, { content: n.body, title: n.summary, id });
-
-            registry.setData("notification.list", Array.from(notifications.keys()) as id<"notification.list[]">[]);
-
-            registry.setData(`notification.list.${id}` as "notification.list[]", {
-                title: n.summary,
-                content: n.body,
-            });
-            registry.setSetCallback(`notification.list.${id}.delete` as "notification.list[].delete", () => {
-                notifications.delete(id);
-                registry.setData("notification.list", Array.from(notifications.keys()) as id<"notification.list[]">[]);
-                return Promise.resolve();
-            });
-        });
-    })
-    .catch((e) => console.error("notification init error", e));
-// UI 对象池
-const uipool = {
-    "power.battery": () => createIndicator(rawRegistry, "power.battery"),
-    "power.devices": () => {
-        const source = rawRegistry.get("power.devices");
-        const us: (() => void)[] = [];
-        const container = dynamicScrollList<string>({
-            itemSize: sSize.item,
-            containerSize: sSize.item * 4,
-            direction: "down",
-            keyExtractor: (x) => x,
-            renderItem: (k) => {
-                const el = iItem({ type: "h", size: "item" }).style({
-                    display: "flex",
-                    alignItems: "center",
-                    padding: `${sSize2.padding}px`,
-                    gap: `${sSize2.padding}px`,
-                });
-                const s = rawRegistry.get(k as "power.devices[]").getAndSubscribe((v) => {
-                    el.clear().add([
-                        aLineText().sv(v.name),
-                        spacer(),
-                        aLineText().sv(v.percentage.toString()).style({ flexShrink: 0 }),
-                    ]);
-                });
-                us.push(s);
-                return el;
-            },
-        });
-
-        const unsub = source.getAndSubscribe(async (ids) => {
-            container.setList(ids);
-        });
-        return {
-            id: "power.devices",
-            type: "dynamic-list",
-            el: container.el.style({ width: "200px" }),
-            unmount: () => {
-                unsub();
-                for (const s of us) s();
-            },
-        };
-    },
-    "wifi.toggle": () => createToggle(rawRegistry, "wifi.enabled"),
-    "wifi.accessPoints": () => {
-        const source = rawRegistry.get("wifi.accessPoints");
-        const us: (() => void)[] = [];
-        const container = dynamicScrollList<string>({
-            itemSize: sSize.item,
-            containerSize: sSize.item * 4,
-            direction: "down",
-            keyExtractor: (x) => x,
-            renderItem: (k) => {
-                const el = iItem({ type: "h", size: "item" }).style({
-                    display: "flex",
-                    alignItems: "center",
-                    padding: `${sSize2.padding}px`,
-                    gap: `${sSize2.padding}px`,
-                });
-                const s = rawRegistry.get(k as "wifi.accessPoints[]").getAndSubscribe((v) => {
-                    el.clear().add([
-                        aLineText().sv(v.ssid),
-                        spacer(),
-                        aLineText().sv(v.connected.toString()).style({ flexShrink: 0 }),
-                    ]);
-                });
-                us.push(s);
-                return el;
-            },
-        });
-
-        const unsub = source.getAndSubscribe(async (ids) => {
-            container.setList(ids);
-        });
-        return {
-            id: "wifi.devices",
-            type: "dynamic-list",
-            el: container.el.style({ width: "200px" }),
-            unmount: () => {
-                unsub();
-                for (const s of us) s();
-            },
-        };
-    },
-    "blue.toggle": () => createToggle(rawRegistry, "blue.power"),
-    "blue.devices": () => {
-        const source = rawRegistry.get("blue.devices");
-        const us: (() => void)[] = [];
-        const container = dynamicScrollList<string>({
-            itemSize: sSize.item,
-            containerSize: sSize.item * 4,
-            direction: "down",
-            keyExtractor: (x) => x,
-            renderItem: (k) => {
-                const el = iItem({ type: "h", size: "item" }).style({
-                    display: "flex",
-                    alignItems: "center",
-                    padding: `${sSize2.padding}px`,
-                    gap: `${sSize2.padding}px`,
-                });
-                const s = rawRegistry.get(k as "blue.devices[]").getAndSubscribe((v) => {
-                    el.clear().add([
-                        aLineText().sv(v.name),
-                        spacer(),
-                        aLineText().sv(v.connected.toString()).style({ flexShrink: 0 }),
-                    ]);
-                });
-                us.push(s);
-                return el;
-            },
-        });
-
-        const unsub = source.getAndSubscribe(async (ids) => {
-            container.setList(ids);
-        });
-        return {
-            id: "blue.devices",
-            type: "dynamic-list",
-            el: container.el.style({ width: "200px" }),
-            unmount: () => {
-                unsub();
-                for (const s of us) s();
-            },
-        };
-    },
-};
 
 tools.registerTool(
     "power",
