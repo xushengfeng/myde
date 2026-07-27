@@ -16,5 +16,3 @@ onlyBuiltDependencies:
   - '@biomejs/biome'
   - electron
 
-patchedDependencies:
-  dkh-ui@0.14.2: patches/dkh-ui@0.14.2.patch

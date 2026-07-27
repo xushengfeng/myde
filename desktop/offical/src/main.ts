@@ -329,11 +329,9 @@ class Tools {
                         const anchorname = `--${crypto.randomUUID()}`;
                         const anchorEl = s?.anchorEl ? pack(s.anchorEl) : el;
                         anchorEl.style({
-                            // @ts-expect-error
                             anchorName: anchorname,
                         });
                         tipel.style({
-                            // @ts-expect-error
                             positionAnchor: anchorname,
                             ...(showA === "left"
                                 ? {
