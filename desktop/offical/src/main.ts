@@ -3,9 +3,6 @@ import { addClass, button, check, ele, type ElType, image, p, pack, setProperty,
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
 import type { mprisPlayer } from "../../../src/sys_api/mpris";
 import { txt, dynamicList } from "dkh-ui";
-import type { blue, blueDevice } from "../../../src/sys_api/blue";
-import type { power } from "../../../src/sys_api/power";
-import type { network, accessPoint } from "../../../src/sys_api/network";
 import { AnimationGear, timingFunction } from "myde-ui";
 import { aLineText, bButton, iItem, sSize, sSize2, ui, uPasswdInput } from "./ui";
 import { dynamicScrollList } from "./scroll-list";
@@ -26,15 +23,6 @@ interface BindingSource<T> {
     subscribe: (cb: (value: T) => void) => () => void;
     getAndSubscribe: (cb: (value: T, isFirst: boolean) => void) => () => void;
     set?: (value: T) => Promise<void>;
-}
-
-interface ListItemData {
-    id: string;
-    label: string;
-    subtitle?: string;
-    icon?: string;
-    status?: "connected" | "paired" | "saved" | "available" | "disabled";
-    action?: () => Promise<void>;
 }
 
 interface ControlNode {
@@ -62,16 +50,21 @@ interface RegistrySchema {
     };
     "wifi.enabled": boolean;
     "wifi.accessPoints": id<"wifi.accessPoints[]">[];
-    "wifi.accessPoints[]": ListItemData;
+    "wifi.accessPoints[]": {
+        ssid: string;
+        connected: boolean;
+    };
     "blue.power": boolean;
     "blue.devices": id<"blue.devices[]">[];
-    "blue.devices[]": ListItemData;
+    "blue.devices[]": {
+        name: string;
+        connected: boolean;
+    };
 }
 
 // 具体的键类型
 type BooleanRegistryKeys = "wifi.enabled" | "blue.power";
 type NumericRegistryKeys = "power.battery";
-type IdArrayRegistryKeys = "power.devices" | "wifi.accessPoints" | "blue.devices";
 
 /**
  * 响应式数据编程
@@ -152,209 +145,12 @@ function createToggle(registry: Registry, id: BooleanRegistryKeys): ControlNode 
     return { id, type: "toggle", el: toggle as unknown as ElType<HTMLElement>, unmount: unsub };
 }
 
-function createListItem(data: ListItemData): ControlNode {
-    const item = view("x");
-    if (data.icon) item.add(txt().sv(data.icon));
-    item.add(txt().sv(data.label));
-    if (data.subtitle) item.add(txt().sv(data.subtitle));
-
-    if (data.action) {
-        item.el.style.cursor = "pointer";
-        item.on("click", () => data.action?.());
-    }
-
-    return { id: data.id, type: "list-item", el: item };
-}
-
-function createDynamicList(
-    registry: Registry,
-    sourceId: IdArrayRegistryKeys,
-    map: (id: string, data: ListItemData) => ControlNode,
-    getChild: (id: string) => ListItemData | Promise<ListItemData>,
-): ControlNode {
-    const source = registry.get(sourceId);
-    const container = view("y");
-
-    const unsub = source.getAndSubscribe(async (ids) => {
-        container.clear();
-        for (const id of ids) {
-            const data = await getChild(id);
-            container.add(map(id, data).el);
-        }
-    });
-    return { id: sourceId, type: "dynamic-list", el: container, unmount: unsub };
-}
-
 function createIndicator(registry: Registry, id: NumericRegistryKeys): ControlNode {
     const source = registry.get(id);
     const label = txt();
 
     const unsub = source.getAndSubscribe((v) => label.sv(String(v)));
     return { id, type: "indicator", el: label as unknown as ElType<HTMLElement>, unmount: unsub };
-}
-
-// ========== 蓝牙适配器 ==========
-
-class BluetoothAdapter {
-    constructor(
-        private blue: blue,
-        private registry: Registry,
-    ) {}
-
-    async init(): Promise<void> {
-        await this.blue.init();
-
-        this.registry.register("blue.power", {
-            get: () => this.blue.isPowered(),
-            subscribe: (_cb) => {
-                // TODO: 监听 D-Bus PropertiesChanged
-                return () => {};
-            },
-            set: (v) => this.blue.setPowered(v),
-        });
-
-        this.registry.register("blue.devices", {
-            get: () => this.blue.getDevices().map((d) => d.getPath() as id<"blue.devices[]">),
-            subscribe: (_cb) => {
-                // TODO: 监听设备添加/移除
-                return () => {};
-            },
-        });
-    }
-
-    async getChild(path: string): Promise<ListItemData> {
-        const device = this.blue.getDevices().find((d) => d.getPath() === path);
-        if (!device) return { id: path, label: "Unknown", status: "disabled" };
-        return {
-            id: path,
-            label: (await device.getName()) || "Unknown",
-            icon: "bluetooth",
-            status: await this.getDeviceStatus(device),
-        };
-    }
-
-    private async getDeviceStatus(device: blueDevice): Promise<ListItemData["status"]> {
-        if (await device.isConnected()) return "connected";
-        if (await device.isTrusted()) return "paired";
-        return "available";
-    }
-}
-
-// ========== 电源适配器 ==========
-
-class PowerAdapter {
-    constructor(
-        private power: power,
-        private registry: Registry,
-    ) {}
-
-    async init(): Promise<void> {
-        await this.power.init();
-
-        this.registry.register("power.battery", {
-            get: async () => {
-                for (const t of this.power.getDevices()) {
-                    if (
-                        (await t.getPowerSupply()) &&
-                        ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")
-                    ) {
-                        return await t.getPercentage();
-                    }
-                }
-                return 0;
-            },
-            subscribe: (_cb) => {
-                // TODO: 监听属性变化
-                return () => {};
-            },
-        });
-
-        this.registry.register("power.devices", {
-            get: () => this.power.getDevices().map((device) => `power.devices.${device.path}` as id<"power.devices[]">),
-            subscribe: (_cb) => {
-                // TODO: 监听设备添加/移除
-                return () => {};
-            },
-        });
-
-        // todo 监听
-        for (const device of this.power.getDevices()) {
-            const name = (await device.getModel()) || "Unknown";
-            const percentage = await device.getPercentage();
-            const status = await device.getState();
-
-            const id = `power.devices.${device.path}` as "power.devices[]";
-            // todo 可以绑定id<"power.devices[]">
-            this.registry.register(id, {
-                get: () => ({ name, percentage, status }),
-                subscribe: () => {
-                    return () => {};
-                },
-            });
-        }
-    }
-}
-
-// ========== WiFi 适配器 ==========
-
-class WifiAdapter {
-    constructor(
-        private network: network,
-        private registry: Registry,
-    ) {}
-
-    async init(): Promise<void> {
-        await this.network.init();
-
-        this.registry.register("wifi.enabled", {
-            get: () => this.network.isWirelessEnabled(),
-            subscribe: (_cb) => {
-                // TODO: 监听属性变化
-                return () => {};
-            },
-            set: (v) => this.network.setWirelessEnabled(v),
-        });
-
-        const wifiDevice = this.network.getWifiDevices()[0];
-        if (!wifiDevice) return;
-
-        this.registry.register("wifi.accessPoints", {
-            get: async () => {
-                const aps = await wifiDevice.getAccessPoints();
-                const ids: id<"wifi.accessPoints[]">[] = [];
-                for (const ap of aps) {
-                    ids.push((await ap.getHwAddress()) as id<"wifi.accessPoints[]">);
-                }
-                return ids;
-            },
-            subscribe: (_cb) => {
-                // TODO: 监听接入点变化
-                return () => {};
-            },
-        });
-    }
-
-    async getChild(id: string): Promise<ListItemData> {
-        const wifiDevice = this.network.getWifiDevices()[0];
-        if (!wifiDevice) return { id, label: "Unknown", status: "disabled" };
-        const aps = await wifiDevice.getAccessPoints();
-        let targetAp: accessPoint | undefined;
-        for (const ap of aps) {
-            if ((await ap.getHwAddress()) === id) {
-                targetAp = ap;
-                break;
-            }
-        }
-        if (!targetAp) return { id, label: "Unknown", status: "disabled" };
-        const ssid = (await targetAp.getSsid()) || "Hidden";
-        const active = await this.network.getActiveWifiConnection();
-        return {
-            id,
-            label: ssid,
-            icon: "wifi",
-            status: active?.id === ssid ? "connected" : "available",
-        };
-    }
 }
 
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
@@ -1876,25 +1672,167 @@ const _desktopRegistry = new Registry();
 // 事件中枢，可以被脚本、ai控制
 const _hubRegistry = new Registry<RegistrySchema>();
 
-// 电源 - 使用 Registry
-const powerAdapter = new PowerAdapter(MSysApi.power, rawRegistry);
 MSysApi.power
     .init()
-    .then(() => powerAdapter.init())
+    .then(async () => {
+        const power = MSysApi.power;
+        const registry = rawRegistry;
+        await power.init();
+
+        registry.register("power.battery", {
+            get: async () => {
+                for (const t of power.getDevices()) {
+                    if (
+                        (await t.getPowerSupply()) &&
+                        ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")
+                    ) {
+                        return await t.getPercentage();
+                    }
+                }
+                return 0;
+            },
+            subscribe: (_cb) => {
+                // TODO: 监听属性变化
+                return () => {};
+            },
+        });
+
+        registry.register("power.devices", {
+            get: () => power.getDevices().map((device) => `power.devices.${device.path}` as id<"power.devices[]">),
+            subscribe: (_cb) => {
+                // TODO: 监听设备添加/移除
+                return () => {};
+            },
+        });
+
+        // todo 监听
+        for (const device of power.getDevices()) {
+            const name = (await device.getModel()) || "Unknown";
+            const percentage = await device.getPercentage();
+            const status = await device.getState();
+
+            const id = `power.devices.${device.path}` as "power.devices[]";
+            // todo 可以绑定id<"power.devices[]">
+            registry.register(id, {
+                get: () => ({ name, percentage, status }),
+                subscribe: () => {
+                    return () => {};
+                },
+            });
+        }
+    })
     .catch((e) => console.error("power init error", e));
 
-// WiFi - 使用 Registry
-const wifiAdapter = new WifiAdapter(MSysApi.network, rawRegistry);
 MSysApi.network
     .init()
-    .then(() => wifiAdapter.init())
+    .then(async () => {
+        const network = MSysApi.network;
+        const registry = rawRegistry;
+        await network.init();
+
+        registry.register("wifi.enabled", {
+            get: () => network.isWirelessEnabled(),
+            subscribe: (_cb) => {
+                // TODO: 监听属性变化
+                return () => {};
+            },
+            set: (v) => network.setWirelessEnabled(v),
+        });
+
+        const wifiDevice = network.getWifiDevices()[0];
+        if (!wifiDevice) return;
+
+        registry.register("wifi.accessPoints", {
+            get: async () => {
+                const aps = await wifiDevice.getAccessPoints();
+                let c = "";
+                const ids: string[] = [];
+                for (const ap of aps) {
+                    const ssid = await ap.getSsid();
+                    if (!ssid) continue;
+                    if (await ap.isActive()) {
+                        c = ssid;
+                        continue;
+                    }
+                    ids.push(ssid);
+                }
+                return Array.from(new Set(c ? [c, ...ids] : ids)).map(
+                    (i) => `wifi.accessPoints.${i}` as id<"wifi.accessPoints[]">,
+                );
+            },
+            subscribe: (_cb) => {
+                // TODO: 监听接入点变化
+                return () => {};
+            },
+        });
+
+        for (const ap of await wifiDevice.getAccessPoints()) {
+            const ssid = await ap.getSsid();
+            if (!ssid) continue;
+            registry.register(`wifi.accessPoints.${ssid}` as "wifi.accessPoints[]", {
+                get: async () => {
+                    const active = await network.getActiveWifiConnection();
+                    return {
+                        ssid: ssid,
+                        connected: active?.id === ssid,
+                    };
+                },
+                subscribe: () => {
+                    return () => {};
+                },
+            });
+        }
+    })
     .catch((e) => console.error("network init error", e));
 
-// 蓝牙 - 使用 Registry
-const blueAdapter = new BluetoothAdapter(MSysApi.blue, rawRegistry);
 MSysApi.blue
     .init()
-    .then(() => blueAdapter.init())
+    .then(async () => {
+        const blue = MSysApi.blue;
+        const registry = rawRegistry;
+        await blue.init();
+
+        registry.register("blue.power", {
+            get: () => blue.isPowered(),
+            subscribe: (_cb) => {
+                // TODO: 监听 D-Bus PropertiesChanged
+                return () => {};
+            },
+            set: (v) => blue.setPowered(v),
+        });
+
+        registry.register("blue.devices", {
+            get: async () => {
+                const c: string[] = [];
+                const l: string[] = [];
+                // connect变化时也更新
+                for (const d of blue.getDevices()) {
+                    if (await d.isTrusted()) {
+                        if (await d.isConnected()) c.push(await d.getAddress());
+                        else l.push(await d.getAddress());
+                    }
+                }
+                return c.concat(l).map((i) => `blue.devices.${i}` as id<"blue.devices[]">);
+            },
+            subscribe: (_cb) => {
+                // TODO: 监听设备添加/移除
+                return () => {};
+            },
+        });
+
+        for (const d of blue.getDevices()) {
+            registry.register(`blue.devices.${await d.getAddress()}` as "blue.devices[]", {
+                get: async () => {
+                    const name = await d.getName();
+                    const c = await d.isConnected();
+                    return { name, connected: c };
+                },
+                subscribe: () => {
+                    return () => {};
+                },
+            });
+        }
+    })
     .catch((e) => console.error("blue init error", e));
 
 // UI 对象池
@@ -1941,21 +1879,87 @@ const uipool = {
         };
     },
     "wifi.toggle": () => createToggle(rawRegistry, "wifi.enabled"),
-    "wifi.accessPoints": () =>
-        createDynamicList(
-            rawRegistry,
-            "wifi.accessPoints",
-            (_id, data) => createListItem(data),
-            (id) => wifiAdapter.getChild(id),
-        ),
+    "wifi.accessPoints": () => {
+        const source = rawRegistry.get("wifi.accessPoints");
+        const us: (() => void)[] = [];
+        const container = dynamicScrollList<string>({
+            itemSize: sSize.item,
+            containerSize: sSize.item * 4,
+            direction: "down",
+            keyExtractor: (x) => x,
+            renderItem: (k) => {
+                const el = iItem({ type: "h", size: "item" }).style({
+                    display: "flex",
+                    alignItems: "center",
+                    padding: `${sSize2.padding}px`,
+                    gap: `${sSize2.padding}px`,
+                });
+                const s = rawRegistry.get(k as "wifi.accessPoints[]").getAndSubscribe((v) => {
+                    el.clear().add([
+                        aLineText().sv(v.ssid),
+                        spacer(),
+                        aLineText().sv(v.connected.toString()).style({ flexShrink: 0 }),
+                    ]);
+                });
+                us.push(s);
+                return el;
+            },
+        });
+
+        const unsub = source.getAndSubscribe(async (ids) => {
+            container.setList(ids);
+        });
+        return {
+            id: "wifi.devices",
+            type: "dynamic-list",
+            el: container.el.style({ width: "200px" }),
+            unmount: () => {
+                unsub();
+                for (const s of us) s();
+            },
+        };
+    },
     "blue.toggle": () => createToggle(rawRegistry, "blue.power"),
-    "blue.devices": () =>
-        createDynamicList(
-            rawRegistry,
-            "blue.devices",
-            (_id, data) => createListItem(data),
-            (id) => blueAdapter.getChild(id),
-        ),
+    "blue.devices": () => {
+        const source = rawRegistry.get("blue.devices");
+        const us: (() => void)[] = [];
+        const container = dynamicScrollList<string>({
+            itemSize: sSize.item,
+            containerSize: sSize.item * 4,
+            direction: "down",
+            keyExtractor: (x) => x,
+            renderItem: (k) => {
+                const el = iItem({ type: "h", size: "item" }).style({
+                    display: "flex",
+                    alignItems: "center",
+                    padding: `${sSize2.padding}px`,
+                    gap: `${sSize2.padding}px`,
+                });
+                const s = rawRegistry.get(k as "blue.devices[]").getAndSubscribe((v) => {
+                    el.clear().add([
+                        aLineText().sv(v.name),
+                        spacer(),
+                        aLineText().sv(v.connected.toString()).style({ flexShrink: 0 }),
+                    ]);
+                });
+                us.push(s);
+                return el;
+            },
+        });
+
+        const unsub = source.getAndSubscribe(async (ids) => {
+            container.setList(ids);
+        });
+        return {
+            id: "blue.devices",
+            type: "dynamic-list",
+            el: container.el.style({ width: "200px" }),
+            unmount: () => {
+                unsub();
+                for (const s of us) s();
+            },
+        };
+    },
 };
 
 tools.registerTool(
