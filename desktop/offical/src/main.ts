@@ -12,12 +12,6 @@ import { dynamicScrollList } from "./scroll-list";
 // 特殊的id类型，表示可以用registry.get获取
 type id<T extends string = string> = string & { __brand: T };
 
-interface BindingSourceRegister<T> {
-    get: () => T | Promise<T>;
-    subscribe: (cb: (value: T) => void) => () => void;
-    set?: (value: T) => Promise<void>;
-}
-
 interface BindingSource<T> {
     get: () => Promise<T>;
     subscribe: (cb: (value: T) => void) => () => void;
@@ -68,66 +62,107 @@ type NumericRegistryKeys = "power.battery";
 
 /**
  * 响应式数据编程
- * 一般先register再get，这里可以先get，直到数据register挂上来
+ * 使用 setData 直接设置数据，支持订阅和双向绑定
  */
 class Registry<T = RegistrySchema> {
-    private sources = new Map<string, BindingSourceRegister<unknown>>();
-    private pendingBinds = new Map<string, Set<(source: unknown) => void>>();
+    private data = new Map<string, unknown>();
+    private subscribers = new Map<string, Set<(value: unknown) => void>>();
+    private setCallbacks = new Map<string, (value: unknown) => Promise<void>>();
+    private pendingBinds = new Map<string, Set<(value: unknown) => void>>();
 
-    register<K extends keyof T & string>(id: K, source: BindingSourceRegister<T[K]>): void {
-        this.sources.set(id, source as BindingSourceRegister<unknown>);
+    setData<K extends keyof T & string>(id: K, data: T[K]) {
+        this.data.set(id, data);
+
+        // 通知所有订阅者
+        const subs = this.subscribers.get(id);
+        if (subs) {
+            for (const cb of subs) {
+                cb(data);
+            }
+        }
+
+        // 解决 pending 的 get 请求
         const pending = this.pendingBinds.get(id);
         if (pending) {
-            for (const cb of pending) cb(source);
+            for (const cb of pending) {
+                cb(data);
+            }
             this.pendingBinds.delete(id);
         }
     }
 
+    setSetCallback<K extends keyof T & string>(id: K, callback: (value: T[K]) => Promise<void>) {
+        this.setCallbacks.set(id, callback as (value: unknown) => Promise<void>);
+    }
+
     get<K extends keyof T & string>(id: K): BindingSource<T[K]> {
-        const source = this.sources.get(id) as BindingSourceRegister<T[K]> | undefined;
-        if (source) {
+        const currentValue = this.data.get(id) as T[K] | undefined;
+
+        // 如果数据已经存在，直接返回
+        if (currentValue !== undefined) {
+            const setcallback = this.setCallbacks.get(id);
             return {
-                get: () => Promise.resolve(source.get()),
-                subscribe: (cb) => source.subscribe(cb),
-                getAndSubscribe: (cb) => {
-                    // 获取当前值（第一次）
-                    Promise.resolve(source.get()).then((v) => cb(v, true));
-                    // 订阅后续变化
-                    return source.subscribe((v) => cb(v, false));
+                get: () => Promise.resolve(this.data.get(id) as T[K]),
+                subscribe: (cb) => {
+                    const subs = this.subscribers.get(id) ?? new Set();
+                    const wrappedCb = (v: unknown) => cb(v as T[K]);
+                    subs.add(wrappedCb);
+                    this.subscribers.set(id, subs);
+                    return () => subs.delete(wrappedCb);
                 },
-                set: source.set,
+                getAndSubscribe: (cb) => {
+                    cb(this.data.get(id) as T[K], true);
+                    const subs = this.subscribers.get(id) ?? new Set();
+                    const wrappedCb = (v: unknown) => cb(v as T[K], false);
+                    subs.add(wrappedCb);
+                    this.subscribers.set(id, subs);
+                    return () => subs.delete(wrappedCb);
+                },
+                set: setcallback ? (v) => setcallback(v) : undefined,
             };
         }
 
-        const currentValue = Promise.withResolvers<T[K]>();
-        let realSource: BindingSourceRegister<T[K]> | undefined;
-        const subscribers = new Set<(value: T[K]) => void>();
+        // 数据尚未存在，创建 pending 绑定
+        const promiseWithResolvers = Promise.withResolvers<T[K]>();
+        let resolved = false;
 
-        if (!this.pendingBinds.has(id)) this.pendingBinds.set(id, new Set());
-        const pending = this.pendingBinds.get(id);
-        if (pending)
-            pending.add((s: unknown) => {
-                realSource = s as BindingSourceRegister<T[K]>;
-                Promise.resolve(realSource.get()).then((v) => {
-                    currentValue.resolve(v);
-                    for (const cb of subscribers) cb(v);
-                });
-            });
+        const pending = this.pendingBinds.get(id) ?? new Set();
+        pending.add((v: unknown) => {
+            if (!resolved) {
+                resolved = true;
+                promiseWithResolvers.resolve(v as T[K]);
+            }
+            const subs = this.subscribers.get(id);
+            if (subs) {
+                for (const cb of subs) cb(v);
+            }
+        });
+        this.pendingBinds.set(id, pending);
+
+        const setcallback = this.setCallbacks.get(id);
 
         return {
-            get: () => currentValue.promise,
+            get: () => promiseWithResolvers.promise,
             subscribe: (cb) => {
-                subscribers.add(cb);
-                return () => subscribers.delete(cb);
+                const subs = this.subscribers.get(id) ?? new Set();
+                const wrappedCb = (v: unknown) => cb(v as T[K]);
+                subs.add(wrappedCb);
+                this.subscribers.set(id, subs);
+                return () => subs.delete(wrappedCb);
             },
             getAndSubscribe: (cb) => {
-                // 获取当前值（第一次）
-                currentValue.promise.then((v) => cb(v, true));
-                // 订阅后续变化
-                subscribers.add((v) => cb(v, false));
-                return () => subscribers.delete((v) => cb(v, false));
+                promiseWithResolvers.promise.then((v) => {
+                    if (!resolved) {
+                        cb(v, true);
+                    }
+                });
+                const subs = this.subscribers.get(id) ?? new Set();
+                const wrappedCb = (v: unknown) => cb(v as T[K], false);
+                subs.add(wrappedCb);
+                this.subscribers.set(id, subs);
+                return () => subs.delete(wrappedCb);
             },
-            set: (v) => realSource?.set?.(v) ?? Promise.resolve(),
+            set: setcallback ? (v) => setcallback(v) : undefined,
         };
     }
 }
@@ -1679,31 +1714,24 @@ MSysApi.power
         const registry = rawRegistry;
         await power.init();
 
-        registry.register("power.battery", {
-            get: async () => {
-                for (const t of power.getDevices()) {
-                    if (
-                        (await t.getPowerSupply()) &&
-                        ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")
-                    ) {
-                        return await t.getPercentage();
-                    }
-                }
-                return 0;
-            },
-            subscribe: (_cb) => {
-                // TODO: 监听属性变化
-                return () => {};
-            },
-        });
+        // 获取初始电量数据
+        let batteryPercentage = 0;
+        for (const t of power.getDevices()) {
+            if ((await t.getPowerSupply()) && ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")) {
+                batteryPercentage = await t.getPercentage();
+                break;
+            }
+        }
+        registry.setData("power.battery", batteryPercentage);
 
-        registry.register("power.devices", {
-            get: () => power.getDevices().map((device) => `power.devices.${device.path}` as id<"power.devices[]">),
-            subscribe: (_cb) => {
-                // TODO: 监听设备添加/移除
-                return () => {};
-            },
-        });
+        // TODO: 监听属性变化并调用 registry.setData("power.battery", newValue)
+
+        registry.setData(
+            "power.devices",
+            power.getDevices().map((device) => `power.devices.${device.path}` as id<"power.devices[]">),
+        );
+
+        // TODO: 监听设备添加/移除并调用 registry.setData("power.devices", newDevices)
 
         // todo 监听
         for (const device of power.getDevices()) {
@@ -1713,12 +1741,7 @@ MSysApi.power
 
             const id = `power.devices.${device.path}` as "power.devices[]";
             // todo 可以绑定id<"power.devices[]">
-            registry.register(id, {
-                get: () => ({ name, percentage, status }),
-                subscribe: () => {
-                    return () => {};
-                },
-            });
+            registry.setData(id, { name, percentage, status });
         }
     })
     .catch((e) => console.error("power init error", e));
@@ -1730,57 +1753,49 @@ MSysApi.network
         const registry = rawRegistry;
         await network.init();
 
-        registry.register("wifi.enabled", {
-            get: () => network.isWirelessEnabled(),
-            subscribe: (_cb) => {
-                // TODO: 监听属性变化
-                return () => {};
-            },
-            set: (v) => network.setWirelessEnabled(v),
-        });
+        // 设置初始无线网络状态
+        registry.setData("wifi.enabled", await network.isWirelessEnabled());
+
+        registry.setSetCallback("wifi.enabled", (v) => network.setWirelessEnabled(v));
+
+        // TODO: 监听属性变化并调用 registry.setData("wifi.enabled", newValue)
 
         const wifiDevice = network.getWifiDevices()[0];
         if (!wifiDevice) return;
 
-        registry.register("wifi.accessPoints", {
-            get: async () => {
-                const aps = await wifiDevice.getAccessPoints();
-                let c = "";
-                const ids: string[] = [];
-                for (const ap of aps) {
-                    const ssid = await ap.getSsid();
-                    if (!ssid) continue;
-                    if (await ap.isActive()) {
-                        c = ssid;
-                        continue;
-                    }
-                    ids.push(ssid);
-                }
-                return Array.from(new Set(c ? [c, ...ids] : ids)).map(
-                    (i) => `wifi.accessPoints.${i}` as id<"wifi.accessPoints[]">,
-                );
-            },
-            subscribe: (_cb) => {
-                // TODO: 监听接入点变化
-                return () => {};
-            },
-        });
+        const aps = await wifiDevice.getAccessPoints();
+        let c = "";
+        const ids: string[] = [];
+        for (const ap of aps) {
+            const ssid = await ap.getSsid();
+            if (!ssid) continue;
+            if (await ap.isActive()) {
+                c = ssid;
+                continue;
+            }
+            ids.push(ssid);
+        }
+        registry.setData(
+            "wifi.accessPoints",
+            Array.from(new Set(c ? [c, ...ids] : ids)).map(
+                (i) => `wifi.accessPoints.${i}` as id<"wifi.accessPoints[]">,
+            ),
+        );
+
+        // TODO: 监听接入点变化并调用 registry.setData("wifi.accessPoints", newAccessPoints)
 
         for (const ap of await wifiDevice.getAccessPoints()) {
             const ssid = await ap.getSsid();
             if (!ssid) continue;
-            registry.register(`wifi.accessPoints.${ssid}` as "wifi.accessPoints[]", {
-                get: async () => {
-                    const active = await network.getActiveWifiConnection();
-                    return {
-                        ssid: ssid,
-                        connected: active?.id === ssid,
-                    };
-                },
-                subscribe: () => {
-                    return () => {};
-                },
+
+            // 获取初始接入点状态
+            const active = await network.getActiveWifiConnection();
+            registry.setData(`wifi.accessPoints.${ssid}` as "wifi.accessPoints[]", {
+                ssid: ssid,
+                connected: active?.id === ssid,
             });
+
+            // TODO: 监听接入点状态变化并调用 registry.setData(...)
         }
     })
     .catch((e) => console.error("network init error", e));
@@ -1792,45 +1807,36 @@ MSysApi.blue
         const registry = rawRegistry;
         await blue.init();
 
-        registry.register("blue.power", {
-            get: () => blue.isPowered(),
-            subscribe: (_cb) => {
-                // TODO: 监听 D-Bus PropertiesChanged
-                return () => {};
-            },
-            set: (v) => blue.setPowered(v),
-        });
+        registry.setData("blue.power", await blue.isPowered());
+        registry.setSetCallback("blue.power", (v) => blue.setPowered(v));
 
-        registry.register("blue.devices", {
-            get: async () => {
-                const c: string[] = [];
-                const l: string[] = [];
-                // connect变化时也更新
-                for (const d of blue.getDevices()) {
-                    if (await d.isTrusted()) {
-                        if (await d.isConnected()) c.push(await d.getAddress());
-                        else l.push(await d.getAddress());
-                    }
-                }
-                return c.concat(l).map((i) => `blue.devices.${i}` as id<"blue.devices[]">);
-            },
-            subscribe: (_cb) => {
-                // TODO: 监听设备添加/移除
-                return () => {};
-            },
-        });
+        // TODO: 监听 D-Bus PropertiesChanged 并调用 registry.setData("blue.power", newValue)
+
+        const c: string[] = [];
+        const l: string[] = [];
+        // connect变化时也更新
+        for (const d of blue.getDevices()) {
+            if (await d.isTrusted()) {
+                if (await d.isConnected()) c.push(await d.getAddress());
+                else l.push(await d.getAddress());
+            }
+        }
+        registry.setData(
+            "blue.devices",
+            c.concat(l).map((i) => `blue.devices.${i}` as id<"blue.devices[]">),
+        );
+
+        // TODO: 监听设备添加/移除并调用 registry.setData("blue.devices", newDevices)
 
         for (const d of blue.getDevices()) {
-            registry.register(`blue.devices.${await d.getAddress()}` as "blue.devices[]", {
-                get: async () => {
-                    const name = await d.getName();
-                    const c = await d.isConnected();
-                    return { name, connected: c };
-                },
-                subscribe: () => {
-                    return () => {};
-                },
+            const name = await d.getName();
+            const connected = await d.isConnected();
+            registry.setData(`blue.devices.${await d.getAddress()}` as "blue.devices[]", {
+                name,
+                connected,
             });
+
+            // TODO: 监听设备状态变化并调用 registry.setData(...)
         }
     })
     .catch((e) => console.error("blue init error", e));
