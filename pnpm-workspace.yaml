@@ -11,8 +11,8 @@ minimumReleaseAgeExclude:
   - myde-remote-connect@0.0.5
   - myde-ui@0.0.4
   - myde-ui@0.0.5
+  - myde-ui@0.0.7
 
 onlyBuiltDependencies:
   - '@biomejs/biome'
   - electron
-

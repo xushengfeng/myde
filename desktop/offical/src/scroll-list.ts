@@ -12,7 +12,6 @@ interface AnimatedElement<T> {
     index: number;
     gear: AnimationGear<{ show: number }>;
     moveGear: AnimationGear<{ pos: number }>;
-    state: "normal" | "moving";
     data: T;
 }
 
@@ -100,7 +99,7 @@ export function dynamicScrollList<T>(options: {
             });
         });
 
-        return { el, index, gear, moveGear, state: "normal", data };
+        return { el, index, gear, moveGear, data };
     }
 
     function animateEnter(item: AnimatedElement<T>, noAnimation?: boolean) {
@@ -122,7 +121,6 @@ export function dynamicScrollList<T>(options: {
 
         if (Math.abs(distance) < 1) return;
 
-        item.state = "moving";
         item.index = newIndex;
 
         const gear = item.gear;
@@ -130,9 +128,7 @@ export function dynamicScrollList<T>(options: {
 
         const moveGear = item.moveGear;
 
-        moveGear.moveTo({ pos: targetPosition }, { duration: animationDuration, map: timingFunction.easeInOut }, () => {
-            item.state = "normal";
-        });
+        moveGear.moveTo({ pos: targetPosition }, { duration: animationDuration, map: timingFunction.easeInOut });
     }
 
     function diffAndUpdateVisibleItems(oldItems: T[], noAnimation: boolean) {
@@ -236,13 +232,9 @@ export function dynamicScrollList<T>(options: {
         // 更新所有元素位置（仅对非动画中的元素）
         const renderedArray = Array.from(renderedEls.values());
         for (const item of renderedArray) {
-            if (item.state === "moving") {
-                // todo gear添加判断方法
+            if (item.moveGear.getRunningAnimation().isRunning) {
                 item.moveGear.moveTo({ pos: item.index * itemSize - currentScroll });
-            } else
-                item.el.style({
-                    [vertical ? "top" : "left"]: `${item.index * itemSize - currentScroll}px`,
-                });
+            } else item.moveGear.moveTo({ pos: item.index * itemSize - currentScroll }, 0);
         }
 
         // 更新可见元素
