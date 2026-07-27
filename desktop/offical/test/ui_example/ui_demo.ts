@@ -1,8 +1,8 @@
 import { addStyle, button, initDKH, txt, view } from "dkh-ui";
 import { carousel, dynamicScrollList } from "../../src/scroll-list";
-import { aLineText, iItem, sSize, ui } from "../../src/ui";
+import { aLineText, iItem, nNotiList, sSize, ui } from "../../src/ui";
 
-addStyle({ body: { userSelect: "none", padding: "8px" } });
+addStyle({ body: { userSelect: "none", padding: "8px", fontFamily: "sans-serif" } });
 initDKH({ pureStyle: true });
 
 // 单行文本
@@ -157,6 +157,40 @@ const dottedBgPopup = createPopupWithBackground(
     "点状图案背景",
 );
 bgTestSection.add(dottedBgPopup);
+
+const n = nNotiList({
+    map: (k) => {
+        return Promise.resolve({
+            ...noMap[k],
+            delete: () => {
+                noSet.delete(k);
+                n.setList(Array.from(noSet));
+            },
+        });
+    },
+});
+const noMap = {
+    a: { title: "title", content: "aaaaaaaaaaaaaaaaa" },
+    b: { title: "title", content: "bb bb" },
+    c: {
+        title: "title",
+        content: "xx xx xx x xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    },
+};
+const noSet = new Set<string>();
+n.el.style({ width: "fit-content" }).addInto();
+const noB = button("show")
+    .on("click", () => {
+        n.setList(["a", "b", "c"]);
+        noSet.clear();
+        noSet.add("a");
+        noSet.add("b");
+        noSet.add("c");
+    })
+    .addInto();
+setTimeout(() => {
+    noB.el.click();
+}, 800);
 
 // 动态滚动列表测试（垂直向下）
 const scrollListDemo = view()

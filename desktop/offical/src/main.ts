@@ -2,9 +2,9 @@ import { addClass, button, check, ele, type ElType, image, p, pack, setProperty,
 
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
 import type { mprisPlayer } from "../../../src/sys_api/mpris";
-import { txt, dynamicList } from "dkh-ui";
+import { txt } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
-import { aLineText, bButton, iItem, sSize, sSize2, ui, uPasswdInput } from "./ui";
+import { aLineText, bButton, iItem, nNotiList, sSize, sSize2, ui, uPasswdInput } from "./ui";
 import { dynamicScrollList } from "./scroll-list";
 
 // ========== Registry 和 ControlNode ==========
@@ -54,6 +54,12 @@ interface RegistrySchema {
         name: string;
         connected: boolean;
     };
+    "notification.list": id<"notification.list[]">[];
+    "notification.list[]": {
+        title: string;
+        content: string;
+    };
+    "notification.list[].delete": boolean;
 }
 
 // 具体的键类型
@@ -1541,42 +1547,6 @@ tools.registerTool(
     { selfBackground: true },
 );
 
-const notifications = new Map<string, { title: string; content: string; id: string }>();
-tools.registerTool("notifications", ({ tipEl, showTip }) => {
-    const nolist = view("y").addInto(tipEl);
-    const btn = button("🔔").on("click", () => {
-        showTip();
-    });
-
-    const d = dynamicList(nolist, [], (id: string) => {
-        const n = notifications.get(id);
-        if (!n) return view();
-        return view("y")
-            .add(
-                view("x").add([
-                    txt(n.title),
-                    button("×").on("click", () => {
-                        notifications.delete(id);
-                        d.setList(Array.from(notifications.keys()));
-                    }),
-                ]),
-            )
-            .add(txt(n.content).style({ fontSize: "12px", color: "gray" }));
-    });
-
-    MSysApi.notification.on("new", (n) => {
-        const id = crypto.randomUUID();
-        notifications.set(id, { content: n.body, title: n.summary, id });
-        d.setList(Array.from(notifications.keys()));
-    });
-
-    MSysApi.notification.init();
-
-    d.setList(Array.from(notifications.keys()));
-
-    return btn;
-});
-
 const mediaControl = new Map<string, mprisPlayer>();
 tools.registerTool("mediaControl", ({ tipEl, showTip }) => {
     const main = view("y").addInto(tipEl);
@@ -1841,6 +1811,30 @@ MSysApi.blue
     })
     .catch((e) => console.error("blue init error", e));
 
+const notifications = new Map<string, { title: string; content: string; id: string }>();
+
+MSysApi.notification
+    .init()
+    .then(() => {
+        const registry = rawRegistry;
+        MSysApi.notification.on("new", (n) => {
+            const id = crypto.randomUUID();
+            notifications.set(id, { content: n.body, title: n.summary, id });
+
+            registry.setData("notification.list", Array.from(notifications.keys()) as id<"notification.list[]">[]);
+
+            registry.setData(`notification.list.${id}` as "notification.list[]", {
+                title: n.summary,
+                content: n.body,
+            });
+            registry.setSetCallback(`notification.list.${id}.delete` as "notification.list[].delete", () => {
+                notifications.delete(id);
+                registry.setData("notification.list", Array.from(notifications.keys()) as id<"notification.list[]">[]);
+                return Promise.resolve();
+            });
+        });
+    })
+    .catch((e) => console.error("notification init error", e));
 // UI 对象池
 const uipool = {
     "power.battery": () => createIndicator(rawRegistry, "power.battery"),
@@ -2026,6 +2020,36 @@ tools.registerTool(
         });
 
         return el;
+    },
+    { selfBackground: true },
+);
+
+tools.registerTool(
+    "notifications",
+    ({ tipEl, showTip }) => {
+        const btn = button("🔔").on("click", () => {
+            showTip();
+        });
+
+        const nl = nNotiList({
+            map: async (id) => {
+                const x = await rawRegistry.get(`notification.list.${id}` as "notification.list[]").get();
+                return {
+                    ...x,
+                    delete: () => {
+                        rawRegistry.get(`notification.list.${id}.delete` as "notification.list[].delete")?.set?.(true);
+                    },
+                };
+            },
+        });
+
+        rawRegistry.get("notification.list").getAndSubscribe((ids) => {
+            nl.setList(ids);
+        });
+
+        nl.el.addInto(tipEl);
+
+        return btn;
     },
     { selfBackground: true },
 );

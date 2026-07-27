@@ -1,5 +1,6 @@
-import { button, type ElType, view } from "dkh-ui";
+import { button, type ElType, spacer, view } from "dkh-ui";
 import { AnimationGear } from "myde-ui";
+import { dynamicScrollList } from "./scroll-list";
 
 export const sSize = {
     /* 一行 */
@@ -32,6 +33,15 @@ export const gGlassStyle = {
         boxShadow: "0 0 4px #00000011",
     },
 } as const;
+
+const fontStyle = {
+    title: {
+        fontSize: "1.2em",
+    },
+    low: {
+        opacity: 0.7,
+    },
+};
 
 function px(n: number) {
     return `${n}px`;
@@ -257,6 +267,43 @@ export function bButton(txt: string, onClick: () => void) {
         .on("click", () => {
             onClick();
         });
+}
+
+export function nNotiList(op: { map: (k: string) => Promise<{ title: string; content: string; delete: () => void }> }) {
+    const nl = dynamicScrollList<string>({
+        itemSize: sSize.xItem,
+        containerSize: sSize.xItem * 4,
+        direction: "down",
+        keyExtractor: (k) => k,
+        renderItem: (id) => {
+            const el = iItem({ type: "h", size: "xItem" }).style({ padding: px(sSize2.padding), alignItems: "center" });
+            op.map(id).then((n) => {
+                el.clear().add([
+                    view("y")
+                        .add([
+                            view("x").add([
+                                aLineText().sv(n.title).style(fontStyle.title),
+                                spacer(),
+                                button("×").on("click", () => {
+                                    n.delete();
+                                }),
+                            ]),
+                            aLineText().sv(n.content).style(fontStyle.low),
+                        ])
+                        .style({
+                            height: "100%",
+                            justifyContent: "space-between",
+                        }),
+                ]);
+            });
+            return el;
+        },
+    });
+
+    return {
+        el: ui.bar([ui.barItem().add(nl.el.style({ width: "360px" }))]).el,
+        setList: (l: string[]) => nl.setList(l),
+    };
 }
 
 export const ui = {
