@@ -61,7 +61,7 @@ export function dynamicScrollList<T>(options: {
         const end = Math.ceil((currentScroll + containerSize) / itemSize);
         return {
             start: Math.max(0, start - bufferSize),
-            end: Math.min(items.length, end + bufferSize),
+            end: end + bufferSize,
         };
     }
 
