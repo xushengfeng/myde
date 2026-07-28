@@ -6,18 +6,12 @@ import { txt } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
 import { aLineText, bButton, iItem, nNotiList, sSize, sSize2, ui, uPasswdInput } from "./ui";
 import { dynamicScrollList } from "./scroll-list";
+import { Registry } from "./registry";
 
 // ========== Registry 和 ControlNode ==========
 
 // 特殊的id类型，表示可以用registry.get获取
 type id<T extends string = string> = string & { __brand: T };
-
-interface BindingSource<T> {
-    get: () => Promise<T>;
-    subscribe: (cb: (value: T) => void) => () => void;
-    getAndSubscribe: (cb: (value: T, isFirst: boolean) => void) => () => void;
-    set?: (value: T) => Promise<void>;
-}
 
 interface ControlNode {
     id: string;
@@ -62,118 +56,13 @@ interface RegistrySchema {
     "notification.list[].delete": boolean;
 }
 
+type tmpRegistry = Registry<RegistrySchema>;
+
 // 具体的键类型
 type BooleanRegistryKeys = "wifi.enabled" | "blue.power";
 type NumericRegistryKeys = "power.battery";
 
-/**
- * 响应式数据编程
- * 使用 setData 直接设置数据，支持订阅和双向绑定
- */
-class Registry<T = RegistrySchema> {
-    private data = new Map<string, unknown>();
-    private subscribers = new Map<string, Set<(value: unknown) => void>>();
-    private setCallbacks = new Map<string, (value: unknown) => Promise<void>>();
-    private pendingBinds = new Map<string, Set<(value: unknown) => void>>();
-
-    setData<K extends keyof T & string>(id: K, data: T[K]) {
-        this.data.set(id, data);
-
-        // 通知所有订阅者
-        const subs = this.subscribers.get(id);
-        if (subs) {
-            for (const cb of subs) {
-                cb(data);
-            }
-        }
-
-        // 解决 pending 的 get 请求
-        const pending = this.pendingBinds.get(id);
-        if (pending) {
-            for (const cb of pending) {
-                cb(data);
-            }
-            this.pendingBinds.delete(id);
-        }
-    }
-
-    setSetCallback<K extends keyof T & string>(id: K, callback: (value: T[K]) => Promise<void>) {
-        this.setCallbacks.set(id, callback as (value: unknown) => Promise<void>);
-    }
-
-    get<K extends keyof T & string>(id: K): BindingSource<T[K]> {
-        const currentValue = this.data.get(id) as T[K] | undefined;
-
-        // 如果数据已经存在，直接返回
-        if (currentValue !== undefined) {
-            const setcallback = this.setCallbacks.get(id);
-            return {
-                get: () => Promise.resolve(this.data.get(id) as T[K]),
-                subscribe: (cb) => {
-                    const subs = this.subscribers.get(id) ?? new Set();
-                    const wrappedCb = (v: unknown) => cb(v as T[K]);
-                    subs.add(wrappedCb);
-                    this.subscribers.set(id, subs);
-                    return () => subs.delete(wrappedCb);
-                },
-                getAndSubscribe: (cb) => {
-                    cb(this.data.get(id) as T[K], true);
-                    const subs = this.subscribers.get(id) ?? new Set();
-                    const wrappedCb = (v: unknown) => cb(v as T[K], false);
-                    subs.add(wrappedCb);
-                    this.subscribers.set(id, subs);
-                    return () => subs.delete(wrappedCb);
-                },
-                set: setcallback ? (v) => setcallback(v) : undefined,
-            };
-        }
-
-        // 数据尚未存在，创建 pending 绑定
-        const promiseWithResolvers = Promise.withResolvers<T[K]>();
-        let resolved = false;
-
-        const pending = this.pendingBinds.get(id) ?? new Set();
-        pending.add((v: unknown) => {
-            if (!resolved) {
-                resolved = true;
-                promiseWithResolvers.resolve(v as T[K]);
-            }
-            const subs = this.subscribers.get(id);
-            if (subs) {
-                for (const cb of subs) cb(v);
-            }
-        });
-        this.pendingBinds.set(id, pending);
-
-        const setcallback = this.setCallbacks.get(id);
-
-        return {
-            get: () => promiseWithResolvers.promise,
-            subscribe: (cb) => {
-                const subs = this.subscribers.get(id) ?? new Set();
-                const wrappedCb = (v: unknown) => cb(v as T[K]);
-                subs.add(wrappedCb);
-                this.subscribers.set(id, subs);
-                return () => subs.delete(wrappedCb);
-            },
-            getAndSubscribe: (cb) => {
-                promiseWithResolvers.promise.then((v) => {
-                    if (!resolved) {
-                        cb(v, true);
-                    }
-                });
-                const subs = this.subscribers.get(id) ?? new Set();
-                const wrappedCb = (v: unknown) => cb(v as T[K], false);
-                subs.add(wrappedCb);
-                this.subscribers.set(id, subs);
-                return () => subs.delete(wrappedCb);
-            },
-            set: setcallback ? (v) => setcallback(v) : undefined,
-        };
-    }
-}
-
-function createToggle(registry: Registry, id: BooleanRegistryKeys): ControlNode {
+function createToggle(registry: tmpRegistry, id: BooleanRegistryKeys): ControlNode {
     const source = registry.get(id);
     const toggle = check(id, ["on", "off"]);
 
@@ -186,7 +75,7 @@ function createToggle(registry: Registry, id: BooleanRegistryKeys): ControlNode 
     return { id, type: "toggle", el: toggle as unknown as ElType<HTMLElement>, unmount: unsub };
 }
 
-function createIndicator(registry: Registry, id: NumericRegistryKeys): ControlNode {
+function createIndicator(registry: tmpRegistry, id: NumericRegistryKeys): ControlNode {
     const source = registry.get(id);
     const label = txt();
 
