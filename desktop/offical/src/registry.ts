@@ -110,4 +110,23 @@ export class Registry<T = object> {
             set: setcallback ? (v) => setcallback(v) : undefined,
         };
     }
+    buildVarId<K extends keyof T & string>(idTemp: K, ids: string[]) {
+        let r = idTemp as string;
+        let offset = 0;
+        let iids = ids;
+        for (let i = 0; i < idTemp.length; i++) {
+            const index = r.indexOf("[]", offset);
+            if (index === -1) {
+                return r;
+            }
+            offset = index + 2;
+            const id = iids.at(0);
+            if (id === undefined) {
+                return idTemp;
+            }
+            iids = iids.slice(1);
+            r = `${r.slice(0, index)}.${id}${r.slice(index + 2)}`;
+        }
+        return r as K;
+    }
 }
