@@ -1,10 +1,9 @@
-import { addClass, button, check, ele, type ElType, image, p, pack, setProperty, spacer, view } from "dkh-ui";
+import { addClass, addStyle, button, check, ele, type ElType, image, pack, setProperty, spacer, view } from "dkh-ui";
 
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
-import type { mprisPlayer } from "../../../src/sys_api/mpris";
 import { txt } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
-import { aLineText, bButton, iItem, nNotiList, sSize, sSize2, ui, uPasswdInput } from "./ui";
+import { aLineText, bButton, iItem, mMedia, nNotiList, sSize, sSize2, ui, uPasswdInput } from "./ui";
 import { dynamicScrollList } from "./scroll-list";
 import { Registry } from "./registry";
 
@@ -54,6 +53,17 @@ interface RegistrySchema {
         content: string;
     };
     "notification.list[].delete": boolean;
+    "media.list": id<"media.list[]">[];
+    "media.list[]": {
+        title: string;
+        cover: string;
+        artist: string[];
+        duration: number;
+    };
+    "media.list[].play": boolean;
+    "media.list[].next": boolean;
+    "media.list[].previous": boolean;
+    "media.list[].currentTime": number;
 }
 
 type tmpRegistry = Registry<RegistrySchema>;
@@ -1294,6 +1304,63 @@ MSysApi.notification
         });
     })
     .catch((e) => console.error("notification init error", e));
+
+const mediaControl = new Set<string>();
+MSysApi.media
+    .init()
+    .then(() => {
+        const media = MSysApi.media;
+        const registry = rawRegistry;
+
+        media.on("new-player", async (p) => {
+            const serverName = p.getServerName();
+            mediaControl.add(serverName);
+            registry.setData("media.list", Array.from(mediaControl.keys()) as id<"media.list[]">[]);
+            async function setData() {
+                registry.setData(registry.buildVarId("media.list[]", [serverName]), {
+                    artist: await p.artist(),
+                    cover: await p.artCover(),
+                    duration: await p.duration(),
+                    title: await p.title(),
+                });
+                registry.setSetCallback(registry.buildVarId("media.list[].next", [serverName]), () => {
+                    p.next();
+                    return Promise.resolve();
+                });
+                registry.setSetCallback(registry.buildVarId("media.list[].previous", [serverName]), () => {
+                    p.previous();
+                    return Promise.resolve();
+                });
+            }
+            setData();
+
+            p.onMetaChange(() => {
+                setData();
+            });
+
+            registry.setData(registry.buildVarId("media.list[].play", [serverName]), await p.paused());
+            p.onStatusChange(async () => {
+                registry.setData(registry.buildVarId("media.list[].play", [serverName]), await p.paused());
+            });
+            registry.setSetCallback(registry.buildVarId("media.list[].play", [serverName]), (v) => {
+                if (v) p.play();
+                else p.pause();
+                return Promise.resolve();
+            });
+
+            setInterval(() => {
+                p.getCurrentTime().then((v) => {
+                    registry.setData(registry.buildVarId("media.list[].currentTime", [serverName]), v);
+                });
+            }, 100);
+            registry.setSetCallback(registry.buildVarId("media.list[].currentTime", [serverName]), (v) => {
+                p.setCurrentTime(v);
+                return Promise.resolve();
+            });
+        });
+    })
+    .catch((e) => console.error("media player init error", e));
+
 // UI 对象池
 const uipool = {
     "power.battery": () => createIndicator(rawRegistry, "power.battery"),
@@ -1729,83 +1796,33 @@ tools.registerTool(
     { selfBackground: true },
 );
 
-const mediaControl = new Map<string, mprisPlayer>();
-tools.registerTool("mediaControl", ({ tipEl, showTip }) => {
-    const main = view("y").addInto(tipEl);
-    const btn = button("🎵").on("click", () => {
-        showTip();
-    });
+tools.registerTool(
+    "mediaControl",
+    ({ tipEl, showTip }) => {
+        const btn = button("🎵").on("click", () => {
+            showTip();
+        });
 
-    const list = view("x").addInto(main);
-    const ditial = view("y").addInto(main);
+        const media = mMedia({
+            map: async (k) => {
+                return {
+                    data: rawRegistry.get(rawRegistry.buildVarId("media.list[]", [k])),
+                    play: rawRegistry.get(rawRegistry.buildVarId("media.list[].play", [k])),
+                    currentTime: rawRegistry.get(rawRegistry.buildVarId("media.list[].currentTime", [k])),
+                    next: () => rawRegistry.get(rawRegistry.buildVarId("media.list[].next", [k])).set?.(true),
+                    previous: () => rawRegistry.get(rawRegistry.buildVarId("media.list[].previous", [k])).set?.(true),
+                };
+            },
+        });
 
-    const cover = view().addInto(ditial);
-    const title = p().addInto(ditial);
-    const artist = p().addInto(ditial);
+        media.el.addInto(tipEl);
 
-    const controls = view("x").addInto(ditial);
-    const prevBtn = button("⏮️").addInto(controls);
-    const playBtn = button("▶️").addInto(controls);
-    const pauseBtn = button("⏸️").addInto(controls);
-    const nextBtn = button("⏭️").addInto(controls);
-    const time = view()
-        .style({
-            width: "160px",
-            height: "10px",
-            background: "rgba(0,0,0,0.1)",
-            borderRadius: "5px",
-            overflow: "hidden",
-        })
-        .addInto(controls);
-    const timex = view()
-        .style({
-            width: "0%",
-            height: "100%",
-            background: "rgba(0,0,0,0.5)",
-        })
-        .addInto(time);
+        rawRegistry.get("media.list").getAndSubscribe((ids) => media.setList(ids));
 
-    MSysApi.media.on("new-player", (p) => {
-        mediaControl.set(p.getServerName(), p);
-        update(p.getServerName());
-        p.onMetaChange(() => update(p.getServerName()));
-    });
-
-    MSysApi.media.init();
-
-    let timer: ReturnType<typeof setInterval> | undefined;
-
-    async function update(name: string) {
-        clearInterval(timer);
-        const p = mediaControl.get(name);
-        if (!p) return;
-        list.clear().add(Array.from(mediaControl.keys()).map((n) => button(n).on("click", () => update(n))));
-        const artCover = await p.artCover();
-        if (artCover) {
-            cover.clear();
-            image(artCover, "cover").style({ width: "100px", height: "100px", objectFit: "cover" }).addInto(cover);
-        } else {
-            cover.clear();
-        }
-        title.sv(await p.title());
-        artist.sv((await p.artist()).join(", "));
-
-        playBtn.on("click", () => p.play());
-        pauseBtn.on("click", () => p.pause());
-        nextBtn.on("click", () => p.next());
-        prevBtn.on("click", () => p.previous());
-
-        if ((await p.duration()) !== Infinity) {
-            clearInterval(timer);
-            timer = setInterval(async () => {
-                if (await p.paused()) return;
-                timex.style({ width: `${((await p.getCurrentTime()) / (await p.duration())) * 100}%` });
-            }, 100);
-        }
-    }
-
-    return btn;
-});
+        return btn;
+    },
+    { selfBackground: true },
+);
 
 tools.registerTool("tray", ({ tipEl, showTip }) => {
     const el = view("x");
@@ -2007,6 +2024,12 @@ windowElWarp.style({
 });
 
 const body = pack(document.body);
+
+addStyle({
+    body: {
+        userSelect: "none",
+    },
+});
 
 body.on("pointermove", (e) => {
     mouseMove(e.x, e.y);

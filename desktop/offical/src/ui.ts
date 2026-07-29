@@ -1,6 +1,7 @@
-import { button, type ElType, spacer, view } from "dkh-ui";
+import { button, type ElType, image, spacer, view } from "dkh-ui";
 import { AnimationGear } from "myde-ui";
-import { dynamicScrollList } from "./scroll-list";
+import { carousel, dynamicScrollList } from "./scroll-list";
+import type { BindingSource } from "./registry";
 
 export const sSize = {
     /* 一行 */
@@ -303,6 +304,122 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
     return {
         el: ui.bar([ui.barItem().add(nl.el.style({ width: "360px" }))]).el,
         setList: (l: string[]) => nl.setList(l),
+    };
+}
+
+export function mMedia(op: {
+    map: (k: string) => Promise<{
+        data: BindingSource<{
+            title: string;
+            cover: string;
+            artist: string[];
+            duration: number;
+        }>;
+        play: BindingSource<boolean>;
+        next: () => void;
+        previous: () => void;
+        currentTime: BindingSource<number>;
+    }>;
+}) {
+    const main = view();
+    const list = view("x")
+        .style({ gap: px(sSize2.padding) })
+        .addInto(main);
+
+    const s = carousel<string>({
+        itemSize: 200,
+        direction: "right",
+        keyExtractor: (k) => k,
+        renderItem: (k) => {
+            const ditial = view("y").addInto(main);
+
+            const cover = view().addInto(ditial);
+            const title = aLineText().addInto(ditial);
+            const artist = aLineText().addInto(ditial);
+
+            const controls = view("x")
+                .on("pointerdown", (e) => {
+                    // carousel可以用鼠标拖拽，这里交互式元素屏蔽拖拽
+                    e.stopPropagation();
+                })
+                .addInto(ditial);
+            const prevBtn = button("⏮️").addInto(controls);
+            const playBtn = button("▶️").addInto(controls);
+            const pauseBtn = button("⏸️").addInto(controls);
+            const nextBtn = button("⏭️").addInto(controls);
+            const time = view()
+                .style({
+                    width: "160px",
+                    height: "10px",
+                    background: "rgba(0,0,0,0.1)",
+                    borderRadius: "5px",
+                    overflow: "hidden",
+                })
+                .addInto(controls);
+            const timex = view()
+                .style({
+                    width: "0%",
+                    height: "100%",
+                    background: "rgba(0,0,0,0.5)",
+                })
+                .addInto(time);
+            op.map(k).then(async (x) => {
+                let duration = 0;
+                x.data.getAndSubscribe((data) => {
+                    const artCover = data.cover;
+                    if (artCover) {
+                        cover.clear();
+                        image(artCover, "cover")
+                            .style({ width: "100px", height: "100px", objectFit: "cover" })
+                            .addInto(cover);
+                    } else {
+                        cover.clear();
+                    }
+                    title.sv(data.title);
+                    artist.sv(data.artist.join(", "));
+                    duration = data.duration;
+                });
+
+                // const play=await x.play.get()
+                playBtn.on("click", () => {
+                    x.play.set?.(true);
+                });
+                pauseBtn.on("click", () => {
+                    x.play.set?.(false);
+                });
+                nextBtn.on("click", () => {
+                    x.next();
+                });
+                prevBtn.on("click", () => {
+                    x.previous();
+                });
+
+                x.currentTime.getAndSubscribe((v) => {
+                    timex.style({ width: `${(v / duration) * 100}%` });
+                });
+            });
+            return ditial;
+        },
+    });
+
+    main.style({ padding: px(sSize2.padding) }).add(s.el);
+
+    const nel = ui.bar([ui.barItem().add(main)]);
+
+    return {
+        el: nel.el,
+        setList: (l: string[]) => {
+            list.clear().add(
+                l.map((i, index) =>
+                    view()
+                        .add(i.replace("org.mpris.MediaPlayer2.", "").split(".")[0])
+                        .on("click", () => {
+                            s.scrollToPage(index);
+                        }),
+                ),
+            );
+            s.setList(l);
+        },
     };
 }
 

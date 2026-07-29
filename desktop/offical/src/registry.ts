@@ -84,8 +84,6 @@ export class Registry<T = object> {
         });
         this.pendingBinds.set(id, pending);
 
-        const setcallback = this.setCallbacks.get(id);
-
         return {
             get: () => promiseWithResolvers.promise,
             subscribe: (cb) => {
@@ -107,7 +105,9 @@ export class Registry<T = object> {
                 this.subscribers.set(id, subs);
                 return () => subs.delete(wrappedCb);
             },
-            set: setcallback ? (v) => setcallback(v) : undefined,
+            set: (v) => {
+                return Promise.resolve(this.setCallbacks.get(id)?.(v));
+            },
         };
     }
     buildVarId<K extends keyof T & string>(idTemp: K, ids: string[]) {
@@ -117,7 +117,7 @@ export class Registry<T = object> {
         for (let i = 0; i < idTemp.length; i++) {
             const index = r.indexOf("[]", offset);
             if (index === -1) {
-                return r;
+                return r as K;
             }
             offset = index + 2;
             const id = iids.at(0);
