@@ -1,9 +1,13 @@
 import { addStyle, button, initDKH, txt, view } from "dkh-ui";
 import { carousel, dynamicScrollList } from "../../src/scroll-list";
-import { aLineText, iItem, nNotiList, sSize, ui } from "../../src/ui";
+import { aLineText, iItem, nNotiList, sSize, sSize2, ui } from "../../src/ui";
 
 addStyle({ body: { userSelect: "none", padding: "8px", fontFamily: "sans-serif" } });
 initDKH({ pureStyle: true });
+
+function px(n: number) {
+    return `${n}px`;
+}
 
 // 单行文本
 aLineText()
@@ -12,6 +16,53 @@ aLineText()
 aLineText()
     .sv("长长长长长长长长长长长长长长长长")
     .addInto(view().style({ border: "solid 1px", width: "100px" }).addInto());
+
+// 布局
+function whiteView() {
+    return view().style({
+        background: "white",
+        borderRadius: px(sSize2.radius1),
+    });
+}
+aLineText().sv("布局").addInto();
+view("y")
+    .style({ padding: px(8), background: "#2196F3", gap: px(8) })
+    .addInto()
+    .add([
+        whiteView()
+            .style({
+                width: px(sSize(4)),
+                height: px(sSize(1)),
+                padding: px(sSize2.paddingx),
+            })
+            .add(aLineText().sv("回1mMg")),
+        view("x")
+            .style({
+                gap: px(8),
+            })
+            .add([
+                whiteView()
+                    .style({
+                        width: px(sSize(8)),
+                        height: px(sSize(1.5)),
+                        padding: px(sSize2.paddingx),
+                    })
+                    .add(aLineText().sv("回1mMg")),
+            ]),
+        view("x")
+            .style({
+                gap: px(8),
+            })
+            .add([
+                whiteView()
+                    .style({
+                        width: px(sSize(8)),
+                        height: px(sSize(2.5)),
+                        padding: px(sSize2.paddingx),
+                    })
+                    .add(view("y").add([aLineText().sv("标题title标题")])),
+            ]),
+    ]);
 
 // 密码输入组件测试
 const i = ui.passwd();
@@ -57,20 +108,20 @@ function createPopupWithBackground(bgStyle: Record<string, string>, label: strin
     );
 
     const list = dynamicScrollList<string>({
-        itemSize: sSize.item,
+        itemSize: sSize(1.5),
         containerSize: 100,
         direction: "down",
         keyExtractor: (x) => x,
         renderItem: (k) => {
             if (k === "1") {
-                return iItem({ type: "h", size: "item" }).style({ backgroundColor: "#fff" }).add(k);
+                return iItem({ type: "h", size: 1.5 }).style({ backgroundColor: "#fff" }).add(k);
             }
-            return iItem({ type: "h", size: "item" }).add(k);
+            return iItem({ type: "h", size: 1.5 }).add(k);
         },
     });
 
     const popup = ui.bar([
-        ui.barItem().add(iItem({ type: "h", size: "oneLine" }).add(txt("测试文本"))),
+        ui.barItem().add(iItem({ type: "h", size: 1 }).add(txt("测试文本"))),
         ui.barItem().add(list.el.style({ width: "100%" })),
     ]);
     list.setList(["1", "2", "3", "4"]);

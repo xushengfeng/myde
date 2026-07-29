@@ -3,17 +3,15 @@ import { AnimationGear } from "myde-ui";
 import { carousel, dynamicScrollList } from "./scroll-list";
 import type { BindingSource } from "./registry";
 
-export const sSize = {
-    /* 一行 */
-    oneLine: 32,
-    /* 复杂信息一行 */
-    item: 48,
-    /* 小组件开关 */
-    xItem: 64,
-};
+export function sSize(s: 1 | 1.5 | 2 | 2.5 | 3 | 3.5 | 4 | 4.5 | 5 | 5.5 | 6 | 6.5 | 7 | 7.7 | 8 | 9 | 10 | 11 | 12) {
+    const baseSize = 12;
+    const gap = 8;
+    const n = s / 0.5;
+    return n * baseSize + (n - 1) * gap;
+}
 
 export const sSize2 = {
-    paddingx: 6,
+    paddingx: 8,
     radius1: 10,
     padding: 8,
     radius2: 18,
@@ -44,7 +42,7 @@ const fontStyle = {
     },
 };
 
-function px(n: number) {
+export function px(n: number) {
     return `${n}px`;
 }
 export function aLineText() {
@@ -231,9 +229,9 @@ export function uPasswdInput() {
     };
 }
 
-export function iItem(op: { type: "h" | "v" | "sq"; size: "oneLine" | "item" | "xItem" }) {
+export function iItem(op: { type: "h" | "v" | "sq"; size: 1 | 1.5 | 2 }) {
     const el = view().style({ borderRadius: `${sSize2.radius1}px` });
-    const s = `${sSize[op.size]}px`;
+    const s = `${sSize(op.size)}px`;
     if (op.type === "h") {
         return el.style({ height: s });
     } else if (op.type === "v") {
@@ -253,6 +251,7 @@ export function xView(els: ElType<HTMLElement>[]) {
         gap: `${sSize2.padding}px`,
         padding: `${sSize2.padding}px`,
         borderRadius: `${sSize2.radius2}px`,
+        boxSizing: "content-box",
         ...gGlassStyle.bg,
     });
     el.add(els);
@@ -272,12 +271,12 @@ export function bButton(txt: string, onClick: () => void) {
 
 export function nNotiList(op: { map: (k: string) => Promise<{ title: string; content: string; delete: () => void }> }) {
     const nl = dynamicScrollList<string>({
-        itemSize: sSize.xItem,
-        containerSize: sSize.xItem * 4,
+        itemSize: sSize(2),
+        containerSize: sSize(2) * 4,
         direction: "down",
         keyExtractor: (k) => k,
         renderItem: (id) => {
-            const el = iItem({ type: "h", size: "xItem" }).style({ padding: px(sSize2.padding), alignItems: "center" });
+            const el = iItem({ type: "h", size: 2 }).style({ padding: px(sSize2.padding), alignItems: "center" });
             op.map(id).then((n) => {
                 el.clear().add([
                     view("y")
@@ -302,7 +301,7 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
     });
 
     return {
-        el: ui.bar([ui.barItem().add(nl.el.style({ width: "360px" }))]).el,
+        el: ui.bar([ui.barItem().add(nl.el.style({ width: px(sSize(10)) }))]).el,
         setList: (l: string[]) => nl.setList(l),
     };
 }
@@ -427,7 +426,7 @@ export const ui = {
     passwd: () => {
         const x = uPasswdInput();
         x.el.style({
-            height: px(sSize.oneLine),
+            height: px(sSize(1)),
             borderRadius: px(sSize2.radius1),
             padding: px(sSize2.paddingx),
             boxSizing: "border-box",

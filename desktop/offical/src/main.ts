@@ -3,7 +3,7 @@ import { addClass, addStyle, button, check, ele, type ElType, image, pack, setPr
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
 import { txt } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
-import { aLineText, bButton, iItem, mMedia, nNotiList, sSize, sSize2, ui, uPasswdInput } from "./ui";
+import { aLineText, bButton, iItem, mMedia, nNotiList, px, sSize, sSize2, ui, uPasswdInput } from "./ui";
 import { dynamicScrollList } from "./scroll-list";
 import { Registry } from "./registry";
 
@@ -1019,7 +1019,7 @@ stateLock.on("lock", ({ nextTrigger, leave }) => {
 stateLock.on("passwd", ({ nextTrigger, leave }) => {
     const inputEl = uPasswdInput();
     inputEl.placeholder("请输入密码");
-    inputEl.el.style({ width: "150px", height: "24px" });
+    inputEl.el.style({ width: px(sSize(5)), height: px(sSize(1)) });
     const timer = new Timer(30000);
     let cheking = false;
     async function check() {
@@ -1368,12 +1368,12 @@ const uipool = {
         const source = rawRegistry.get("power.devices");
         const us: (() => void)[] = [];
         const container = dynamicScrollList<string>({
-            itemSize: sSize.item,
-            containerSize: sSize.item * 4,
+            itemSize: sSize(1.5),
+            containerSize: sSize(1.5) * 4,
             direction: "down",
             keyExtractor: (x) => x,
             renderItem: (k) => {
-                const el = iItem({ type: "h", size: "item" }).style({
+                const el = iItem({ type: "h", size: 1.5 }).style({
                     display: "flex",
                     alignItems: "center",
                     padding: `${sSize2.padding}px`,
@@ -1397,7 +1397,7 @@ const uipool = {
         return {
             id: "power.devices",
             type: "dynamic-list",
-            el: container.el.style({ width: "200px" }),
+            el: container.el.style({ width: px(sSize(6)) }),
             unmount: () => {
                 unsub();
                 for (const s of us) s();
@@ -1409,12 +1409,12 @@ const uipool = {
         const source = rawRegistry.get("wifi.accessPoints");
         const us: (() => void)[] = [];
         const container = dynamicScrollList<string>({
-            itemSize: sSize.item,
-            containerSize: sSize.item * 4,
+            itemSize: sSize(1.5),
+            containerSize: sSize(1.5) * 4,
             direction: "down",
             keyExtractor: (x) => x,
             renderItem: (k) => {
-                const el = iItem({ type: "h", size: "item" }).style({
+                const el = iItem({ type: "h", size: 1.5 }).style({
                     display: "flex",
                     alignItems: "center",
                     padding: `${sSize2.padding}px`,
@@ -1438,7 +1438,7 @@ const uipool = {
         return {
             id: "wifi.devices",
             type: "dynamic-list",
-            el: container.el.style({ width: "200px" }),
+            el: container.el.style({ width: px(sSize(6)) }),
             unmount: () => {
                 unsub();
                 for (const s of us) s();
@@ -1450,12 +1450,12 @@ const uipool = {
         const source = rawRegistry.get("blue.devices");
         const us: (() => void)[] = [];
         const container = dynamicScrollList<string>({
-            itemSize: sSize.item,
-            containerSize: sSize.item * 4,
+            itemSize: sSize(1.5),
+            containerSize: sSize(1.5) * 4,
             direction: "down",
             keyExtractor: (x) => x,
             renderItem: (k) => {
-                const el = iItem({ type: "h", size: "item" }).style({
+                const el = iItem({ type: "h", size: 1.5 }).style({
                     display: "flex",
                     alignItems: "center",
                     padding: `${sSize2.padding}px`,
@@ -1479,7 +1479,7 @@ const uipool = {
         return {
             id: "blue.devices",
             type: "dynamic-list",
-            el: container.el.style({ width: "200px" }),
+            el: container.el.style({ width: px(sSize(6)) }),
             unmount: () => {
                 unsub();
                 for (const s of us) s();
@@ -1758,26 +1758,26 @@ tools.registerTool(
 
         ui.bar([
             ui.barItem().add(
-                iItem({ type: "h", size: "oneLine" }).add(
+                iItem({ type: "h", size: 1 }).add(
                     bButton("锁屏", () => {
                         state.setState("lock");
                     }),
                 ),
             ),
             ui.barItem().add([
-                iItem({ type: "h", size: "oneLine" }).add(
+                iItem({ type: "h", size: 1 }).add(
                     bButton("关机", async () => {
                         const t = await confirm("确认 关机？");
                         if (t) MSysApi.login("shutdown");
                     }),
                 ),
-                iItem({ type: "h", size: "oneLine" }).add(
+                iItem({ type: "h", size: 1 }).add(
                     bButton("重启", async () => {
                         const t = await confirm("确认 重启？");
                         if (t) MSysApi.login("restart");
                     }),
                 ),
-                iItem({ type: "h", size: "oneLine" }).add(
+                iItem({ type: "h", size: 1 }).add(
                     bButton("挂起", async () => {
                         const t = await confirm("确认 挂起？");
                         if (t) MSysApi.login("suspend");
@@ -1785,7 +1785,7 @@ tools.registerTool(
                 ),
             ]),
         ])
-            .el.style({ width: "100px" })
+            .el.style({ width: px(sSize(3)) })
             .addInto(tipEl);
 
         el.on("click", () => {
