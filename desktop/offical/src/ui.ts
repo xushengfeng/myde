@@ -1,5 +1,5 @@
 import { button, type ElType, image, spacer, view } from "dkh-ui";
-import { AnimationGear } from "myde-ui";
+import { AnimationGear, timingFunction } from "myde-ui";
 import { carousel, dynamicScrollList } from "./scroll-list";
 import type { BindingSource } from "./registry";
 
@@ -50,8 +50,6 @@ export function aLineText() {
         whiteSpace: "nowrap",
         textOverflow: "ellipsis",
         overflow: "hidden",
-        // biome-ignore lint/suspicious/noTsIgnore: css
-        // @ts-ignore
         textBoxTrim: "trim-both",
         userSelect: "none",
         width: "100%",
@@ -292,17 +290,50 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
                         ])
                         .style({
                             height: "100%",
-                            justifyContent: "space-between",
+                            justifyContent: "center",
                         }),
                 ]);
             });
             return el;
         },
     });
+    const emptyMask = view("x")
+        .style({
+            width: px(sSize(10)),
+            height: px(sSize(2) * 4),
+            justifyContent: "center",
+            alignItems: "center",
+            pointerEvents: "none",
+        })
+        .add(
+            aLineText()
+                .sv("没有通知")
+                .style({ ...fontStyle.low }),
+        );
+    const showGear = new AnimationGear({ s: 0 }, { transition: { duration: 400, map: timingFunction.easeOut } });
+    showGear.setUpdateCallback((v) => {
+        emptyMask.style({ opacity: v.s });
+    });
+    showGear.moveTo({ s: 1 }, 0);
 
     return {
-        el: ui.bar([ui.barItem().add(nl.el.style({ width: px(sSize(10)) }))]).el,
-        setList: (l: string[]) => nl.setList(l),
+        el: ui.bar([
+            ui
+                .barItem()
+                .style({ position: "relative" })
+                .add([
+                    nl.el.style({ width: px(sSize(10)) }),
+                    emptyMask.style({ position: "absolute", top: 0, left: 0 }),
+                ]),
+        ]).el,
+        setList: (l: string[]) => {
+            if (l.length === 0) {
+                showGear.moveTo({ s: 1 });
+            } else {
+                showGear.moveTo({ s: 0 });
+            }
+            nl.setList(l);
+        },
     };
 }
 
