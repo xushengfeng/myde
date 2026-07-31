@@ -3,9 +3,10 @@ import { addClass, addStyle, button, check, ele, type ElType, image, pack, setPr
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
 import { txt } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
-import { aLineText, bButton, iItem, mMedia, nNotiList, px, sSize, sSize2, ui, uPasswdInput } from "./ui";
+import { aLineText, bButton, iItem, mMedia, nNotiList, px, sSize, sSize2, tTrayMenu, ui, uPasswdInput } from "./ui";
 import { dynamicScrollList } from "./scroll-list";
 import { Registry } from "./registry";
+import type { MenuItem } from "../../../src/sys_api/menu";
 
 // ========== Registry 和 ControlNode ==========
 
@@ -64,6 +65,14 @@ interface RegistrySchema {
     "media.list[].next": boolean;
     "media.list[].previous": boolean;
     "media.list[].currentTime": number;
+    "tray.list": id<"tray.list[]">[];
+    "tray.list[]": {
+        icon: string;
+        title: string;
+        itemIsMenu: boolean;
+    };
+    "tray.list[].active": boolean;
+    "tray.list[].menu": MenuItem[];
 }
 
 type tmpRegistry = Registry<RegistrySchema>;
@@ -1361,6 +1370,43 @@ MSysApi.media
     })
     .catch((e) => console.error("media player init error", e));
 
+MSysApi.tray.init().then(async () => {
+    const tray = MSysApi.tray;
+    rawRegistry.setData("tray.list", Array.from(tray.tarysService.keys()) as id<"tray.list[]">[]);
+    for (const k of tray.tarysService.keys()) bindData(k);
+    tray.ev.on("new", (k) => {
+        rawRegistry.setData("tray.list", Array.from(tray.tarysService.keys()) as id<"tray.list[]">[]);
+        bindData(k);
+    });
+    tray.ev.on("remove", () => {
+        rawRegistry.setData("tray.list", Array.from(tray.tarysService.keys()) as id<"tray.list[]">[]);
+    });
+    async function bindData(k: string) {
+        const t = tray.tarysService.get(k);
+        if (!t) return;
+        rawRegistry.setData(rawRegistry.buildVarId("tray.list[]", [k]), {
+            icon:
+                (await t.getIcon({
+                    theme: setting.get("icon.theme"),
+                })) || "",
+            title: await t.title(),
+            itemIsMenu: await t.itemIsMenu(),
+        });
+        t.getMenu().then((menu) => {
+            rawRegistry.setData(rawRegistry.buildVarId("tray.list[].menu", [k]), menu);
+        });
+        t.ev.on("menuUpdate", async () => {
+            t.getMenu().then((menu) => {
+                rawRegistry.setData(rawRegistry.buildVarId("tray.list[].menu", [k]), menu);
+            });
+        });
+        rawRegistry.setSetCallback(rawRegistry.buildVarId("tray.list[].active", [k]), () => {
+            t.activate();
+            return Promise.resolve();
+        });
+    }
+});
+
 // UI 对象池
 const uipool = {
     "power.battery": () => createIndicator(rawRegistry, "power.battery"),
@@ -1824,47 +1870,47 @@ tools.registerTool(
     { selfBackground: true },
 );
 
-tools.registerTool("tray", ({ tipEl, showTip }) => {
-    const el = view("x");
+tools.registerTool(
+    "tray",
+    ({ tipEl, showTip }) => {
+        const el = view("x");
+        rawRegistry.get("tray.list").getAndSubscribe(async (ids) => {
+            el.clear();
+            for (const id of ids) {
+                const icon = view().addInto(el);
+                const menuEl = tTrayMenu({
+                    click: () => {
+                        rawRegistry.get(rawRegistry.buildVarId("tray.list[].active", [id])).set?.(true);
+                    },
+                    clickItem: () => {
+                        showTip({ state: "hide", anchorEl: icon.el });
+                    },
+                });
 
-    MSysApi.tray.init().then(async () => {
-        for (const t of MSysApi.tray.tarysService.values()) {
-            const icon = view().addInto(el);
-            image(
-                (await t.getIcon({
-                    theme: setting.get("icon.theme"),
-                })) || "",
-                await t.title(),
-            )
-                .style({ width: "24px", height: "24px", objectFit: "cover" })
-                .addInto(icon);
-            icon.on("click", async () => {
-                const menu = await t.getMenu();
-                if (!menu) return;
-                const menuEl = view("y").addInto(mainEl);
-                for (const item of menu) {
-                    const itemEl = view("x").style({ whiteSpace: "pre" }).addInto(menuEl);
-                    if (item.iconUrl) {
-                        image((await item.iconUrl({ theme: setting.get("icon.theme") })) ?? "", "icon")
-                            .style({ width: "16px", height: "16px", objectFit: "cover" })
-                            .addInto(itemEl);
-                    }
-                    aLineText().sv(item.label).addInto(itemEl);
-                    itemEl.on("click", () => {
-                        item.click();
-                        menuEl.remove();
-                        showTip({ state: "hide" });
+                rawRegistry
+                    .get(rawRegistry.buildVarId("tray.list[]", [id]))
+                    .get()
+                    .then((data) => {
+                        image(data.icon, data.title)
+                            .style({ width: "24px", height: "24px", objectFit: "cover" })
+                            .addInto(icon);
+                        icon.on("click", async () => {
+                            const menu = await rawRegistry.get(rawRegistry.buildVarId("tray.list[].menu", [id])).get();
+                            if (!menu) return;
+                            menuEl.setTree(menu);
+                            pack(tipEl).clear();
+                            menuEl.el.addInto(tipEl);
+                            showTip({ state: "show", anchorEl: icon.el });
+                        });
+                        menuEl.setTitle(data.title);
                     });
-                }
-                pack(tipEl).clear();
-                menuEl.addInto(tipEl);
-                showTip({ state: "show", anchorEl: icon.el });
-            });
-        }
-    });
+            }
+        });
 
-    return el;
-});
+        return el;
+    },
+    { selfBackground: true },
+);
 
 tools.registerTool(
     "power",

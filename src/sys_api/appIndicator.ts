@@ -1,13 +1,15 @@
 // Status Notifier Item also Tray
 
-import { dbusClient, dbusInterface, DBusTypes, type dbusIO } from "myde-dbus";
+import { dbusClient, type dbusInterface, type DBusTypes, type dbusIO } from "myde-dbus";
 import { getDesktopIcon } from "./application";
 import { dbusMenu } from "./menu";
+import { EventEmitter } from "../event-emitter/event-emitter";
 
 export class tray {
     // private sniHost: dbusServer; // todo 实现watcher
     private dbus: dbusIO;
     private sniWatcher: dbusClient;
+    ev = new EventEmitter<{ new: [string]; remove: [string]; menuUpdate: [] }>();
     tarysService = new Map<string, trayItem>();
 
     constructor(dbus: dbusIO) {
@@ -26,16 +28,19 @@ export class tray {
             const item = new trayItem(name, this.dbus);
             await item.init();
             this.tarysService.set(name, item);
+            item.ev.on("menuUpdate", () => this.ev.emit("menuUpdate"));
         }
         infc.on<"s">("StatusNotifierItemRegistered", async (name) => {
             const item = new trayItem(name, this.dbus);
             await item.init();
             this.tarysService.set(name, item);
-            // todo emit
+            this.ev.emit("new", name);
+            item.ev.on("menuUpdate", () => this.ev.emit("menuUpdate"));
         });
         infc.on<"s">("StatusNotifierItemUnregistered", async (name) => {
             console.log("remove tray", name);
             this.tarysService.delete(name);
+            this.ev.emit("remove", name);
         });
     }
 }
@@ -46,6 +51,7 @@ export class trayItem {
     private menuPath: dbusMenu | undefined;
     // @ts-expect-error
     private mainInterface: dbusInterface;
+    ev = new EventEmitter<{ menuUpdate: [] }>();
     constructor(path: string, io: dbusIO) {
         this.client = new dbusClient({ io });
         this.path = path;
@@ -59,15 +65,25 @@ export class trayItem {
         const infc = await trayItemObj.getInterface("org.kde.StatusNotifierItem");
         this.mainInterface = infc;
         const menuPath = (await infc.get<"o">("Menu"))[0];
-        this.menuPath = new dbusMenu(this.client, { serverName: service, objectPath: menuPath });
-        await this.menuPath.init();
+        if (menuPath) {
+            this.menuPath = new dbusMenu(this.client, { serverName: service, objectPath: menuPath });
+            await this.menuPath.init();
+            this.menuPath.ev.on("update", () => {
+                this.ev.emit("menuUpdate");
+            });
+        }
     }
     async title() {
         return (await this.mainInterface.get<"s">("Title"))[0];
     }
     /** true 可视化程序应优先显示菜单或发送 ContextMenu() 而不是 Activate() */
     async itemIsMenu() {
-        return (await this.mainInterface.get<"b">("ItemIsMenu"))[0];
+        try {
+            return (await this.mainInterface.get<"b">("ItemIsMenu"))[0];
+        } catch (error) {
+            console.error("tray ItemIsMenu error", error);
+            return true;
+        }
     }
     async getIcon(op?: { size?: number; scale?: number; theme?: string }) {
         let iconName: string | undefined;
@@ -132,5 +148,8 @@ export class trayItem {
     }
     async getMenu() {
         return (await this.menuPath?.getAllLayout()) ?? [];
+    }
+    async activate() {
+        this.mainInterface.call<"ii">("Activate", "ii", 0, 0);
     }
 }

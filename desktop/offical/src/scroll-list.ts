@@ -19,7 +19,7 @@ export function dynamicScrollList<T>(options: {
     itemSize: number;
     containerSize: number;
     direction: Direction;
-    renderItem: (item: T, index: number) => ReturnType<typeof view>;
+    renderItem: (item: T, index: number, list: T[]) => ReturnType<typeof view>;
     keyExtractor: (item: T, index: number) => string;
     snap?: boolean;
     onScroll?: (index: number, progress: number) => void;
@@ -66,7 +66,7 @@ export function dynamicScrollList<T>(options: {
     }
 
     function createAnimatedElement(data: T, index: number): AnimatedElement<T> {
-        const el = renderItem(data, index);
+        const el = renderItem(data, index, structuredClone(items));
         const gear = new AnimationGear<{ show: number }>(
             { show: 0 },
             { transition: { duration: animationDuration, map: timingFunction.easeOut } },

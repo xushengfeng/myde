@@ -167,7 +167,12 @@ export function addMockMprisPlayer(name: string, identity: string) {
 }
 
 // 添加托盘项
-export function addMockTrayItem(path: string, title: string, iconName = "application-default-icon", itemIsMenu = false) {
+export function addMockTrayItem(
+    path: string,
+    title: string,
+    iconName = "application-default-icon",
+    itemIsMenu = false,
+) {
     const item = new MockTrayItem(path, title, iconName, itemIsMenu);
     trayManager.addItem(item);
     return item;
@@ -206,27 +211,90 @@ function initMockData() {
     // 托盘项示例
     const telegram = addMockTrayItem("org.kde.StatusNotifierItem/telegram", "Telegram", "telegram", false);
     telegram.setMenuLayout([
-        { id: 1, type: "standard", label: "打开 Telegram", click: () => console.log("打开 Telegram") },
-        { id: 2, type: "standard", label: "新消息", click: () => console.log("新消息") },
-        { id: 3, type: "separator", label: "", click: () => {} },
+        {
+            id: 1,
+            type: "standard",
+            label: "打开 Telegram",
+            enabled: true,
+            visible: true,
+            click: () => console.log("打开 Telegram"),
+        },
+        { id: 2, type: "standard", label: "新消息", enabled: true, visible: true, click: () => console.log("新消息") },
+        { id: 3, type: "separator", label: "", enabled: true, visible: true, click: () => {} },
         {
             id: 4,
             type: "standard",
             label: "状态",
             click: () => console.log("状态"),
+            enabled: true,
+            visible: true,
             children: [
-                { id: 41, type: "standard", label: "在线", toggleType: "radio", toggleState: true, click: () => console.log("在线") },
-                { id: 42, type: "standard", label: "离开", toggleType: "radio", toggleState: false, click: () => console.log("离开") },
-                { id: 43, type: "standard", label: "忙碌", toggleType: "radio", toggleState: false, click: () => console.log("忙碌") },
-                { id: 44, type: "standard", label: "隐身", toggleType: "radio", toggleState: false, click: () => console.log("隐身") },
+                {
+                    id: 41,
+                    type: "standard",
+                    label: "在线",
+                    enabled: true,
+                    visible: true,
+                    toggleType: "radio",
+                    toggleState: true,
+                    click: () => console.log("在线"),
+                },
+                {
+                    id: 42,
+                    type: "standard",
+                    label: "离开",
+                    enabled: true,
+                    visible: true,
+                    toggleType: "radio",
+                    toggleState: false,
+                    click: () => console.log("离开"),
+                },
+                {
+                    id: 43,
+                    type: "standard",
+                    label: "忙碌",
+                    enabled: true,
+                    visible: true,
+                    toggleType: "radio",
+                    toggleState: false,
+                    click: () => console.log("忙碌"),
+                },
+                {
+                    id: 44,
+                    type: "standard",
+                    label: "隐身",
+                    enabled: true,
+                    visible: true,
+                    toggleType: "radio",
+                    toggleState: false,
+                    click: () => console.log("隐身"),
+                },
             ],
         },
-        { id: 5, type: "separator", label: "", click: () => {} },
-        { id: 6, type: "standard", label: "通知", toggleType: "checkmark", toggleState: true, click: () => console.log("通知") },
-        { id: 7, type: "standard", label: "声音", toggleType: "checkmark", toggleState: false, click: () => console.log("声音") },
-        { id: 8, type: "separator", label: "", click: () => {} },
-        { id: 9, type: "standard", label: "设置", click: () => console.log("设置") },
-        { id: 10, type: "standard", label: "退出", click: () => console.log("退出") },
+        { id: 5, type: "separator", label: "", enabled: true, visible: true, click: () => {} },
+        {
+            id: 6,
+            type: "standard",
+            label: "通知",
+            enabled: true,
+            visible: true,
+            toggleType: "checkmark",
+            toggleState: true,
+            click: () => console.log("通知"),
+        },
+        {
+            id: 7,
+            type: "standard",
+            label: "声音",
+            enabled: true,
+            visible: true,
+            toggleType: "checkmark",
+            toggleState: false,
+            click: () => console.log("声音"),
+        },
+        { id: 8, type: "separator", label: "", enabled: true, visible: true, click: () => {} },
+        { id: 9, type: "standard", label: "设置", enabled: true, visible: true, click: () => console.log("设置") },
+        { id: 10, type: "standard", label: "退出", enabled: true, visible: true, click: () => console.log("退出") },
     ]);
 
     // Discord 没有菜单内容（边界测试）
@@ -234,26 +302,81 @@ function initMockData() {
 
     const obs = addMockTrayItem("org.kde.StatusNotifierItem/obs", "OBS Studio", "obs", true);
     obs.setMenuLayout([
-        { id: 1, type: "standard", label: "开始录制", click: () => console.log("开始录制") },
-        { id: 2, type: "standard", label: "开始直播", click: () => console.log("开始直播") },
-        { id: 3, type: "separator", label: "", click: () => {} },
+        {
+            id: 1,
+            type: "standard",
+            label: "开始录制",
+            enabled: true,
+            visible: true,
+            click: () => console.log("开始录制"),
+        },
+        {
+            id: 2,
+            type: "standard",
+            label: "开始直播",
+            enabled: true,
+            visible: true,
+            click: () => console.log("开始直播"),
+        },
+        { id: 3, type: "separator", label: "", enabled: true, visible: true, click: () => {} },
         {
             id: 4,
             type: "standard",
             label: "场景",
             click: () => console.log("场景"),
+            enabled: true,
+            visible: true,
             children: [
-                { id: 41, type: "standard", label: "游戏", click: () => console.log("游戏场景") },
-                { id: 42, type: "standard", label: "聊天", click: () => console.log("聊天场景") },
-                { id: 43, type: "standard", label: "全屏", click: () => console.log("全屏场景") },
+                {
+                    id: 41,
+                    type: "standard",
+                    label: "游戏",
+                    enabled: true,
+                    visible: true,
+                    click: () => console.log("游戏场景"),
+                },
+                {
+                    id: 42,
+                    type: "standard",
+                    label: "聊天",
+                    enabled: true,
+                    visible: true,
+                    click: () => console.log("聊天场景"),
+                },
+                {
+                    id: 43,
+                    type: "standard",
+                    label: "全屏",
+                    enabled: true,
+                    visible: true,
+                    click: () => console.log("全屏场景"),
+                },
             ],
         },
-        { id: 5, type: "separator", label: "", click: () => {} },
-        { id: 6, type: "standard", label: "静音麦克风", toggleType: "checkmark", toggleState: false, click: () => console.log("静音麦克风") },
-        { id: 7, type: "standard", label: "桌面音频", toggleType: "checkmark", toggleState: true, click: () => console.log("桌面音频") },
-        { id: 8, type: "separator", label: "", click: () => {} },
-        { id: 9, type: "standard", label: "设置", click: () => console.log("设置") },
-        { id: 10, type: "standard", label: "退出", click: () => console.log("退出") },
+        { id: 5, type: "separator", label: "", enabled: true, visible: true, click: () => {} },
+        {
+            id: 6,
+            type: "standard",
+            label: "静音麦克风",
+            toggleType: "checkmark",
+            toggleState: false,
+            enabled: true,
+            visible: true,
+            click: () => console.log("静音麦克风"),
+        },
+        {
+            id: 7,
+            type: "standard",
+            label: "桌面音频",
+            toggleType: "checkmark",
+            toggleState: true,
+            enabled: true,
+            visible: true,
+            click: () => console.log("桌面音频"),
+        },
+        { id: 8, type: "separator", label: "", enabled: true, visible: true, click: () => {} },
+        { id: 9, type: "standard", label: "设置", enabled: true, visible: true, click: () => console.log("设置") },
+        { id: 10, type: "standard", label: "退出", enabled: true, visible: true, click: () => console.log("退出") },
     ]);
 
     // 通知示例

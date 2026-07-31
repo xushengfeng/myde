@@ -2,6 +2,7 @@ import { button, type ElType, image, spacer, view } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
 import { carousel, dynamicScrollList } from "./scroll-list";
 import type { BindingSource } from "./registry";
+import type { MenuItem } from "../../../src/sys_api/menu";
 
 export function sSize(s: 1 | 1.5 | 2 | 2.5 | 3 | 3.5 | 4 | 4.5 | 5 | 5.5 | 6 | 6.5 | 7 | 7.7 | 8 | 9 | 10 | 11 | 12) {
     const baseSize = 12;
@@ -450,6 +451,122 @@ export function mMedia(op: {
             );
             s.setList(l);
         },
+    };
+}
+
+export function tTrayMenu(op: { click: () => void; clickItem: () => void }) {
+    const titleEl = aLineText();
+    const mainClick = view("x")
+        .style({ alignItems: "center", justifyContent: "center", height: px(sSize(1)) })
+        .add(titleEl)
+        .on("click", () => {
+            op.click();
+        });
+    const backMenu = view("x")
+        .style({ alignItems: "center", justifyContent: "center", height: px(sSize(1)) })
+        .add("<");
+    const data = new Map<number, MenuItem>();
+    const list = dynamicScrollList<number>({
+        itemSize: sSize(1),
+        containerSize: sSize(1) * 8,
+        direction: "down",
+        keyExtractor: (k) => k.toString(),
+        renderItem: (i, _, items) => {
+            const item = data.get(i);
+            const itemEl = view("x").style({
+                padding: px(sSize2.paddingx),
+                gap: px(sSize2.paddingx),
+                alignItems: "center",
+            });
+            if (!item) {
+                console.error(`tray ui ${i} cannot find item`);
+                return itemEl;
+            }
+            const hasIcon = items.some((i) => data.get(i)?.iconUrl);
+            if (hasIcon) {
+                const iconEl = view().style({ width: "16px", height: "16px", flexShrink: 0 }).addInto(itemEl);
+                if (item.iconUrl) {
+                    item.iconUrl({ theme: "breeze" }).then((url) => {
+                        image(url ?? "", "icon")
+                            .style({ width: "16px", height: "16px", objectFit: "cover" })
+                            .addInto(iconEl);
+                    });
+                }
+            }
+            aLineText().sv(item.label).addInto(itemEl).style({ flexGrow: 1 });
+            // todo
+            if (item.children?.length) {
+                view().add(">").addInto(itemEl);
+            } else if (item.toggleType === "checkmark") {
+                if (item.toggleState) {
+                    view().add("v").addInto(itemEl);
+                } else {
+                    view().add("☐").addInto(itemEl);
+                }
+            } else if (item.toggleType === "radio") {
+                if (item.toggleState) {
+                    view().add("v").addInto(itemEl);
+                } else {
+                    view().add("○").addInto(itemEl);
+                }
+            }
+            itemEl.on("click", () => {
+                if (item.children?.length) {
+                    backMenu.on("click", () => {
+                        list.setList(items);
+                    });
+                    list.setList(
+                        item.children
+                            .filter((i) => i.visible)
+                            .filter((i) => i.type === "standard")
+                            .map((i) => i.id),
+                    );
+                } else {
+                    item.click();
+                    op.clickItem();
+                }
+            });
+
+            return itemEl;
+        },
+    });
+    list.el.style({ width: px(sSize(6)) });
+    const menuEl = ui.bar([ui.barItem().add(mainClick), ui.barItem().add([backMenu, list.el])]);
+
+    function set(tree: MenuItem[]) {
+        data.clear();
+        function w(tree: MenuItem[]) {
+            for (const i of tree) {
+                data.set(i.id, i);
+                if (i.children?.length) {
+                    w(i.children);
+                }
+            }
+        }
+        w(tree);
+    }
+
+    return {
+        // 全部更新而不是局部更新
+        // 一方面，拖盘弹窗点击就关闭，对更新页面不敏感
+        // 其次，软件实现也有不同，有更新局部的，有全部更新的
+        setTree: (tree: MenuItem[]) => {
+            set(tree);
+            list.setList(
+                tree
+                    .filter((i) => i.visible)
+                    .filter((i) => i.type === "standard")
+                    .map((i) => i.id),
+                true,
+            );
+            if (tree.some((i) => i.children?.length)) {
+                backMenu.style({ display: "flex" });
+            } else {
+                backMenu.style({ display: "none" });
+            }
+        },
+        setTitle: (s: string) => titleEl.sv(s),
+        el: menuEl.el,
     };
 }
 
