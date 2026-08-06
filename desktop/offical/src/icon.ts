@@ -266,6 +266,16 @@ export function getIconX(name: string) {
     }
     return undefined;
 }
+export function getIconXEl(name: string, op?: { size: number }) {
+    const size = op?.size ?? 16;
+    const el = document.createElement("div");
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    if (name in iconsName) {
+        el.innerHTML = render(iconsName[name]({ center: { x: 256 / 2, y: 256 / 2 }, size: 256, color: "#000" }));
+    }
+    return el;
+}
 
 const iconsName: Record<string, (env: { center: { x: number; y: number }; size: number; color: string }) => Icon> = {
     line: (env) => {
@@ -326,6 +336,36 @@ const iconsName: Record<string, (env: { center: { x: number; y: number }; size: 
                         {
                             type: "dot",
                             data: { p: env.center, sizeWidth: 20, color: env.color },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    blue: (env) => {
+        const w = 24;
+        const padding = w / 2;
+        const radius = 8;
+        return {
+            center: { x: env.center.x, y: env.center.y },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: p(env.center, -150, env.size / 2 - padding), ri: 0, ro: radius },
+                                    { p: p(env.center, 30, env.size / 2 - padding), ri: 0, ro: padding },
+                                    { p: p(env.center, 90, env.size / 2 - padding), ri: 0, ro: padding },
+                                    { p: p(env.center, -90, env.size / 2 - padding), ri: 0, ro: padding },
+                                    { p: p(env.center, -30, env.size / 2 - padding), ri: 0, ro: padding },
+                                    { p: p(env.center, 150, env.size / 2 - padding), ri: 0, ro: radius },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
                         },
                     ],
                 },

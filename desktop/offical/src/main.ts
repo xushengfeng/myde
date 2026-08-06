@@ -7,6 +7,7 @@ import { aLineText, bButton, iItem, mMedia, nNotiList, px, sSize, sSize2, tTrayM
 import { dynamicScrollList } from "./scroll-list";
 import { Registry } from "./registry";
 import type { MenuItem } from "../../../src/sys_api/menu";
+import { getIconXEl } from "./icon";
 
 // ========== Registry 和 ControlNode ==========
 
@@ -1960,7 +1961,7 @@ tools.registerTool(
 tools.registerTool(
     "blue",
     ({ tipEl, showTip }) => {
-        const el = view("x").add("蓝牙");
+        const el = view("x").add(getIconXEl("blue")).style({ alignItems: "center" });
         const toggle = uipool["blue.toggle"]();
         const deviceList = uipool["blue.devices"]();
         ui.bar([ui.barItem().add(toggle.el), ui.barItem().add(deviceList.el)]).el.addInto(tipEl);
