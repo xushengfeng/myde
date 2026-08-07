@@ -1,7 +1,7 @@
 import { getIconX, getIconXEl } from "../../src/icon";
 
-const l = ["line", "zline", "dot", "blue"];
-for (const i of l) {
+const l = ["line", "zline", "dot", "rect", "rect.r", "rect.fill", "blue"];
+for (const i of ["rect"]) {
     const svg = getIconX(i);
     console.log(`Icon "${i}":`);
     console.log(svg);
@@ -9,10 +9,6 @@ for (const i of l) {
 }
 
 if ("document" in globalThis) {
-    const icon = new URLSearchParams(location.search).get("icon");
-    if (icon) {
-        showIcon(icon);
-    }
     for (const i of l) {
         const el = getIconXEl(i, { size: 128 });
         document.body.append(el);
@@ -32,5 +28,9 @@ if ("document" in globalThis) {
         }
         dialog.innerHTML = "";
         dialog.append(pel);
+    }
+    const icon = new URLSearchParams(location.search).get("icon");
+    if (icon) {
+        showIcon(icon);
     }
 }
