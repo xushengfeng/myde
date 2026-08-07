@@ -1922,11 +1922,13 @@ tools.registerTool(
 tools.registerTool(
     "power",
     ({ tipEl, showTip }) => {
-        const el = view("x");
+        const el = view("x").style({ alignItems: "center" });
 
         // 顶部显示电池状态
-        const batteryIndicator = uipool["power.battery"]();
+        const batteryIndicator = getIconXEl("battery");
         el.add(batteryIndicator.el);
+
+        rawRegistry.get("power.battery").getAndSubscribe((v) => batteryIndicator.sv("value", v / 100));
 
         // 弹出框显示详情
         const batteryInfo = uipool["power.battery"]();
@@ -1967,7 +1969,7 @@ tools.registerTool(
 tools.registerTool(
     "blue",
     ({ tipEl, showTip }) => {
-        const el = view("x").add(getIconXEl("blue")).style({ alignItems: "center" });
+        const el = view("x").add(getIconXEl("blue").el).style({ alignItems: "center" });
         const toggle = uipool["blue.toggle"]();
         const deviceList = uipool["blue.devices"]();
         ui.bar([ui.barItem().add(toggle.el), ui.barItem().add(deviceList.el)]).el.addInto(tipEl);

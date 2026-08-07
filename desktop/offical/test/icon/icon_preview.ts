@@ -1,6 +1,6 @@
 import { getIconX, getIconXEl } from "../../src/icon";
 
-const l = ["line", "zline", "dot", "rect", "rect.r", "rect.fill", "blue"];
+const l = ["line", "zline", "dot", "rect", "rect.r", "rect.fill", "blue", "battery"];
 for (const i of ["rect"]) {
     const svg = getIconX(i);
     console.log(`Icon "${i}":`);
@@ -10,7 +10,7 @@ for (const i of ["rect"]) {
 
 if ("document" in globalThis) {
     for (const i of l) {
-        const el = getIconXEl(i, { size: 128 });
+        const el = getIconXEl(i, { size: 128 }).el;
         document.body.append(el);
         el.onclick = () => showIcon(i);
     }
@@ -23,7 +23,7 @@ if ("document" in globalThis) {
         dialog.showPopover();
         const pel = document.createElement("div");
         for (const size of [32, 64, 512]) {
-            const el = getIconXEl(name, { size });
+            const el = getIconXEl(name, { size }).el;
             pel.append(el);
         }
         dialog.innerHTML = "";

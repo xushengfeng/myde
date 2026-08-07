@@ -367,18 +367,33 @@ export function getIconX(name: string) {
     }
     return undefined;
 }
-export function getIconXEl(name: string, op?: { size: number }) {
+export function getIconXEl(name: string, op?: { size: number; data?: Record<string, any> }) {
     const size = op?.size ?? 16;
     const el = document.createElement("div");
     el.style.width = `${size}px`;
     el.style.height = `${size}px`;
+    el.style.flexShrink = "0";
+    const data = structuredClone(op?.data) ?? {};
     if (name in iconsName) {
-        el.innerHTML = render(iconsName[name]({ center: { x: 256 / 2, y: 256 / 2 }, size: 256, color: "#000" }));
+        el.innerHTML = render(iconsName[name]({ center: { x: 256 / 2, y: 256 / 2 }, size: 256, color: "#000", data }));
     }
-    return el;
+    return {
+        el,
+        sv: (k: string, v: any) => {
+            if (name in iconsName) {
+                data[k] = v;
+                el.innerHTML = render(
+                    iconsName[name]({ center: { x: 256 / 2, y: 256 / 2 }, size: 256, color: "#000", data }),
+                );
+            }
+        },
+    };
 }
 
-const iconsName: Record<string, (env: { center: { x: number; y: number }; size: number; color: string }) => Icon> = {
+const iconsName: Record<
+    string,
+    (env: { center: { x: number; y: number }; size: number; color: string; data?: Record<string, any> }) => Icon
+> = {
     line: (env) => {
         return {
             center: { x: env.center.x, y: env.center.y },
@@ -544,6 +559,95 @@ const iconsName: Record<string, (env: { center: { x: number; y: number }; size: 
                                     { p: p(env.center, 150, env.size / 2 - padding), ri: 0, ro: radius },
                                 ],
                                 width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    battery: (env) => {
+        const w = 16;
+        const padding = w / 2;
+        const radius = 8;
+
+        const centerGap = 8;
+
+        const rb0 = 8;
+        const rb1 = rb0 + centerGap;
+        const rb2 = rb1 + w;
+
+        const by = env.size / 2 - 64;
+        const by1 = env.size / 2 + 64;
+
+        const centerW100 = env.size - w - w - w - centerGap - centerGap;
+        const centerW = Math.max(centerW100 * Math.min(1, env.data?.value ?? 1), rb0 * 2);
+
+        return {
+            center: { x: env.center.x, y: env.center.y },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: padding, y: by }, ri: rb1, ro: rb2 },
+                                    { p: { x: env.size - (padding + w), y: by }, ri: rb1, ro: rb2 },
+                                    { p: { x: env.size - (padding + w), y: by1 }, ri: rb1, ro: rb2 },
+                                    { p: { x: padding, y: by1 }, ri: rb1, ro: rb2 },
+                                ],
+                                close: true,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+                {
+                    name: "base1",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: env.size - padding, y: env.size / 2 - 24 }, ri: 0, ro: radius },
+                                    { p: { x: env.size - padding, y: env.size / 2 + 24 }, ri: 0, ro: radius },
+                                ],
+                                close: true,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+                {
+                    name: "v",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: {
+                                            x: w + centerGap,
+                                            y: env.center.y,
+                                        },
+                                        ri: 0,
+                                        ro: rb0,
+                                    },
+                                    {
+                                        p: {
+                                            x: w + centerGap + centerW,
+                                            y: env.center.y,
+                                        },
+                                        ri: 0,
+                                        ro: rb0,
+                                    },
+                                ],
+                                width: by1 - by - w - centerGap - centerGap,
                                 color: env.color,
                             },
                         },
