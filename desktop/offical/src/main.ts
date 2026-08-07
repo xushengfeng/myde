@@ -161,6 +161,7 @@ class Tools {
     getTool(name: string) {
         const tool = this.tools.get(name);
         if (!tool) return undefined;
+        let launchEl: HTMLElement | null = null;
         const tipel = (() => {
             let show = false;
             const el = view()
@@ -207,14 +208,18 @@ class Tools {
         });
         gear.moveTo("hide", 0);
         // todo 回收
-        window.addEventListener("pointerdown", (e) => {
-            const target = e.target as HTMLElement;
-            if (tipel.gv === true && !tipel.el.contains(target)) {
-                e.stopImmediatePropagation();
-                tipel.sv("hide");
-                gear.moveTo("hide");
-            }
-        });
+        window.addEventListener(
+            "click",
+            (e) => {
+                const target = e.target as HTMLElement;
+                if (tipel.gv === true && !tipel.el.contains(target)) {
+                    if (launchEl?.contains(target)) e.stopImmediatePropagation();
+                    tipel.sv("hide");
+                    gear.moveTo("hide");
+                }
+            },
+            { capture: true },
+        );
         return {
             getEl: (showA: "left" | "right" | "top" | "bottom") => {
                 const el = tool.cb({
@@ -267,6 +272,7 @@ class Tools {
                     },
                     showA,
                 });
+                launchEl = el.el;
                 return el;
             },
         };
