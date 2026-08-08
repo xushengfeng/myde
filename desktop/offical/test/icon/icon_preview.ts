@@ -1,6 +1,6 @@
 import { getIconX, getIconXEl } from "../../src/icon";
 
-const l = ["line", "zline", "dot", "rect", "rect.r", "rect.fill", "blue", "battery"];
+const l = ["line", "zline", "dot", "rect", "rect.r", "rect.fill", "blue", "battery", "wifi"];
 for (const i of ["rect"]) {
     const svg = getIconX(i);
     console.log(`Icon "${i}":`);

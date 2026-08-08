@@ -1,6 +1,7 @@
 type Icon = {
     /** 视觉重心 */
     center: { x: number; y: number };
+    edgeTrim?: { type: "x" | "y"; start?: number; end?: number };
     layout: { name: string; shapes: xShape[] }[];
 };
 
@@ -8,8 +9,22 @@ type Point = { x: number; y: number };
 type zLinePoint = { p: Point; ro: number; ri: number };
 type zLine = { ps: zLinePoint[]; width: number; close?: boolean; fill?: boolean; color: string };
 type dot = { p: Point; sizeWidth: number; color: string };
+type aArc = { center: Point; r: number; width: number; fromAngle: number; endAngle: number; color: string };
+type pPath = {
+    ps: { p: Point; c1: Point; c2: Point }[];
+    width: number;
+    close?: boolean;
+    fill?: boolean;
+    color: string;
+};
+type rRaw = { pathStr: string; color: string };
 
-type xShape = { type: "zline"; data: zLine } | { type: "dot"; data: dot };
+type xShape =
+    | { type: "zline"; data: zLine }
+    | { type: "dot"; data: dot }
+    | { type: "arc"; data: aArc }
+    | { type: "path"; data: pPath }
+    | { type: "raw"; data: rRaw };
 
 function p(startPoint: Point, angle: number, size: number) {
     const ax = (angle / 180) * Math.PI;
@@ -336,12 +351,71 @@ function renderZLine(zline: zLine): string {
     return `<path d="${path}" fill="${zline.color}"/>`;
 }
 
+function renderArc(arc: aArc) {
+    const { center, r, width, fromAngle, endAngle, color } = arc;
+    const hw = width / 2;
+
+    if (fromAngle === endAngle) {
+        return `<circle cx="${n(center.x)}" cy="${n(center.y)}" r="${n(r)}" fill="none" stroke="${color}" stroke-width="${width}"/>`;
+    }
+
+    const fromRad = (fromAngle / 180) * Math.PI;
+    const endRad = (endAngle / 180) * Math.PI;
+
+    const cos = Math.cos;
+    const sin = Math.sin;
+    const R = r + hw;
+    const Ri = r - hw;
+
+    const sx = center.x + R * cos(fromRad);
+    const sy = center.y + R * sin(fromRad);
+    const ex = center.x + R * cos(endRad);
+    const ey = center.y + R * sin(endRad);
+    const sxi = center.x + Ri * cos(endRad);
+    const syi = center.y + Ri * sin(endRad);
+    const exi = center.x + Ri * cos(fromRad);
+    const eyi = center.y + Ri * sin(fromRad);
+
+    const diff = (endAngle - fromAngle + 360) % 360;
+    const largeArc = diff > 180 ? 1 : 0;
+
+    const d = `M ${n(sx)} ${n(sy)} A ${R} ${R} 0 ${largeArc} 1 ${n(ex)} ${n(ey)} L ${n(sxi)} ${n(syi)} A ${Ri} ${Ri} 0 ${largeArc} 0 ${n(exi)} ${n(eyi)}`;
+
+    return `<path d="${d}" fill="${color}"/>`;
+}
+
+function renderPath(path: pPath) {
+    const { ps, color, close, fill, width } = path;
+    if (ps.length === 0) return "";
+
+    let d = `M ${n(ps[0].p.x)} ${n(ps[0].p.y)}`;
+    for (let i = 1; i < ps.length; i++) {
+        d += ` C ${n(ps[i - 1].c2.x)} ${n(ps[i - 1].c2.y)} ${n(ps[i].c1.x)} ${n(ps[i].c1.y)} ${n(ps[i].p.x)} ${n(ps[i].p.y)}`;
+    }
+    if (close) d += " Z";
+
+    const fillAttr = fill ? color : "none";
+    const strokeAttr = fill ? "none" : color;
+
+    return `<path d="${d}" fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${width}" stroke-linejoin="round" stroke-linecap="butt"/>`;
+}
+
+function renderRaw(raw: rRaw) {
+    return `<path d="${raw.pathStr}" fill="${raw.color}"/>`;
+}
+
 // 渲染单个shape
 function renderShape(shape: xShape): string {
     if (shape.type === "dot") {
         return renderDot(shape.data);
     } else if (shape.type === "zline") {
         return renderZLine(shape.data);
+    } else if (shape.type === "arc") {
+        return renderArc(shape.data);
+    } else if (shape.type === "path") {
+        return renderPath(shape.data);
+    } else if (shape.type === "raw") {
+        return renderRaw(shape.data);
     }
     return "";
 }
@@ -648,6 +722,58 @@ const iconsName: Record<
                                     },
                                 ],
                                 width: by1 - by - w - centerGap - centerGap,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    wifi: (env) => {
+        const maxR = (env.size / 2) * Math.sqrt(2);
+        const b = 8;
+        const maxRb = Math.floor(maxR / 8);
+        const gapb = 2;
+        const lOther = Math.floor((maxRb - gapb - gapb) / 3);
+        const center = maxRb - gapb - gapb - lOther - lOther;
+        return {
+            center: { x: env.center.x, y: env.center.y },
+            edgeTrim: { type: "y", start: env.size - maxRb * b },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: env.center.x, y: env.size },
+                                fromAngle: -90 - 45,
+                                endAngle: -45,
+                                r: (center + gapb + lOther + gapb + lOther / 2) * b,
+                                width: lOther * b,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: env.center.x, y: env.size },
+                                fromAngle: -90 - 45,
+                                endAngle: -45,
+                                r: (center + gapb + lOther / 2) * b,
+                                width: lOther * b,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: env.center.x, y: env.size },
+                                fromAngle: -90 - 45,
+                                endAngle: -45,
+                                r: (center / 2) * b,
+                                width: center * b,
                                 color: env.color,
                             },
                         },
