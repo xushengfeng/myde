@@ -1925,7 +1925,7 @@ tools.registerTool(
         const el = view("x").style({ alignItems: "center" });
 
         // 顶部显示电池状态
-        const batteryIndicator = getIconXEl("battery", { size: 24 });
+        const batteryIndicator = getIconXEl("battery", { size: 20, width: 24, height: 24 });
         el.add(batteryIndicator.el);
 
         rawRegistry.get("power.battery").getAndSubscribe((v) => batteryIndicator.sv("value", v / 100));
@@ -1954,7 +1954,7 @@ tools.registerTool(
     ({ tipEl, showTip }) => {
         const el = view("x")
             .style({ alignItems: "center" })
-            .add(getIconXEl("wifi", { size: 24 }));
+            .add(getIconXEl("wifi", { size: 20, width: 24, height: 24 }));
         const toggle = uipool["wifi.toggle"]();
         const apList = uipool["wifi.accessPoints"]();
         ui.bar([ui.barItem().add(toggle.el), ui.barItem().add(apList.el)]).el.addInto(tipEl);
@@ -1972,7 +1972,7 @@ tools.registerTool(
     "blue",
     ({ tipEl, showTip }) => {
         const el = view("x")
-            .add(getIconXEl("blue", { size: 24 }).el)
+            .add(getIconXEl("blue", { size: 20, width: 24, height: 24 }).el)
             .style({ alignItems: "center" });
         const toggle = uipool["blue.toggle"]();
         const deviceList = uipool["blue.devices"]();

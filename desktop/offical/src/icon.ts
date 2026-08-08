@@ -1,7 +1,8 @@
 type Icon = {
+    size: number;
     /** 视觉重心 */
-    center: { x: number; y: number };
-    edgeTrim?: { type: "x" | "y"; start?: number; end?: number };
+    viewCenter?: { x: number; y: number };
+    edgeTrim?: { top?: number; bottom?: number; left?: number; right?: number };
     layout: { name: string; shapes: xShape[] }[];
 };
 
@@ -432,45 +433,90 @@ function render(icon: Icon): string {
         svgContent += `</g>`;
     }
 
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">${svgContent}</svg>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${icon.size} ${icon.size}">${svgContent}</svg>`;
 }
 
 export function getIconX(name: string) {
     if (name in iconsName) {
-        return render(iconsName[name]({ center: { x: 256 / 2, y: 256 / 2 }, size: 256, color: "#000" }));
+        return render(iconsName[name]({ color: "#000" }));
     }
     return undefined;
 }
-export function getIconXEl(name: string, op?: { size: number; data?: Record<string, any> }) {
+export function getIconXEl(
+    name: string,
+    op?: { size: number; width?: number; height?: number; data?: Record<string, any> },
+) {
     const size = op?.size ?? 16;
+    const width = op?.width ?? size;
+    const height = op?.height ?? size;
     const el = document.createElement("div");
-    el.style.width = `${size}px`;
-    el.style.height = `${size}px`;
+    el.style.width = `${width}px`;
+    el.style.height = `${height}px`;
     el.style.flexShrink = "0";
+    el.style.overflow = "hidden";
     const data = structuredClone(op?.data) ?? {};
+    function r() {
+        const icon = iconsName[name]({ color: "#000", data });
+        const rsize = icon.size;
+        el.innerHTML = render(icon);
+        const svg = el.querySelector("svg");
+        if (!svg) {
+            return;
+        }
+        const outerWidth = (width / size) * rsize;
+        const outerHeight = (height / size) * rsize;
+
+        const vTop = icon.edgeTrim?.top ?? 0;
+        const vBottom = icon.edgeTrim?.bottom ?? rsize;
+        const vLeft = icon.edgeTrim?.left ?? 0;
+        const vRight = icon.edgeTrim?.right ?? rsize;
+        const vWidth = vRight - vLeft;
+        const vHeight = vBottom - vTop;
+
+        const centerX = icon.viewCenter?.x ?? vLeft + vWidth / 2;
+        const centerY = icon.viewCenter?.y ?? vTop + vHeight / 2;
+
+        // 中心对齐，但是边界不能超出
+        const cx = Math.max(Math.min(outerWidth / 2, centerX - vLeft), vWidth + 0 - outerWidth / 2);
+        const cy = Math.max(Math.min(outerHeight / 2, centerY - vTop), vHeight + 0 - outerHeight / 2);
+
+        const offsetX = outerWidth / 2 - cx;
+        const offsetY = outerHeight / 2 - cy - vTop;
+        svg.style.width = `${size}px`;
+        svg.style.position = "relative";
+        if (offsetX !== 0) {
+            svg.style.left = `${(offsetX / rsize) * size}px`;
+        }
+        if (offsetY !== 0) {
+            svg.style.top = `${(offsetY / rsize) * size}px`;
+        }
+    }
     if (name in iconsName) {
-        el.innerHTML = render(iconsName[name]({ center: { x: 256 / 2, y: 256 / 2 }, size: 256, color: "#000", data }));
+        r();
     }
     return {
         el,
         sv: (k: string, v: any) => {
             if (name in iconsName) {
                 data[k] = v;
-                el.innerHTML = render(
-                    iconsName[name]({ center: { x: 256 / 2, y: 256 / 2 }, size: 256, color: "#000", data }),
-                );
+                r();
             }
         },
     };
 }
 
-const iconsName: Record<
-    string,
-    (env: { center: { x: number; y: number }; size: number; color: string; data?: Record<string, any> }) => Icon
-> = {
+function buildZb(size: number) {
+    return {
+        size,
+        center: { x: size / 2, y: size / 2 } as Point,
+    };
+}
+
+const iconsName: Record<string, (env: { color: string; data?: Record<string, any> }) => Icon> = {
     line: (env) => {
+        const { size, center } = buildZb(256);
         return {
-            center: { x: env.center.x, y: env.center.y },
+            size,
             layout: [
                 {
                     name: "base",
@@ -479,8 +525,8 @@ const iconsName: Record<
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: p(env.center, 180, env.size / 2), ro: 4, ri: 0 },
-                                    { p: p(env.center, 0, env.size / 2), ro: 4, ri: 0 },
+                                    { p: p(center, 180, size / 2), ro: 4, ri: 0 },
+                                    { p: p(center, 0, size / 2), ro: 4, ri: 0 },
                                 ],
                                 width: 20,
                                 color: env.color,
@@ -492,8 +538,9 @@ const iconsName: Record<
         };
     },
     zline: (env) => {
+        const { size, center } = buildZb(256);
         return {
-            center: { x: env.center.x, y: env.center.y },
+            size,
             layout: [
                 {
                     name: "base",
@@ -502,10 +549,10 @@ const iconsName: Record<
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: p(env.center, 180, env.size / 2 - 30), ro: 4, ri: 0 },
-                                    { p: p(env.center, -90, env.size / 2 - 30), ro: 24, ri: 4 },
-                                    { p: p(env.center, 90, env.size / 2 - 30), ro: 24, ri: 4 },
-                                    { p: p(env.center, 0, env.size / 2 - 30), ro: 4, ri: 0 },
+                                    { p: p(center, 180, size / 2 - 30), ro: 4, ri: 0 },
+                                    { p: p(center, -90, size / 2 - 30), ro: 24, ri: 4 },
+                                    { p: p(center, 90, size / 2 - 30), ro: 24, ri: 4 },
+                                    { p: p(center, 0, size / 2 - 30), ro: 4, ri: 0 },
                                 ],
                                 width: 20,
                                 color: env.color,
@@ -517,15 +564,16 @@ const iconsName: Record<
         };
     },
     dot: (env) => {
+        const { size, center } = buildZb(256);
         return {
-            center: { x: env.center.x, y: env.center.y },
+            size,
             layout: [
                 {
                     name: "base",
                     shapes: [
                         {
                             type: "dot",
-                            data: { p: env.center, sizeWidth: 20, color: env.color },
+                            data: { p: center, sizeWidth: 20, color: env.color },
                         },
                     ],
                 },
@@ -533,8 +581,9 @@ const iconsName: Record<
         };
     },
     rect: (env) => {
+        const { size } = buildZb(256);
         return {
-            center: { x: env.center.x, y: env.center.y },
+            size,
             layout: [
                 {
                     name: "base",
@@ -559,8 +608,9 @@ const iconsName: Record<
         };
     },
     "rect.r": (env) => {
+        const { size } = buildZb(256);
         return {
-            center: { x: env.center.x, y: env.center.y },
+            size,
             layout: [
                 {
                     name: "base",
@@ -585,8 +635,9 @@ const iconsName: Record<
         };
     },
     "rect.fill": (env) => {
+        const { size } = buildZb(256);
         return {
-            center: { x: env.center.x, y: env.center.y },
+            size,
             layout: [
                 {
                     name: "base",
@@ -612,11 +663,12 @@ const iconsName: Record<
         };
     },
     blue: (env) => {
+        const { size, center } = buildZb(256);
         const w = 24;
         const padding = w / 2;
         const radius = 8;
         return {
-            center: { x: env.center.x, y: env.center.y },
+            size,
             layout: [
                 {
                     name: "base",
@@ -625,12 +677,12 @@ const iconsName: Record<
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: p(env.center, -150, env.size / 2 - padding), ri: 0, ro: radius },
-                                    { p: p(env.center, 30, env.size / 2 - padding), ri: 0, ro: padding },
-                                    { p: p(env.center, 90, env.size / 2 - padding), ri: 0, ro: padding },
-                                    { p: p(env.center, -90, env.size / 2 - padding), ri: 0, ro: padding },
-                                    { p: p(env.center, -30, env.size / 2 - padding), ri: 0, ro: padding },
-                                    { p: p(env.center, 150, env.size / 2 - padding), ri: 0, ro: radius },
+                                    { p: p(center, -150, size / 2 - padding), ri: 0, ro: radius },
+                                    { p: p(center, 30, size / 2 - padding), ri: 0, ro: padding },
+                                    { p: p(center, 90, size / 2 - padding), ri: 0, ro: padding },
+                                    { p: p(center, -90, size / 2 - padding), ri: 0, ro: padding },
+                                    { p: p(center, -30, size / 2 - padding), ri: 0, ro: padding },
+                                    { p: p(center, 150, size / 2 - padding), ri: 0, ro: radius },
                                 ],
                                 width: w,
                                 color: env.color,
@@ -642,6 +694,7 @@ const iconsName: Record<
         };
     },
     battery: (env) => {
+        const { size, center } = buildZb(256);
         const w = 16;
         const padding = w / 2;
         const radius = 8;
@@ -652,14 +705,14 @@ const iconsName: Record<
         const rb1 = rb0 + centerGap;
         const rb2 = rb1 + w;
 
-        const by = env.size / 2 - 64;
-        const by1 = env.size / 2 + 64;
+        const by = size / 2 - 64;
+        const by1 = size / 2 + 64;
 
-        const centerW100 = env.size - w - w - w - centerGap - centerGap;
+        const centerW100 = size - w - w - w - centerGap - centerGap;
         const centerW = Math.max(centerW100 * Math.min(1, env.data?.value ?? 1), rb0 * 2);
 
         return {
-            center: { x: env.center.x, y: env.center.y },
+            size,
             layout: [
                 {
                     name: "base",
@@ -669,8 +722,8 @@ const iconsName: Record<
                             data: {
                                 ps: [
                                     { p: { x: padding, y: by }, ri: rb1, ro: rb2 },
-                                    { p: { x: env.size - (padding + w), y: by }, ri: rb1, ro: rb2 },
-                                    { p: { x: env.size - (padding + w), y: by1 }, ri: rb1, ro: rb2 },
+                                    { p: { x: size - (padding + w), y: by }, ri: rb1, ro: rb2 },
+                                    { p: { x: size - (padding + w), y: by1 }, ri: rb1, ro: rb2 },
                                     { p: { x: padding, y: by1 }, ri: rb1, ro: rb2 },
                                 ],
                                 close: true,
@@ -678,17 +731,12 @@ const iconsName: Record<
                                 color: env.color,
                             },
                         },
-                    ],
-                },
-                {
-                    name: "base1",
-                    shapes: [
                         {
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: { x: env.size - padding, y: env.size / 2 - 24 }, ri: 0, ro: radius },
-                                    { p: { x: env.size - padding, y: env.size / 2 + 24 }, ri: 0, ro: radius },
+                                    { p: { x: size - padding, y: size / 2 - 24 }, ri: 0, ro: radius },
+                                    { p: { x: size - padding, y: size / 2 + 24 }, ri: 0, ro: radius },
                                 ],
                                 close: true,
                                 width: w,
@@ -707,7 +755,7 @@ const iconsName: Record<
                                     {
                                         p: {
                                             x: w + centerGap,
-                                            y: env.center.y,
+                                            y: center.y,
                                         },
                                         ri: 0,
                                         ro: rb0,
@@ -715,7 +763,7 @@ const iconsName: Record<
                                     {
                                         p: {
                                             x: w + centerGap + centerW,
-                                            y: env.center.y,
+                                            y: center.y,
                                         },
                                         ri: 0,
                                         ro: rb0,
@@ -731,15 +779,16 @@ const iconsName: Record<
         };
     },
     wifi: (env) => {
-        const maxR = (env.size / 2) * Math.sqrt(2);
+        const { size, center } = buildZb(256);
+        const maxR = (size / 2) * Math.sqrt(2);
         const b = 8;
         const maxRb = Math.floor(maxR / 8);
         const gapb = 2;
         const lOther = Math.floor((maxRb - gapb - gapb) / 3);
-        const center = maxRb - gapb - gapb - lOther - lOther;
+        const centerx = maxRb - gapb - gapb - lOther - lOther;
         return {
-            center: { x: env.center.x, y: env.center.y },
-            edgeTrim: { type: "y", start: env.size - maxRb * b },
+            size,
+            edgeTrim: { top: size - maxRb * b },
             layout: [
                 {
                     name: "base",
@@ -747,10 +796,10 @@ const iconsName: Record<
                         {
                             type: "arc",
                             data: {
-                                center: { x: env.center.x, y: env.size },
+                                center: { x: center.x, y: size },
                                 fromAngle: -90 - 45,
                                 endAngle: -45,
-                                r: (center + gapb + lOther + gapb + lOther / 2) * b,
+                                r: (centerx + gapb + lOther + gapb + lOther / 2) * b,
                                 width: lOther * b,
                                 color: env.color,
                             },
@@ -758,10 +807,10 @@ const iconsName: Record<
                         {
                             type: "arc",
                             data: {
-                                center: { x: env.center.x, y: env.size },
+                                center: { x: center.x, y: size },
                                 fromAngle: -90 - 45,
                                 endAngle: -45,
-                                r: (center + gapb + lOther / 2) * b,
+                                r: (centerx + gapb + lOther / 2) * b,
                                 width: lOther * b,
                                 color: env.color,
                             },
@@ -769,11 +818,11 @@ const iconsName: Record<
                         {
                             type: "arc",
                             data: {
-                                center: { x: env.center.x, y: env.size },
+                                center: { x: center.x, y: size },
                                 fromAngle: -90 - 45,
                                 endAngle: -45,
-                                r: (center / 2) * b,
-                                width: center * b,
+                                r: (centerx / 2) * b,
+                                width: centerx * b,
                                 color: env.color,
                             },
                         },

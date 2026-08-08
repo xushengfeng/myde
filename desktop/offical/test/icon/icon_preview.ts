@@ -24,6 +24,7 @@ if ("document" in globalThis) {
         const pel = document.createElement("div");
         for (const size of [32, 64, 512]) {
             const el = getIconXEl(name, { size }).el;
+            el.style.border = "1px solid blue";
             pel.append(el);
         }
         dialog.innerHTML = "";
