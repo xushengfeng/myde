@@ -3,6 +3,7 @@ import { AnimationGear, timingFunction } from "myde-ui";
 import { carousel, dynamicScrollList } from "./scroll-list";
 import type { BindingSource } from "./registry";
 import type { MenuItem } from "../../../src/sys_api/menu";
+import { getIconXEl } from "./icon";
 
 export function sSize(s: 1 | 1.5 | 2 | 2.5 | 3 | 3.5 | 4 | 4.5 | 5 | 5.5 | 6 | 6.5 | 7 | 7.7 | 8 | 9 | 10 | 11 | 12) {
     const baseSize = 12;
@@ -283,7 +284,7 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
                             view("x").add([
                                 aLineText().sv(n.title).style(fontStyle.title),
                                 spacer(),
-                                button("×").on("click", () => {
+                                button(getIconXEl("cross")).on("click", () => {
                                     n.delete();
                                 }),
                             ]),
@@ -374,10 +375,10 @@ export function mMedia(op: {
                     e.stopPropagation();
                 })
                 .addInto(ditial);
-            const prevBtn = button("⏮️").addInto(controls);
-            const playBtn = button("▶️").addInto(controls);
-            const pauseBtn = button("⏸️").addInto(controls);
-            const nextBtn = button("⏭️").addInto(controls);
+            const prevBtn = button(getIconXEl("media.backward.fill")).addInto(controls);
+            const playBtn = button(getIconXEl("media.play.fill")).addInto(controls);
+            const pauseBtn = button(getIconXEl("media.pause.fill")).addInto(controls);
+            const nextBtn = button(getIconXEl("media.forward.fill")).addInto(controls);
             const time = view()
                 .style({
                     width: "160px",
@@ -464,7 +465,7 @@ export function tTrayMenu(op: { click: () => void; clickItem: () => void }) {
         });
     const backMenu = view("x")
         .style({ alignItems: "center", justifyContent: "center", height: px(sSize(1)) })
-        .add("<");
+        .add(getIconXEl("chevron.left"));
     const data = new Map<number, MenuItem>();
     const list = dynamicScrollList<number>({
         itemSize: sSize(1),
@@ -496,7 +497,7 @@ export function tTrayMenu(op: { click: () => void; clickItem: () => void }) {
             aLineText().sv(item.label).addInto(itemEl).style({ flexGrow: 1 });
             // todo
             if (item.children?.length) {
-                view().add(">").addInto(itemEl);
+                view().add(getIconXEl("chevron.right")).addInto(itemEl);
             } else if (item.toggleType === "checkmark") {
                 if (item.toggleState) {
                     view().add("v").addInto(itemEl);

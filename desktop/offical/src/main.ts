@@ -3,7 +3,7 @@ import { addClass, addStyle, button, check, ele, type ElType, image, pack, setPr
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
 import { txt } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
-import { aLineText, bButton, iItem, mMedia, nNotiList, px, sSize, sSize2, tTrayMenu, ui, uPasswdInput } from "./ui";
+import { aLineText, iItem, mMedia, nNotiList, px, sSize, sSize2, tTrayMenu, ui, uPasswdInput } from "./ui";
 import { dynamicScrollList } from "./scroll-list";
 import { Registry } from "./registry";
 import type { MenuItem } from "../../../src/sys_api/menu";
@@ -1545,7 +1545,7 @@ tools.registerTool("blank", () => {
     return view().style({ flexGrow: 1 });
 });
 tools.registerTool("showAllView", () => {
-    const showAllViewBtn = button("≡").on("click", () => {
+    const showAllViewBtn = button(getIconXEl("mutiWinView", { size: 20, width: 24, height: 24 })).on("click", () => {
         viewAllShowing = !viewAllShowing;
         viewAll(viewAllShowing);
     });
@@ -1807,31 +1807,49 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
 tools.registerTool(
     "login",
     ({ tipEl, showTip }) => {
-        const el = view().add("电源");
+        const el = view("x")
+            .style({ alignItems: "center" })
+            .add(getIconXEl("shutdown", { size: 20, width: 24, height: 24 }));
+
+        function bButton(icon: HTMLElement, txt: string, onClick: () => void) {
+            return button()
+                .style({
+                    width: "100%",
+                    height: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "8px",
+                })
+                .add([icon, aLineText().sv(txt)])
+                .on("click", () => {
+                    onClick();
+                });
+        }
 
         ui.bar([
             ui.barItem().add(
                 iItem({ type: "h", size: 1 }).add(
-                    bButton("锁屏", () => {
+                    bButton(getIconXEl("lock", { size: 16 }).el, "锁屏", () => {
                         state.setState("lock");
                     }),
                 ),
             ),
             ui.barItem().add([
                 iItem({ type: "h", size: 1 }).add(
-                    bButton("关机", async () => {
+                    bButton(getIconXEl("shutdown", { size: 16 }).el, "关机", async () => {
                         const t = await confirm("确认 关机？");
                         if (t) MSysApi.login("shutdown");
                     }),
                 ),
                 iItem({ type: "h", size: 1 }).add(
-                    bButton("重启", async () => {
+                    bButton(getIconXEl("reboot", { size: 16 }).el, "重启", async () => {
                         const t = await confirm("确认 重启？");
                         if (t) MSysApi.login("restart");
                     }),
                 ),
                 iItem({ type: "h", size: 1 }).add(
-                    bButton("挂起", async () => {
+                    bButton(getIconXEl("suspend", { size: 16 }).el, "挂起", async () => {
                         const t = await confirm("确认 挂起？");
                         if (t) MSysApi.login("suspend");
                     }),
@@ -1852,7 +1870,7 @@ tools.registerTool(
 tools.registerTool(
     "mediaControl",
     ({ tipEl, showTip }) => {
-        const btn = button("🎵").on("click", () => {
+        const btn = button(getIconXEl("music", { size: 20, width: 24, height: 24 })).on("click", () => {
             showTip();
         });
 
