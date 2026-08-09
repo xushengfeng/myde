@@ -1,5 +1,5 @@
 import { ele, txt, view } from "dkh-ui";
-import { getIconXEl } from "../../src/icon";
+import { getIconComment, getIconXEl } from "../../src/icon";
 
 const l = [
     "line",
@@ -44,9 +44,18 @@ if ("document" in globalThis) {
         dialog.el.showPopover();
         const pel = view();
         for (const size of [32, 64, 512]) {
+            const xel = view().style({ position: "relative" });
             const el = getIconXEl(name, { size }).el;
-            el.style.border = "1px solid blue";
-            pel.add(el);
+            xel.add(el).style({ border: "1px solid blue" });
+            pel.add(xel);
+            if (size === 512) {
+                const cEl = view().style({ position: "absolute", top: 0, width: "512px" });
+                const x = getIconComment(name);
+                if (x) cEl.el.innerHTML = x;
+                console.log(x);
+
+                xel.add(cEl);
+            }
         }
         dialog.clear().add(pel);
     }

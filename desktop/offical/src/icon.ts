@@ -415,6 +415,28 @@ function renderShape(shape: xShape): string {
     return "";
 }
 
+function renderCom(shape: xShape) {
+    const p = (p: Point) => `<circle cx=${p.x} cy=${p.y} r="2" fill="red"></circle>`;
+    if (shape.type === "dot") {
+        return p(shape.data.p);
+    }
+    if (shape.type === "zline") {
+        const l = shape.data.ps;
+        return `<path d="M ${l
+            .map((i) => i.p)
+            .map((i) => `${i.x} ${i.y}`)
+            .join(
+                " L ",
+            )} ${shape.data.close ? "Z" : ""}" stroke="red" stroke-width="2" fill="none"></path>${l.map((i) => p(i.p))}`;
+    }
+    if (shape.type === "arc") {
+        return `${p(shape.data.center)}
+        <circle cx=${shape.data.center.x} cy=${shape.data.center.y} r="${shape.data.r}"
+        stroke="red" stroke-width="2" fill="none"></circle>`;
+    }
+    return "";
+}
+
 // 渲染整个图标
 function render(icon: Icon): string {
     let svgContent = "";
@@ -436,6 +458,64 @@ export function getIconX(name: string) {
     }
     return undefined;
 }
+
+function computeOffset(icon: Icon, size: number, width: number, height: number) {
+    const rsize = icon.size;
+
+    const outerWidth = (width / size) * rsize;
+    const outerHeight = (height / size) * rsize;
+
+    const vTop = icon.edgeTrim?.top ?? 0;
+    const vBottom = icon.edgeTrim?.bottom ?? rsize;
+    const vLeft = icon.edgeTrim?.left ?? 0;
+    const vRight = icon.edgeTrim?.right ?? rsize;
+    const vWidth = vRight - vLeft;
+    const vHeight = vBottom - vTop;
+
+    const centerX = icon.viewCenter?.x ?? vLeft + vWidth / 2;
+    const centerY = icon.viewCenter?.y ?? vTop + vHeight / 2;
+
+    // 中心对齐，但是边界不能超出
+    const cx = Math.max(Math.min(outerWidth / 2, centerX - vLeft), vWidth + 0 - outerWidth / 2);
+    const cy = Math.max(Math.min(outerHeight / 2, centerY - vTop), vHeight + 0 - outerHeight / 2);
+
+    const offsetX = outerWidth / 2 - cx;
+    const offsetY = outerHeight / 2 - cy - vTop;
+    return { offsetX, offsetY };
+}
+
+export function getIconComment(name: string) {
+    const iconf = iconsName[name];
+    if (!iconf) return;
+    const icon = iconf({ color: "#000" });
+    let svgContent = "";
+    const rsize = icon.size;
+
+    for (const l of icon.layout) {
+        for (const s of l.shapes) {
+            svgContent += renderCom(s);
+        }
+    }
+
+    const { offsetX, offsetY } = computeOffset(icon, icon.size, icon.size, icon.size);
+
+    svgContent += `<path d="M${0 - offsetX} ${icon.size / 2 - offsetY} L ${icon.size - offsetX} ${icon.size / 2 - offsetY}" stroke="blue" stroke-width="1"></path>`;
+    svgContent += `<path d="M${icon.size / 2 - offsetX} ${0 - offsetY} L ${icon.size / 2 - offsetX} ${icon.size - offsetY}" stroke="blue" stroke-width="1"></path>`;
+
+    const vTop = icon.edgeTrim?.top ?? 0;
+    const vBottom = icon.edgeTrim?.bottom ?? rsize;
+    const vLeft = icon.edgeTrim?.left ?? 0;
+    const vRight = icon.edgeTrim?.right ?? rsize;
+
+    svgContent += `<path d="M${vLeft} ${vTop}
+    L ${vRight} ${vTop}
+    L ${vRight} ${vBottom}
+    L ${vRight} ${vBottom}
+    L ${vLeft} ${vBottom} Z" stroke="blue" stroke-width="1" fill="none"></path>`;
+
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-offsetX} ${-offsetY} ${icon.size} ${icon.size}">${svgContent}</svg>`;
+}
+
 export function getIconXEl(
     name: string,
     op?: { size: number; width?: number; height?: number; data?: Record<string, any> },
@@ -457,25 +537,8 @@ export function getIconXEl(
         if (!svg) {
             return;
         }
-        const outerWidth = (width / size) * rsize;
-        const outerHeight = (height / size) * rsize;
 
-        const vTop = icon.edgeTrim?.top ?? 0;
-        const vBottom = icon.edgeTrim?.bottom ?? rsize;
-        const vLeft = icon.edgeTrim?.left ?? 0;
-        const vRight = icon.edgeTrim?.right ?? rsize;
-        const vWidth = vRight - vLeft;
-        const vHeight = vBottom - vTop;
-
-        const centerX = icon.viewCenter?.x ?? vLeft + vWidth / 2;
-        const centerY = icon.viewCenter?.y ?? vTop + vHeight / 2;
-
-        // 中心对齐，但是边界不能超出
-        const cx = Math.max(Math.min(outerWidth / 2, centerX - vLeft), vWidth + 0 - outerWidth / 2);
-        const cy = Math.max(Math.min(outerHeight / 2, centerY - vTop), vHeight + 0 - outerHeight / 2);
-
-        const offsetX = outerWidth / 2 - cx;
-        const offsetY = outerHeight / 2 - cy - vTop;
+        const { offsetX, offsetY } = computeOffset(icon, size, width, height);
         svg.style.width = `${size}px`;
         svg.style.position = "relative";
         if (offsetX !== 0) {
