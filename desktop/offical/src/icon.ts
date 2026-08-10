@@ -402,7 +402,7 @@ function renderPath(path: pPath) {
     if (close) d += " Z";
 
     const fillAttr = fill ? color : "none";
-    const strokeAttr = fill ? "none" : color;
+    const strokeAttr = color;
 
     return `<path d="${d}" fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${width}" stroke-linejoin="round" stroke-linecap="butt"/>`;
 }
@@ -429,6 +429,9 @@ function renderShape(shape: xShape): string {
 
 function renderCom(shape: xShape) {
     const p = (p: Point) => `<circle cx=${p.x} cy=${p.y} r="2" fill="red"></circle>`;
+    const l = (p1: Point, p2: Point) =>
+        `<line fill="none" stroke="red" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}"/>`;
+
     if (shape.type === "dot") {
         return p(shape.data.p);
     }
@@ -445,6 +448,9 @@ function renderCom(shape: xShape) {
         return `${p(shape.data.center)}
         <circle cx=${shape.data.center.x} cy=${shape.data.center.y} r="${shape.data.r}"
         stroke="red" stroke-width="2" fill="none"></circle>`;
+    }
+    if (shape.type === "path") {
+        return `${shape.data.ps.map((i) => `${p(i.p)}${l(i.p, i.c1)}${l(i.p, i.c2)}`).join("")}`;
     }
     return "";
 }

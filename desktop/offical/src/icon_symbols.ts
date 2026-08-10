@@ -846,6 +846,79 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             ],
         };
     },
+    notification: (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const ts = 8 * 9;
+        const tr = 8 * 5;
+        const br = 8 * 4; // todo nagitive
+        const p0 = { x: center.x, y: padding };
+        const p1l = { x: center.x - ts, y: padding + ts };
+        const p1r = { x: center.x + ts, y: padding + ts };
+        const p2l = { x: padding, y: size - padding - br };
+        const p2r = { x: size - padding, y: size - padding - br };
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "path",
+                            data: {
+                                ps: [
+                                    {
+                                        p: p0,
+                                        c1: p0,
+                                        c2: p(p0, -180, tr),
+                                    },
+                                    {
+                                        p: p1l,
+                                        c1: p(p1l, -90, tr),
+                                        c2: p(p1l, 90, tr),
+                                    },
+                                    {
+                                        p: p2l,
+                                        c1: p(p2l, -30, 40),
+                                        c2: p(p2l, 0, 40),
+                                    },
+                                    {
+                                        p: p2r,
+                                        c1: p(p2r, -180, 40),
+                                        c2: p(p2r, -180 + 30, 40),
+                                    },
+                                    {
+                                        p: p1r,
+                                        c1: p(p1r, 90, tr),
+                                        c2: p(p1r, -90, tr),
+                                    },
+                                    {
+                                        p: p0,
+                                        c1: p(p0, 0, tr),
+                                        c2: p0,
+                                    },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x, y: p2l.y },
+                                r: br,
+                                fromAngle: 0,
+                                endAngle: 180,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
     mutiWinView: (env) => {
         const { center, size } = buildZb(256);
         const w = 24;

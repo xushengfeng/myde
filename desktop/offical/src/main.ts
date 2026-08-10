@@ -2008,7 +2008,7 @@ tools.registerTool(
 tools.registerTool(
     "notifications",
     ({ tipEl, showTip }) => {
-        const btn = button("🔔").on("click", () => {
+        const btn = button(getIconXEl("notification", { size: 20, width: 24, height: 24 })).on("click", () => {
             showTip();
         });
 

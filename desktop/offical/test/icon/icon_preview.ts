@@ -24,6 +24,7 @@ const l = [
     "media.pause.fill",
     "cross",
     "mutiWinView",
+    "notification",
     "number.0",
     "number.1",
     "number.2",
