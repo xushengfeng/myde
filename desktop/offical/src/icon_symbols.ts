@@ -15,6 +15,13 @@ function p(startPoint: Point, angle: number, size: number) {
     } as Point;
 }
 
+function computPOfCircleAngle(p: Point, cCenter: Point, cR: number) {
+    const base = Math.atan2(p.y - cCenter.y, p.x - cCenter.x);
+    const d = Math.sqrt((p.y - cCenter.y) ** 2 + (p.x - cCenter.x) ** 2);
+    const a = Math.acos(cR / d);
+    return [((base + a) / Math.PI) * 180, ((base - a) / Math.PI) * 180];
+}
+
 export const iconsName: Record<string, (env: { color: string; data?: Record<string, any> }) => Icon> = {
     line: (env) => {
         const { size, center } = buildZb(256);
@@ -442,11 +449,12 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: p(p0, -180, padding), ro: w / 2, ri: 0 },
+                                    { p: p0, ro: w / 2, ri: 0 },
                                     { p: p1, ro: w / 2, ri: 0 },
                                     { p: p2, ro: w / 2, ri: 0 },
-                                    { p: p(p3, 0, padding), ro: w / 2, ri: 0 },
+                                    { p: p3, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 color: env.color,
                                 width: w,
                             },
@@ -536,10 +544,11 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: p({ x: center.x, y: padding }, -45, w / 2), ro: w / 2, ri: 0 },
+                                    { p: { x: center.x, y: padding }, ro: w / 2, ri: 0 },
                                     { p: { x: padding, y: center.y }, ro: w / 2, ri: 0 },
-                                    { p: p({ x: center.x, y: size - padding }, 45, w / 2), ro: w / 2, ri: 0 },
+                                    { p: { x: center.x, y: size - padding }, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 color: env.color,
                                 width: w,
                             },
@@ -564,10 +573,11 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: p({ x: padding, y: padding }, -90 - 45, w / 2), ro: w / 2, ri: 0 },
+                                    { p: { x: padding, y: padding }, ro: w / 2, ri: 0 },
                                     { p: center, ro: w / 2, ri: 0 },
-                                    { p: p({ x: padding, y: size - padding }, 180 - 45, w / 2), ro: w / 2, ri: 0 },
+                                    { p: { x: padding, y: size - padding }, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 color: env.color,
                                 width: w,
                             },
@@ -801,7 +811,6 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
         const { size } = buildZb(256);
         const w = 24;
         const padding = w / 2;
-        const pd = padding * (1 - Math.SQRT1_2);
         return {
             size,
             layout: [
@@ -812,9 +821,10 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: { x: pd, y: pd }, ro: w / 2, ri: 0 },
-                                    { p: { x: size - pd, y: size - pd }, ro: w / 2, ri: 0 },
+                                    { p: { x: padding, y: padding }, ro: w / 2, ri: 0 },
+                                    { p: { x: size - padding, y: size - padding }, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -823,9 +833,10 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: { x: size - pd, y: pd }, ro: w / 2, ri: 0 },
-                                    { p: { x: pd, y: size - pd }, ro: w / 2, ri: 0 },
+                                    { p: { x: size - padding, y: padding }, ro: w / 2, ri: 0 },
+                                    { p: { x: padding, y: size - padding }, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -950,9 +961,10 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: { x: center.x - r, y: padding + r }, ri: 0, ro: 0 },
-                                    { p: { x: center.x - r, y: size - (padding + r) }, ri: 0, ro: 0 },
+                                    { p: { x: center.x - r, y: padding + r }, ri: 0, ro: w / 2 },
+                                    { p: { x: center.x - r, y: size - (padding + r) }, ri: 0, ro: w / 2 },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -961,9 +973,10 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: { x: center.x + r, y: padding + r }, ri: 0, ro: 0 },
-                                    { p: { x: center.x + r, y: size - (padding + r) }, ri: 0, ro: 0 },
+                                    { p: { x: center.x + r, y: padding + r }, ri: 0, ro: w / 2 },
+                                    { p: { x: center.x + r, y: size - (padding + r) }, ri: 0, ro: w / 2 },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -980,10 +993,10 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
         return {
             size,
             edgeTrim: {
-                left: center.x - 64 - padding * (1 - Math.SQRT1_2),
+                left: center.x - 64 - padding,
                 right: center.x + padding,
             },
-            viewCenter: { x: center.x - 16, y: center.y },
+            viewCenter: { x: center.x - 8 * 2, y: center.y },
             layout: [
                 {
                     name: "base",
@@ -996,6 +1009,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                     { p: { x: center.x, y: padding }, ro: w / 2, ri: 0 },
                                     { p: { x: center.x, y: size }, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "start",
                                 width: w,
                                 color: env.color,
                             },
@@ -1010,7 +1024,11 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
         const w = 24;
         const padding = w / 2;
         const d2 = 8 * 19;
-        const xAngle = 41.81;
+        const [_, xAngle] = computPOfCircleAngle(
+            { x: center.x - d2 / 2 + padding, y: size - padding },
+            { x: center.x, y: d2 / 2 },
+            d2 / 2 - padding,
+        );
         return {
             size,
             edgeTrim: { left: center.x - d2 / 2, right: center.x + d2 / 2 },
@@ -1033,18 +1051,19 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: p({ x: center.x, y: d2 / 2 }, xAngle, d2 / 2 - padding), ri: 0, ro: 0 },
+                                    { p: p({ x: center.x, y: d2 / 2 }, xAngle, d2 / 2 - padding), ri: 0, ro: w / 2 },
                                     {
                                         p: { x: center.x - d2 / 2 + padding, y: size - padding },
                                         ri: 0,
                                         ro: w / 2,
                                     },
                                     {
-                                        p: { x: center.x + d2 / 2, y: size - padding },
+                                        p: { x: center.x + d2 / 2 - padding, y: size - padding },
                                         ri: 0,
                                         ro: w / 2,
                                     },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1059,6 +1078,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
         const w = 24;
         const padding = w / 2;
         const d2 = 8 * 20;
+        const ww = 8 * 7;
         const xAngle = -90 - 30;
         return {
             size,
@@ -1071,14 +1091,15 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: { x: center.x - d2 / 2 + 8, y: padding }, ri: 0, ro: w / 2 },
-                                    { p: { x: center.x + d2 / 2 - padding - 8, y: padding }, ri: 0, ro: w / 2 },
+                                    { p: { x: center.x - ww, y: padding }, ri: 0, ro: w / 2 },
+                                    { p: { x: center.x + ww, y: padding }, ri: 0, ro: w / 2 },
                                     {
                                         p: p({ x: center.x, y: size - d2 / 2 }, xAngle, d2 / 2 - padding),
                                         ri: 0,
                                         ro: w / 2,
                                     },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1107,7 +1128,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             size,
             edgeTrim: {
                 left: center.x - 8 * 12 - padding,
-                right: center.x + 8 * 6,
+                right: center.x + 8 * 5 + padding,
             },
             layout: [
                 {
@@ -1117,11 +1138,12 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: { x: center.x, y: size }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x, y: size - padding }, ro: w / 2, ri: 0 },
                                     { p: { x: center.x, y: padding }, ro: w / 2, ri: 0 },
                                     { p: { x: center.x - 8 * 12, y: center.y + 8 * 8 }, ro: w / 2, ri: 0 },
-                                    { p: { x: center.x + 8 * 6, y: center.y + 8 * 8 }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x + 8 * 5, y: center.y + 8 * 8 }, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1137,7 +1159,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
         const padding = w / 2;
         const d2 = 8 * 20;
         const ww = 8 * 5;
-        const xAngle = -90 - 65;
+        const xAngle = -90 - 55;
         return {
             size,
             edgeTrim: { left: center.x - d2 / 2, right: center.x + d2 / 2 },
@@ -1157,6 +1179,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                         ro: w / 2,
                                     },
                                 ],
+                                extendNode: "both",
                                 color: env.color,
                                 width: w,
                             },
@@ -1182,7 +1205,8 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
         const w = 24;
         const padding = w / 2;
         const d2 = 8 * 19;
-        const xAngle = -90 - 60;
+        const p0 = { x: center.x + 8, y: padding };
+        const [_, xAngle] = computPOfCircleAngle(p0, { x: center.x, y: size - d2 / 2 }, d2 / 2 - padding);
         return {
             size,
             edgeTrim: { left: center.x - d2 / 2, right: center.x + d2 / 2 },
@@ -1194,13 +1218,14 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: { x: center.x, y: padding }, ro: w / 2, ri: 0 },
+                                    { p: p0, ro: w / 2, ri: 0 },
                                     {
                                         p: p({ x: center.x, y: size - d2 / 2 }, xAngle, d2 / 2 - padding),
                                         ro: w / 2,
                                         ri: 0,
                                     },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1227,7 +1252,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
         const padding = w / 2;
         return {
             size,
-            edgeTrim: { left: center.x - 8 * 8, right: center.y + 8 * 8 + padding },
+            edgeTrim: { left: center.x - 8 * 8 - padding, right: center.y + 8 * 8 + padding },
             layout: [
                 {
                     name: "base",
@@ -1238,8 +1263,9 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                 ps: [
                                     { p: { x: center.x - 8 * 8, y: padding }, ro: w / 2, ri: 0 },
                                     { p: { x: center.x + 8 * 8, y: padding }, ro: w / 2, ri: 0 },
-                                    { p: { x: center.x - 8 * 2, y: size }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x - 8 * 5, y: size - padding }, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1294,7 +1320,8 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
         const w = 24;
         const padding = w / 2;
         const d2 = 8 * 19;
-        const xAngle = 30;
+        const p0 = { x: center.x - 8, y: size - padding };
+        const [_, xAngle] = computPOfCircleAngle(p0, { x: center.x, y: d2 / 2 }, d2 / 2 - padding);
         return {
             size,
             edgeTrim: { left: center.x - d2 / 2, right: center.x + d2 / 2 },
@@ -1322,8 +1349,9 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                         ro: w / 2,
                                         ri: 0,
                                     },
-                                    { p: { x: center.x, y: size }, ro: w / 2, ri: 0 },
+                                    { p: p0, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1335,7 +1363,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
     },
     "number.dot": (env) => {
         const { center, size } = buildZb(256);
-        const w = 24;
+        const w = 32;
         const padding = w / 2;
         return {
             size,
@@ -1362,9 +1390,9 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
     },
     "number.:": (env) => {
         const { center, size } = buildZb(256);
-        const w = 24;
+        const w = 32;
         const padding = w / 2;
-        const x = 8 * 4;
+        const x = 8 * 6;
         return {
             size,
             edgeTrim: {
@@ -1403,7 +1431,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
         return {
             size,
             edgeTrim: {
-                left: center.x - padding - 32,
+                left: center.x - padding - 8 * 3,
                 right: center.x + padding,
             },
             layout: [
@@ -1415,12 +1443,13 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             data: {
                                 ps: [
                                     {
-                                        p: { x: center.x, y: center.y + 8 * 6 },
+                                        p: { x: center.x, y: size - 8 * 6 },
                                         ro: w / 2,
                                         ri: 0,
                                     },
-                                    { p: { x: center.x - 32, y: size - padding }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x - 8 * 3, y: size - padding }, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1487,6 +1516,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                     },
                                     { p: { x: center.x - d, y: size - padding }, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1502,6 +1532,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                     },
                                     { p: { x: center.x + d, y: size - padding }, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1537,6 +1568,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                     },
                                     { p: { x: center.x - dd, y: size - padding }, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1572,6 +1604,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                     },
                                     { p: { x: center.x + dd, y: size - padding }, ro: w / 2, ri: 0 },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1615,6 +1648,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                         ri: 0,
                                     },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1646,7 +1680,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             ],
         };
     },
-    "number.-": (env) => {
+    "number.minus": (env) => {
         const { center, size } = buildZb(256);
         const w = 24;
         const padding = w / 2;
@@ -1676,6 +1710,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                         ri: 0,
                                     },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1685,7 +1720,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             ],
         };
     },
-    "number.+": (env) => {
+    "number.plus": (env) => {
         const { center, size } = buildZb(256);
         const w = 24;
         const padding = w / 2;
@@ -1715,6 +1750,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                         ri: 0,
                                     },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1734,6 +1770,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                         ri: 0,
                                     },
                                 ],
+                                extendNode: "both",
                                 width: w,
                                 color: env.color,
                             },
@@ -1741,6 +1778,88 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                     ],
                 },
             ],
+        };
+    },
+    "number.degree": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const r = 8 * 4;
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - r - padding,
+                right: center.x + r + padding + r + r,
+            },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x, y: r + padding },
+                                r,
+                                endAngle: 0,
+                                fromAngle: 0,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "font.underscore": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const dd = 8 * 4;
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - dd - padding,
+                right: center.x + dd + padding,
+            },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: { x: center.x + dd, y: size - padding },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    {
+                                        p: { x: center.x - dd, y: size - padding },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                ],
+                                extendNode: "both",
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "font.space": () => {
+        const { center, size } = buildZb(256);
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - 8 * 2,
+                right: center.x + 8 * 2,
+            },
+            layout: [],
         };
     },
 };

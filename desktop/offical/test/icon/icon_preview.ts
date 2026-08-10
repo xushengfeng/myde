@@ -41,8 +41,11 @@ const l = [
     "number.slash",
     "number.backslash",
     "number.percent",
-    "number.-",
-    "number.+",
+    "number.minus",
+    "number.plus",
+    "number.degree",
+    "font.underscore",
+    "font.space",
 ];
 
 if ("document" in globalThis) {
@@ -53,7 +56,12 @@ if ("document" in globalThis) {
             .style({ alignItems: "center", gap: "8px", width: `${64}px` })
             .add([el, txt(i).style({ fontFamily: "monospace", wordBreak: "break-all" })])
             .addInto(pel)
-            .on("click", () => showIcon(i));
+            .on("click", () => {
+                const url = new URL(window.location.href);
+                url.searchParams.set("icon", i);
+                window.history.replaceState({}, "", url.toString());
+                showIcon(i);
+            });
     }
     const dialog = ele("dialog").attr({ popover: "auto" }).addInto();
     function showIcon(name: string) {

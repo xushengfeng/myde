@@ -18,8 +18,18 @@ aLineText()
     .addInto(view().style({ border: "solid 1px", width: "100px" }).addInto());
 
 // 数字
-view()
-    .add([nNumber("0123456789.:/\\,#%-+"), nNumber("12:34.567")])
+view("y")
+    .style({ gap: "8px" })
+    .add([
+        nNumber("0123456789.:/\\,#%-+°_ "),
+        nNumber("12:34.567"),
+        nNumber("-200°0"),
+        nNumber("#12345"),
+        nNumber("1234,5678,9.0"),
+        nNumber("1234.5678.90,0"),
+        nNumber("1234_5678_90.0"),
+        nNumber("123 4567 890.0"),
+    ])
     .addInto();
 
 // 布局

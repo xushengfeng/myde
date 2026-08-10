@@ -10,7 +10,14 @@ export type Icon = {
 
 export type Point = { x: number; y: number };
 type zLinePoint = { p: Point; ro: number; ri: number };
-type zLine = { ps: zLinePoint[]; width: number; close?: boolean; fill?: boolean; color: string };
+type zLine = {
+    ps: zLinePoint[];
+    width: number;
+    close?: boolean;
+    extendNode?: "none" | "start" | "end" | "both";
+    fill?: boolean;
+    color: string;
+};
 type dot = { p: Point; sizeWidth: number; color: string };
 type aArc = { center: Point; r: number; width: number; fromAngle: number; endAngle: number; color: string };
 type pPath = {
@@ -253,16 +260,21 @@ function generateZLinePath(zline: zLine): string {
         // 非 close 模式：起点终点有端点修饰
         const startRo = ps[0].ro;
         const endRo = ps[len - 1].ro;
+        const extendNode = zline.extendNode ?? "none";
+        const extendStart = extendNode === "start" || extendNode === "both";
+        const extendEnd = extendNode === "end" || extendNode === "both";
 
         const startV = edgeDirs[0];
         const startN = leftNormal(startV);
-        const startLeft = vecAdd(ps[0].p, vecScale(startN, hw));
-        const startRight = vecAdd(ps[0].p, vecScale(startN, -hw));
+        const startOffset = extendStart ? hw : 0;
+        const startLeft = vecAdd(ps[0].p, vecAdd(vecScale(startN, hw), vecScale(startV, -startOffset)));
+        const startRight = vecAdd(ps[0].p, vecAdd(vecScale(startN, -hw), vecScale(startV, -startOffset)));
 
         const endV = edgeDirs[len - 2];
         const endN = leftNormal(endV);
-        const endLeft = vecAdd(ps[len - 1].p, vecScale(endN, hw));
-        const endRight = vecAdd(ps[len - 1].p, vecScale(endN, -hw));
+        const endOffset = extendEnd ? hw : 0;
+        const endLeft = vecAdd(ps[len - 1].p, vecAdd(vecScale(endN, hw), vecScale(endV, endOffset)));
+        const endRight = vecAdd(ps[len - 1].p, vecAdd(vecScale(endN, -hw), vecScale(endV, endOffset)));
 
         const startLeftFillet = computeFillet(startLeft, startN, startV, startRo);
         const startRightFillet = computeFillet(startRight, vecScale(startV, -1), startN, startRo);
