@@ -18,6 +18,7 @@ import { mpris } from "../../sys_api/mpris";
 import { network } from "../../sys_api/network";
 import { notification } from "../../sys_api/notification";
 import { power } from "../../sys_api/power";
+import { volumeControl } from "../../sys_api/volume";
 
 const {
     default: { loginService },
@@ -62,6 +63,7 @@ async function loadDesktop(p: string) {
     myde.MSysApi.power = new power(await newDBusIO(true));
     myde.MSysApi.blue = new blue(await newDBusIO(true));
     myde.MSysApi.network = new network(await newDBusIO(true));
+    myde.MSysApi.volume = new volumeControl();
     // 影响了fs promise正常工作
     // myde.MSysApi.input = new InputManager(inputFs);
     // await myde.MSysApi.input.init();

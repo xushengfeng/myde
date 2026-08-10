@@ -16,6 +16,7 @@ import type { network } from "./sys_api/network";
 import type { notification } from "./sys_api/notification";
 import type { power } from "./sys_api/power";
 import { server } from "./sys_api/run";
+import type { volumeControl } from "./sys_api/volume";
 import { renderToolsHtmlEl } from "./wayland/render_tools_el";
 
 export const _myde = {
@@ -39,6 +40,7 @@ export const _myde = {
         network: undefined as unknown as network,
         display: undefined as unknown as display,
         input: undefined as unknown as InputManager,
+        volume: undefined as unknown as volumeControl,
         appControl: {
             getPidTree,
             getPid,
