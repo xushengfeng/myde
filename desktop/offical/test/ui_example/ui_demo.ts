@@ -1,6 +1,6 @@
 import { addStyle, button, initDKH, txt, view } from "dkh-ui";
 import { carousel, dynamicScrollList } from "../../src/scroll-list";
-import { aLineText, iItem, nNotiList, sSize, sSize2, ui } from "../../src/ui";
+import { aLineText, iItem, nNotiList, nNumber, sSize, sSize2, ui } from "../../src/ui";
 
 addStyle({ body: { userSelect: "none", padding: "8px", fontFamily: "sans-serif" } });
 initDKH({ pureStyle: true });
@@ -16,6 +16,11 @@ aLineText()
 aLineText()
     .sv("长长长长长长长长长长长长长长长长")
     .addInto(view().style({ border: "solid 1px", width: "100px" }).addInto());
+
+// 数字
+view()
+    .add([nNumber("0123456789.:/\\,#%-+"), nNumber("12:34.567")])
+    .addInto();
 
 // 布局
 function whiteView() {

@@ -571,6 +571,35 @@ export function tTrayMenu(op: { click: () => void; clickItem: () => void }) {
     };
 }
 
+export function nNumber(n: string) {
+    const l = n.split("");
+    const t = view("x").style({ height: "16px" });
+    const map: Record<string, { name: string; w: number }> = {};
+    for (const i of Array(10)
+        .fill(0)
+        .map((_, i) => i)) {
+        map[i] = { name: `number.${i}`, w: 12 };
+    }
+    console.log(map);
+
+    map["."] = { name: "number.dot", w: 4 };
+    map[":"] = { name: "number.:", w: 4 };
+    map[","] = { name: "number.,", w: 4 };
+    map["/"] = { name: "number.slash", w: 12 };
+    map["\\"] = { name: "number.backslash", w: 12 };
+    map["#"] = { name: "number.hash", w: 12 };
+    map["%"] = { name: "number.percent", w: 12 };
+    map["-"] = { name: "number.-", w: 12 };
+    map["+"] = { name: "number.+", w: 12 };
+    for (const n of l) {
+        if (!(n in map)) console.warn(`cannot conver "${n}"`);
+        else {
+            t.add(getIconXEl(map[n].name, { size: 16, width: map[n].w, height: 16 }));
+        }
+    }
+    return t;
+}
+
 export const ui = {
     passwd: () => {
         const x = uPasswdInput();

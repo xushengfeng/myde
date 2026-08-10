@@ -24,7 +24,25 @@ const l = [
     "media.pause.fill",
     "cross",
     "mutiWinView",
+    "number.0",
     "number.1",
+    "number.2",
+    "number.3",
+    "number.4",
+    "number.5",
+    "number.6",
+    "number.7",
+    "number.8",
+    "number.9",
+    "number.dot",
+    "number.:",
+    "number.,",
+    "number.hash",
+    "number.slash",
+    "number.backslash",
+    "number.percent",
+    "number.-",
+    "number.+",
 ];
 
 if ("document" in globalThis) {
@@ -43,20 +61,31 @@ if ("document" in globalThis) {
         // 32 64 512
         dialog.el.showPopover();
         const pel = view();
-        for (const size of [32, 64, 512]) {
-            const xel = view().style({ position: "relative" });
+        const sm = view("x").addInto(pel);
+        for (const size of [16, 24, 32]) {
             const el = getIconXEl(name, { size }).el;
-            xel.add(el).style({ border: "1px solid blue" });
-            pel.add(xel);
-            if (size === 512) {
-                const cEl = view().style({ position: "absolute", top: 0, width: "512px" });
-                const x = getIconComment(name);
-                if (x) cEl.el.innerHTML = x;
-                console.log(x);
-
-                xel.add(cEl);
-            }
+            el.style.border = "1px solid blue";
+            sm.add(el);
         }
+        const bel = view("x").addInto(pel);
+        for (const b of [0, 2, 4, 6, 8, 10, 12, 14]) {
+            const el = getIconXEl(name, { size: 64 }).el;
+            el.style.filter = `blur(${b}px)`;
+            bel.add(
+                view().style({ width: "64px", height: "64px", border: "1px solid blue", overflow: "hidden" }).add(el),
+            );
+        }
+
+        const xel = view().style({ position: "relative" });
+        const el = getIconXEl(name, { size: 512 }).el;
+        el.style.border = "1px solid blue";
+        xel.add(el);
+        pel.add(xel);
+        const cEl = view().style({ position: "absolute", top: 0, width: "512px" });
+        const x = getIconComment(name);
+        if (x) cEl.el.innerHTML = x;
+        xel.add(cEl);
+
         dialog.clear().add(pel);
     }
     const icon = new URLSearchParams(location.search).get("icon");

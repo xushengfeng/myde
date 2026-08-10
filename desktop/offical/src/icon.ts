@@ -479,7 +479,7 @@ function computeOffset(icon: Icon, size: number, width: number, height: number) 
     const cx = Math.max(Math.min(outerWidth / 2, centerX - vLeft), vWidth + 0 - outerWidth / 2);
     const cy = Math.max(Math.min(outerHeight / 2, centerY - vTop), vHeight + 0 - outerHeight / 2);
 
-    const offsetX = outerWidth / 2 - cx;
+    const offsetX = outerWidth / 2 - cx - vLeft;
     const offsetY = outerHeight / 2 - cy - vTop;
     return { offsetX, offsetY };
 }
@@ -499,8 +499,7 @@ export function getIconComment(name: string) {
 
     const { offsetX, offsetY } = computeOffset(icon, icon.size, icon.size, icon.size);
 
-    svgContent += `<path d="M${0 - offsetX} ${icon.size / 2 - offsetY} L ${icon.size - offsetX} ${icon.size / 2 - offsetY}" stroke="blue" stroke-width="1"></path>`;
-    svgContent += `<path d="M${icon.size / 2 - offsetX} ${0 - offsetY} L ${icon.size / 2 - offsetX} ${icon.size - offsetY}" stroke="blue" stroke-width="1"></path>`;
+    svgContent += `<circle cx=${icon.size / 2 - offsetX} cy=${icon.size / 2 - offsetY} r="2" fill="blue"></circle>`;
 
     const vTop = icon.edgeTrim?.top ?? 0;
     const vBottom = icon.edgeTrim?.bottom ?? rsize;

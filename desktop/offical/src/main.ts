@@ -3,7 +3,7 @@ import { addClass, addStyle, button, check, ele, type ElType, image, pack, setPr
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
 import { txt } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
-import { aLineText, iItem, mMedia, nNotiList, px, sSize, sSize2, tTrayMenu, ui, uPasswdInput } from "./ui";
+import { aLineText, iItem, mMedia, nNotiList, nNumber, px, sSize, sSize2, tTrayMenu, ui, uPasswdInput } from "./ui";
 import { dynamicScrollList } from "./scroll-list";
 import { Registry } from "./registry";
 import type { MenuItem } from "../../../src/sys_api/menu";
@@ -1613,12 +1613,12 @@ tools.registerTool("startMenuFullScreen", ({ tipEl, showTip }) => {
 });
 
 tools.registerTool("clock", () => {
-    const clockEl = txt("00:00");
+    const clockEl = view("x").style({ alignItems: "center" });
     function updateTime() {
         const now = new Date();
         const hours = now.getHours().toString().padStart(2, "0");
         const minutes = now.getMinutes().toString().padStart(2, "0");
-        clockEl.sv(`${hours}:${minutes}`);
+        clockEl.clear().add(nNumber(`${hours}:${minutes}`));
     }
     updateTime();
     setInterval(updateTime, 60000);

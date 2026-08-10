@@ -912,4 +912,835 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             ],
         };
     },
+    "number.0": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const r = (8 * 19) / 2 - padding;
+        return {
+            size,
+            edgeTrim: { left: center.x - r - padding, right: center.x + r + padding },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x, y: padding + r },
+                                color: env.color,
+                                fromAngle: -180,
+                                endAngle: 0,
+                                r,
+                                width: w,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x, y: size - (padding + r) },
+                                color: env.color,
+                                fromAngle: 0,
+                                endAngle: -180,
+                                r,
+                                width: w,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: center.x - r, y: padding + r }, ri: 0, ro: 0 },
+                                    { p: { x: center.x - r, y: size - (padding + r) }, ri: 0, ro: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: center.x + r, y: padding + r }, ri: 0, ro: 0 },
+                                    { p: { x: center.x + r, y: size - (padding + r) }, ri: 0, ro: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.1": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - 64 - padding * (1 - Math.SQRT1_2),
+                right: center.x + padding,
+            },
+            viewCenter: { x: center.x - 16, y: center.y },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: center.x - 64, y: 64 }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x, y: padding }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x, y: size }, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.2": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const d2 = 8 * 19;
+        const xAngle = 41.81;
+        return {
+            size,
+            edgeTrim: { left: center.x - d2 / 2, right: center.x + d2 / 2 },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x, y: d2 / 2 },
+                                endAngle: xAngle,
+                                fromAngle: -170,
+                                r: d2 / 2 - padding,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: p({ x: center.x, y: d2 / 2 }, xAngle, d2 / 2 - padding), ri: 0, ro: 0 },
+                                    {
+                                        p: { x: center.x - d2 / 2 + padding, y: size - padding },
+                                        ri: 0,
+                                        ro: w / 2,
+                                    },
+                                    {
+                                        p: { x: center.x + d2 / 2, y: size - padding },
+                                        ri: 0,
+                                        ro: w / 2,
+                                    },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.3": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const d2 = 8 * 20;
+        const xAngle = -90 - 30;
+        return {
+            size,
+            edgeTrim: { left: center.x - d2 / 2, right: center.x + d2 / 2 },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: center.x - d2 / 2 + 8, y: padding }, ri: 0, ro: w / 2 },
+                                    { p: { x: center.x + d2 / 2 - padding - 8, y: padding }, ri: 0, ro: w / 2 },
+                                    {
+                                        p: p({ x: center.x, y: size - d2 / 2 }, xAngle, d2 / 2 - padding),
+                                        ri: 0,
+                                        ro: w / 2,
+                                    },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x, y: size - d2 / 2 },
+                                endAngle: -180,
+                                fromAngle: xAngle,
+                                r: d2 / 2 - padding,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.4": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - 8 * 12 - padding,
+                right: center.x + 8 * 6,
+            },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: center.x, y: size }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x, y: padding }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x - 8 * 12, y: center.y + 8 * 8 }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x + 8 * 6, y: center.y + 8 * 8 }, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.5": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const d2 = 8 * 20;
+        const ww = 8 * 5;
+        const xAngle = -90 - 65;
+        return {
+            size,
+            edgeTrim: { left: center.x - d2 / 2, right: center.x + d2 / 2 },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: center.x + ww, y: padding }, ri: 0, ro: w / 2 },
+                                    { p: { x: center.x - ww, y: padding }, ri: 0, ro: w / 2 },
+                                    {
+                                        p: p({ x: center.x, y: size - d2 / 2 }, xAngle, d2 / 2 - padding),
+                                        ri: 0,
+                                        ro: w / 2,
+                                    },
+                                ],
+                                color: env.color,
+                                width: w,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x, y: size - d2 / 2 },
+                                endAngle: -180 - 15,
+                                fromAngle: xAngle,
+                                r: d2 / 2 - padding,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.6": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const d2 = 8 * 19;
+        const xAngle = -90 - 60;
+        return {
+            size,
+            edgeTrim: { left: center.x - d2 / 2, right: center.x + d2 / 2 },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: center.x, y: padding }, ro: w / 2, ri: 0 },
+                                    {
+                                        p: p({ x: center.x, y: size - d2 / 2 }, xAngle, d2 / 2 - padding),
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x, y: size - d2 / 2 },
+                                endAngle: 0,
+                                fromAngle: 0,
+                                r: d2 / 2 - padding,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.7": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        return {
+            size,
+            edgeTrim: { left: center.x - 8 * 8, right: center.y + 8 * 8 + padding },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: center.x - 8 * 8, y: padding }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x + 8 * 8, y: padding }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x - 8 * 2, y: size }, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.8": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const d2 = 8 * 19;
+        const d1 = size - d2 + w;
+        return {
+            size,
+            edgeTrim: { left: center.x - d2 / 2, right: center.x + d2 / 2 },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x, y: d1 / 2 },
+                                endAngle: 0,
+                                fromAngle: 0,
+                                r: d1 / 2 - padding,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x, y: size - d2 / 2 },
+                                endAngle: 0,
+                                fromAngle: 0,
+                                r: d2 / 2 - padding,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.9": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const d2 = 8 * 19;
+        const xAngle = 30;
+        return {
+            size,
+            edgeTrim: { left: center.x - d2 / 2, right: center.x + d2 / 2 },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x, y: d2 / 2 },
+                                endAngle: 0,
+                                fromAngle: 0,
+                                r: d2 / 2 - padding,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: p({ x: center.x, y: d2 / 2 }, xAngle, d2 / 2 - padding),
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    { p: { x: center.x, y: size }, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.dot": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - padding,
+                right: center.x + padding,
+            },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "dot",
+                            data: {
+                                p: { x: center.x, y: size - padding },
+                                sizeWidth: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.:": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const x = 8 * 4;
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - padding,
+                right: center.x + padding,
+            },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "dot",
+                            data: {
+                                p: { x: center.x, y: center.y - x },
+                                sizeWidth: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "dot",
+                            data: {
+                                p: { x: center.x, y: center.y + x },
+                                sizeWidth: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.,": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - padding - 32,
+                right: center.x + padding,
+            },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: { x: center.x, y: center.y + 8 * 6 },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    { p: { x: center.x - 32, y: size - padding }, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.hash": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const d = 8 * 4;
+        const dd = 8 * 10;
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - dd,
+                right: center.x + dd,
+            },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: { x: center.x - dd, y: center.y - d },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    { p: { x: center.x + dd, y: center.y - d }, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: { x: center.x - dd, y: center.y + d },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    { p: { x: center.x + dd, y: center.y + d }, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: { x: center.x - d, y: padding },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    { p: { x: center.x - d, y: size - padding }, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: { x: center.x + d, y: padding },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    { p: { x: center.x + d, y: size - padding }, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.slash": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const dd = 8 * 6;
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - padding - dd,
+                right: center.x + padding + dd,
+            },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: { x: center.x + dd, y: padding },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    { p: { x: center.x - dd, y: size - padding }, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.backslash": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const dd = 8 * 6;
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - padding - dd,
+                right: center.x + padding + dd,
+            },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: { x: center.x - dd, y: padding },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    { p: { x: center.x + dd, y: size - padding }, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.percent": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const dd = 8 * 8;
+        const cdx = 8 * 5;
+        const cdy = 8 * 9;
+        const r = 8 * 4;
+        const t = Math.max(dd + padding, cdx + r + padding);
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - t,
+                right: center.x + t,
+            },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: { x: center.x + dd, y: padding },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    {
+                                        p: { x: center.x - dd, y: size - padding },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x - cdx, y: center.y - cdy },
+                                endAngle: 0,
+                                fromAngle: 0,
+                                r,
+                                color: env.color,
+                                width: w,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x + cdx, y: center.y + cdy },
+                                endAngle: 0,
+                                fromAngle: 0,
+                                r,
+                                color: env.color,
+                                width: w,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.-": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const dd = 8 * 8;
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - dd - padding,
+                right: center.x + dd + padding,
+            },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: { x: center.x + dd, y: center.y },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    {
+                                        p: { x: center.x - dd, y: center.y },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "number.+": (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const dd = 8 * 8;
+        return {
+            size,
+            edgeTrim: {
+                left: center.x - dd - padding,
+                right: center.x + dd + padding,
+            },
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: { x: center.x + dd, y: center.y },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    {
+                                        p: { x: center.x - dd, y: center.y },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    {
+                                        p: { x: center.x, y: center.y - dd },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                    {
+                                        p: { x: center.x, y: center.y + dd },
+                                        ro: w / 2,
+                                        ri: 0,
+                                    },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
 };
