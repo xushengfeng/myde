@@ -270,6 +270,7 @@ export function bButton(txt: string, onClick: () => void) {
 }
 
 export function nNotiList(op: { map: (k: string) => Promise<{ title: string; content: string; delete: () => void }> }) {
+    let list: string[] = [];
     const nl = dynamicScrollList<string>({
         itemSize: sSize(2),
         containerSize: sSize(2) * 4,
@@ -318,8 +319,21 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
     });
     showGear.moveTo({ s: 1 }, 0);
 
+    const clearAll = view("x")
+        .add(getIconXEl("cross"))
+        .style({
+            alignItems: "center",
+            justifyContent: "center",
+        })
+        .on("click", async () => {
+            for (const l of list) {
+                (await op.map(l)).delete();
+            }
+        });
+
     return {
         el: ui.bar([
+            // todo 勿扰模式
             ui
                 .barItem()
                 .style({ position: "relative" })
@@ -327,6 +341,14 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
                     nl.el.style({ width: px(sSize(10)) }),
                     emptyMask.style({ position: "absolute", top: 0, left: 0 }),
                 ]),
+            ui
+                .barItem()
+                .style({ height: px(sSize(1)) })
+                .add(
+                    clearAll.style({
+                        height: "100%",
+                    }),
+                ),
         ]).el,
         setList: (l: string[]) => {
             if (l.length === 0) {
@@ -335,6 +357,7 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
                 showGear.moveTo({ s: 0 });
             }
             nl.setList(l);
+            list = l;
         },
     };
 }
