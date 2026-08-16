@@ -1,6 +1,6 @@
 import { addStyle, button, initDKH, txt, view } from "dkh-ui";
 import { carousel, dynamicScrollList } from "../../src/scroll-list";
-import { aLineText, iItem, nNotiList, nNumber, sSize, sSize2, ui } from "../../src/ui";
+import { aLineText, iItem, nNotiList, nNumber, rRange, sSize, sSize2, ui, vVolume } from "../../src/ui";
 
 addStyle({ body: { userSelect: "none", padding: "8px", fontFamily: "sans-serif" } });
 initDKH({ pureStyle: true });
@@ -257,6 +257,15 @@ const noB = button("show")
 setTimeout(() => {
     noB.el.click();
 }, 800);
+
+const range = rRange();
+const rangePel = view().addInto().style({ width: "300px", height: "20px" });
+range.el.addInto(rangePel);
+const rangeText = txt().addInto(rangePel);
+range.onChange((v) => rangeText.sv(v.toString()));
+
+const volume = vVolume();
+volume.el.addInto();
 
 // 动态滚动列表测试（垂直向下）
 const scrollListDemo = view()

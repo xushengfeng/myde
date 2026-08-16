@@ -19,6 +19,9 @@ import {
     MockMprisPlayer,
     MockTrayManager,
     MockTrayItem,
+    MockVolumeManager,
+    MockAudioDevice,
+    MockAudioStream,
 } from "../../../../test/mock";
 import { createMockApp, getMockAppIcon, getMockAppList } from "../../../../test/mock/apps";
 import { MockRenderTools } from "../../../../test/mock/render-tools";
@@ -50,6 +53,7 @@ const powerManager = new MockPowerManager(console.log);
 const notificationManager = new MockNotificationManager(console.log);
 const mprisManager = new MockMprisManager(console.log);
 const trayManager = new MockTrayManager(console.log);
+const volumeManager = new MockVolumeManager(console.log);
 
 let clientIdCounter = 0;
 
@@ -109,6 +113,10 @@ export function getMockMprisManager() {
 
 export function getMockTrayManager() {
     return trayManager;
+}
+
+export function getMockVolumeManager() {
+    return volumeManager;
 }
 
 // 添加蓝牙设备
@@ -176,6 +184,35 @@ export function addMockTrayItem(
     const item = new MockTrayItem(path, title, iconName, itemIsMenu);
     trayManager.addItem(item);
     return item;
+}
+
+// 添加音频设备
+export function addMockAudioDevice(
+    id: number,
+    name: string,
+    type: "sink" | "source" | "device" = "device",
+    isDefault = false,
+    volume = 1.0,
+    isMuted = false,
+) {
+    const device = new MockAudioDevice(id, name, type, isDefault, volume, isMuted);
+    volumeManager.addDevice(device);
+    return device;
+}
+
+// 添加音频流
+export function addMockAudioStream(
+    id: number,
+    name: string,
+    type: "input" | "output" = "output",
+    pid?: number,
+    applicationName?: string,
+    volume = 1.0,
+    isMuted = false,
+) {
+    const stream = new MockAudioStream(id, name, type, pid, applicationName, volume, isMuted);
+    volumeManager.addStream(stream);
+    return stream;
 }
 
 // 初始化示例数据
@@ -379,6 +416,19 @@ function initMockData() {
         { id: 10, type: "standard", label: "退出", enabled: true, visible: true, click: () => console.log("退出") },
     ]);
 
+    // 音频设备示例
+    addMockAudioDevice(51, "内置音频模拟立体声", "sink", true, 0.65, false);
+    addMockAudioDevice(52, "内置音频模拟立体声", "source", true, 0.80, false);
+    addMockAudioDevice(53, "USB音频设备", "sink", false, 0.50, false);
+    addMockAudioDevice(54, "蓝牙音频", "sink", false, 0.75, true);
+
+    // 音频流示例（应用程序）
+    addMockAudioStream(81, "Firefox", "output", 1234, "Firefox", 0.80, false);
+    addMockAudioStream(82, "Spotify", "output", 5678, "Spotify", 0.90, false);
+    addMockAudioStream(83, "Discord", "output", 9012, "Discord", 0.70, false);
+    addMockAudioStream(84, "系统声音", "output", undefined, "system-sounds", 1.0, false);
+    addMockAudioStream(85, "麦克风", "input", 3456, "speech-dispatcher", 0.60, false);
+
     // 通知示例
     setTimeout(() => {
         sendMockNotification(
@@ -459,6 +509,7 @@ async function init() {
         notificationManager,
         mprisManager,
         trayManager,
+        volumeManager,
         sysApi: {
             getDesktopEntries: async () => mockData.desktopEntries as any,
             getDesktopEntry: async (id: string) => {

@@ -3,7 +3,20 @@ import { addClass, addStyle, button, check, ele, type ElType, image, pack, setPr
 import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
 import { txt } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
-import { aLineText, iItem, mMedia, nNotiList, nNumber, px, sSize, sSize2, tTrayMenu, ui, uPasswdInput } from "./ui";
+import {
+    aLineText,
+    iItem,
+    mMedia,
+    nNotiList,
+    nNumber,
+    px,
+    sSize,
+    sSize2,
+    tTrayMenu,
+    ui,
+    uPasswdInput,
+    vVolume,
+} from "./ui";
 import { dynamicScrollList } from "./scroll-list";
 import { Registry } from "./registry";
 import type { MenuItem } from "../../../src/sys_api/menu";
@@ -74,6 +87,10 @@ interface RegistrySchema {
     };
     "tray.list[].active": boolean;
     "tray.list[].menu": MenuItem[];
+    "volume.output.default.muted": boolean;
+    "volume.input.default.muted": boolean;
+    "volume.output.default.volume": number;
+    "volume.input.default.volume": number;
 }
 
 type tmpRegistry = Registry<RegistrySchema>;
@@ -504,6 +521,7 @@ const planteData: Plant[] = [
             { id: "blue" },
             { id: "network" },
             { id: "power" },
+            { id: "volume" },
             { id: "login" },
             { id: "notifications" },
             { id: "clock" },
@@ -1414,6 +1432,66 @@ MSysApi.tray.init().then(async () => {
     }
 });
 
+MSysApi.volume.init().then(async () => {
+    const volume = MSysApi.volume;
+    const d = volume.getDevices();
+    console.log(d);
+    function findDefault() {
+        const output = volume.getSinks();
+        const dop = output.find((o) => o.isDefault);
+        const input = volume.getSources();
+        const dip = input.find((o) => o.isDefault);
+        return {
+            output: dop,
+            input: dip,
+        };
+    }
+    function df() {
+        volume.ev.on("deviceVolumeChange", (id, v) => {
+            console.log(id, v); // todo 没触发 bug
+            const { output, input } = findDefault();
+            if (output?.id === id) {
+                rawRegistry.setData("volume.output.default.volume", v);
+            }
+            if (input?.id === id) {
+                rawRegistry.setData("volume.input.default.volume", v);
+            }
+        });
+        volume.ev.on("deviceMuteChange", (id, b) => {
+            const { output, input } = findDefault();
+            if (output?.id === id) rawRegistry.setData("volume.output.default.muted", b);
+            if (input?.id === id) rawRegistry.setData("volume.input.default.muted", b);
+        });
+        const { output, input } = findDefault();
+        if (output?.volume !== undefined) rawRegistry.setData("volume.output.default.volume", output.volume);
+        if (input?.volume !== undefined) rawRegistry.setData("volume.input.default.volume", input.volume);
+        if (output?.isMuted !== undefined) rawRegistry.setData("volume.output.default.muted", output.isMuted);
+        if (input?.isMuted !== undefined) rawRegistry.setData("volume.input.default.muted", input.isMuted);
+
+        rawRegistry.setSetCallback("volume.output.default.volume", (v) => {
+            const { output } = findDefault();
+            if (output?.id !== undefined) volume.setDeviceVolume(output.id, v);
+            return Promise.resolve();
+        });
+        rawRegistry.setSetCallback("volume.input.default.volume", (v) => {
+            const { input } = findDefault();
+            if (input?.id !== undefined) volume.setDeviceVolume(input.id, v);
+            return Promise.resolve();
+        });
+        rawRegistry.setSetCallback("volume.output.default.muted", (b) => {
+            const { output } = findDefault();
+            if (output?.id !== undefined) volume.setDeviceMute(output.id, b);
+            return Promise.resolve();
+        });
+        rawRegistry.setSetCallback("volume.input.default.muted", (b) => {
+            const { input } = findDefault();
+            if (input?.id !== undefined) volume.setDeviceMute(input.id, b);
+            return Promise.resolve();
+        });
+    }
+    df();
+});
+
 // UI 对象池
 const uipool = {
     "power.battery": () => createIndicator(rawRegistry, "power.battery"),
@@ -2029,6 +2107,27 @@ tools.registerTool(
         });
 
         nl.el.addInto(tipEl);
+
+        return btn;
+    },
+    { selfBackground: true },
+);
+
+tools.registerTool(
+    "volume",
+    ({ tipEl, showTip }) => {
+        const btn = button(getIconXEl("speaker", { size: 20, width: 24, height: 24 })).on("click", () => {
+            showTip();
+        });
+
+        const m = vVolume({
+            outputM: rawRegistry.get("volume.output.default.muted"),
+            inputM: rawRegistry.get("volume.output.default.muted"),
+            outputV: rawRegistry.get("volume.output.default.volume"),
+            inputV: rawRegistry.get("volume.input.default.volume"),
+        });
+
+        m.el.addInto(tipEl);
 
         return btn;
     },

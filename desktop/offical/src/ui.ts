@@ -1,4 +1,4 @@
-import { button, type ElType, image, spacer, view } from "dkh-ui";
+import { button, type ElType, image, spacer, view, trackPoint, pack } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
 import { carousel, dynamicScrollList } from "./scroll-list";
 import type { BindingSource } from "./registry";
@@ -604,6 +604,186 @@ export function nNumber(n: string, op?: { fontSize?: number; lineHeight?: number
         }
     }
     return t;
+}
+
+export function rRange(op?: { dir?: "right" | "left" | "up" | "down"; mel?: HTMLElement }) {
+    const pel = view().style({ width: "200px", height: "16px" });
+    const t = (op?.mel ? pack(op.mel) : view().style({ background: "#000" })).addInto(pel);
+
+    let v = 0; // 0-1
+
+    let onChange: ((v: number) => void) | null = null;
+
+    function limitV(iv: number) {
+        return Math.min(1, Math.max(0, iv));
+    }
+    function set(iv: number) {
+        v = limitV(iv);
+        switch (dir) {
+            case "right":
+                t.style({ width: `${v * 100}%` });
+                break;
+            case "left":
+                t.style({ width: `${v * 100}%` });
+                break;
+            case "up":
+                t.style({ height: `${v * 100}%` });
+                break;
+            case "down":
+                t.style({ height: `${v * 100}%` });
+                break;
+            default:
+                break;
+        }
+    }
+
+    const dir = op?.dir ?? "right";
+
+    if (dir === "right") {
+        t.style({ height: "100%" });
+    } else if (dir === "left") {
+        t.style({ height: "100%", right: "0", position: "absolute" });
+    } else if (dir === "down") {
+        t.style({ width: "100%" });
+    } else {
+        t.style({ bottom: "0", width: "100%", position: "absolute" });
+    }
+
+    trackPoint(pel, {
+        start: () => {
+            return { x: 0, y: 0, data: v };
+        },
+        ing: ({ x, y }, _, { startData }) => {
+            let vv = 0;
+            switch (dir) {
+                case "right":
+                    vv = x / pel.el.offsetWidth + startData;
+                    break;
+                case "left":
+                    vv = x / pel.el.offsetWidth - startData;
+                    break;
+                case "up":
+                    vv = y / pel.el.offsetHeight - startData;
+                    break;
+                case "down":
+                    vv = y / pel.el.offsetWidth + startData;
+                    break;
+                default:
+                    break;
+            }
+            set(vv); // todo 考虑移除，或者用动画区分手势预期位置和实际反馈sv
+            onChange?.(limitV(vv));
+        },
+    });
+
+    set(0);
+
+    return {
+        el: pel,
+        sv: (v: number) => set(v),
+        gv: () => v,
+        onChange(f: (v: number) => void) {
+            onChange = f;
+        },
+    };
+}
+
+export function vVolume(op?: {
+    inputM: BindingSource<boolean>;
+    outputM: BindingSource<boolean>;
+    inputV: BindingSource<number>;
+    outputV: BindingSource<number>;
+}) {
+    const output = view("x").style({ gap: px(sSize2.padding) });
+    const input = view("x").style({ gap: px(sSize2.padding) });
+    const p = ui.bar([output, input]);
+
+    const d = 1;
+
+    function muteB(icon: string) {
+        let muted = false;
+        const el = view()
+            .style({
+                width: px(sSize(d)),
+                height: px(sSize(d)),
+                borderRadius: px(sSize2.radius1),
+                ...gGlassStyle.itemInBg,
+            })
+            .add(
+                getIconXEl(icon, {
+                    size: sSize(d) - 12,
+                    width: sSize(d),
+                    height: sSize(d),
+                }),
+            )
+            .bindGet(() => muted)
+            .bindSet((v: boolean) => {
+                muted = v;
+                if (v) {
+                    el.style({ opacity: "0.5" });
+                } else {
+                    el.style({ opacity: "1" });
+                }
+            });
+        el.sv(false);
+        return el;
+    }
+
+    const bOutput = muteB("speaker").on("click", (_, el) => {
+        op?.outputM.set?.(!el.gv);
+        bOutput.sv(!el.gv); // todo 异步加载动画
+    });
+    const bInput = muteB("mic").on("click", (_, el) => {
+        op?.inputM.set?.(!el.gv);
+        bInput.sv(!el.gv);
+    });
+
+    const rOutput = rRange({ mel: view().style({ background: "white", borderRadius: px(sSize2.radius1) }).el });
+    const rInput = rRange({ mel: view().style({ background: "white", borderRadius: px(sSize2.radius1) }).el });
+
+    rOutput.el.style({
+        height: px(sSize(d)),
+        flexGrow: 1,
+        borderRadius: px(sSize2.radius1),
+        overflow: "hidden",
+        ...gGlassStyle.itemInBg,
+    });
+    rInput.el.style({
+        height: px(sSize(d)),
+        flexGrow: 1,
+        borderRadius: px(sSize2.radius1),
+        overflow: "hidden",
+        ...gGlassStyle.itemInBg,
+    });
+
+    output.add([bOutput, rOutput.el]);
+    input.add([bInput, rInput.el]);
+
+    p.el.style({
+        width: px(sSize(6)),
+        height: px(sSize((d * 2) as 1)),
+    });
+
+    // todo 应用音量
+
+    op?.outputM.getAndSubscribe((v) => {
+        bOutput.sv(v);
+    });
+    op?.inputM.getAndSubscribe((v) => {
+        bInput.sv(v);
+    });
+    op?.outputV.getAndSubscribe((v) => {
+        rOutput.sv(v);
+    });
+    op?.inputV.getAndSubscribe((v) => {
+        rInput.sv(v);
+    });
+    rOutput.onChange((v) => op?.outputV.set?.(v));
+    rInput.onChange((v) => op?.inputV.set?.(v));
+
+    return {
+        el: p.el,
+    };
 }
 
 export const ui = {

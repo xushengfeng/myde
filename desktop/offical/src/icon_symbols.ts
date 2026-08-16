@@ -996,6 +996,180 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             ],
         };
     },
+    speaker: (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const a1 = 8 * 4;
+        const a2 = 8 * 4;
+        const a3 = 8 * 7;
+        const ag = 30;
+        const wr: Point = { x: center.x - 8 * 5, y: center.y };
+        const wd = 8 * 6;
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: padding, y: center.y - a1 }, ri: 0, ro: w / 2 },
+                                    { p: { x: padding, y: center.y + a1 }, ri: 0, ro: w / 2 },
+                                    { p: { x: padding + a2, y: center.y + a1 }, ri: 0, ro: w / 2 },
+                                    { p: { x: padding + a2 + a3, y: center.y + a1 + a3 }, ri: 0, ro: w / 2 },
+                                    { p: { x: padding + a2 + a3, y: center.y - a1 - a3 }, ri: 0, ro: w / 2 },
+                                    { p: { x: padding + a2, y: center.y - a1 }, ri: 0, ro: w / 2 },
+                                ],
+                                close: true,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: wr,
+                                fromAngle: -ag,
+                                endAngle: ag,
+                                r: size - wr.x - padding - wd * 2,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: wr,
+                                fromAngle: -ag,
+                                endAngle: ag,
+                                r: size - wr.x - padding - wd * 1,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: wr,
+                                fromAngle: -ag,
+                                endAngle: ag,
+                                r: size - wr.x - padding,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    mic: (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+        const r = 8 * 4;
+        const dr = 8 * 9;
+        const drc: Point = { x: center.x, y: center.y };
+        const dd = 8 * 6;
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "arc",
+                            data: {
+                                center: { x: center.x, y: padding + r },
+                                color: env.color,
+                                fromAngle: -180,
+                                endAngle: 0,
+                                r,
+                                width: w,
+                            },
+                        },
+                        {
+                            type: "arc",
+                            data: {
+                                center: drc,
+                                color: env.color,
+                                fromAngle: 0,
+                                endAngle: -180,
+                                r,
+                                width: w,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: center.x - r, y: padding + r }, ri: 0, ro: w / 2 },
+                                    { p: { x: center.x - r, y: drc.y }, ri: 0, ro: w / 2 },
+                                ],
+                                extendNode: "both",
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: center.x + r, y: padding + r }, ri: 0, ro: w / 2 },
+                                    { p: { x: center.x + r, y: drc.y }, ri: 0, ro: w / 2 },
+                                ],
+                                extendNode: "both",
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+                {
+                    name: "baseb",
+                    shapes: [
+                        {
+                            type: "arc",
+                            data: {
+                                center: drc,
+                                color: env.color,
+                                fromAngle: 0,
+                                endAngle: -180,
+                                r: dr,
+                                width: w,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: center.x, y: drc.y + dr }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x, y: size - padding }, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: center.x - dd, y: size - padding }, ro: w / 2, ri: 0 },
+                                    { p: { x: center.x + dd, y: size - padding }, ro: w / 2, ri: 0 },
+                                ],
+                                extendNode: "both",
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
     "number.0": (env) => {
         const { center, size } = buildZb(256);
         const w = 24;

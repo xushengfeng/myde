@@ -10,8 +10,11 @@ import type { MprisEvents, mpris } from "../../src/sys_api/mpris";
 import type { network } from "../../src/sys_api/network";
 import type { NotificationData, NotificationEvents, notification } from "../../src/sys_api/notification";
 import type { power } from "../../src/sys_api/power";
+import type { volumeControl } from "../../src/sys_api/volume";
 import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools";
 import type { MockRenderTools } from "./render-tools";
+import type { MockVolumeManager } from "./volume-mock";
+import { createMockVolume } from "./volume-mock";
 
 /**
  * 提取类的公共成员（排除构造函数和private成员）
@@ -103,6 +106,8 @@ export interface MockConfig {
     mprisManager?: MockMprisManager;
     /** 托盘管理器 */
     trayManager?: MockTrayManager;
+    /** 音量管理器 */
+    volumeManager?: MockVolumeManager;
 }
 
 type SettingInitReturn = ReturnType<DesktopApi["MSetting"]["init"]>;
@@ -1265,6 +1270,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         notificationManager,
         mprisManager,
         trayManager,
+        volumeManager,
     } = config;
 
     const log = (method: string, ...args: unknown[]) => {
@@ -1360,6 +1366,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         power: powerManager ? powerManager.createMock() : createMockPower(log),
         blue: blueManager ? blueManager.createMock() : createMockBlue(log),
         network: networkManager ? networkManager.createMock() : createMockNetwork(log),
+        volume: volumeManager ? volumeManager.createMock() : createMockVolume(log),
         display: createMockDisplay(log),
         input: createMockInput(log),
         appControl: {

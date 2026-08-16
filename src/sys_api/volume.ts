@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+const { execSync } = require("node:child_process") as typeof import("node:child_process");
 import { EventEmitter } from "../event-emitter/event-emitter";
 
 export interface AudioDevice {

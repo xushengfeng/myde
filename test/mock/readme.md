@@ -35,6 +35,7 @@ import {
     MockPowerManager, MockPowerDevice,
     MockNotificationManager,
     MockMprisManager, MockMprisPlayer,
+    MockVolumeManager, MockAudioDevice, MockAudioStream,
 } from "test/mock";
 
 // 创建管理器
@@ -51,6 +52,7 @@ setupMydeMock({
     powerManager,
     notificationManager,
     mprisManager,
+    volumeManager,
 });
 
 // 动态添加蓝牙设备
@@ -87,6 +89,16 @@ player.setMetadata({
 });
 player.setPlaybackStatus("Playing");
 mprisManager.addPlayer(player);
+
+// 动态添加音频设备和流
+const volumeManager = new MockVolumeManager(console.log);
+const sink = new MockAudioDevice(51, "Speakers", "sink", true, 0.8, false);
+const source = new MockAudioDevice(52, "Microphone", "source", false, 0.6, false);
+volumeManager.addDevice(sink);
+volumeManager.addDevice(source);
+
+const stream = new MockAudioStream(81, "Firefox", "output", 1234, "Firefox", 0.7, false);
+volumeManager.addStream(stream);
 ```
 
 ## 导出
@@ -110,6 +122,9 @@ mprisManager.addPlayer(player);
 | `MockNotificationManager` | 类 | 通知管理器 |
 | `MockMprisManager` | 类 | MPRIS音乐播放器管理器 |
 | `MockMprisPlayer` | 类 | MPRIS播放器mock |
+| `MockVolumeManager` | 类 | 音量管理器 |
+| `MockAudioDevice` | 类 | 音频设备mock |
+| `MockAudioStream` | 类 | 音频流mock |
 | `MockConfig` | 类型 | 配置选项 |
 
 ## MockConfig 配置
@@ -127,6 +142,7 @@ interface MockConfig {
     powerManager?: MockPowerManager;    // 电源管理器
     notificationManager?: MockNotificationManager; // 通知管理器
     mprisManager?: MockMprisManager;    // MPRIS管理器
+    volumeManager?: MockVolumeManager;  // 音量管理器
 }
 ```
 
@@ -150,6 +166,7 @@ interface MockConfig {
 | `power` | ✅ | 支持动态添加/删除设备 |
 | `blue` | ✅ | 支持动态添加/删除设备 |
 | `network` | ✅ | 支持动态添加/删除WiFi设备和接入点 |
+| `volume` | ✅ | 支持动态添加/删除音频设备和流 |
 | `display` | ✅ | onMessage/send |
 | `input` | ✅ | init/on/getDevices |
 | `verifyUserPassword` | ✅ | 可配置密码验证 |
@@ -387,4 +404,104 @@ mock.on("new-player", (p) => {
 
 // 移除播放器
 manager.removePlayer("spotify");
+```
+
+### MockVolumeManager
+
+```typescript
+const manager = new MockVolumeManager(log);
+
+// 添加音频设备
+const sink = new MockAudioDevice(
+    51,                // id
+    "Speakers",        // name
+    "sink",            // type: "sink" | "source" | "device"
+    true,              // isDefault
+    0.8,               // volume (0.0 - 1.0)
+    false              // isMuted
+);
+manager.addDevice(sink);
+
+const source = new MockAudioDevice(52, "Microphone", "source", false, 0.6, false);
+manager.addDevice(source);
+
+// 添加音频流（应用）
+const stream = new MockAudioStream(
+    81,                // id
+    "Firefox",         // name
+    "output",          // type: "input" | "output"
+    1234,              // pid
+    "Firefox",         // applicationName
+    0.7,               // volume
+    false              // isMuted
+);
+manager.addStream(stream);
+
+// 修改设备状态
+sink.setVolume(0.5);
+sink.setMuted(true);
+
+// 修改流状态
+stream.setVolume(0.9);
+stream.setMuted(false);
+
+// 监听事件
+const mock = manager.createMock();
+mock.ev.on("deviceVolumeChange", (id, volume) => {
+    console.log(`设备 ${id} 音量变为 ${volume}`);
+});
+
+mock.ev.on("streamVolumeChange", (id, volume) => {
+    console.log(`流 ${id} 音量变为 ${volume}`);
+});
+
+// 移除设备/流
+manager.removeDevice(51);
+manager.removeStream(81);
+```
+
+### MockAudioDevice
+
+```typescript
+const device = new MockAudioDevice(
+    51,                // id
+    "Speakers",        // name
+    "sink",            // type
+    true,              // isDefault
+    0.8,               // volume
+    false              // isMuted
+);
+
+// 修改属性
+device.setId(52);
+device.setName("Headphones");
+device.setType("sink");
+device.setDefault(false);
+device.setVolume(0.5);
+device.setMuted(true);
+device.setDescription("USB Audio Device");
+```
+
+### MockAudioStream
+
+```typescript
+const stream = new MockAudioStream(
+    81,                // id
+    "Firefox",         // name
+    "output",          // type
+    1234,              // pid
+    "Firefox",         // applicationName
+    0.7,               // volume
+    false              // isMuted
+);
+
+// 修改属性
+stream.setId(82);
+stream.setName("Chrome");
+stream.setType("output");
+stream.setPid(5678);
+stream.setApplicationName("Google Chrome");
+stream.setMediaClass("Stream/Output/Audio");
+stream.setVolume(0.9);
+stream.setMuted(false);
 ```

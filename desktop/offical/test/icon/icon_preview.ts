@@ -25,6 +25,8 @@ const l = [
     "cross",
     "mutiWinView",
     "notification",
+    "speaker",
+    "mic",
     "number.0",
     "number.1",
     "number.2",

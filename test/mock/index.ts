@@ -22,3 +22,4 @@ export {
     MockTrayItem,
     MockTrayManager,
 } from "./myde-mock";
+export { MockAudioDevice, MockAudioStream, MockVolumeManager } from "./volume-mock";
