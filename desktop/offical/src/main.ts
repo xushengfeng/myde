@@ -995,8 +995,7 @@ const windowElWarp = view().style({
     position: "absolute",
 });
 
-const toolsBottom = view();
-const toolsTop = view()
+const toolsEl = view()
     .style({ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" })
     .class(
         addClass(
@@ -1008,23 +1007,20 @@ const toolsTop = view()
             },
         ),
     );
-tools.setTipEl(toolsTop.el);
+tools.setTipEl(toolsEl.el);
 
-const fullscreen = view();
-
-const topest = view(); // 也是通知控制栏、锁屏
-const toolTip = view();
+const lockScreen = view();
 
 state.setState("normal");
 state.on("normal", () => {
-    toolTip.style({ transform: "translateY(-100%)", transition: "0.4s" });
+    lockScreen.style({ transform: "translateY(-100%)", transition: "0.4s" });
 });
 state.on("lock", () => {
     stateLock.setState("xipin");
 });
 
 stateLock.on("xipin", ({ nextTrigger }) => {
-    toolTip
+    lockScreen
         .clear()
         .style({
             width: "100vw",
@@ -1038,7 +1034,7 @@ stateLock.on("xipin", ({ nextTrigger }) => {
         .on("click", () => nextTrigger("lock"), { once: true });
 });
 stateLock.on("lock", ({ nextTrigger, leave }) => {
-    toolTip
+    lockScreen
         .clear()
         .style({ background: "white" })
         .add("时间等")
@@ -1070,7 +1066,7 @@ stateLock.on("passwd", ({ nextTrigger, leave }) => {
         }
     }
 
-    toolTip.clear().add([inputEl.el, button("确认进入").on("click", check)]);
+    lockScreen.clear().add([inputEl.el, button("确认进入").on("click", check)]);
 
     inputEl.el.on("change", () => {
         check();
@@ -1089,11 +1085,13 @@ stateLock.on("passwd", ({ nextTrigger, leave }) => {
     });
 });
 stateLock.on("out", () => {
-    toolTip.clear();
+    lockScreen.clear();
     state.setState("normal");
 });
 
-mainEl.add([bg, windowElWarp, toolsBottom, toolsTop, fullscreen, topest, toolTip]);
+const cursorEl = view();
+
+mainEl.add([bg, windowElWarp, toolsEl, lockScreen, cursorEl]);
 
 const windowEl = view()
     .style({
@@ -1162,7 +1160,7 @@ async function confirm(text: string) {
         if (v.v === 0) {
             el.remove();
         } else {
-            toolsTop.add(el);
+            toolsEl.add(el);
             el.style({ top: "40%", opacity: `${v.v}` });
         }
     });
@@ -2136,7 +2134,7 @@ tools.registerTool(
 
 const wino = { t: 0, l: 0, r: 0, b: 0 };
 for (const p of planteData) {
-    const plantEl = view().style({ position: "absolute" }).addInto(toolsBottom);
+    const plantEl = view().style({ position: "absolute" }).addInto(toolsEl);
     switch (p.posi) {
         case "left":
             plantEl.style({ left: "0px", flexDirection: "column" });
@@ -2242,7 +2240,7 @@ windowEl.on("wheel", (e) => {
     sendScrollEvent(e);
 });
 
-const mouseEl = view().addInto().style({
+const mouseEl = view().addInto(cursorEl).style({
     position: "fixed",
     width: "10px",
     height: "10px",
