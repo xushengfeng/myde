@@ -148,52 +148,31 @@ export function uPasswdInput() {
 
         if (e.key.length !== 1) return;
 
-        const kEl = view().style({
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontFamily: "monospace",
-        });
+        const kEl = view();
         const isFirst = pd.length === 0;
         uiAnimatePdSize++;
         const g = new AnimationGear({ v: 0 });
         g.addState("init", { v: 0 }, ["x"]);
-        g.addState("x", { v: 1 }, ["hideKey"]);
-        g.addState("hideKey", { v: 2 }, ["rm"]);
-        g.addState("rm", { v: 3 }, []);
+        g.addState("x", { v: 1 }, ["init"]);
         g.setUpdateCallback((v) => {
             if (v.v === 0) {
+                uiAnimatePdSize--;
+                kEl.remove();
+            } else if (0 < v.v && v.v <= 1) {
                 if (kEl.el.innerText === "") {
                     contentEl.add(kEl);
-                    kEl.add(e.key);
                 }
-                kEl.style({ width: 0, overflow: "hidden", height: "100%" });
-            } else if (0 < v.v && v.v <= 1) {
-                kEl.style({ width: `${v.v}ch` });
+                kEl.style({ width: `${v.v}ch`, height: `${v.v}ch`, borderRadius: "8px", background: "#000" });
                 if (!isFirst) kEl.style({ marginLeft: `${v.v * 4}px` });
                 if (v.v === 1) {
-                    g.moveTo("hideKey", 200);
                     updateAlignment();
                 }
-            } else if (1 < v.v && v.v <= 2) {
-                if (v.v === 2) {
-                    kEl.clear().style({ width: "8px", height: "8px", borderRadius: "8px", background: "#000" });
-                    updateAlignment();
-                }
-            } else if (2 < v.v && v.v <= 3) {
-                kEl.style({ width: `${8 * (3 - v.v)}px`, height: `${8 * (3 - v.v)}px` });
-                updateAlignment();
-                if (v.v === 3) {
-                    kEl.remove();
-                    uiAnimatePdSize--;
-                    updateAlignment();
-                    updatePlaceholder();
-                }
+                uiAnimatePdSize++;
             }
         });
         g.moveTo("init", 0);
         g.moveTo("x", { duration: 200 });
-        pd.push({ k: e.key, rm: () => g.moveTo("rm", 100), el: kEl });
+        pd.push({ k: e.key, rm: () => g.moveTo("init", 100), el: kEl });
         updateAlignment();
         updatePlaceholder();
         wrapEl.el.dispatchEvent(new Event("input"));
