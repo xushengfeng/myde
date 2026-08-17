@@ -91,6 +91,13 @@ interface RegistrySchema {
     "volume.input.default.muted": boolean;
     "volume.output.default.volume": number;
     "volume.input.default.volume": number;
+    "time.hour": number;
+    "time.minute": number;
+    "time.second": number;
+    "time.year": number;
+    "time.month": number;
+    "time.day": number;
+    "time.weekday": number;
 }
 
 type tmpRegistry = Registry<RegistrySchema>;
@@ -1045,77 +1052,6 @@ function xPosition(x: number, y: number) {
     };
 }
 
-(() => {
-    const clockEl = view();
-    function updateTime() {
-        const now = new Date();
-        const hours = now.getHours().toString().padStart(2, "0");
-        const minutes = now.getMinutes().toString().padStart(2, "0");
-        clockEl.clear().add(nNumber(`${hours}:${minutes}`, { fontSize: 120 }));
-    }
-    updateTime();
-    setInterval(updateTime, 60000);
-    lockScreenView.style({ width: "100%", height: "100%" }).add([
-        image(fs.readFileAsDataURLSync("/assets/wallpaper/1.svg"), "wallpaper").style({
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-        }),
-        view()
-            .style({ position: "absolute", ...xPosition(0.5, 0.4) })
-            .add(clockEl),
-    ]);
-
-    lockScreenPassword.style({ width: "100%", height: "100%", backdropFilter: "blur(40px)" });
-
-    const inputEl = ui.passwd();
-    inputEl.placeholder("请输入密码");
-    inputEl.el.style({ width: px(sSize(5)), height: px(sSize(1)) });
-    let cheking = false;
-    async function check() {
-        if (cheking) return;
-        cheking = true;
-        inputEl.disable(true);
-        const r = await myde.MSysApi.verifyUserPassword(inputEl.el.gv);
-        if (r) {
-            inputEl.clear();
-            inputEl.disable(false);
-            cheking = false;
-
-            stateLock.setState("out");
-        } else {
-            inputEl.clear();
-            inputEl.disable(false);
-            inputEl.placeholder("密码错误，请重试"); // todo pam code
-            cheking = false;
-        }
-    }
-
-    lockScreenPassword.add(
-        view("x")
-            .add([
-                inputEl.el,
-                view()
-                    .add(getIconXEl("chevron.right", { size: 16, width: sSize(1), height: sSize(1) }))
-                    .style({
-                        ...gGlassStyle.justItem,
-                        width: px(sSize(1)),
-                        height: px(sSize(1)),
-                        borderRadius: px(sSize2.radius1),
-                    })
-                    .on("click", check),
-            ])
-            .style({ gap: px(8), position: "absolute", ...xPosition(0.5, 0.6) }),
-    );
-
-    inputEl.el.on("change", () => {
-        check();
-    });
-    inputEl.el.on("input", () => {
-        stateLock.setState("passwd");
-    });
-})();
-
 const lockScreenAnimate = new AnimationGear({
     viewShow: 0,
     passwordShow: 0,
@@ -1304,6 +1240,19 @@ const _desktopRegistry = new Registry();
 // 聚合硬件和桌面注册，广播出去，接收其他广播
 // 事件中枢，可以被脚本、ai控制
 const _hubRegistry = new Registry<RegistrySchema>();
+
+function updateTime() {
+    const now = new Date();
+    rawRegistry.setData("time.second", now.getSeconds());
+    rawRegistry.setData("time.minute", now.getMinutes());
+    rawRegistry.setData("time.hour", now.getHours());
+    rawRegistry.setData("time.day", now.getDate());
+    rawRegistry.setData("time.month", now.getMonth() + 1);
+    rawRegistry.setData("time.weekday", now.getDay());
+    rawRegistry.setData("time.year", now.getFullYear());
+}
+updateTime();
+setInterval(updateTime, 6000);
 
 MSysApi.power
     .init()
@@ -1817,14 +1766,15 @@ tools.registerTool("startMenuFullScreen", ({ tipEl, showTip }) => {
 
 tools.registerTool("clock", () => {
     const clockEl = view("x").style({ alignItems: "center" });
-    function updateTime() {
-        const now = new Date();
-        const hours = now.getHours().toString().padStart(2, "0");
-        const minutes = now.getMinutes().toString().padStart(2, "0");
-        clockEl.clear().add(nNumber(`${hours}:${minutes}`));
-    }
-    updateTime();
-    setInterval(updateTime, 60000);
+    const hh = view();
+    const mm = view();
+    clockEl.add([hh, nNumber(":"), mm]);
+    rawRegistry.get("time.hour").getAndSubscribe((v) => {
+        hh.clear().add(nNumber(v.toString().padStart(2, "0")));
+    });
+    rawRegistry.get("time.minute").getAndSubscribe((v) => {
+        mm.clear().add(nNumber(v.toString().padStart(2, "0")));
+    });
     return clockEl;
 });
 
@@ -2258,6 +2208,96 @@ tools.registerTool(
     },
     { selfBackground: true },
 );
+
+(() => {
+    const day = view("x");
+    const clockEl = view("x");
+    const y = view();
+    const m = view();
+    const d = view();
+    const w = view();
+    day.add([y, nNumber("/"), m, nNumber("/"), d, nNumber(" "), w]);
+    const hh = view();
+    const mm = view();
+    clockEl.add([hh, nNumber(":", { fontSize: 120 }), mm]);
+    rawRegistry.get("time.year").getAndSubscribe((v) => {
+        y.clear().add(nNumber(v.toString()));
+    });
+    rawRegistry.get("time.month").getAndSubscribe((v) => {
+        m.clear().add(nNumber(v.toString()));
+    });
+    rawRegistry.get("time.day").getAndSubscribe((v) => {
+        d.clear().add(nNumber(v.toString()));
+    });
+    rawRegistry.get("time.weekday").getAndSubscribe((v) => {
+        w.clear().add(nNumber(v.toString()));
+    });
+    rawRegistry.get("time.hour").getAndSubscribe((v) => {
+        hh.clear().add(nNumber(v.toString().padStart(2, "0"), { fontSize: 120 }));
+    });
+    rawRegistry.get("time.minute").getAndSubscribe((v) => {
+        mm.clear().add(nNumber(v.toString().padStart(2, "0"), { fontSize: 120 }));
+    });
+    lockScreenView.style({ width: "100%", height: "100%" }).add([
+        image(fs.readFileAsDataURLSync("/assets/wallpaper/1.svg"), "wallpaper").style({
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+        }),
+        view("y")
+            .style({ position: "absolute", ...xPosition(0.5, 0.4), alignItems: "center", gap: px(40) })
+            .add([day, clockEl]),
+    ]);
+
+    lockScreenPassword.style({ width: "100%", height: "100%", backdropFilter: "blur(40px)" });
+
+    const inputEl = ui.passwd();
+    inputEl.placeholder("请输入密码");
+    inputEl.el.style({ width: px(sSize(5)), height: px(sSize(1)) });
+    let cheking = false;
+    async function check() {
+        if (cheking) return;
+        cheking = true;
+        inputEl.disable(true);
+        const r = await myde.MSysApi.verifyUserPassword(inputEl.el.gv);
+        if (r) {
+            inputEl.clear();
+            inputEl.disable(false);
+            cheking = false;
+
+            stateLock.setState("out");
+        } else {
+            inputEl.clear();
+            inputEl.disable(false);
+            inputEl.placeholder("密码错误，请重试"); // todo pam code
+            cheking = false;
+        }
+    }
+
+    lockScreenPassword.add(
+        view("x")
+            .add([
+                inputEl.el,
+                view()
+                    .add(getIconXEl("chevron.right", { size: 16, width: sSize(1), height: sSize(1) }))
+                    .style({
+                        ...gGlassStyle.justItem,
+                        width: px(sSize(1)),
+                        height: px(sSize(1)),
+                        borderRadius: px(sSize2.radius1),
+                    })
+                    .on("click", check),
+            ])
+            .style({ gap: px(8), position: "absolute", ...xPosition(0.5, 0.6) }),
+    );
+
+    inputEl.el.on("change", () => {
+        check();
+    });
+    inputEl.el.on("input", () => {
+        stateLock.setState("passwd");
+    });
+})();
 
 const wino = { t: 0, l: 0, r: 0, b: 0 };
 for (const p of planteData) {
