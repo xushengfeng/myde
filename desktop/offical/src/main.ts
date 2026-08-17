@@ -5,6 +5,7 @@ import { txt } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
 import {
     aLineText,
+    gGlassStyle,
     iItem,
     mMedia,
     nNotiList,
@@ -14,7 +15,6 @@ import {
     sSize2,
     tTrayMenu,
     ui,
-    uPasswdInput,
     vVolume,
 } from "./ui";
 import { dynamicScrollList } from "./scroll-list";
@@ -635,7 +635,13 @@ const stateLock = new stateMachine({
         next: [{ t: dyj电源键, n: "xipin" }, { n: "passwd" }],
     },
     passwd: {
-        next: [{ n: "lock" }, { n: "out" }],
+        next: [
+            { n: "lock" },
+            { n: "out" },
+            {
+                n: "passwd", // 用于输入密码时不断回到自己以延长定时器
+            },
+        ],
     },
     out: { next: [] },
 });
@@ -1009,56 +1015,75 @@ const toolsEl = view()
     );
 tools.setTipEl(toolsEl.el);
 
-const lockScreen = view();
-
-state.setState("normal");
-state.on("normal", () => {
-    lockScreen.style({ transform: "translateY(-100%)", transition: "0.4s" });
-});
-state.on("lock", () => {
-    stateLock.setState("xipin");
-});
-
-stateLock.on("xipin", ({ nextTrigger }) => {
-    lockScreen
-        .clear()
-        .style({
+const lockScreen = view().class(
+    addClass(
+        {
+            background: "white",
             width: "100vw",
             height: "100vh",
             position: "fixed",
             top: "0",
             left: "0",
-            background: "rgb(0,0,0)",
-            transform: "translateY(0)",
-        })
-        .on("click", () => nextTrigger("lock"), { once: true });
-});
-stateLock.on("lock", ({ nextTrigger, leave }) => {
-    lockScreen
-        .clear()
-        .style({ background: "white" })
-        .add("时间等")
-        .on("click", () => nextTrigger("passwd"), { once: true });
-    const t = setTimeout(() => {
-        nextTrigger("xipin");
-    }, 3000);
-    leave(() => {
-        clearTimeout(t);
-    });
-});
-stateLock.on("passwd", ({ nextTrigger, leave }) => {
-    const inputEl = uPasswdInput();
+        },
+        {
+            "&>*": {
+                position: "absolute",
+                top: 0,
+            },
+        },
+    ),
+);
+
+const lockScreenView = view().style({ width: "100%", height: "100%" }).addInto(lockScreen); // 图片 信息等
+const lockScreenPassword = view().style({ width: "100%", height: "100%" }).addInto(lockScreen);
+
+function xPosition(x: number, y: number) {
+    return {
+        left: `${x * 100}%`,
+        top: `${y * 100}%`,
+        transform: `translate(-${x * 100}%, -${y * 100}%)`,
+    };
+}
+
+(() => {
+    const clockEl = view();
+    function updateTime() {
+        const now = new Date();
+        const hours = now.getHours().toString().padStart(2, "0");
+        const minutes = now.getMinutes().toString().padStart(2, "0");
+        clockEl.clear().add(nNumber(`${hours}:${minutes}`, { fontSize: 120 }));
+    }
+    updateTime();
+    setInterval(updateTime, 60000);
+    lockScreenView.style({ width: "100%", height: "100%" }).add([
+        image(fs.readFileAsDataURLSync("/assets/wallpaper/1.svg"), "wallpaper").style({
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+        }),
+        view()
+            .style({ position: "absolute", ...xPosition(0.5, 0.4) })
+            .add(clockEl),
+    ]);
+
+    lockScreenPassword.style({ width: "100%", height: "100%", backdropFilter: "blur(40px)" });
+
+    const inputEl = ui.passwd();
     inputEl.placeholder("请输入密码");
     inputEl.el.style({ width: px(sSize(5)), height: px(sSize(1)) });
-    const timer = new Timer(30000);
     let cheking = false;
     async function check() {
         if (cheking) return;
         cheking = true;
         inputEl.disable(true);
         const r = await myde.MSysApi.verifyUserPassword(inputEl.el.gv);
-        if (r) nextTrigger("out");
-        else {
+        if (r) {
+            inputEl.clear();
+            inputEl.disable(false);
+            cheking = false;
+
+            stateLock.setState("out");
+        } else {
             inputEl.clear();
             inputEl.disable(false);
             inputEl.placeholder("密码错误，请重试"); // todo pam code
@@ -1066,28 +1091,130 @@ stateLock.on("passwd", ({ nextTrigger, leave }) => {
         }
     }
 
-    lockScreen.clear().add([inputEl.el, button("确认进入").on("click", check)]);
+    lockScreenPassword.add(
+        view("x")
+            .add([
+                inputEl.el,
+                view()
+                    .add(getIconXEl("chevron.right", { size: 16, width: sSize(1), height: sSize(1) }))
+                    .style({
+                        ...gGlassStyle.justItem,
+                        width: px(sSize(1)),
+                        height: px(sSize(1)),
+                        borderRadius: px(sSize2.radius1),
+                    })
+                    .on("click", check),
+            ])
+            .style({ gap: px(8), position: "absolute", ...xPosition(0.5, 0.6) }),
+    );
 
     inputEl.el.on("change", () => {
         check();
     });
     inputEl.el.on("input", () => {
-        timer.reset();
-        timer.start();
+        stateLock.setState("passwd");
+    });
+})();
+
+const lockScreenAnimate = new AnimationGear({
+    viewShow: 0,
+    passwordShow: 0,
+});
+
+lockScreenAnimate.addState(
+    "normal(out)",
+    {
+        viewShow: 0,
+        passwordShow: 0,
+    },
+    [],
+);
+
+lockScreenAnimate.addState(
+    "lockview",
+    {
+        viewShow: 1,
+        passwordShow: 0,
+    },
+    [],
+);
+lockScreenAnimate.addState(
+    "password",
+    {
+        viewShow: 1,
+        passwordShow: 1,
+    },
+    [],
+);
+lockScreenAnimate.addState(
+    "xipin",
+    {
+        viewShow: 2,
+        passwordShow: 0,
+    },
+    [],
+);
+lockScreenAnimate.setUpdateCallback((v) => {
+    lockScreen.style({ transform: `translateY(${(1 - Math.min(1, v.viewShow)) * -100}%)` });
+    lockScreenPassword.style({
+        opacity: v.passwordShow,
+        pointerEvents: v.passwordShow === 1 ? "auto" : "none",
     });
 
-    timer.on(() => {
-        nextTrigger("lock");
-    });
-    timer.start();
+    if (v.viewShow > 1) {
+        lockScreen.style({
+            background: "rgb(0,0,0)",
+        });
+        lockScreenView.style({ opacity: 1 - (v.viewShow - 1) });
+    } else {
+        lockScreen.style({
+            background: "white",
+        });
+        lockScreenView.style({ opacity: 1 });
+    }
+});
+
+state.on("normal", () => {
+    lockScreenAnimate.moveTo("normal(out)");
+});
+state.on("lock", () => {
+    stateLock.setState("lock");
+});
+state.setState("normal");
+
+stateLock.on("xipin", ({ nextTrigger }) => {
+    lockScreenAnimate.moveTo("xipin");
+    lockScreen.on("click", () => nextTrigger("lock"), { once: true });
+});
+
+const lock2xipinTimer = new Timer(30000);
+lock2xipinTimer.on(() => {
+    stateLock.setState("xipin");
+});
+stateLock.on("lock", ({ nextTrigger, leave }) => {
+    lockScreenAnimate.moveTo("lockview");
+    lockScreen.on("click", () => nextTrigger("passwd"), { once: true });
+    lock2xipinTimer.start();
     leave(() => {
-        timer.reset();
+        lock2xipinTimer.reset();
+    });
+});
+const passwd2lock = new Timer(3000);
+passwd2lock.on(() => {
+    stateLock.setState("lock");
+});
+stateLock.on("passwd", ({ leave }) => {
+    lockScreenAnimate.moveTo("password");
+    passwd2lock.start();
+    leave(() => {
+        passwd2lock.reset();
     });
 });
 stateLock.on("out", () => {
-    lockScreen.clear();
     state.setState("normal");
 });
+
+stateLock.setState("out");
 
 const cursorEl = view();
 
