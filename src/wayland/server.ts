@@ -58,7 +58,7 @@ type WaylandData = {
         pending: WaylandSurfaceData;
     };
     wl_buffer:
-        | { type: "shm"; fd: number; start: number; end: number; imageData: ImageData }
+        | { type: "shm"; fd: number; offset: number; stride: number; imageData: ImageData }
         | {
               type: "dmabuf";
               planes: {
@@ -848,8 +848,8 @@ class WaylandClient {
             buffer.data = {
                 type: "shm",
                 fd: thisObj.data.fd,
-                start: x.args.offset,
-                end: x.args.offset + x.args.stride * x.args.height,
+                offset: x.args.offset,
+                stride: x.args.stride,
                 imageData: imageData,
             };
         });
@@ -904,20 +904,25 @@ class WaylandClient {
                 if (bufferObj.type === "shm") {
                     image = bufferObj.imageData;
 
-                    const buffern = new Uint8ClampedArray(bufferObj.end - bufferObj.start);
+                    const buffern = new Uint8ClampedArray(bufferObj.stride * image.height * 4);
                     try {
-                        fs.readSync(bufferObj.fd, buffern, bufferObj.start, buffern.length, 0);
+                        fs.readSync(bufferObj.fd, buffern, bufferObj.offset, buffern.length, 0);
                     } catch (error) {
                         console.error("Error reading shm buffer:", error);
                     }
-                    // todo 搞清楚为什么给定rgb格式，读取出来是bgr格式
-                    const rgba = new Uint8ClampedArray(buffern.length);
-                    for (let i = 0; i < buffern.length; i += 4) {
-                        rgba[i] = buffern[i + 2];
-                        rgba[i + 1] = buffern[i + 1];
-                        rgba[i + 2] = buffern[i];
-                        rgba[i + 3] = buffern[i + 3];
+                    // todo 模块读取
+                    const rgba = new Uint8ClampedArray(image.width * image.height * 4);
+                    for (let y = 0; y < image.height; y++) {
+                        for (let x = 0; x < image.width; x++) {
+                            const ri = y * bufferObj.stride + x * 4;
+                            const i = (y * image.width + x) * 4;
+                            rgba[i] = buffern[ri + 2];
+                            rgba[i + 1] = buffern[ri + 1];
+                            rgba[i + 2] = buffern[ri];
+                            rgba[i + 3] = buffern[ri + 3];
+                        }
                     }
+
                     image.data.set(rgba);
                 } else {
                     const modifierX = bufferObj.planes[0];
