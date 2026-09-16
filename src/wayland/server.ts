@@ -1473,7 +1473,7 @@ class WaylandClient {
                 size: formatTable.byteLength,
             });
 
-            const r = fs.statSync("/dev/dri/card1"); // todo
+            const r = fs.statSync("/dev/dri/renderD128"); // todo
             const buffer = Buffer.alloc(8);
             buffer.writeBigUInt64LE(BigInt(r.rdev));
             const a = new Uint8Array(buffer.buffer);
