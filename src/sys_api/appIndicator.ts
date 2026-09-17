@@ -64,13 +64,17 @@ export class trayItem {
         const trayItemObj = await serviceClient.getObject(objPath);
         const infc = await trayItemObj.getInterface("org.kde.StatusNotifierItem");
         this.mainInterface = infc;
-        const menuPath = (await infc.get<"o">("Menu"))[0];
-        if (menuPath) {
-            this.menuPath = new dbusMenu(this.client, { serverName: service, objectPath: menuPath });
-            await this.menuPath.init();
-            this.menuPath.ev.on("update", () => {
-                this.ev.emit("menuUpdate");
-            });
+        try {
+            const menuPath = (await infc.get<"o">("Menu"))[0];
+            if (menuPath) {
+                this.menuPath = new dbusMenu(this.client, { serverName: service, objectPath: menuPath });
+                await this.menuPath.init();
+                this.menuPath.ev.on("update", () => {
+                    this.ev.emit("menuUpdate");
+                });
+            }
+        } catch (error) {
+            console.warn("tray Menu property not available:", error);
         }
     }
     async title() {
