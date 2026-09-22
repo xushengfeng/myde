@@ -1,6 +1,7 @@
 export type renderToolsOn = {
     onToplevelCreate?: (wid: string) => void;
     onToplevelRemove?: (wid: string) => void;
+    // canvas为string时是语义光标（wp_cursor_shape_device_v1.shape的枚举名，热点为0），undefined表示隐藏光标
     onCursorUpdata?: (canvas: OffscreenCanvas | string | undefined, hx: number, hy: number) => void;
 };
 
@@ -20,5 +21,6 @@ export interface renderTools {
     asToplevel(id: string): void;
     addPopupToXdgSurface(popupSurfaceId: string, parentSurfaceId: string): void;
     setPopupPosi(popupSurfaceId: string, x: number, y: number): void;
+    // canvas为string时是语义光标（wp_cursor_shape_device_v1.shape的枚举名，热点为0），undefined表示隐藏光标
     setCursor(canvas: OffscreenCanvas | string | undefined, hotspotX: number, hotspotY: number): void;
 }

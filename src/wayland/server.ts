@@ -103,6 +103,10 @@ type WaylandData = {
     wp_viewport: {
         surface: WaylandObjectId2<"wl_surface">;
     };
+    wp_cursor_shape_device_v1: {
+        // 绑定的指针设备，目前只有wl_pointer
+        pointer: WaylandObjectId2<"wl_pointer">;
+    };
 };
 
 type WaylandObjectX<T extends WaylandInterfaces> = {
@@ -1666,6 +1670,22 @@ class WaylandClient {
             }
         });
 
+        // todo wp_cursor_shape_manager_v1.get_tablet_tool_v2 暂不实现，平板工具支持后再加
+        isOp("wp_cursor_shape_manager_v1.get_pointer", (x) => {
+            this.getObject(x.args.cursor_shape_device).data = { pointer: x.args.pointer };
+        });
+        isOp("wp_cursor_shape_device_v1.set_shape", (x) => {
+            // todo serial 校验wl_pointer.enter的serial，不匹配时忽略
+            const shape = getEnumName("wp_cursor_shape_device_v1.shape", x.args.shape);
+            if (!shape) {
+                this.postError("wp_cursor_shape_device_v1", x.id, "invalid_shape", `Invalid shape ${x.args.shape}`);
+                return;
+            }
+            // 语义光标替换之前的surface光标（与wl_pointer.set_cursor混用，后到者生效）
+            this.obj2.cursorSurface = null;
+            this.render.setCursor(shape, 0, 0);
+        });
+
         isOp("zwp_text_input_manager_v1.create_text_input", (x) => {
             const textInputId = x.args.id;
             if (!this.obj2.textInputV1) this.obj2.textInputV1 = { focus: null, m: new Map() };
@@ -2453,6 +2473,16 @@ function getEnumValue<T extends keyof WaylandEnumObj>(enumName: T, value: Waylan
         if (entry === undefined) throw new Error(`Value ${value} not found in enum ${enumName}`);
         return entry;
     }
+}
+
+function getEnumName<T extends keyof WaylandEnumObj>(enumName: T, value: number): WaylandEnumObj[T] | undefined {
+    const [pName, enumN] = enumName.split(".");
+    const proto = WaylandProtocols[pName];
+    if (!proto) throw new Error(`Protocol ${pName} cannot find`);
+    if (!proto.enum) throw new Error(`Protocol ${proto.name} has no enums`);
+    const e = proto.enum.find((e) => e.name === enumN);
+    if (!e) throw new Error(`Enum ${enumN} not found in protocol ${proto.name}`);
+    return Object.entries(e.enum).find(([, v]) => v === value)?.[0] as WaylandEnumObj[T] | undefined;
 }
 
 function newFd(data: string | Uint8Array): { fd: number; size: number } {

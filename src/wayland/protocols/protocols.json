@@ -3386,5 +3386,125 @@
       "event": [],
       "enum": []
     }
+  ],
+  "cursor-shape-v1": [
+    {
+      "name": "wp_cursor_shape_manager_v1",
+      "version": 2,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "get_pointer",
+          "args": [
+            {
+              "name": "cursor_shape_device",
+              "type": "new_id",
+              "interface": "wp_cursor_shape_device_v1"
+            },
+            {
+              "name": "pointer",
+              "type": "object",
+              "interface": "wl_pointer"
+            }
+          ]
+        },
+        {
+          "name": "get_tablet_tool_v2",
+          "args": [
+            {
+              "name": "cursor_shape_device",
+              "type": "new_id",
+              "interface": "wp_cursor_shape_device_v1"
+            },
+            {
+              "name": "tablet_tool",
+              "type": "object",
+              "interface": "zwp_tablet_tool_v2"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": []
+    },
+    {
+      "name": "wp_cursor_shape_device_v1",
+      "version": 2,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "set_shape",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint",
+              "summary": "serial number of the enter event"
+            },
+            {
+              "name": "shape",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": [
+        {
+          "name": "shape",
+          "enum": {
+            "default": 1,
+            "context_menu": 2,
+            "help": 3,
+            "pointer": 4,
+            "progress": 5,
+            "wait": 6,
+            "cell": 7,
+            "crosshair": 8,
+            "text": 9,
+            "vertical_text": 10,
+            "alias": 11,
+            "copy": 12,
+            "move": 13,
+            "no_drop": 14,
+            "not_allowed": 15,
+            "grab": 16,
+            "grabbing": 17,
+            "e_resize": 18,
+            "n_resize": 19,
+            "ne_resize": 20,
+            "nw_resize": 21,
+            "s_resize": 22,
+            "se_resize": 23,
+            "sw_resize": 24,
+            "w_resize": 25,
+            "ew_resize": 26,
+            "ns_resize": 27,
+            "nesw_resize": 28,
+            "nwse_resize": 29,
+            "col_resize": 30,
+            "row_resize": 31,
+            "all_scroll": 32,
+            "zoom_in": 33,
+            "zoom_out": 34,
+            "dnd_ask": 35,
+            "all_resize": 36
+          }
+        },
+        {
+          "name": "error",
+          "enum": {
+            "invalid_shape": 1
+          }
+        }
+      ]
+    }
   ]
 }

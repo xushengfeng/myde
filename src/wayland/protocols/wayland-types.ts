@@ -33,7 +33,9 @@ export type WaylandInterfaces =
     | "zwp_linux_buffer_params_v1"
     | "zwp_linux_dmabuf_feedback_v1"
     | "zwp_text_input_v1"
-    | "zwp_text_input_manager_v1";
+    | "zwp_text_input_manager_v1"
+    | "wp_cursor_shape_manager_v1"
+    | "wp_cursor_shape_device_v1";
 
 export enum WaylandEventOpcode {
     wl_display__error = 0,
@@ -1024,6 +1026,21 @@ export type WaylandRequestObj = {
     "zwp_text_input_manager_v1.create_text_input": {
         id: WaylandObjectId2<"zwp_text_input_v1">;
     };
+    "wp_cursor_shape_manager_v1.destroy": {};
+    "wp_cursor_shape_manager_v1.get_pointer": {
+        cursor_shape_device: WaylandObjectId2<"wp_cursor_shape_device_v1">;
+        pointer: WaylandObjectId2<"wl_pointer">;
+    };
+    "wp_cursor_shape_manager_v1.get_tablet_tool_v2": {
+        cursor_shape_device: WaylandObjectId2<"wp_cursor_shape_device_v1">;
+        tablet_tool: WaylandObjectId2<"zwp_tablet_tool_v2">;
+    };
+    "wp_cursor_shape_device_v1.destroy": {};
+    "wp_cursor_shape_device_v1.set_shape": {
+        /** serial number of the enter event*/
+        serial: number;
+        shape: number;
+    };
 };
 
 export type WaylandEnumObj = {
@@ -1299,4 +1316,42 @@ export type WaylandEnumObj = {
         | "selection"
         | "incorrect";
     "zwp_text_input_v1.text_direction": "auto" | "ltr" | "rtl";
+    "wp_cursor_shape_device_v1.shape":
+        | "default"
+        | "context_menu"
+        | "help"
+        | "pointer"
+        | "progress"
+        | "wait"
+        | "cell"
+        | "crosshair"
+        | "text"
+        | "vertical_text"
+        | "alias"
+        | "copy"
+        | "move"
+        | "no_drop"
+        | "not_allowed"
+        | "grab"
+        | "grabbing"
+        | "e_resize"
+        | "n_resize"
+        | "ne_resize"
+        | "nw_resize"
+        | "s_resize"
+        | "se_resize"
+        | "sw_resize"
+        | "w_resize"
+        | "ew_resize"
+        | "ns_resize"
+        | "nesw_resize"
+        | "nwse_resize"
+        | "col_resize"
+        | "row_resize"
+        | "all_scroll"
+        | "zoom_in"
+        | "zoom_out"
+        | "dnd_ask"
+        | "all_resize";
+    "wp_cursor_shape_device_v1.error": "invalid_shape";
 };

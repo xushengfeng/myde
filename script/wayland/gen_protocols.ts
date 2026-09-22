@@ -82,6 +82,13 @@ const supportedProtocols: Array<{
             { name: "zwp_text_input_manager_v1", version: 1 },
         ],
     },
+    {
+        name: "cursor-shape-v1",
+        interfaces: [
+            { name: "wp_cursor_shape_manager_v1", version: 2 },
+            { name: "wp_cursor_shape_device_v1", version: 2 },
+        ],
+    },
 ];
 
 // 支持遍历 supportedProtocols，按 name 读取对应 xml 文件并处理
