@@ -56,6 +56,8 @@ type WaylandData = {
         canvas: OffscreenCanvas;
         current: WaylandSurfaceData;
         pending: WaylandSurfaceData;
+        // wl_pointer.set_cursor的hotspot，不是双缓冲状态，立即生效并被后续commit沿用
+        cursorHotspot?: { x: number; y: number };
     };
     wl_buffer:
         | { type: "shm"; fd: number; offset: number; stride: number; imageData: ImageData }
@@ -251,12 +253,21 @@ function tryX<t>(f: () => t): [Error, null] | [null, t] {
     }
 }
 
+function snapshotCanvas(canvas: OffscreenCanvas): OffscreenCanvas {
+    // 画布可能被后续渲染复用/清空，复制一份供外部持有
+    const snapshot = new OffscreenCanvas(canvas.width, canvas.height);
+    snapshot.getContext("2d")?.drawImage(canvas, 0, 0);
+    return snapshot;
+}
+
 class wlSurfaceData {
     private wl_surface: Record<
         WaylandObjectId2<"wl_surface">,
         {
-            role: "subsurface" | "toplevel" | "popup" | undefined;
+            role: "subsurface" | "toplevel" | "popup" | "cursor" | undefined;
             size: { w: number; h: number };
+            // 最近一次合成输出的画布，可能与surface画布共用，取用时需要复制
+            frame?: OffscreenCanvas;
         }
     > = {};
 
@@ -276,6 +287,7 @@ class wlSurfaceData {
         return this.wl_surface[id];
     }
     renderWlSurface(id: WaylandObjectId2<"wl_surface">, canvas: OffscreenCanvas) {
+        this.wl_surface[id].frame = canvas;
         this.render.renderCanvas(canvas, this.idScope(id));
     }
     destroyWlSurface(id: WaylandObjectId2<"wl_surface">) {
@@ -283,7 +295,7 @@ class wlSurfaceData {
         this.render.destroyCanvas(this.idScope(id));
     }
 
-    setWlSurfaceRole(id: WaylandObjectId2<"wl_surface">, role: "subsurface" | "toplevel" | "popup") {
+    setWlSurfaceRole(id: WaylandObjectId2<"wl_surface">, role: "subsurface" | "toplevel" | "popup" | "cursor") {
         const oldRole = this.wl_surface[id].role;
         if (oldRole !== undefined && oldRole !== role) {
             throw new WaylandSurfaceRoleError();
@@ -579,9 +591,12 @@ class WaylandClient {
     private protoVersions: Map<string, number> = new Map();
     private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
     private nextObjectId: number = 0xff000000;
+    private render: renderTools;
     private obj2: Partial<{
         focusSurface: WaylandObjectId2<"wl_surface"> | null;
         focusSurfaceType: "main" | "popup" | null;
+        // 当前光标surface，null表示隐藏光标
+        cursorSurface: WaylandObjectId2<"wl_surface"> | null;
         textInputV1: {
             focus: WaylandObjectId | null;
             m: Map<WaylandObjectId2<"zwp_text_input_v1">, { focus: boolean; serial: number }>;
@@ -658,6 +673,7 @@ class WaylandClient {
             appid: undefined,
             xdg_wm_base: new Set(),
         };
+        this.render = render;
         this.wlSurface = new wlSurfaceData(render);
         this.dataManager = {
             wlSubSurface: new wlSubSurfaceData(this.wlSurface),
@@ -856,6 +872,7 @@ class WaylandClient {
         isOp("wl_surface.attach", (x) => {
             const surface = this.getObject(x.id);
             const bufferId = waylandObjectId(x.args.buffer, "wl_buffer");
+            // todo attach(null)应该unmap，commit后视为无内容（如隐藏光标surface）
             if (!bufferId) return;
             surface.data.pending.buffer = { id: bufferId };
         });
@@ -904,9 +921,9 @@ class WaylandClient {
                 if (bufferObj.type === "shm") {
                     image = bufferObj.imageData;
 
-                    const buffern = new Uint8ClampedArray(bufferObj.stride * image.height * 4);
+                    const buffern = new Uint8ClampedArray(bufferObj.stride * image.height);
                     try {
-                        fs.readSync(bufferObj.fd, buffern, bufferObj.offset, buffern.length, 0);
+                        fs.readSync(bufferObj.fd, buffern, 0, buffern.length, bufferObj.offset);
                     } catch (error) {
                         console.error("Error reading shm buffer:", error);
                     }
@@ -1017,6 +1034,7 @@ class WaylandClient {
                 if (image instanceof VideoFrame) {
                     image.close();
                 }
+                let fcanvas = canvas;
                 if (data.viewport && (data.viewport.destination || data.viewport.source)) {
                     const source = data.viewport.source;
                     const destination = data.viewport.destination;
@@ -1036,8 +1054,15 @@ class WaylandClient {
                     } else {
                         sctx?.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, dwidth, dheight);
                     }
-                    this.wlSurface.renderWlSurface(surfaceId, ncanvas);
-                } else this.wlSurface.renderWlSurface(surfaceId, canvas);
+                    fcanvas = ncanvas;
+                }
+                this.wlSurface.renderWlSurface(surfaceId, fcanvas);
+
+                // 只有当前光标surface才推送光标，隐藏后commit不应重新显示
+                if (this.obj2.cursorSurface === surfaceId) {
+                    const hotspot = surface.data.cursorHotspot;
+                    this.render.setCursor(snapshotCanvas(fcanvas), hotspot?.x ?? 0, hotspot?.y ?? 0);
+                }
             }
 
             requestAnimationFrame(() => {
@@ -1056,6 +1081,11 @@ class WaylandClient {
         });
         isOp("wl_surface.destroy", (x) => {
             const surfaceId = x.id;
+            if (this.obj2.cursorSurface === surfaceId) {
+                // 光标surface销毁后隐藏光标
+                this.obj2.cursorSurface = null;
+                this.render.setCursor(undefined, 0, 0);
+            }
             this.wlSurface.destroyWlSurface(surfaceId);
             // todo 相关的如subsurface、xdgsurface等
         });
@@ -1118,6 +1148,38 @@ class WaylandClient {
                 fd: fd,
                 size: size,
             });
+        });
+        isOp("wl_pointer.set_cursor", (x) => {
+            // todo serial
+            // todo wlsurface.offset
+            const surfaceId = x.args.surface;
+            if (!surfaceId) {
+                // surface为null时隐藏光标
+                this.obj2.cursorSurface = null;
+                this.render.setCursor(undefined, 0, 0);
+                return;
+            }
+            const s = this.getObject(surfaceId);
+            const [roleError] = tryX(() => {
+                this.wlSurface.setWlSurfaceRole(surfaceId, "cursor");
+            });
+            if (roleError instanceof WaylandSurfaceRoleError) {
+                this.postError("wl_pointer", x.id, "role", "Surface already has another role");
+                return;
+            }
+            this.obj2.cursorSurface = surfaceId;
+
+            // hotspot立即生效，之后的commit沿用
+            s.data.cursorHotspot = {
+                x: x.args.hotspot_x,
+                y: x.args.hotspot_y,
+            };
+
+            // surface已有内容时立即更新光标，不需要等下一次commit
+            const frame = this.wlSurface.getWlSurface(surfaceId).frame;
+            if (frame) {
+                this.render.setCursor(snapshotCanvas(frame), s.data.cursorHotspot.x, s.data.cursorHotspot.y);
+            }
         });
         isOp("wl_region.add", (x) => {
             const region = this.getObject(x.id);

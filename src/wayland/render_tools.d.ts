@@ -1,6 +1,7 @@
 export type renderToolsOn = {
     onToplevelCreate?: (wid: string) => void;
     onToplevelRemove?: (wid: string) => void;
+    onCursorUpdata?: (canvas: OffscreenCanvas | string | undefined, hx: number, hy: number) => void;
 };
 
 export interface renderTools {
@@ -19,4 +20,5 @@ export interface renderTools {
     asToplevel(id: string): void;
     addPopupToXdgSurface(popupSurfaceId: string, parentSurfaceId: string): void;
     setPopupPosi(popupSurfaceId: string, x: number, y: number): void;
+    setCursor(canvas: OffscreenCanvas | string | undefined, hotspotX: number, hotspotY: number): void;
 }

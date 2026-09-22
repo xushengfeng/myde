@@ -133,4 +133,7 @@ export class renderToolsHtmlEl implements renderTools {
             top: `${y}px`,
         });
     }
+    setCursor(canvas: OffscreenCanvas | string | undefined, hotspotX: number, hotspotY: number): void {
+        this._on.onCursorUpdata?.(canvas, hotspotX, hotspotY);
+    }
 }

@@ -5,7 +5,7 @@ import { getDesktopEntries, getDesktopIcon } from "../../sys_api/application";
 import { renderToolsHtmlEl } from "../../wayland/render_tools_el";
 import { _myde as myde } from "../../desktop-api";
 
-import { button, image, pack, txt, view, initDKH, input, addStyle } from "dkh-ui";
+import { button, image, pack, txt, view, initDKH, input, addStyle, ele } from "dkh-ui";
 import type { WaylandClient } from "../../wayland/server";
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
@@ -111,6 +111,24 @@ render.on({
     },
     onToplevelRemove: (wid) => {
         render.getXdgSurfaceEle(wid)?.remove();
+    },
+    onCursorUpdata(c, hx, hy) {
+        console.log("cursor", c, hx, hy);
+
+        if (c === undefined) {
+            mouseEL.style({ opacity: 0 });
+            return;
+        } else {
+            mouseEL.style({ opacity: 1 });
+        }
+        if (typeof c === "string") {
+        } else {
+            const cel = ele("canvas");
+
+            cel.attr({ width: c.width, height: c.height });
+            cel.el.getContext("2d")?.drawImage(c, 0, 0);
+            mouseEL.clear().add(cel.style({ position: "absolute", left: `-${hx}px`, top: `-${hy}px` }));
+        }
     },
 });
 
