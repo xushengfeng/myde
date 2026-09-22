@@ -21,6 +21,7 @@ import { dynamicScrollList } from "./scroll-list";
 import { Registry } from "./registry";
 import type { MenuItem } from "../../../src/sys_api/menu";
 import { getIconXEl } from "./icon";
+import { Cursor } from "./cursor";
 
 // ========== Registry 和 ControlNode ==========
 
@@ -682,8 +683,10 @@ function mouseMove(x: number, y: number) {
     // 更新全局鼠标坐标
     mousePos.x = x;
     mousePos.y = y;
-    mouseEl.style({ top: `${y}px`, left: `${x}px` });
-    sendPointerEvent("move", new PointerEvent("pointermove", { clientX: x, clientY: y }));
+    cursor.move(x, y);
+    const inWin = sendPointerEvent("move", new PointerEvent("pointermove", { clientX: x, clientY: y }));
+    // 移开surface或软件后恢复默认光标
+    if (!inWin) cursor.reset();
 }
 
 function cssVar(name: string) {
@@ -800,8 +803,9 @@ function appIcon(iconPath: () => Promise<string>, name: string) {
     return p;
 }
 
-function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
-    if (viewAllShowing) return;
+function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): boolean {
+    if (viewAllShowing) return false;
+    let hit = false;
     for (const [_id, client] of server.server.clients) {
         for (const [winId, _win] of client.getWindows()) {
             const xwin = client.win(winId);
@@ -812,6 +816,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
             const ny = p.y - rect.top;
             const inWin = xwin.point.inWin({ x: nx, y: ny });
             if (!inWin) continue;
+            hit = true;
             xwin.point.sendPointerEvent(
                 type,
                 new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
@@ -828,6 +833,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
             break;
         }
     }
+    return hit;
 }
 
 function sendScrollEvent(p: WheelEvent) {
@@ -876,6 +882,11 @@ render.on({
         if (el) {
             el.remove();
         }
+    },
+    onCursorUpdata: (c, hx, hy) => {
+        if (c === undefined) cursor.hide();
+        else if (typeof c === "string") cursor.setShape(c);
+        else cursor.setImage(c, hx, hy);
     },
 });
 const server = MSysApi.server({ render });
@@ -2407,19 +2418,7 @@ windowEl.on("wheel", (e) => {
     sendScrollEvent(e);
 });
 
-const mouseEl = view().addInto(cursorEl).style({
-    position: "fixed",
-    width: "10px",
-    height: "10px",
-    background: "rgba(0,0,0,0.5)",
-    outline: "1px solid #fff",
-    borderRadius: "50%",
-    pointerEvents: "none",
-    top: "0px",
-    left: "0px",
-    transform: "translate(-50%, -50%)",
-    zIndex: 9999,
-});
+const cursor = new Cursor(cursorEl);
 
 MSysApi.getDesktopEntries().then((e) => {
     for (const x of e) {

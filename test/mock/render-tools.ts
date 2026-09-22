@@ -136,6 +136,10 @@ export class MockRenderTools implements renderTools {
         }
     }
 
+    setCursor(canvas: OffscreenCanvas | string | undefined, hotspotX: number, hotspotY: number): void {
+        this._on.onCursorUpdata?.(canvas, hotspotX, hotspotY);
+    }
+
     destroy(): void {
         for (const [, info] of this.xdgElMap) {
             info.element.remove();

@@ -136,6 +136,7 @@ function createMockRenderTools(): renderTools {
         asToplevel(_id: string): void {},
         addPopupToXdgSurface(_popupSurfaceId: string, _parentSurfaceId: string): void {},
         setPopupPosi(_popupSurfaceId: string, _x: number, _y: number): void {},
+        setCursor(_canvas: OffscreenCanvas | string | undefined, _hotspotX: number, _hotspotY: number): void {},
     };
 }
 
