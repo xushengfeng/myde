@@ -19,10 +19,6 @@ interface Rect {
 
 interface Transform {
     rotation?: number;
-    scale_x?: number;
-    scale_y?: number;
-    translate_x?: number;
-    translate_y?: number;
 }
 
 interface DisplayMessage {
@@ -185,7 +181,7 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         ipcRenderer.send("SetWindowSize", { width, height });
     }
 
-    async renderToScreen(screenIndex: number, rects: Rect[], transforms?: Transform[]): Promise<void> {
+    async renderToScreen(screenIndex: number, rect: Rect, transform?: Transform): Promise<void> {
         if (this.type !== "desktop") {
             return;
         }
@@ -193,8 +189,8 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
             "RenderToScreen",
             {
                 screen_index: screenIndex,
-                rects,
-                transforms: transforms || [],
+                rect,
+                transforms: transform,
             },
             "RenderedToScreen",
         );

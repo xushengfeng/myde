@@ -2446,7 +2446,7 @@ if (display.getType() === "desktop") {
         console.log("screen", JSON.stringify(s));
         const x = s[0];
         display.setWindowSize(x.width, x.height);
-        display.renderToScreen(0, [{ x: 0, y: 0, width: x.width, height: x.height }]);
+        display.renderToScreen(0, { x: 0, y: 0, width: x.width, height: x.height });
     });
 }
 
