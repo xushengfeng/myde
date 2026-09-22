@@ -392,7 +392,12 @@ export function dynamicScrollList<T>(options: {
         lastTouchPos = touchStartPos;
         lastTouchTime = Date.now();
         touchVelocity = 0;
-        container.el.setPointerCapture(e.pointerId);
+        try {
+            // 合成事件（如 evdev 注入）没有活动指针，无法捕获，忽略
+            container.el.setPointerCapture(e.pointerId);
+        } catch {
+            // ignore
+        }
     });
 
     container.el.addEventListener("pointermove", (e) => {

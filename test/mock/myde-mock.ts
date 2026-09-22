@@ -5,7 +5,7 @@ import type { tray } from "../../src/sys_api/appIndicator";
 import type { MenuItem } from "../../src/sys_api/menu";
 import type { blue } from "../../src/sys_api/blue";
 import type { display } from "../../src/sys_api/display";
-import type { InputManager } from "../../src/sys_api/input";
+import type { InputManager } from "myde-input";
 import type { MprisEvents, mpris } from "../../src/sys_api/mpris";
 import type { network } from "../../src/sys_api/network";
 import type { NotificationData, NotificationEvents, notification } from "../../src/sys_api/notification";
@@ -1056,9 +1056,15 @@ function createMockDisplay(log: (...args: any[]) => void): MockType<display> {
 
 function createMockInput(log: (...args: any[]) => void): MockType<InputManager> {
     const emitter = createMockEventEmitter<any>();
+    // myde-input 的 InputManager 基于 node:events EventEmitter（on 返回 this 等），
+    // mock 用自己的 emitter 模拟事件行为，方法签名不完全一致，统一断言
     return {
         async init() {
             log("input.init");
+            return { ok: true, value: undefined };
+        },
+        isInitialized() {
+            return false;
         },
         on: emitter.on.bind(emitter),
         off: emitter.off.bind(emitter),
@@ -1076,10 +1082,10 @@ function createMockInput(log: (...args: any[]) => void): MockType<InputManager> 
         getDevice(_path: string) {
             return undefined;
         },
-        destroy() {
+        async destroy() {
             log("input.destroy");
         },
-    };
+    } as unknown as MockType<InputManager>;
 }
 
 export class MockVfsStore {

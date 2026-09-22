@@ -13,7 +13,6 @@ import { blue } from "../../sys_api/blue";
 import { display } from "../../sys_api/display";
 import { getEnv } from "../../sys_api/env";
 import { vfs } from "../../sys_api/fs";
-import { InputManager } from "../../sys_api/input";
 import { mpris } from "../../sys_api/mpris";
 import { network } from "../../sys_api/network";
 import { notification } from "../../sys_api/notification";
@@ -23,6 +22,14 @@ import { volumeControl } from "../../sys_api/volume";
 const {
     default: { loginService },
 } = require("myde-pam-client") as typeof import("myde-pam-client");
+
+// input 是可选能力（如打包环境缺失依赖、无权限），加载失败不应阻断桌面加载
+let InputManagerCtor: typeof import("myde-input")["InputManager"] | undefined;
+try {
+    ({ InputManager: InputManagerCtor } = require("myde-input") as typeof import("myde-input"));
+} catch (e) {
+    console.warn("[input] myde-input 加载失败:", e);
+}
 
 async function loadDesktop(p: string) {
     const dirPath = p.replace(/\/$/, "");
@@ -64,9 +71,17 @@ async function loadDesktop(p: string) {
     myde.MSysApi.blue = new blue(await newDBusIO(true));
     myde.MSysApi.network = new network(await newDBusIO(true));
     myde.MSysApi.volume = new volumeControl();
-    // 影响了fs promise正常工作
-    // myde.MSysApi.input = new InputManager(inputFs);
-    // await myde.MSysApi.input.init();
+    if (InputManagerCtor) {
+        myde.MSysApi.input = new InputManagerCtor();
+        try {
+            const inputResult = await myde.MSysApi.input.init();
+            if (!inputResult.ok) {
+                console.warn("[input] 初始化失败:", inputResult.error.message);
+            }
+        } catch (e) {
+            console.warn("[input] 初始化异常:", e);
+        }
+    }
     const packageData = fs.readFileSync(packagePath, "utf-8");
     const packageJson = JSON.parse(packageData);
     const mainPath = `${dirPath}/${packageJson.main || "index.js"}`;

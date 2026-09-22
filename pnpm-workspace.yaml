@@ -1,6 +1,7 @@
 allowBuilds:
   electron: true
   esbuild: false
+  msgpackr-extract: false
 
 ignoredBuiltDependencies:
   - esbuild

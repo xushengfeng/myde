@@ -168,7 +168,7 @@ interface MockConfig {
 | `network` | ✅ | 支持动态添加/删除WiFi设备和接入点 |
 | `volume` | ✅ | 支持动态添加/删除音频设备和流 |
 | `display` | ✅ | onMessage/send |
-| `input` | ✅ | init/on/getDevices |
+| `input` | ✅ | init/isInitialized/getDevices/getDevice/destroy（无设备模拟，`isInitialized()` 返回 false） |
 | `verifyUserPassword` | ✅ | 可配置密码验证 |
 | `appControl` | ✅ | getPidTree/getPid |
 

@@ -22,6 +22,7 @@ import { Registry } from "./registry";
 import type { MenuItem } from "../../../src/sys_api/menu";
 import { getIconXEl } from "./icon";
 import { Cursor } from "./cursor";
+import { useEvdevPointer } from "./input_pointer";
 
 // ========== Registry 和 ControlNode ==========
 
@@ -818,10 +819,11 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): boolea
             // todo 指针离开窗口时调用point.sendPointerLeave()（待实现）让客户端收到wl_pointer.leave，见server.ts updatePointerFocus
             if (!inWin) continue;
             hit = true;
-            xwin.point.sendPointerEvent(
-                type,
-                new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
-            );
+            xwin.point.sendPointerEvent(type, {
+                x: p.x - rect.left,
+                y: p.y - rect.top,
+                button: p.button,
+            });
             if (type === "down") {
                 xwin.focus();
                 viewData.focusWin(ViewData.winId(_id, winId));
@@ -2420,6 +2422,21 @@ windowEl.on("wheel", (e) => {
 });
 
 const cursor = new Cursor(cursorEl);
+
+// 鼠标输入：evdev 原生输入可用时接管指针（硬件事件注入为 DOM 指针事件），否则使用 DOM 指针事件
+const inputApi = MSysApi.input;
+inputApi
+    .init()
+    .then((x) => {
+        if (x.ok && useEvdevPointer(inputApi)) {
+            console.log("[input] use evdev native input");
+        } else {
+            console.log("[input] use dom mouse input", JSON.stringify(x));
+        }
+    })
+    .catch((e) => {
+        console.error(`native input error`, e);
+    });
 
 MSysApi.getDesktopEntries().then((e) => {
     for (const x of e) {

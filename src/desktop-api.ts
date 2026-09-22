@@ -1,3 +1,4 @@
+import type { InputManager } from "myde-input";
 import type { Connect } from "./connect/connect";
 import { mapKeyCode } from "./input_map/web2x";
 import type { nowConfig } from "./setting/config";
@@ -9,7 +10,6 @@ import type { blue } from "./sys_api/blue";
 import type { display } from "./sys_api/display";
 import { getEnv } from "./sys_api/env";
 import { vfs } from "./sys_api/fs";
-import type { InputManager } from "./sys_api/input";
 import { setPowerState } from "./sys_api/login";
 import type { mpris } from "./sys_api/mpris";
 import type { network } from "./sys_api/network";
@@ -62,5 +62,20 @@ declare global {
     var myde: DesktopApi;
 }
 
+export type {
+    AppError,
+    AxisInfo,
+    DeviceCapabilities,
+    DeviceError,
+    DeviceInfo,
+    DeviceType,
+    InputDevice,
+    InputDeviceEvents,
+    InputEvent,
+    InputManager,
+    InputManagerEvents,
+    Result,
+    TouchInfo,
+} from "myde-input";
 export type { renderTools } from "./wayland/render_tools";
 export type { WaylandClient, WaylandWinId } from "./wayland/server";

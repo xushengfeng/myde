@@ -121,66 +121,42 @@ mpris，获取正在播放的媒体相关信息，并控制播放暂停等
 
 ### input
 
-原生输入设备读取，支持键盘、鼠标、触控板、数位板、触屏、游戏手柄
+原生输入设备读取（evdev），支持键盘、鼠标、触控板、数位板、触屏、游戏手柄。由 `myde-input` 模块提供（Rust 子进程读取，不占用渲染进程线程）。
+
+加载器已完成 `init()`，用 `input.isInitialized()` 判断是否可用（无 `/dev/input` 权限或子进程缺失时为 false，此时应使用 DOM 事件回退）。
 
 ```typescript
 const { input } = MSysApi;
 
-// 获取所有输入设备（每个设备都是 EventEmitter）
-const devices = input.getDevices();
-// [InputDevice, InputDevice, ...]
+if (input.isInitialized()) {
+    // 获取所有输入设备信息（DeviceInfo[]，仅元数据，不含事件流）
+    const devices = input.getDevices();
 
-// 获取单个设备
-const device = input.getDevice("/dev/input/event0");
+    // 获取单个设备并显式开始读取事件
+    const dev = input.getDevice("/dev/input/event3");
+    if (dev) {
+        dev.startReading();
+        dev.on("keyDown", (code) => console.log("按下", code));
+        dev.on("relative", (code, value) => console.log("相对移动", code, value));
+    }
 
-// 监听单个设备事件
-const keyboard = devices.find((d) => d.type === "keyboard");
-if (keyboard) {
-    keyboard.on("keyDown", (event) => {
-        console.log(`${keyboard.name} 按键按下: code=${event.code}`);
+    // 监听设备热插拔（管理器事件）
+    input.on("deviceAdded", (info) => {
+        console.log("设备接入:", info.name, info.type);
+        input.getDevice(info.path)?.startReading();
     });
-
-    keyboard.on("keyUp", (event) => {
-        console.log(`${keyboard.name} 按键释放: code=${event.code}`);
+    input.on("deviceRemoved", (path) => {
+        console.log("设备断开:", path);
     });
-}
-
-// 监听鼠标设备
-const mouse = devices.find((d) => d.type === "mouse");
-if (mouse) {
-    mouse.on("relative", (event) => {
-        console.log(`${mouse.name} 移动: code=${event.code} value=${event.value}`);
+    input.on("error", (e) => {
+        console.warn(e.code, e.message);
     });
 }
-
-// 监听触屏设备
-const touchscreen = devices.find((d) => d.type === "touchscreen");
-if (touchscreen) {
-    touchscreen.on("absolute", (event) => {
-        console.log(`${touchscreen.name} 触摸: code=${event.code} value=${event.value}`);
-    });
-}
-
-// 聚合监听所有设备事件（input 本身也是 EventEmitter）
-input.on("keyDown", (event) => {
-    console.log(`[任意键盘] ${event.device.name} 按下: code=${event.code}`);
-});
-
-input.on("relative", (event) => {
-    console.log(`[任意鼠标] ${event.device.name} 移动: code=${event.code} value=${event.value}`);
-});
-
-// 监听设备变化
-input.on("deviceAdded", (device) => {
-    console.log("设备接入:", device.name, device.type);
-});
-
-input.on("deviceRemoved", (device) => {
-    console.log("设备断开:", device.name, device.type);
-});
 ```
 
-设备类型 (`device.type`)：
+设备信息 (`DeviceInfo`)：`path`、`name`、`type`、`phys`、`vendor`/`product`/`version`、`capabilities`（`eventTypes`/`keyCodes`/`relAxes`/`absAxes`、`hasKeyboard`/`hasMouse`/`hasTouchpad`/`hasTouchscreen`、`maxTouchSlots`）、`touchInfo`（触屏物理轴信息）、`absInfo`（所有绝对轴量程 `Record<轴码, AxisInfo>`，绝对定位设备坐标校准用）、`errors`（如权限不足）
+
+设备类型 (`info.type`)：
 
 - `"keyboard"` - 键盘
 - `"mouse"` - 鼠标
@@ -188,25 +164,29 @@ input.on("deviceRemoved", (device) => {
 - `"touchscreen"` - 触屏
 - `"tablet"` - 数位板
 - `"gamepad"` - 游戏手柄
-- `"unknown"` - 未知设备
+- `"unknown"` - 未知设备（常见于无权限读取能力信息）
 
-事件类型（通过 `event.type` 区分）：
+每个设备 (`InputDevice`) 可监听的事件：
 
-- `EV_KEY` (1): 按键事件，value=1按下，value=0释放，value=2长按
-- `EV_REL` (2): 相对移动事件（鼠标），event.code 区分轴向
-- `EV_ABS` (3): 绝对位置事件（触屏、触控板、数位板），event.code 区分轴向
-- `EV_SYN` (0): 同步事件，表示一帧事件结束
+- `"key"` - `(code, value, timestamp)` 按键原始事件，value=1按下、value=0释放、value=2长按
+- `"keyDown"` / `"keyUp"` / `"keyRepeat"` - `(code)` 语义化按键事件
+- `"relative"` - `(code, value)` 相对移动（鼠标、触控板），code 区分轴向（0=REL_X、1=REL_Y、8=REL_WHEEL、6=REL_HWHEEL）
+- `"absolute"` - `(code, value)` 绝对位置（触屏、数位板）
+- `"sync"` - `()` 同步帧结束（一帧事件收齐，适合批量处理移动）
+- `"raw"` - `(event)` 原始事件 `{ devicePath, type, code, value, timestamp }`
+- `"error"` - `(error)` 读取错误
 
-每个设备可监听的事件：
+管理器 (`input`) 事件：`"deviceAdded"` `(info: DeviceInfo)`、`"deviceRemoved"` `(path: string)`、`"error"` `(error)`
 
-- `"event"` - 所有原始事件
-- `"key"` / `"keyDown"` / `"keyUp"` / `"keyRepeat"` - 按键事件
-- `"relative"` - 相对移动
-- `"absolute"` - 绝对位置
-- `"sync"` - 同步帧
-- `"error"` - 读取错误
+方法：
 
-权限要求：用户需要在 `input` 组中才能读取 `/dev/input/event*`，否则设备列表为空
+- `input.getDevices()` / `input.getDevice(path)` / `input.isInitialized()` / `input.destroy()`
+- `dev.startReading()` / `dev.stopReading()` / `dev.isReading()`
+- 方法返回 `Result`：`{ ok: true, value }` 或 `{ ok: false, error: { code, message, detail? } }`，不会抛出异常
+
+按键码为 Linux evdev 键码（如 30=KEY_A、272=BTN_LEFT），浏览器 `e.code` 可用 `MInputMap.mapKeyCode` 转换
+
+权限要求：用户需要在 `input` 组中才能读取 `/dev/input/event*`，否则设备列表为空或 `errors` 提示 Permission denied
 
 ### appControl
 
