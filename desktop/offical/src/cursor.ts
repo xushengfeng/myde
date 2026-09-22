@@ -18,11 +18,17 @@ const shapeStyle = {
  * 管理光标的位置与内容：默认圆点、语义shape（wp_cursor_shape_device_v1.shape枚举名）、
  * 客户端surface图片光标（含热点）、隐藏
  *
+ * 客户端设置的光标会被记忆：指针移开surface（软件窗口）时显示默认光标，重新进入时恢复记忆的光标
+ *
  * 状态变化统一经过apply/render，日后可在render里实现过渡动画
  */
 export class Cursor {
     private warpEl: ElType<HTMLElement>;
     private state: cursorState = { type: "default" };
+    /** 客户端最后设置的光标（记忆），指针移开surface后重新进入时恢复 */
+    private clientState: cursorState = { type: "default" };
+    /** 指针是否在客户端surface（软件窗口）上 */
+    private surfaceFocus = false;
 
     constructor(parent: ElType<HTMLElement>) {
         this.warpEl = view()
@@ -42,24 +48,41 @@ export class Cursor {
         this.warpEl.style({ left: `${x}px`, top: `${y}px` });
     }
 
+    /** 指针进入/离开客户端surface（软件窗口）
+     *
+     * 离开时显示默认光标，重新进入时恢复记忆的客户端光标
+     */
+    setSurfaceFocus(focus: boolean) {
+        if (focus === this.surfaceFocus) return;
+        this.surfaceFocus = focus;
+        this.apply(focus ? this.clientState : { type: "default" });
+    }
+
     /** 客户端surface图片光标，hotspot为热点相对图片左上角的偏移 */
     setImage(canvas: OffscreenCanvas, hotspotX: number, hotspotY: number) {
-        this.apply({ type: "image", canvas, hotspot: { x: hotspotX, y: hotspotY } });
+        this.clientUpdate({ type: "image", canvas, hotspot: { x: hotspotX, y: hotspotY } });
     }
 
     /** 语义shape，wp_cursor_shape_device_v1.shape的枚举名 */
     setShape(shape: string) {
-        this.apply({ type: "shape", shape });
+        this.clientUpdate({ type: "shape", shape });
     }
 
     /** 隐藏光标 */
     hide() {
-        this.apply({ type: "hidden" });
+        this.clientUpdate({ type: "hidden" });
     }
 
-    /** 恢复默认光标，如移开客户端surface或软件后 */
+    /** 清空记忆并恢复默认光标 */
     reset() {
+        this.clientState = { type: "default" };
         this.apply({ type: "default" });
+    }
+
+    /** 记忆客户端设置的光标，指针焦点在客户端surface上时才显示（协议规定焦点外不改变光标） */
+    private clientUpdate(state: cursorState) {
+        this.clientState = state;
+        if (this.surfaceFocus) this.apply(state);
     }
 
     private apply(state: cursorState) {

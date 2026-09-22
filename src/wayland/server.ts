@@ -2142,6 +2142,9 @@ class WaylandClient {
                         }
                         return { x: nx, y: ny };
                     }
+                    // todo 指针不在任何surface上时应发送wl_pointer.leave并清除指针焦点
+                    //  现在焦点悬挂：客户端收不到leave（hover状态卡住），重新进来也不发enter、客户端不重发光标
+                    //  还需给桌面新增point.sendPointerLeave()入口（移出窗口时调用，幂等），覆盖移出所有窗口、跨客户端窗口
                     return undefined;
                 },
                 sendPointerEvent: (type: "move" | "down" | "up", p: { x: number; y: number; button: number }) => {

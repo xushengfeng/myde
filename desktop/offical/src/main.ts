@@ -685,8 +685,8 @@ function mouseMove(x: number, y: number) {
     mousePos.y = y;
     cursor.move(x, y);
     const inWin = sendPointerEvent("move", new PointerEvent("pointermove", { clientX: x, clientY: y }));
-    // 移开surface或软件后恢复默认光标
-    if (!inWin) cursor.reset();
+    // 指针移开surface或软件后恢复默认光标，重新进入时恢复记忆的客户端光标
+    cursor.setSurfaceFocus(inWin);
 }
 
 function cssVar(name: string) {
@@ -815,6 +815,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): boolea
             const nx = p.x - rect.left;
             const ny = p.y - rect.top;
             const inWin = xwin.point.inWin({ x: nx, y: ny });
+            // todo 指针离开窗口时调用point.sendPointerLeave()（待实现）让客户端收到wl_pointer.leave，见server.ts updatePointerFocus
             if (!inWin) continue;
             hit = true;
             xwin.point.sendPointerEvent(
