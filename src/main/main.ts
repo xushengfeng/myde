@@ -169,6 +169,10 @@ ipcMain.on("test", (_, data) => {
     }
 });
 
+ipcMain.on("SetWindowSize", (_, x: { width: number; height: number }) => {
+    mainWin?.setContentSize(x.width, x.height);
+});
+
 if (runAsDesktop) {
     dev = false;
 }

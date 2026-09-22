@@ -1,6 +1,8 @@
 import type { USocket } from "myde-unix-socket";
 import { EventEmitter } from "../event-emitter/event-emitter";
 
+const { ipcRenderer } = require("electron") as typeof import("electron");
+
 interface Screen {
     name: string;
     width: number;
@@ -52,7 +54,9 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         this.socket = new mus.USocket({ path: op.socketPath });
 
         this.socket.on("data", (data) => {
-            this.handleData(data.buffer as ArrayBuffer);
+            // data is a Node Buffer: its underlying ArrayBuffer may be pooled,
+            // so only pass the actual [byteOffset, byteOffset + byteLength) range.
+            this.handleData(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
         });
 
         this.socket.on("error", (error) => {
@@ -65,12 +69,12 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         });
     }
 
-    private handleData(data: ArrayBuffer): void {
+    private handleData(data: Uint8Array): void {
         // Append new data to buffer
         const newBuffer = new ArrayBuffer(this.buffer.byteLength + data.byteLength);
         const newView = new Uint8Array(newBuffer);
         newView.set(new Uint8Array(this.buffer));
-        newView.set(new Uint8Array(data), this.buffer.byteLength);
+        newView.set(data, this.buffer.byteLength);
         this.buffer = newBuffer;
 
         // Process complete messages
@@ -97,32 +101,25 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
     private handleMessage(message: DisplayMessage): void {
         const { type, ...data } = message;
 
-        // Handle responses to pending requests
-        if (type === "Screens" && this.pendingRequests.has("GetScreens")) {
-            const pending = this.pendingRequests.get("GetScreens");
-            pending?.resolve(data.screens as Screen[]);
-            this.pendingRequests.delete("GetScreens");
-        } else if (type === "WindowSizeSet" && this.pendingRequests.has("SetWindowSize")) {
-            const pending = this.pendingRequests.get("SetWindowSize");
-            pending?.resolve(undefined);
-            this.pendingRequests.delete("SetWindowSize");
-        } else if (type === "RenderedToScreen" && this.pendingRequests.has("RenderToScreen")) {
-            const pending = this.pendingRequests.get("RenderToScreen");
-            pending?.resolve(undefined);
-            this.pendingRequests.delete("RenderToScreen");
-        } else if (type === "InputState" && this.pendingRequests.has("SetInputEnabled")) {
-            const pending = this.pendingRequests.get("SetInputEnabled");
-            pending?.resolve(data.enabled as boolean);
-            this.pendingRequests.delete("SetInputEnabled");
-        } else if (type === "Pong" && this.pendingRequests.has("Ping")) {
-            const pending = this.pendingRequests.get("Ping");
-            pending?.resolve(undefined);
-            this.pendingRequests.delete("Ping");
-        } else if (type === "Error") {
+        if (type === "Error") {
             // Reject all pending requests on error
             for (const [id, pending] of this.pendingRequests) {
-                pending.reject(new Error(data.message as string));
                 this.pendingRequests.delete(id);
+                pending.reject(new Error(data.message as string));
+            }
+        } else {
+            // Resolve the pending request registered under this response type
+            // (see sendWithResponse: pendingRequests is keyed by responseType).
+            const pending = this.pendingRequests.get(type);
+            if (pending) {
+                this.pendingRequests.delete(type);
+                if (type === "Screens") {
+                    pending.resolve(data.screens as Screen[]);
+                } else if (type === "InputState") {
+                    pending.resolve(data.enabled as boolean);
+                } else {
+                    pending.resolve(undefined);
+                }
             }
         }
 
@@ -150,17 +147,33 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
 
     private sendWithResponse(type: string, data: object, responseType: string): Promise<unknown> {
         return new Promise((resolve, reject) => {
-            this.pendingRequests.set(responseType, { resolve, reject });
-
-            this.send({ type, ...data });
+            const pending = {
+                resolve: (value: unknown) => {
+                    clearTimeout(timer);
+                    resolve(value);
+                },
+                reject: (reason: Error) => {
+                    clearTimeout(timer);
+                    reject(reason);
+                },
+            };
+            this.pendingRequests.set(responseType, pending);
 
             // Timeout after 5 seconds
-            setTimeout(() => {
-                if (this.pendingRequests.has(responseType)) {
-                    this.pendingRequests.get(responseType)?.reject(new Error(`Request timeout: ${type}`));
+            const timer = setTimeout(() => {
+                // Only reject if this request is still the pending one
+                if (this.pendingRequests.get(responseType) === pending) {
                     this.pendingRequests.delete(responseType);
+                    pending.reject(new Error(`Request timeout: ${type}`));
                 }
             }, 5000);
+
+            try {
+                this.send({ type, ...data });
+            } catch (error) {
+                this.pendingRequests.delete(responseType);
+                pending.reject(error instanceof Error ? error : new Error(String(error)));
+            }
         });
     }
 
@@ -168,7 +181,8 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         if (this.type !== "desktop") {
             return;
         }
-        await this.sendWithResponse("SetWindowSize", { width, height }, "WindowSizeSet");
+        // await this.sendWithResponse("SetWindowSize", { width, height }, "WindowSizeSet");
+        ipcRenderer.send("SetWindowSize", { width, height });
     }
 
     async renderToScreen(screenIndex: number, rects: Rect[], transforms?: Transform[]): Promise<void> {

@@ -2438,6 +2438,18 @@ inputApi
         console.error(`native input error`, e);
     });
 
+const display = MSysApi.display;
+if (display.getType() === "desktop") {
+    console.log("render type desktop");
+
+    display.getScreens().then((s) => {
+        console.log("screen", JSON.stringify(s));
+        const x = s[0];
+        display.setWindowSize(x.width, x.height);
+        display.renderToScreen(0, [{ x: 0, y: 0, width: x.width, height: x.height }]);
+    });
+}
+
 MSysApi.getDesktopEntries().then((e) => {
     for (const x of e) {
         MSysApi.getDesktopIcon(x.icon, {
