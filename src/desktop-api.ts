@@ -6,12 +6,13 @@ import type { nowConfig } from "./setting/config";
 import type { setting } from "./setting/setting";
 import { getPid, getPidTree } from "./sys_api/app_control";
 import type { tray } from "./sys_api/appIndicator";
-import type { inputSim } from "./sys_api/input_sim";
 import { getDesktopEntries, getDesktopEntry, getDesktopIcon, refreshDesktopEntries } from "./sys_api/application";
 import type { blue } from "./sys_api/blue";
 import type { display } from "./sys_api/display";
 import { getEnv } from "./sys_api/env";
 import { vfs } from "./sys_api/fs";
+import type { inputMethod } from "./sys_api/input_method";
+import type { inputSim } from "./sys_api/input_sim";
 import { setPowerState } from "./sys_api/login";
 import type { mpris } from "./sys_api/mpris";
 import type { network } from "./sys_api/network";
@@ -43,6 +44,7 @@ export const _myde = {
         display: undefined as unknown as display,
         input: undefined as unknown as InputManager,
         inputSim: undefined as unknown as inputSim,
+        inputMethod: undefined as unknown as inputMethod,
         volume: undefined as unknown as volumeControl,
         appControl: {
             getPidTree,

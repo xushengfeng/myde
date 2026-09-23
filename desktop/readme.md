@@ -222,6 +222,51 @@ inputSim.emit({ kind: "key", type: "up", code: 30, source: "evdev" });
 
 聚合层参考实现见 `desktop/offical`：`main.ts` 的"输入聚合层"完成聚合/融合/分发——window capture 捕获真实 DOM 事件（只收 `isTrusted`，合成事件不回流防环）归一化，`useEvdevDevice` 解码 input api 事件（EV_SYN 帧合并、相对位移积分、绝对轴小数映射、滚轮换算、按键分流，判定/换算工具在 `input_evdev.ts`），统一传入本 api；来源只以 `source` 标记保留类型数据，不做去重。
 
+### inputMethod
+
+输入法（fcitx5，dbus 连接）。传入字母（按键），返回合成中的预编辑文本、候选词、提交文本。fcitx5 不可用时 `MSysApi.inputMethod` 为 `undefined`（加载器初始化时探测）。
+
+```typescript
+const im = MSysApi.inputMethod;
+
+// 创建合成会话（一个输入上下文）
+const ctx = await im.createContext("myde");
+await ctx.focus();
+
+// 传入字母，返回合成结果
+const r = await ctx.type("nihk"); // 自然码双拼：ni + hao →「你好」
+// { preedit, preeditCursor, auxiliary, candidates, candidateLabels,
+//   candidateCursor, candidateLayout, hasPrev, hasNext, handled, committed }
+
+console.log(r.preedit, r.candidates); // "ni hao" ["你好","你好","你","拟","尼"]
+
+// 事件订阅（合成状态实时推送）
+const off1 = ctx.on("update", (state) => render(state)); // 合成状态更新（预编辑/候选词等）
+const off2 = ctx.on("commit", (text) => insert(text)); // 提交文字
+const off3 = ctx.on("im", (imInfo) => show(imInfo)); // 当前输入法变化
+
+// 单个按键（X keysym，如 0x61='a'、0xff08=BackSpace）
+const r2 = await ctx.keyEvent(0xff08);
+
+// 选择候选词（提交文字）
+await ctx.selectCandidate(0);
+// 候选翻页
+await ctx.nextPage();
+await ctx.prevPage();
+
+// 丢弃合成（不提交）
+await ctx.reset();
+await ctx.destroy();
+```
+
+- `type(text)` 逐字符发按键（按下+抬起），返回合成快照；`keyEvent(keyval, isRelease?)` 单按键
+- 事件（`ctx.on(event, cb)` 返回取消订阅函数）：`update`（合成状态更新）/ `commit`（提交文字）/ `im`（当前输入法变化）
+- `getState()` 当前合成状态快照；`getCurrentIM()` 当前输入法（`{ name, uniqueName, language }`）
+- 合成快照 `ImComposeState`：`preedit`（预编辑文本）/ `preeditCursor` / `auxiliary`（辅助文本）/ `candidates`（候选词）/ `candidateLabels`（候选标签）/ `candidateCursor` / `candidateLayout` / `hasPrev` / `hasNext`
+- `ImKeyResult` 追加 `handled`（按键是否被输入法处理）与 `committed`（本次输入提交的文本）
+- `createContext(program, capabilities?)` 可自定义能力位图（缺省 ClientSideUI|Preedit|FormattedPreedit|ClientSideInputPanel；**注意不要全置 1**，会带上 Disable/Password 位导致 fcitx5 退化为键盘布局不合成）
+- 底层为 fcitx5 `org.fcitx.Fcitx.InputMethod1` → `org.fcitx.Fcitx.InputContext1`（信号 `UpdateClientSideUI`/`UpdateFormattedPreedit`/`CommitString`/`CurrentIM`）
+
 ### appControl
 
 `getPidTree`获取所有进程树，包括pid、ppid、名称、内存使用

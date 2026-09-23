@@ -13,6 +13,7 @@ import { blue } from "../../sys_api/blue";
 import { display } from "../../sys_api/display";
 import { getEnv } from "../../sys_api/env";
 import { vfs } from "../../sys_api/fs";
+import { inputMethod } from "../../sys_api/input_method";
 import { inputSim } from "../../sys_api/input_sim";
 import { mpris } from "../../sys_api/mpris";
 import { network } from "../../sys_api/network";
@@ -74,6 +75,17 @@ async function loadDesktop(p: string) {
     myde.MSysApi.volume = new volumeControl();
     // 统一输入事件 → 模拟 DOM 事件（无外部依赖，始终可用）
     myde.MSysApi.inputSim = new inputSim();
+    // 输入法（fcitx5），不可用时保留空实现不影响桌面加载
+    try {
+        const im = new inputMethod(await newDBusIO());
+        if (await im.init()) {
+            myde.MSysApi.inputMethod = im;
+        } else {
+            console.warn("[input_method] fcitx5 不可用，输入法 API 未启用");
+        }
+    } catch (e) {
+        console.warn("[input_method] 初始化失败:", e);
+    }
     if (InputManagerCtor) {
         myde.MSysApi.input = new InputManagerCtor();
         try {
