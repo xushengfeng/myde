@@ -99,6 +99,123 @@ describe("input_method", () => {
         }
     });
 
+    it("候选选择、翻页与提交", async () => {
+        if (!connected) return; // 已在前置提示
+        const ctx = await im.createContext("myde-test-commit");
+        await ctx.focus();
+        try {
+            // 切到合成输入法
+            execSync("fcitx5-remote -o");
+            execSync(`fcitx5-remote -s ${TEST_IM}`);
+            await new Promise((r2) => setTimeout(r2, 300));
+
+            // 合成
+            const r = await ctx.type(TEST_INPUT);
+            expect(r.candidates.length).toBeGreaterThan(0);
+            const first = r.candidates[0];
+
+            // 翻页（下一页应有上一页可回，且候选/高亮状态更新）
+            const page1 = await ctx.nextPage();
+            console.log(
+                `[input_method 测试] 下一页: cursor=${page1.candidateCursor} hasPrev=${page1.hasPrev} 候选=[${page1.candidates.join(",")}]`,
+            );
+            expect(page1.hasPrev).toBe(true);
+            const page0 = await ctx.prevPage();
+            expect(page0.candidates[0]).toBe(first);
+
+            // 选词上屏（真实提交，测完无残留）
+            const r2 = await ctx.selectCandidate(0);
+            console.log(`[input_method 测试] 选词上屏: "${r2.committed}"`);
+            expect(r2.committed).toBe(first);
+            // 上屏后合成清空
+            expect(ctx.getState().preedit).toBe("");
+        } finally {
+            await ctx.reset();
+            await ctx.destroy();
+        }
+    });
+
+    it("长句分段选词（部分词只锁定不提交）", async () => {
+        if (!connected) return; // 已在前置提示
+        const ctx = await im.createContext("myde-test-long");
+        await ctx.focus();
+        try {
+            execSync("fcitx5-remote -o");
+            execSync(`fcitx5-remote -s ${TEST_IM}`);
+            await new Promise((r2) => setTimeout(r2, 300));
+
+            // 多音节合成：自然码双拼 nihkma = ni hao ma
+            const updates: ImComposeState[] = [];
+            const commits: string[] = [];
+            const offUpdate = ctx.on("update", (s) => updates.push(s));
+            const offCommit = ctx.on("commit", (t) => commits.push(t));
+
+            const r = await ctx.type("nihkma");
+            expect(r.preedit.length).toBeGreaterThan(0);
+            expect(r.candidates.length).toBeGreaterThan(0);
+
+            // 选一个部分词（单字）：只锁定进 preedit，不提交
+            const partial = await ctx.selectCandidate(2);
+            expect(partial.committed).toBe("");
+            expect(partial.preedit.length).toBeGreaterThan(0);
+            expect(partial.preedit).not.toBe(r.preedit);
+            // 剩余部分继续合成，候选更新为下一段
+            expect(partial.candidates.length).toBeGreaterThan(0);
+
+            // 关键：部分选词后候选列表更新会触发 update 事件（payload 为新候选）
+            const changed = updates.filter((s) => s.candidates.join("\u0000") !== r.candidates.join("\u0000"));
+            expect(changed.length).toBeGreaterThan(0);
+            expect(changed[changed.length - 1].candidates.join("\u0000")).toBe(partial.candidates.join("\u0000"));
+            // 此时不应有 commit 事件
+            expect(commits).toEqual([]);
+
+            // 整句完成后才一次上屏
+            const done = await ctx.selectCandidate(0);
+            console.log(
+                `[input_method 测试] 分段选词上屏: "${done.committed}" (preedit=${r.preedit} → ${partial.preedit} → "${done.preedit}"), update 事件 ${updates.length} 次`,
+            );
+            expect(done.committed.length).toBeGreaterThan(0);
+            expect(ctx.getState().preedit).toBe("");
+            // 整句完成触发 commit 事件
+            expect(commits.length).toBeGreaterThan(0);
+            offUpdate();
+            offCommit();
+        } finally {
+            await ctx.reset();
+            await ctx.destroy();
+        }
+    });
+
+    it("commit 提交当前合成（回车原文/空格上屏）", async () => {
+        if (!connected) return; // 已在前置提示
+        const ctx = await im.createContext("myde-test-commit2");
+        await ctx.focus();
+        try {
+            execSync("fcitx5-remote -o");
+            execSync(`fcitx5-remote -s ${TEST_IM}`);
+            await new Promise((r2) => setTimeout(r2, 300));
+
+            // 回车：上屏原文（双拼字母串）
+            const r1 = await ctx.type(TEST_INPUT);
+            expect(r1.preedit.length).toBeGreaterThan(0);
+            const r2 = await ctx.commit();
+            console.log(`[input_method 测试] 回车上屏: "${r2.committed}"`);
+            expect(r2.committed).toBe(TEST_INPUT);
+            expect(ctx.getState().preedit).toBe("");
+
+            // 空格：上屏高亮/首选候选
+            const r3 = await ctx.type(TEST_INPUT);
+            const first = r3.candidates[0];
+            const r4 = await ctx.commit(false);
+            console.log(`[input_method 测试] 空格上屏: "${r4.committed}"`);
+            expect(r4.committed).toBe(first);
+            expect(ctx.getState().preedit).toBe("");
+        } finally {
+            await ctx.reset();
+            await ctx.destroy();
+        }
+    });
+
     it("合成字母（不提交）", async () => {
         if (!connected) return; // 已在前置提示
         const ctx = await im.createContext("myde-test");

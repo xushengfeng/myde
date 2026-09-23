@@ -391,24 +391,35 @@ export class inputMethodContext extends EventEmitter<ImEvents> {
         return { ...this.getState(), handled, committed: this.committedBuf };
     }
 
+    /** 发送一次完整按键（按下+抬起），返回是否被输入法处理 */
+    private async press(keyval: number): Promise<boolean> {
+        const [handled] = await this.iface()
+            .call<"uuubu">("ProcessKeyEvent", "uuubu", keyval, 0, 0, false, 0)
+            .as<"b">();
+        await this.iface()
+            .call<"uuubu">("ProcessKeyEvent", "uuubu", keyval, 0, 0, true, 0)
+            .as<"b">()
+            .catch(() => {});
+        return handled;
+    }
+
     /** 传入字母（字符串，逐字符发按键），返回合成结果 */
     async type(text: string): Promise<ImKeyResult> {
         this.committedBuf = "";
         let handled = false;
         for (const ch of text) {
-            const keyval = ch.codePointAt(0) ?? 0;
-            const [h] = await this.iface().call<"uuubu">("ProcessKeyEvent", "uuubu", keyval, 0, 0, false, 0).as<"b">();
+            const h = await this.press(ch.codePointAt(0) ?? 0);
             handled = h || handled;
-            await this.iface()
-                .call<"uuubu">("ProcessKeyEvent", "uuubu", keyval, 0, 0, true, 0)
-                .as<"b">()
-                .catch(() => {});
         }
         await new Promise((r) => setTimeout(r, 30));
         return { ...this.getState(), handled, committed: this.committedBuf };
     }
 
-    /** 选择候选词（页内下标），会提交文字 */
+    /**
+     * 选择候选词（下标对应 `state.candidates` 数组，跳过占位符），选中即上屏
+     *
+     * 多音节合成时部分输入法可能只锁定该词继续合成（committed 为空、preedit 变化）
+     */
     async selectCandidate(index: number): Promise<ImKeyResult> {
         this.committedBuf = "";
         await this.iface().call<"i">("SelectCandidate", "i", index).await();
@@ -416,13 +427,30 @@ export class inputMethodContext extends EventEmitter<ImEvents> {
         return { ...this.getState(), handled: true, committed: this.committedBuf };
     }
 
-    /** 候选翻页 */
-    async nextPage() {
-        await this.iface().call("NextPage").await();
+    /**
+     * 提交当前合成上屏
+     *
+     * @param raw true 发送回车（上屏原文，缺省）；false 发送空格（上屏高亮/首选候选）
+     */
+    async commit(raw = true): Promise<ImKeyResult> {
+        this.committedBuf = "";
+        const handled = await this.press(raw ? 0xff0d : 0x20);
+        await new Promise((r) => setTimeout(r, 30));
+        return { ...this.getState(), handled, committed: this.committedBuf };
     }
 
-    async prevPage() {
+    /** 候选翻页（下一页），返回翻页后的合成状态 */
+    async nextPage(): Promise<ImComposeState> {
+        await this.iface().call("NextPage").await();
+        await new Promise((r) => setTimeout(r, 30));
+        return this.getState();
+    }
+
+    /** 候选翻页（上一页），返回翻页后的合成状态 */
+    async prevPage(): Promise<ImComposeState> {
         await this.iface().call("PrevPage").await();
+        await new Promise((r) => setTimeout(r, 30));
+        return this.getState();
     }
 
     /** 丢弃当前合成（不提交） */

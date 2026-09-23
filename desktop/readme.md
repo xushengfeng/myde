@@ -248,11 +248,17 @@ const off3 = ctx.on("im", (imInfo) => show(imInfo)); // 当前输入法变化
 // 单个按键（X keysym，如 0x61='a'、0xff08=BackSpace）
 const r2 = await ctx.keyEvent(0xff08);
 
-// 选择候选词（提交文字）
-await ctx.selectCandidate(0);
-// 候选翻页
-await ctx.nextPage();
-await ctx.prevPage();
+// 选择候选词（下标对应 r.candidates，选中即上屏）
+const r3 = await ctx.selectCandidate(0);
+console.log(r3.committed); // 上屏文字
+
+// 提交当前合成上屏
+await ctx.commit(); // 回车：上屏原文
+await ctx.commit(false); // 空格：上屏高亮/首选候选
+
+// 候选翻页（返回翻页后的合成状态）
+const p1 = await ctx.nextPage();
+const p2 = await ctx.prevPage();
 
 // 丢弃合成（不提交）
 await ctx.reset();
@@ -260,6 +266,7 @@ await ctx.destroy();
 ```
 
 - `type(text)` 逐字符发按键（按下+抬起），返回合成快照；`keyEvent(keyval, isRelease?)` 单按键
+- `selectCandidate(index)` 选词上屏，下标对应 `state.candidates`（fcitx5 跳过占位符后的下标）；`commit(raw?)` 提交当前合成（true=回车上屏原文，false=空格上屏高亮候选）；`nextPage()`/`prevPage()` 翻页返回翻页后状态
 - 事件（`ctx.on(event, cb)` 返回取消订阅函数）：`update`（合成状态更新）/ `commit`（提交文字）/ `im`（当前输入法变化）
 - `getState()` 当前合成状态快照；`getCurrentIM()` 当前输入法（`{ name, uniqueName, language }`）
 - 合成快照 `ImComposeState`：`preedit`（预编辑文本）/ `preeditCursor` / `auxiliary`（辅助文本）/ `candidates`（候选词）/ `candidateLabels`（候选标签）/ `candidateCursor` / `candidateLayout` / `hasPrev` / `hasNext`
