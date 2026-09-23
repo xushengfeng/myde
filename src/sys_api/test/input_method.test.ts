@@ -186,6 +186,28 @@ describe("input_method", () => {
         }
     });
 
+    it("英文模式（键盘布局）按键全放行", async () => {
+        if (!connected) return; // 已在前置提示
+        const group = await im.getGroupInfo();
+        const layoutIM = group.inputMethods[0].uniqueName; // 键盘布局（如 keyboard-us）
+        const ctx = await im.createContext("myde-test-en");
+        await ctx.focus();
+        try {
+            await im.setCurrentIM(layoutIM);
+            await new Promise((r2) => setTimeout(r2, 300));
+            // 字母、数字、标点全部放行：handled=false 且无 commit
+            for (const ch of ["a", "1", "!"]) {
+                const r = await ctx.keyEvent(ch.codePointAt(0) ?? 0);
+                console.log(`[input_method 测试] 英文模式 "${ch}" → handled=${r.handled} committed="${r.committed}"`);
+                expect(r.handled).toBe(false);
+                expect(r.committed).toBe("");
+            }
+        } finally {
+            await im.setCurrentIM(TEST_IM);
+            await ctx.destroy();
+        }
+    });
+
     it("数字/标点的协议行为（放行 vs 输入法上屏）", async () => {
         if (!connected) return; // 已在前置提示
         const ctx = await im.createContext("myde-test-punct");

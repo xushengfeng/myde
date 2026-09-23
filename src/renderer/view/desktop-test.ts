@@ -1,11 +1,13 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
+const { dbusIO } = require("myde-dbus") as typeof import("myde-dbus");
+const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
-import { getDesktopEntries, getDesktopIcon } from "../../sys_api/application";
-import { renderToolsHtmlEl } from "../../wayland/render_tools_el";
+import { addStyle, button, ele, image, initDKH, input, pack, txt, view } from "dkh-ui";
 import { _myde as myde } from "../../desktop-api";
-
-import { button, image, pack, txt, view, initDKH, input, addStyle, ele } from "dkh-ui";
+import { getDesktopEntries, getDesktopIcon } from "../../sys_api/application";
+import { type ImComposeState, inputMethod, type inputMethodContext } from "../../sys_api/input_method";
+import { renderToolsHtmlEl } from "../../wayland/render_tools_el";
 import type { WaylandClient } from "../../wayland/server";
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
@@ -355,15 +357,154 @@ view("y")
     )
     .addInto();
 
+// —— 输入法测试：打字走输入法合成，带候选列表 ——
+async function connectSessionBus() {
+    const socket = new mus.USocket();
+    socket.connect("/run/user/1000/bus");
+    const io = new dbusIO({ socket });
+    await io.connect();
+    return io;
+}
+
+const imSys = new inputMethod(await connectSessionBus());
+// 注意：不能用 input 等可编辑元素捕获按键——主机输入法会先行合成（Chromium IME 路径），
+// 页面只能看到 Process/composition 事件拿不到原始按键；非编辑元素不激活主机 IME，
+// keydown 即原始按键，才能喂给自己的输入法 API（真实桌面里这些键来自 evdev，天然无此问题）
+const imCaptureView = view().attr({ tabIndex: 0 }).style({
+    border: "1px solid #888",
+    minHeight: "32px",
+    padding: "4px",
+    outline: "none",
+    whiteSpace: "pre-wrap",
+});
+const imInfoLine = ele("div").style({ color: "#8af", fontSize: "12px" });
+const imSwitchBox = view("x").style({ flexWrap: "wrap", gap: "4px" });
+const imPreeditLine = ele("div").style({ color: "#0ff", minHeight: "24px" });
+const imCandidateBox = view("x").style({ flexWrap: "wrap", gap: "4px", alignItems: "center" });
+const imOutLine = ele("div").style({ color: "#ff0", minHeight: "24px" });
+const imStatusLine = ele("div").style({ color: "#888", fontSize: "12px" });
+
+let imCtx: inputMethodContext | undefined;
+
+/** 文字上屏去向：显示 + 转发给 wayland 客户端 */
+function imSendText(t: string) {
+    imOutLine.el.textContent += t;
+    for (const client of server.clients.values()) {
+        client.keyboard.sendText(t, false);
+    }
+}
+
+function imRender(s: ImComposeState) {
+    imPreeditLine.el.textContent = s.preedit;
+    const label = (i: number) => (s.candidateLabels[i] || `${i + 1}`).trim();
+    imCandidateBox.clear().add(
+        [
+            button("◀").on("click", async () => {
+                if (imCtx) imRender(await imCtx.prevPage());
+            }),
+            ...s.candidates.map((c, i) =>
+                button(`${label(i)} ${c}`).on("click", async () => {
+                    if (!imCtx) return;
+                    const r = await imCtx.selectCandidate(i);
+                    imStatusLine.el.textContent = `select(${i}) handled=${r.handled} committed="${r.committed}"`;
+                }),
+            ),
+            button("▶").on("click", async () => {
+                if (imCtx) imRender(await imCtx.nextPage());
+            }),
+        ].map((b) => b.style({ padding: "2px 6px", background: "#fff" })),
+    );
+}
+
+/** DOM 按键 → X keysym；修饰键等返回 undefined */
+function imKeySym(key: string): number | undefined {
+    const special: Record<string, number> = {
+        Backspace: 0xff08,
+        Enter: 0xff0d,
+        Escape: 0xff1b,
+        Tab: 0xff09,
+        Delete: 0xffff,
+        Home: 0xff50,
+        End: 0xff57,
+        PageUp: 0xff55,
+        PageDown: 0xff56,
+        ArrowLeft: 0xff51,
+        ArrowUp: 0xff52,
+        ArrowRight: 0xff53,
+        ArrowDown: 0xff54,
+    };
+    if (special[key] !== undefined) return special[key];
+    if ([...key].length === 1) return key.codePointAt(0);
+    return undefined;
+}
+
+if (await imSys.init()) {
+    imCtx = await imSys.createContext("myde-desktop-test");
+    // 路1：输入法主动上屏（合成完成/选词/标点转全角）
+    imCtx.on("commit", (text) => {
+        imSendText(text);
+        imStatusLine.el.textContent = `commit "${text}"`;
+    });
+    imCtx.on("update", (s) => imRender(s));
+
+    // 当前输入法 + 切换按钮（含键盘布局=英文模式）
+    const imRefresh = async () => {
+        const cur = await imSys.getCurrentIM();
+        imInfoLine.el.textContent = `当前输入法: ${cur.uniqueName || "(无)"}`;
+        const group = await imSys.getGroupInfo();
+        imSwitchBox.clear().add(
+            group.inputMethods.map((entry) =>
+                button(entry.uniqueName)
+                    .style({ padding: "2px 6px", background: "#fff" })
+                    .on("click", async () => {
+                        await imSys.setCurrentIM(entry.uniqueName);
+                        imRefresh();
+                    }),
+            ),
+        );
+    };
+    await imRefresh();
+
+    imCaptureView.on("focus", () => {
+        void imCtx?.focus();
+    });
+    imCaptureView.on("blur", () => {
+        void imCtx?.blur();
+    });
+} else {
+    imInfoLine.el.textContent = "ime: fcitx5 不可用";
+}
+
+imCaptureView.on("keydown", (e) => {
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    // 主机输入法漏进来的合成按键（理论上非编辑元素不会出现，防御）
+    if (e.isComposing || e.key === "Process") return;
+    const keysym = imKeySym(e.key);
+    if (keysym === undefined) return;
+    e.preventDefault();
+    e.stopPropagation(); // 不走全局按键转发
+    const ctx = imCtx;
+    if (!ctx) return;
+    void ctx.keyEvent(keysym).then((r) => {
+        if (!r.handled && r.committed === "" && [...e.key].length === 1) {
+            // 路2：输入法放行（如英文模式），自己插字符
+            imSendText(e.key);
+            imStatusLine.el.textContent = `key "${e.key}" handled=false → 直接插入`;
+        } else {
+            imStatusLine.el.textContent = `key "${e.key}" handled=${r.handled} committed="${r.committed}"`;
+        }
+    });
+});
+
 view()
     .add([
-        txt("ime"),
-        // @ts-expect-error
-        input().on("input", (e: InputEvent, el) => {
-            for (const client of server.clients.values()) {
-                client.keyboard.sendText(el.gv, e.isComposing);
-            }
-            el.sv("");
-        }),
+        txt("ime（点此输入）"),
+        imCaptureView,
+        imInfoLine,
+        imSwitchBox,
+        imPreeditLine,
+        imCandidateBox,
+        imOutLine,
+        imStatusLine,
     ])
     .addInto();
