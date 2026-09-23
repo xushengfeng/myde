@@ -36,6 +36,42 @@ export interface ImCurrentIM {
     language: string;
 }
 
+/** 输入法条目 */
+export interface ImEntry {
+    /** 唯一名称（如 "rime"、"keyboard-us"），切换用这个 */
+    uniqueName: string;
+    /** 显示名（如 "中州韵"） */
+    name: string;
+    /** 本地化名称 */
+    nativeName: string;
+    /** 图标名 */
+    icon: string;
+    /** 简短标签（如 "中"） */
+    label: string;
+    /** 语言代码（如 "zh"） */
+    languageCode: string;
+    /** 所属 addon（如 "rime"），仅部分查询返回 */
+    addon: string;
+    /** 布局覆盖（空 = 用组默认布局），仅部分查询返回 */
+    layout: string;
+    isConfigurable: boolean;
+}
+
+/** 输入法组详情 */
+export interface ImGroupInfo {
+    /** 组名 */
+    name: string;
+    /** 组默认输入法 uniqueName（激活合成时使用） */
+    defaultInputMethod: string;
+    /** 组默认键盘布局 */
+    defaultLayout: string;
+    /** 组内启用的输入法（第一个是键盘布局，切换菜单用这个列表） */
+    inputMethods: ImEntry[];
+}
+
+/** 输入法状态：0 关闭 / 1 未激活（键盘布局打英文）/ 2 激活（合成） */
+export type ImState = 0 | 1 | 2;
+
 /** 合成会话事件 */
 export type ImEvents = {
     /** 合成状态更新（预编辑/候选词等变化） */
@@ -58,10 +94,14 @@ const emptyState = (): ImComposeState => ({
     hasNext: false,
 });
 
-const FCITX_SERVICES = ["org.freedesktop.portal.Fcitx", "org.fcitx.Fcitx5"];
+// org.fcitx.Fcitx5 含全部对象（InputMethod1 + Controller1）；
+// portal 服务名只有 InputMethod1，放后面兜底
+const FCITX_SERVICES = ["org.fcitx.Fcitx5", "org.freedesktop.portal.Fcitx"];
 const INPUT_METHOD_PATH = "/org/freedesktop/portal/inputmethod";
 const INPUT_METHOD_IFACE = "org.fcitx.Fcitx.InputMethod1";
 const INPUT_CONTEXT_IFACE = "org.fcitx.Fcitx.InputContext1";
+const CONTROLLER_PATH = "/controller";
+const CONTROLLER_IFACE = "org.fcitx.Fcitx.Controller1";
 
 // 能力位图（fcitx5 CapabilityFlag）
 const CAP_CLIENT_SIDE_UI = 1n << 0n;
@@ -80,6 +120,7 @@ const CAP_DEFAULT = CAP_CLIENT_SIDE_UI | CAP_PREEDIT | CAP_FORMATTED_PREEDIT | C
 export class inputMethod {
     private client: dbusClient;
     private service: dbusService | undefined;
+    private controller: dbusInterface | undefined;
 
     constructor(dbus: dbusIO) {
         this.client = new dbusClient({ io: dbus });
@@ -92,13 +133,124 @@ export class inputMethod {
                 const s = await this.client.getService(name);
                 const infc = await (await s.getObject(INPUT_METHOD_PATH)).getInterface(INPUT_METHOD_IFACE);
                 await infc.call("Version").as<"u">();
+                // controller 真实调用验证（部分服务名下没有 /controller 对象）
+                const ctrl = await (await s.getObject(CONTROLLER_PATH)).getInterface(CONTROLLER_IFACE);
+                await ctrl.call("CurrentInputMethodGroup").as<"s">();
                 this.service = s;
+                this.controller = ctrl;
                 return true;
             } catch {
                 // 尝试下一个服务名
             }
         }
         return false;
+    }
+
+    /** 会话可用的控制器接口 */
+    private ctrl(): dbusInterface {
+        if (!this.controller) {
+            throw new Error("input_method: 未初始化或 fcitx5 不可用");
+        }
+        return this.controller;
+    }
+
+    /** 列出全部可用输入法（含所有键盘布局，几百个） */
+    async listInputMethods(): Promise<ImEntry[]> {
+        // (uniqueName, name, nativeName, icon, label, languageCode, isConfigurable)
+        const [entries] = await this.ctrl().call("AvailableInputMethods").as<"a(ssssssb)">();
+        return entries.map(([uniqueName, name, nativeName, icon, label, languageCode, isConfigurable]) => ({
+            uniqueName,
+            name,
+            nativeName,
+            icon,
+            label,
+            languageCode,
+            addon: "",
+            layout: "",
+            isConfigurable,
+        }));
+    }
+
+    /** 列出输入法组名 */
+    async listGroups(): Promise<string[]> {
+        const [groups] = await this.ctrl().call("InputMethodGroups").as<"as">();
+        return groups;
+    }
+
+    /** 当前输入法组名 */
+    async getCurrentGroup(): Promise<string> {
+        const [group] = await this.ctrl().call("CurrentInputMethodGroup").as<"s">();
+        return group;
+    }
+
+    /** 输入法组详情（缺省当前组）：组内启用的输入法列表，第一个是键盘布局 */
+    async getGroupInfo(groupName = ""): Promise<ImGroupInfo> {
+        // (组名, 默认输入法, 默认布局, {}, [(uniqueName, name, nativeName, icon, label, lang, addon, isConfigurable, layout, {})])
+        const [name, defaultInputMethod, defaultLayout, , entries] = await this.ctrl()
+            .call<"s">("FullInputMethodGroupInfo", "s", groupName)
+            .as<"sssa{sv}a(sssssssbsa{sv})">();
+        return {
+            name,
+            defaultInputMethod,
+            defaultLayout,
+            inputMethods: entries.map(
+                ([uniqueName, imName, nativeName, icon, label, languageCode, addon, isConfigurable, layout]) => ({
+                    uniqueName,
+                    name: imName,
+                    nativeName,
+                    icon,
+                    label,
+                    languageCode,
+                    addon,
+                    layout,
+                    isConfigurable,
+                }),
+            ),
+        };
+    }
+
+    /** 当前输入法详情（无聚焦上下文时为空 uniqueName） */
+    async getCurrentIM(): Promise<ImEntry> {
+        // (uniqueName, name, nativeName, icon, label, lang, addon, isConfigurable, layout, {})
+        const [uniqueName, name, nativeName, icon, label, languageCode, addon, isConfigurable, layout] =
+            await this.ctrl().call("CurrentInputMethodInfo").as<"sssssssbsa{sv}">();
+        return { uniqueName, name, nativeName, icon, label, languageCode, addon, layout, isConfigurable };
+    }
+
+    /**
+     * 切换输入法（uniqueName，如 "rime"、"keyboard-us"）
+     *
+     * 作用于最近聚焦的输入上下文；idx=0（键盘布局）等价停用合成。
+     * 受 fcitx5 ShareInputState 设置影响（No=按窗口独立记忆）。
+     */
+    async setCurrentIM(uniqueName: string): Promise<void> {
+        await this.ctrl().call<"s">("SetCurrentIM", "s", uniqueName).await();
+    }
+
+    /** 当前输入法状态：0 关闭 / 1 未激活 / 2 激活 */
+    async getState(): Promise<ImState> {
+        const [state] = await this.ctrl().call("State").as<"i">();
+        return state as ImState;
+    }
+
+    /** 激活输入法（合成开） */
+    async activate(): Promise<void> {
+        await this.ctrl().call("Activate").await();
+    }
+
+    /** 停用输入法（合成关，直接打英文字母） */
+    async deactivate(): Promise<void> {
+        await this.ctrl().call("Deactivate").await();
+    }
+
+    /** 切换激活/停用 */
+    async toggle(): Promise<void> {
+        await this.ctrl().call("Toggle").await();
+    }
+
+    /** 切换输入法组 */
+    async switchGroup(groupName: string): Promise<void> {
+        await this.ctrl().call<"s">("SwitchInputMethodGroup", "s", groupName).await();
     }
 
     /** 创建一个合成会话 */

@@ -267,6 +267,36 @@ await ctx.destroy();
 - `createContext(program, capabilities?)` 可自定义能力位图（缺省 ClientSideUI|Preedit|FormattedPreedit|ClientSideInputPanel；**注意不要全置 1**，会带上 Disable/Password 位导致 fcitx5 退化为键盘布局不合成）
 - 底层为 fcitx5 `org.fcitx.Fcitx.InputMethod1` → `org.fcitx.Fcitx.InputContext1`（信号 `UpdateClientSideUI`/`UpdateFormattedPreedit`/`CommitString`/`CurrentIM`）
 
+输入法列出与切换（fcitx5 `org.fcitx.Fcitx.Controller1`）：
+
+```typescript
+const im = MSysApi.inputMethod;
+
+// 列出全部可用输入法（含所有键盘布局，几百个）
+const all = await im.listInputMethods(); // ImEntry[]
+// { uniqueName ("rime"), name ("中州韵"), nativeName, icon, label ("中"), languageCode ("zh"), addon, layout, isConfigurable }
+
+// 当前输入法 / 组
+const cur = await im.getCurrentIM(); // ImEntry（无聚焦上下文时 uniqueName 为空）
+const group = await im.getGroupInfo(); // 当前组：{ name, defaultInputMethod, defaultLayout, inputMethods }
+const groups = await im.listGroups(); // 组名列表
+await im.getCurrentGroup(); // 当前组名
+
+// 切换输入法（uniqueName）
+await im.setCurrentIM("rime"); // 切到合成输入法（激活）
+await im.setCurrentIM("keyboard-us"); // 切回键盘布局（停用合成，等价 fcitx5-remote -s）
+await im.switchGroup("默认"); // 切换输入法组
+
+// 激活状态
+await im.getState(); // 0 关闭 / 1 未激活（打英文）/ 2 激活（合成）
+await im.activate();
+await im.deactivate();
+await im.toggle();
+```
+
+- 切换菜单用 `getGroupInfo().inputMethods`（组内启用项，第一个是键盘布局）；`listInputMethods()` 是全部可用（含几百个键盘布局，供设置页添加用）
+- `setCurrentIM` 作用于最近聚焦的输入上下文；受 fcitx5 `ShareInputState` 设置影响（No=按窗口独立记忆）
+
 ### appControl
 
 `getPidTree`获取所有进程树，包括pid、ppid、名称、内存使用

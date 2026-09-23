@@ -58,6 +58,47 @@ describe("input_method", () => {
         }
     });
 
+    it("列出与切换输入法", async () => {
+        if (!connected) return; // 已在前置提示
+
+        // 列出全部可用输入法
+        const all = await im.listInputMethods();
+        console.log(`[input_method 测试] 可用输入法共 ${all.length} 个`);
+        const names = all.map((e) => e.uniqueName);
+        expect(names).toContain(TEST_IM);
+        expect(names).toContain("keyboard-us");
+
+        // 当前组详情（切换菜单用的列表：第一个是键盘布局）
+        const group = await im.getGroupInfo();
+        console.log(
+            `[input_method 测试] 组 "${group.name}" 默认输入法: ${group.defaultInputMethod}, 成员: [${group.inputMethods.map((e) => e.uniqueName).join(", ")}]`,
+        );
+        expect(group.inputMethods.length).toBeGreaterThan(1);
+        const layoutIM = group.inputMethods[0].uniqueName;
+        expect(group.inputMethods.some((e) => e.uniqueName === TEST_IM)).toBe(true);
+
+        // 自建上下文聚焦后切换（作用于最近聚焦的上下文）
+        const ctx = await im.createContext("myde-test-switch");
+        await ctx.focus();
+        try {
+            // 切到键盘布局 = 停用合成
+            await im.setCurrentIM(layoutIM);
+            await new Promise((r) => setTimeout(r, 300));
+            expect((await im.getCurrentIM()).uniqueName).toBe(layoutIM);
+            expect(await im.getState()).toBe(1); // 未激活
+
+            // 切到合成输入法 = 激活
+            await im.setCurrentIM(TEST_IM);
+            await new Promise((r) => setTimeout(r, 300));
+            expect((await im.getCurrentIM()).uniqueName).toBe(TEST_IM);
+            expect(await im.getState()).toBe(2); // 激活
+        } finally {
+            // 恢复现场
+            await im.setCurrentIM(prevIM || TEST_IM);
+            await ctx.destroy();
+        }
+    });
+
     it("合成字母（不提交）", async () => {
         if (!connected) return; // 已在前置提示
         const ctx = await im.createContext("myde-test");
