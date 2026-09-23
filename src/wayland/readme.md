@@ -42,3 +42,9 @@
 - text-input-unstable-v1
     - zwp_text_input_v1 部分
     - zwp_text_input_manager_v1
+
+- text-input-unstable-v3
+    - zwp_text_input_v3 部分（delete_surrounding_text 未实现）
+    - zwp_text_input_manager_v3
+
+v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧计，后激活者胜出（zwp_text_input_v1.activate / zwp_text_input_v3.enable 抢占），文本只发给持有对象，v3 的 enter/leave 跟随键盘焦点。

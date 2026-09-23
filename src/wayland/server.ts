@@ -109,6 +109,49 @@ type WaylandData = {
     };
 };
 
+/** zwp_text_input_v3 的状态，双缓冲（pending -> commit -> current） */
+type TextInputV3State = {
+    /** 是否启用文本输入 */
+    enabled: boolean;
+    surroundingText: { text: string; cursor: number; anchor: number };
+    /** 周围文本变化原因，应用到current后重置为input_method */
+    textChangeCause: "input_method" | "other";
+    contentHint: number;
+    contentPurpose: number;
+    /** 光标矩形（surface坐标），null表示客户端不支持 */
+    cursorRect: { x: number; y: number; width: number; height: number } | null;
+};
+
+function newTextInputV3State(): TextInputV3State {
+    return {
+        enabled: false,
+        surroundingText: { text: "", cursor: 0, anchor: 0 },
+        textChangeCause: "input_method",
+        contentHint: 0,
+        contentPurpose: 0,
+        cursorRect: null,
+    };
+}
+
+type TextInputV3Data = {
+    /** 是否收到enter，即文本输入焦点在本对象上 */
+    entered: boolean;
+    /** 客户端commit计数，作为done事件的serial */
+    commitCount: number;
+    /** 已应用的状态 */
+    current: TextInputV3State;
+    /** 待commit应用的状态 */
+    pending: TextInputV3State;
+};
+
+/**
+ * v1/v3是竞争协议，按协议（manager）一侧仲裁、后激活者胜出：
+ * zwp_text_input_v1.activate / zwp_text_input_v3.enable 后到者抢占，文本只发给持有对象
+ */
+type TextInputOwner =
+    | { protocol: "v1"; id: WaylandObjectId2<"zwp_text_input_v1"> }
+    | { protocol: "v3"; id: WaylandObjectId2<"zwp_text_input_v3"> };
+
 type WaylandObjectX<T extends WaylandInterfaces> = {
     protocol: WaylandProtocol;
     data: T extends keyof WaylandData ? WaylandData[T] : never;
@@ -617,6 +660,14 @@ class WaylandClient {
                 keyboard?: WaylandObjectId2<"wl_keyboard">;
             }
         >;
+        /** text-input-v3，焦点跟随键盘焦点 */
+        textInputV3: {
+            /** 当前文本输入焦点surface，null表示无焦点 */
+            focus: WaylandObjectId2<"wl_surface"> | null;
+            m: Map<WaylandObjectId2<"zwp_text_input_v3">, TextInputV3Data>;
+        };
+        /** v1/v3竞争仲裁的持有对象，null表示无激活的text_input */
+        textInputOwner: TextInputOwner | null;
         xdg_wm_base: Set<WaylandObjectId2<"xdg_wm_base">>;
         windows: Map<
             WaylandObjectId2<"xdg_toplevel">,
@@ -674,6 +725,8 @@ class WaylandClient {
             windows: new Map(),
             modifiers: new Set(),
             seats: new Map(),
+            textInputV3: { focus: null, m: new Map() },
+            textInputOwner: null,
             appid: undefined,
             xdg_wm_base: new Set(),
         };
@@ -1693,6 +1746,8 @@ class WaylandClient {
         });
         isOp("zwp_text_input_v1.activate", (x) => {
             this.sendMessageX(x.id, "zwp_text_input_v1.enter", { surface: x.args.surface });
+            // v1/v3竞争仲裁：后激活者胜出
+            this.obj2.textInputOwner = { protocol: "v1", id: x.id };
             if (!this.obj2.textInputV1) return;
             for (const [k, v] of this.obj2.textInputV1.m) {
                 if (k !== x.id && v.focus) {
@@ -1712,12 +1767,82 @@ class WaylandClient {
             if (!this.obj2.textInputV1) return;
             const t = this.obj2.textInputV1.m.get(x.id);
             if (t) t.focus = false;
+            if (this.obj2.textInputOwner?.id === x.id) this.obj2.textInputOwner = null;
         });
         isOp("zwp_text_input_v1.commit_state", (x) => {
             const xx = this.obj2.textInputV1?.m.get(x.id);
             if (xx) {
                 xx.serial = x.args.serial;
             }
+        });
+
+        isOp("zwp_text_input_manager_v3.get_text_input", (x) => {
+            const textInputId = x.args.id;
+            // todo seat参数，目前只有单seat
+            const data: TextInputV3Data = {
+                entered: false,
+                commitCount: 0,
+                current: newTextInputV3State(),
+                pending: newTextInputV3State(),
+            };
+            this.obj2.textInputV3.m.set(textInputId, data);
+            // 对象创建晚于焦点变化时补发enter
+            const focus = this.obj2.textInputV3.focus;
+            if (focus !== null) {
+                data.entered = true;
+                this.sendMessageImm(textInputId, "zwp_text_input_v3.enter", { surface: focus });
+            }
+        });
+        isOp("zwp_text_input_v3.destroy", (x) => {
+            this.obj2.textInputV3.m.delete(x.id);
+            if (this.obj2.textInputOwner?.id === x.id) this.obj2.textInputOwner = null;
+        });
+        isOp("zwp_text_input_v3.enable", (x) => {
+            const t = this.obj2.textInputV3.m.get(x.id);
+            if (!t) return;
+            // enable会重置所有状态，客户端需重新提交
+            t.pending = newTextInputV3State();
+            t.pending.enabled = true;
+            // v1/v3竞争仲裁：后激活者胜出
+            this.obj2.textInputOwner = { protocol: "v3", id: x.id };
+        });
+        isOp("zwp_text_input_v3.disable", (x) => {
+            const t = this.obj2.textInputV3.m.get(x.id);
+            if (!t) return;
+            // disable同样使状态失效
+            t.pending = newTextInputV3State();
+            if (this.obj2.textInputOwner?.id === x.id) this.obj2.textInputOwner = null;
+        });
+        isOp("zwp_text_input_v3.set_surrounding_text", (x) => {
+            const t = this.obj2.textInputV3.m.get(x.id);
+            if (!t) return;
+            t.pending.surroundingText = { text: x.args.text, cursor: x.args.cursor, anchor: x.args.anchor };
+        });
+        isOp("zwp_text_input_v3.set_text_change_cause", (x) => {
+            const t = this.obj2.textInputV3.m.get(x.id);
+            if (!t) return;
+            const cause = getEnumName("zwp_text_input_v3.change_cause", x.args.cause);
+            t.pending.textChangeCause = cause === "other" ? "other" : "input_method";
+        });
+        isOp("zwp_text_input_v3.set_content_type", (x) => {
+            const t = this.obj2.textInputV3.m.get(x.id);
+            if (!t) return;
+            t.pending.contentHint = x.args.hint;
+            t.pending.contentPurpose = x.args.purpose;
+        });
+        isOp("zwp_text_input_v3.set_cursor_rectangle", (x) => {
+            const t = this.obj2.textInputV3.m.get(x.id);
+            if (!t) return;
+            t.pending.cursorRect = { x: x.args.x, y: x.args.y, width: x.args.width, height: x.args.height };
+        });
+        isOp("zwp_text_input_v3.commit", (x) => {
+            const t = this.obj2.textInputV3.m.get(x.id);
+            if (!t) return;
+            t.current = { ...t.pending };
+            // change_cause只作用于本次commit，应用后重置
+            t.pending.textChangeCause = "input_method";
+            t.commitCount++;
+            this.sendMessageImm(x.id, "zwp_text_input_v3.done", { serial: t.commitCount });
         });
 
         return {
@@ -2257,10 +2382,12 @@ class WaylandClient {
                     group: 0,
                 });
             }
+            this.textInputV3Focus(id);
         },
         blurSurface: (id: WaylandObjectId2<"wl_surface">) => {
             for (const k of this.getKeyboards())
                 this.sendMessageImm(k, "wl_keyboard.leave", { serial: 0, surface: id });
+            this.textInputV3Blur(id);
         },
         sendKey: (key: number, state: "pressed" | "released") => {
             const s = this.obj2.serial ?? 1;
@@ -2307,10 +2434,37 @@ class WaylandClient {
             }
         },
         sendText: (text: string, preedit: boolean) => {
+            // 输入法文本统一走该路径；v1/v3是竞争协议，仲裁后只发给持有对象（后激活者胜出）
+            const owner = this.obj2.textInputOwner;
+            if (owner?.protocol === "v3") {
+                const t = this.obj2.textInputV3.m.get(owner.id);
+                // 未enter或未enable的对象按协议忽略
+                if (t?.entered && t.current.enabled) {
+                    if (preedit) {
+                        // 光标置于preedit末尾（cursor_*为字节偏移）
+                        const cursor = new TextEncoder().encode(text).length;
+                        this.sendMessageImm(owner.id, "zwp_text_input_v3.preedit_string", {
+                            text,
+                            cursor_begin: cursor,
+                            cursor_end: cursor,
+                        });
+                    } else {
+                        this.sendMessageImm(owner.id, "zwp_text_input_v3.commit_string", { text });
+                        this.sendMessageImm(owner.id, "zwp_text_input_v3.preedit_string", {
+                            text: "",
+                            cursor_begin: 0,
+                            cursor_end: 0,
+                        });
+                    }
+                    // 双缓冲事件在done时生效，serial为客户端commit计数
+                    this.sendMessageImm(owner.id, "zwp_text_input_v3.done", { serial: t.commitCount });
+                }
+                return;
+            }
             const input1 = this.obj2.textInputV1;
             console.log(text, preedit, input1);
-            if (input1) {
-                const id = Array.from(input1.m).find((i) => i[1].focus === true);
+            if (input1 && owner?.protocol === "v1") {
+                const id = Array.from(input1.m).find((i) => i[0] === owner.id && i[1].focus === true);
                 if (!id) return;
                 if (preedit) {
                     this.sendMessageImm(id[0], "zwp_text_input_v1.preedit_cursor", {
@@ -2335,6 +2489,32 @@ class WaylandClient {
             }
         },
     };
+
+    /** text-input-v3焦点跟随键盘焦点 */
+    private textInputV3Focus(surface: WaylandObjectId2<"wl_surface">) {
+        const ti = this.obj2.textInputV3;
+        if (ti.focus === surface) return;
+        if (ti.focus !== null) this.textInputV3Blur(ti.focus);
+        ti.focus = surface;
+        // 协议要求enter发给所有text_input对象
+        for (const [id, t] of ti.m) {
+            t.entered = true;
+            this.sendMessageImm(id, "zwp_text_input_v3.enter", { surface });
+        }
+    }
+    private textInputV3Blur(surface: WaylandObjectId2<"wl_surface">) {
+        const ti = this.obj2.textInputV3;
+        if (ti.focus !== surface) return;
+        for (const [id, t] of ti.m) {
+            if (!t.entered) continue;
+            t.entered = false;
+            this.sendMessageImm(id, "zwp_text_input_v3.leave", { surface });
+            // leave后状态失效，客户端需重新enable并提交
+            t.current = newTextInputV3State();
+            t.pending = newTextInputV3State();
+        }
+        ti.focus = null;
+    }
 
     private computeModsDepressed(): number {
         if (!this.obj2.modifiers) return 0;

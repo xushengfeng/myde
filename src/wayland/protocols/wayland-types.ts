@@ -32,6 +32,8 @@ export type WaylandInterfaces =
     | "zwp_linux_dmabuf_v1"
     | "zwp_linux_buffer_params_v1"
     | "zwp_linux_dmabuf_feedback_v1"
+    | "zwp_text_input_v3"
+    | "zwp_text_input_manager_v3"
     | "zwp_text_input_v1"
     | "zwp_text_input_manager_v1"
     | "wp_cursor_shape_manager_v1"
@@ -109,6 +111,12 @@ export enum WaylandEventOpcode {
     zwp_linux_dmabuf_feedback_v1__tranche_target_device = 4,
     zwp_linux_dmabuf_feedback_v1__tranche_formats = 5,
     zwp_linux_dmabuf_feedback_v1__tranche_flags = 6,
+    zwp_text_input_v3__enter = 0,
+    zwp_text_input_v3__leave = 1,
+    zwp_text_input_v3__preedit_string = 2,
+    zwp_text_input_v3__commit_string = 3,
+    zwp_text_input_v3__delete_surrounding_text = 4,
+    zwp_text_input_v3__done = 5,
     zwp_text_input_v1__enter = 0,
     zwp_text_input_v1__leave = 1,
     zwp_text_input_v1__modifiers_map = 2,
@@ -480,6 +488,29 @@ export type WaylandEventObj = {
     "zwp_linux_dmabuf_feedback_v1.tranche_flags": {
         /** tranche flags*/
         flags: number;
+    };
+    "zwp_text_input_v3.enter": {
+        surface: WaylandObjectId2<"wl_surface">;
+    };
+    "zwp_text_input_v3.leave": {
+        surface: WaylandObjectId2<"wl_surface">;
+    };
+    "zwp_text_input_v3.preedit_string": {
+        text?: string;
+        cursor_begin: number;
+        cursor_end: number;
+    };
+    "zwp_text_input_v3.commit_string": {
+        text?: string;
+    };
+    "zwp_text_input_v3.delete_surrounding_text": {
+        /** length of text before current cursor position*/
+        before_length: number;
+        /** length of text after current cursor position*/
+        after_length: number;
+    };
+    "zwp_text_input_v3.done": {
+        serial: number;
     };
     "zwp_text_input_v1.enter": {
         surface: WaylandObjectId2<"wl_surface">;
@@ -987,6 +1018,33 @@ export type WaylandRequestObj = {
         flags: number;
     };
     "zwp_linux_dmabuf_feedback_v1.destroy": {};
+    "zwp_text_input_v3.destroy": {};
+    "zwp_text_input_v3.enable": {};
+    "zwp_text_input_v3.disable": {};
+    "zwp_text_input_v3.set_surrounding_text": {
+        text: string;
+        cursor: number;
+        anchor: number;
+    };
+    "zwp_text_input_v3.set_text_change_cause": {
+        cause: number;
+    };
+    "zwp_text_input_v3.set_content_type": {
+        hint: number;
+        purpose: number;
+    };
+    "zwp_text_input_v3.set_cursor_rectangle": {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    "zwp_text_input_v3.commit": {};
+    "zwp_text_input_manager_v3.destroy": {};
+    "zwp_text_input_manager_v3.get_text_input": {
+        id: WaylandObjectId2<"zwp_text_input_v3">;
+        seat: WaylandObjectId2<"wl_seat">;
+    };
     "zwp_text_input_v1.activate": {
         seat: WaylandObjectId2<"wl_seat">;
         surface: WaylandObjectId2<"wl_surface">;
@@ -1278,6 +1336,34 @@ export type WaylandEnumObj = {
         | "invalid_wl_buffer";
     "zwp_linux_buffer_params_v1.flags": "y_invert" | "interlaced" | "bottom_first";
     "zwp_linux_dmabuf_feedback_v1.tranche_flags": "scanout";
+    "zwp_text_input_v3.change_cause": "input_method" | "other";
+    "zwp_text_input_v3.content_hint":
+        | "none"
+        | "completion"
+        | "spellcheck"
+        | "auto_capitalization"
+        | "lowercase"
+        | "uppercase"
+        | "titlecase"
+        | "hidden_text"
+        | "sensitive_data"
+        | "latin"
+        | "multiline";
+    "zwp_text_input_v3.content_purpose":
+        | "normal"
+        | "alpha"
+        | "digits"
+        | "number"
+        | "phone"
+        | "url"
+        | "email"
+        | "name"
+        | "password"
+        | "pin"
+        | "date"
+        | "time"
+        | "datetime"
+        | "terminal";
     "zwp_text_input_v1.content_hint":
         | "none"
         | "default"

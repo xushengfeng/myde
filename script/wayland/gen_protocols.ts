@@ -68,13 +68,13 @@ const supportedProtocols: Array<{
             { name: "zwp_linux_dmabuf_feedback_v1", version: 5 },
         ],
     },
-    // {
-    //     name: "text-input-unstable-v3",
-    //     interfaces: [
-    //         { name: "zwp_text_input_v3", version: 1 },
-    //         { name: "zwp_text_input_manager_v3", version: 1 },
-    //     ],
-    // },
+    {
+        name: "text-input-unstable-v3",
+        interfaces: [
+            { name: "zwp_text_input_v3", version: 1 },
+            { name: "zwp_text_input_manager_v3", version: 1 },
+        ],
+    },
     {
         name: "text-input-unstable-v1",
         interfaces: [

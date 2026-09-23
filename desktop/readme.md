@@ -412,6 +412,10 @@ win.point.sendPointerEvent("move" | "down" | "up", pointerEvent);
 win.point.sendScrollEvent({ p: wheelEvent });
 // mapKeyCode转换过来的
 client.keyboard.sendKey(keyCode, "pressed" | "released");
+// 输入法文本（preedit为true表示合成中的预编辑），统一走该入口，
+// 按客户端 text-input 焦点自动分发 zwp_text_input_v1 / zwp_text_input_v3
+//（两者是竞争协议，单客户端内后激活者胜出：v1 activate / v3 enable 抢占，文本只发给持有对象）
+client.keyboard.sendText(text, preedit);
 ```
 
 ## 输入处理
