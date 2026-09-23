@@ -266,6 +266,10 @@ await ctx.destroy();
 ```
 
 - `type(text)` 逐字符发按键（按下+抬起），返回合成快照；`keyEvent(keyval, isRelease?)` 单按键
+- **插入文字的正确姿势（桌面 UI 必读）**：协议只有按键没有文本通道，文字经两条路上屏——
+  1. `ctx.on("commit", cb)`：输入法主动提交（合成完成、选词整词、标点转全角等）
+  2. `keyEvent`/`type` 返回 `handled=false` 且 `committed=""`：输入法**放行**该按键，客户端按默认行为自己插入字符（典型：无合成时的数字、输入法停用时的字母）
+  - 合成中数字 `1-9` 会被输入法消费为选词快捷键（不放行）；合成中标点会连同合成一起上屏（一次 commit）
 - `selectCandidate(index)` 选词上屏，下标对应 `state.candidates`（fcitx5 跳过占位符后的下标）；`commit(raw?)` 提交当前合成（true=回车上屏原文，false=空格上屏高亮候选）；`nextPage()`/`prevPage()` 翻页返回翻页后状态
 - 事件（`ctx.on(event, cb)` 返回取消订阅函数）：`update`（合成状态更新）/ `commit`（提交文字）/ `im`（当前输入法变化）
 - `getState()` 当前合成状态快照；`getCurrentIM()` 当前输入法（`{ name, uniqueName, language }`）

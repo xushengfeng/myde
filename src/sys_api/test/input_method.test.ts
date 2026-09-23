@@ -186,6 +186,47 @@ describe("input_method", () => {
         }
     });
 
+    it("数字/标点的协议行为（放行 vs 输入法上屏）", async () => {
+        if (!connected) return; // 已在前置提示
+        const ctx = await im.createContext("myde-test-punct");
+        await ctx.focus();
+        try {
+            execSync("fcitx5-remote -o");
+            execSync(`fcitx5-remote -s ${TEST_IM}`);
+            await new Promise((r2) => setTimeout(r2, 300));
+
+            // 无合成 + 数字：输入法放行（handled=false、无 commit）→ 客户端自己插入字符
+            const d = await ctx.keyEvent("1".codePointAt(0) ?? 0);
+            expect(d.handled).toBe(false);
+            expect(d.committed).toBe("");
+
+            // 无合成 + 标点：输入法接管，转全角后主动上屏（走 commit 事件）
+            const p = await ctx.keyEvent("!".codePointAt(0) ?? 0);
+            expect(p.handled).toBe(true);
+            expect(p.committed.length).toBeGreaterThan(0);
+            console.log(`[input_method 测试] 无合成: 数字放行 handled=${d.handled}, 标点输入法上屏 "${p.committed}"`);
+
+            // 合成中 + 标点：先上屏合成、再上屏标点（实测为一次 commit）
+            const r = await ctx.type(TEST_INPUT);
+            expect(r.preedit.length).toBeGreaterThan(0);
+            const q = await ctx.keyEvent(".".codePointAt(0) ?? 0);
+            expect(q.handled).toBe(true);
+            expect(q.committed.length).toBeGreaterThan(0);
+            expect(ctx.getState().preedit).toBe("");
+            console.log(`[input_method 测试] 合成中敲标点: "${q.committed}"（合成+标点一起上屏）`);
+
+            // 合成中 + 数字：消费为选词（1-9），不直接上屏数字
+            await ctx.type(TEST_INPUT);
+            const sel = await ctx.keyEvent("1".codePointAt(0) ?? 0);
+            expect(sel.handled).toBe(true);
+            expect(sel.committed).not.toBe("1");
+            console.log(`[input_method 测试] 合成中敲数字: 消费为选词 → "${sel.committed}"`);
+        } finally {
+            await ctx.reset();
+            await ctx.destroy();
+        }
+    });
+
     it("commit 提交当前合成（回车原文/空格上屏）", async () => {
         if (!connected) return; // 已在前置提示
         const ctx = await im.createContext("myde-test-commit2");
