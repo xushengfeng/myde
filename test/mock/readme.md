@@ -169,6 +169,7 @@ interface MockConfig {
 | `volume` | ✅ | 支持动态添加/删除音频设备和流 |
 | `display` | ✅ | onMessage/send |
 | `input` | ✅ | init/isInitialized/getDevices/getDevice/destroy（无设备模拟，`isInitialized()` 返回 false） |
+| `inputSim` | ✅ | 真实实现（统一输入事件 → 模拟 DOM 事件） |
 | `verifyUserPassword` | ✅ | 可配置密码验证 |
 | `appControl` | ✅ | getPidTree/getPid |
 
@@ -177,6 +178,9 @@ interface MockConfig {
 | API | 状态 | 说明 |
 |-----|------|------|
 | `mapKeyCode` | ✅ | 返回0 |
+| `absRange` | ✅ | 真实实现（abs 轴量程，缺失时 MT 定位轴回退 touchInfo） |
+| `absRatio` | ✅ | 真实实现（abs 值 → 小数） |
+| `absPosMapping` | ✅ | 真实实现（触屏/数位板 X/Y 轴 → 小数转换） |
 
 ### MUtils
 

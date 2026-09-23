@@ -13,6 +13,7 @@ import { blue } from "../../sys_api/blue";
 import { display } from "../../sys_api/display";
 import { getEnv } from "../../sys_api/env";
 import { vfs } from "../../sys_api/fs";
+import { inputSim } from "../../sys_api/input_sim";
 import { mpris } from "../../sys_api/mpris";
 import { network } from "../../sys_api/network";
 import { notification } from "../../sys_api/notification";
@@ -71,6 +72,8 @@ async function loadDesktop(p: string) {
     myde.MSysApi.blue = new blue(await newDBusIO(true));
     myde.MSysApi.network = new network(await newDBusIO(true));
     myde.MSysApi.volume = new volumeControl();
+    // 统一输入事件 → 模拟 DOM 事件（无外部依赖，始终可用）
+    myde.MSysApi.inputSim = new inputSim();
     if (InputManagerCtor) {
         myde.MSysApi.input = new InputManagerCtor();
         try {

@@ -1,6 +1,12 @@
 import { addClass, addStyle, button, check, ele, type ElType, image, pack, setProperty, spacer, view } from "dkh-ui";
 
-import type { DesktopIconConfig, WaylandClient, WaylandWinId } from "../../../src/desktop-api";
+import type {
+    DesktopIconConfig,
+    InputManager,
+    UniInputEvent,
+    WaylandClient,
+    WaylandWinId,
+} from "../../../src/desktop-api";
 import { txt } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
 import {
@@ -22,7 +28,17 @@ import { Registry } from "./registry";
 import type { MenuItem } from "../../../src/sys_api/menu";
 import { getIconXEl } from "./icon";
 import { Cursor } from "./cursor";
-import { useEvdevPointer } from "./input_pointer";
+import { InputEventCodes } from "../../../src/input_codes/types";
+import {
+    BTN_TO_BUTTON,
+    HI_RES_SCALE,
+    WHEEL_STEP,
+    canKey,
+    hasRelativeXY,
+    type InputPointerPos,
+    pointerKindOf,
+    ratioToView,
+} from "./input_evdev";
 
 // ========== Registry 和 ControlNode ==========
 
@@ -2423,20 +2439,232 @@ windowEl.on("wheel", (e) => {
 
 const cursor = new Cursor(cursorEl);
 
-// 鼠标输入：evdev 原生输入可用时接管指针（硬件事件注入为 DOM 指针事件），否则使用 DOM 指针事件
+// ── 输入聚合层 ────────────────────────────────────────────────────────────────────────────────────
+// DOM 原生事件与 input api（evdev）聚合为统一输入事件流，传入 MSysApi.inputSim 模拟 DOM 事件，
+// UI 组件与 wayland 窗口转发照旧消费模拟出的 DOM 事件
+// 聚合：window capture 捕获真实 DOM 事件 + input api 设备事件，都归一化为 UniInputEvent
+// 来源只以 source 标记保留类型数据（现实难以同源双触发，不做去重）；合成事件（!isTrusted）不回流防环
+// 分发：统一 dispatchInput() → inputSim.emit()，evdev 判定/换算工具见 input_evdev.ts
+const inputSim = MSysApi.inputSim;
 const inputApi = MSysApi.input;
-inputApi
-    .init()
-    .then((x) => {
-        if (x.ok && useEvdevPointer(inputApi)) {
-            console.log("[input] use evdev native input");
-        } else {
-            console.log("[input] use dom mouse input", JSON.stringify(x));
+
+/** 分发：统一传入新 api（当前行为为模拟 DOM 事件） */
+function dispatchInput(e: UniInputEvent) {
+    inputSim.emit(e);
+}
+
+// 聚合层指针位置（视口坐标）：DOM 事件直接取坐标，evdev 相对设备做位移积分
+const inputPointerPos = { x: Math.floor(window.innerWidth / 2), y: Math.floor(window.innerHeight / 2) };
+
+// 统一重新模拟的真实事件（click/auxclick/contextmenu 等由 inputSim 从 down/up 合成，原生的直接吞掉；
+// hover 类（pointerover/out/enter/leave）不在其中，放行原生事件保持 hover 行为；
+// keydown 原生默认行为也被屏蔽，文本输入由 inputSim 在未被 preventDefault 时补齐）
+const SWALLOWED_EVENTS = [
+    "pointerdown",
+    "pointerup",
+    "pointermove",
+    "mousedown",
+    "mouseup",
+    "mousemove",
+    "wheel",
+    "click",
+    "auxclick",
+    "dblclick",
+    "contextmenu",
+    "keydown",
+    "keyup",
+];
+
+function domInputEvent(e: Event) {
+    if (!e.isTrusted) return; // 合成事件不回流
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    if (e instanceof KeyboardEvent) {
+        dispatchInput({
+            kind: "key",
+            type: e.type === "keydown" ? "down" : "up",
+            code: MInputMap.mapKeyCode(e.code),
+            webCode: e.code,
+            key: e.key,
+            repeat: e.repeat,
+            source: "dom",
+            target: e.target,
+        });
+        return;
+    }
+    if (e instanceof WheelEvent) {
+        dispatchInput({
+            kind: "pointer",
+            type: "wheel",
+            x: e.clientX,
+            y: e.clientY,
+            deltaX: e.deltaX,
+            deltaY: e.deltaY,
+            deltaMode: e.deltaMode,
+            source: "dom",
+            target: e.target,
+        });
+        return;
+    }
+    if (e instanceof PointerEvent && (e.type === "pointerdown" || e.type === "pointerup" || e.type === "pointermove")) {
+        inputPointerPos.x = e.clientX;
+        inputPointerPos.y = e.clientY;
+        dispatchInput({
+            kind: "pointer",
+            type: e.type === "pointerdown" ? "down" : e.type === "pointerup" ? "up" : "move",
+            x: e.clientX,
+            y: e.clientY,
+            button: e.button,
+            pointerType: e.pointerType === "touch" || e.pointerType === "pen" ? e.pointerType : "mouse",
+            pointerId: e.pointerId,
+            source: "dom",
+            target: e.target,
+        });
+    }
+}
+
+for (const type of SWALLOWED_EVENTS) {
+    window.addEventListener(type, domInputEvent, true);
+}
+
+/** 单个 input api（evdev）设备 → 统一输入事件（帧合并后 emit） */
+function useEvdevDevice(input: InputManager, emit: (e: UniInputEvent) => void, pointerPos: InputPointerPos, path: string) {
+    const dev = input.getDevice(path);
+    if (!dev) return;
+    const info = dev.info;
+    const kind = pointerKindOf(info);
+    const rel = hasRelativeXY(info);
+    const abs = MInputMap.absPosMapping(info);
+    const keyboard = canKey(info);
+    if (!rel && !abs && !keyboard) return;
+    // 高精度滚轮与普通滚轮会同时上报，优先高精度避免重复滚动
+    const hiResWheel = info.capabilities.relAxes.includes(InputEventCodes.REL_WHEEL_HI_RES);
+    // MT-B 设备多指会交替上报各 slot 坐标，只跟随第一根手指
+    let slot = 0;
+    let sawSlot = false;
+
+    // 帧缓冲：一帧（EV_SYN 前）内的位移/滚轮/按键合并，保持事件顺序
+    let dx = 0;
+    let dy = 0;
+    let moved = false;
+    let wheelX = 0;
+    let wheelY = 0;
+    const frameKeys: { code: number; value: number }[] = [];
+
+    function flushFrame() {
+        if (dx || dy) {
+            pointerPos.x = Math.min(Math.max(pointerPos.x + dx, 0), window.innerWidth - 1);
+            pointerPos.y = Math.min(Math.max(pointerPos.y + dy, 0), window.innerHeight - 1);
+            dx = 0;
+            dy = 0;
+            moved = true;
         }
-    })
-    .catch((e) => {
-        console.error(`native input error`, e);
+        if (moved) {
+            moved = false;
+            emit({
+                kind: "pointer",
+                type: "move",
+                x: pointerPos.x,
+                y: pointerPos.y,
+                pointerType: kind,
+                source: "evdev",
+            });
+        }
+        if (wheelX || wheelY) {
+            const deltaX = wheelX;
+            const deltaY = wheelY;
+            wheelX = 0;
+            wheelY = 0;
+            emit({
+                kind: "pointer",
+                type: "wheel",
+                x: pointerPos.x,
+                y: pointerPos.y,
+                deltaX,
+                deltaY,
+                source: "evdev",
+            });
+        }
+        const frame = frameKeys.splice(0);
+        for (const { code, value } of frame) {
+            const button = BTN_TO_BUTTON[code];
+            if (button !== undefined) {
+                emit({
+                    kind: "pointer",
+                    type: value === 1 ? "down" : "up",
+                    x: pointerPos.x,
+                    y: pointerPos.y,
+                    button,
+                    pointerType: kind,
+                    source: "evdev",
+                });
+            } else {
+                // 键盘按键（BTN_*（>=BTN_0）是鼠标/触屏按钮，走上面的分支）
+                emit({
+                    kind: "key",
+                    type: value === 0 ? "up" : "down",
+                    code,
+                    repeat: value === 2,
+                    source: "evdev",
+                });
+            }
+        }
+    }
+
+    if (!dev.startReading().ok) return;
+
+    dev.on("relative", (code, value) => {
+        if (code === InputEventCodes.REL_X) dx += value;
+        else if (code === InputEventCodes.REL_Y) dy += value;
+        else if (code === InputEventCodes.REL_WHEEL_HI_RES) wheelY += -value * HI_RES_SCALE;
+        else if (code === InputEventCodes.REL_HWHEEL_HI_RES) wheelX += value * HI_RES_SCALE;
+        else if (code === InputEventCodes.REL_WHEEL && !hiResWheel) wheelY += -value * WHEEL_STEP;
+        else if (code === InputEventCodes.REL_HWHEEL && !hiResWheel) wheelX += value * WHEEL_STEP;
     });
+    dev.on("absolute", (code, value) => {
+        if (!abs) return;
+        if (code === InputEventCodes.ABS_MT_SLOT) {
+            sawSlot = true;
+            slot = value;
+            return;
+        }
+        if (sawSlot && slot !== 0) return;
+        if (code === abs.xCode) {
+            pointerPos.x = ratioToView(abs.ratioX(value), window.innerWidth);
+            moved = true;
+        } else if (code === abs.yCode) {
+            pointerPos.y = ratioToView(abs.ratioY(value), window.innerHeight);
+            moved = true;
+        }
+    });
+    dev.on("key", (code, value) => {
+        if (BTN_TO_BUTTON[code] !== undefined) {
+            if (value === 0 || value === 1) frameKeys.push({ code, value });
+        } else if (code < InputEventCodes.BTN_0) {
+            // 键盘按键
+            frameKeys.push({ code, value });
+        }
+    });
+    dev.on("sync", flushFrame);
+}
+
+/** 接入 input api：逐设备解码 evdev 事件流（含热插拔），产出统一输入事件 */
+function useEvdevInput(input: InputManager, emit: (e: UniInputEvent) => void, pointerPos: InputPointerPos) {
+    for (const info of input.getDevices()) {
+        useEvdevDevice(input, emit, pointerPos, info.path);
+    }
+    input.on("deviceAdded", (info) => {
+        useEvdevDevice(input, emit, pointerPos, info.path);
+    });
+}
+
+// evdev 原生输入：判定/换算工具见 input_evdev.ts
+if (inputApi?.isInitialized()) {
+    useEvdevInput(inputApi, dispatchInput, inputPointerPos);
+    console.log("[input] use dom + evdev native input");
+} else {
+    console.log("[input] use dom input");
+}
 
 const display = MSysApi.display;
 if (display.getType() === "desktop") {

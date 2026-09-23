@@ -6,6 +6,8 @@ import type { MenuItem } from "../../src/sys_api/menu";
 import type { blue } from "../../src/sys_api/blue";
 import type { display } from "../../src/sys_api/display";
 import type { InputManager } from "myde-input";
+import { absPosMapping, absRange, absRatio } from "../../src/input_map/abs";
+import { inputSim } from "../../src/sys_api/input_sim";
 import type { MprisEvents, mpris } from "../../src/sys_api/mpris";
 import type { network } from "../../src/sys_api/network";
 import type { NotificationData, NotificationEvents, notification } from "../../src/sys_api/notification";
@@ -1376,6 +1378,8 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         volume: volumeManager ? volumeManager.createMock() : createMockVolume(log),
         display: createMockDisplay(log),
         input: createMockInput(log),
+        // 统一输入事件 → 模拟 DOM 事件：真实实现无外部依赖，mock 环境直接复用
+        inputSim: new inputSim(),
         appControl: {
             getPidTree: async (pid?: number): Promise<Item> => {
                 log("getPidTree", pid);
@@ -1400,6 +1404,10 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
             log("mapKeyCode", code);
             return 0;
         },
+        // abs 转换是纯函数，mock 直接复用真实实现（abs 值 → 小数）
+        absRange,
+        absRatio,
+        absPosMapping,
     };
 
     const defaultSetting: DesktopApi["MSetting"] = {

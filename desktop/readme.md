@@ -154,7 +154,7 @@ if (input.isInitialized()) {
 }
 ```
 
-设备信息 (`DeviceInfo`)：`path`、`name`、`type`、`phys`、`vendor`/`product`/`version`、`capabilities`（`eventTypes`/`keyCodes`/`relAxes`/`absAxes`、`hasKeyboard`/`hasMouse`/`hasTouchpad`/`hasTouchscreen`、`maxTouchSlots`）、`touchInfo`（触屏物理轴信息）、`absInfo`（所有绝对轴量程 `Record<轴码, AxisInfo>`，绝对定位设备坐标校准用）、`errors`（如权限不足）
+设备信息 (`DeviceInfo`)：`path`、`name`、`type`、`phys`、`vendor`/`product`/`version`、`capabilities`（`eventTypes`/`keyCodes`/`relAxes`/`absAxes`、`hasKeyboard`/`hasMouse`/`hasTouchpad`/`hasTouchscreen`、`maxTouchSlots`）、`touchInfo`（触屏物理轴信息）、`absInfo`（所有绝对轴量程 `Partial<Record<轴码, AxisInfo>>`，只有部分轴存在，绝对定位设备坐标校准用，归一化为小数见 `MInputMap.absRatio`/`absPosMapping`）、`errors`（如权限不足）
 
 设备类型 (`info.type`)：
 
@@ -188,6 +188,40 @@ if (input.isInitialized()) {
 
 权限要求：用户需要在 `input` 组中才能读取 `/dev/input/event*`，否则设备列表为空或 `errors` 提示 Permission denied
 
+### inputSim
+
+统一输入事件 → 模拟 DOM 事件。桌面主文件把 DOM 原生事件与 input api（`input`）聚合（区分来源、融合坐标/帧/按键）成统一输入事件后传入，当前行为是模拟对应的 DOM 事件（Pointer/Wheel/Mouse/Keyboard），UI 组件与 wayland 窗口转发照旧消费 DOM 事件。
+
+```typescript
+const { inputSim } = MSysApi;
+
+// 指针移动（视口坐标）
+inputSim.emit({ kind: "pointer", type: "move", x: 100, y: 100, pointerType: "mouse", source: "evdev" });
+// 左键按下 / 抬起（抬起时合成 click 并补齐聚焦）
+inputSim.emit({ kind: "pointer", type: "down", x: 100, y: 100, button: 0, source: "evdev" });
+inputSim.emit({ kind: "pointer", type: "up", x: 100, y: 100, button: 0, source: "evdev" });
+// 滚轮
+inputSim.emit({ kind: "pointer", type: "wheel", x: 100, y: 100, deltaX: 0, deltaY: 100, source: "evdev" });
+// 键盘（evdev 键码 30=KEY_A，自动补出 KeyboardEvent.code="KeyA"、key="a"）
+inputSim.emit({ kind: "key", type: "down", code: 30, source: "evdev" });
+inputSim.emit({ kind: "key", type: "up", code: 30, source: "evdev" });
+```
+
+统一输入事件：
+
+- `UniPointerEvent`：`kind: "pointer"`，`type: "move" | "down" | "up" | "wheel"`，`x`/`y`（视口坐标），`button?`（down/up，0左 1中 2右），`pointerType?`（"mouse"/"touch"/"pen"），`pointerId?`，`deltaX?`/`deltaY?`/`deltaMode?`（wheel），`target?`（指定派发目标，缺省按坐标命中测试）
+- `UniKeyEvent`：`kind: "key"`，`type: "down" | "up"`，`code`（evdev 键码），`webCode?`（DOM `KeyboardEvent.code`，缺省由 evdev 码反查），`key?`（DOM `KeyboardEvent.key`，缺省按美式布局 + 修饰键推导），`repeat?`，`target?`（缺省为当前聚焦元素）
+- `source`："dom"（DOM 原生事件）或 "evdev"（input api），聚合层用它区分/去重来源
+
+行为细节：
+
+- 左键按下后抬起才合成 `click`，并补齐聚焦（最近的 `input, textarea, select, [tabindex]`），按钮位掩码与修饰键（Shift/Ctrl/Alt/Meta、CapsLock）状态由 api 自己维护
+- `pointerover/out/enter/leave`、`mousedown/up`、`auxclick`、`dblclick`、`contextmenu` 不模拟（hover 类建议放行原生事件）
+- 合成事件没有浏览器默认行为：按键派发后未被 `preventDefault` 时补齐文本输入（`input`/`textarea`/contenteditable 的插入、Backspace、Delete）
+- DOM 操作通过宿主接口 `InputSimHost`（`targetAt`/`activeTarget`/`focus`/`dispatch`）访问，默认实现 `domInputSimHost()` 操作真实 DOM，纯 node 环境可 `new inputSim(host)` 注入自定义宿主
+
+聚合层参考实现见 `desktop/offical`：`main.ts` 的"输入聚合层"完成聚合/融合/分发——window capture 捕获真实 DOM 事件（只收 `isTrusted`，合成事件不回流防环）归一化，`useEvdevDevice` 解码 input api 事件（EV_SYN 帧合并、相对位移积分、绝对轴小数映射、滚轮换算、按键分流，判定/换算工具在 `input_evdev.ts`），统一传入本 api；来源只以 `source` 标记保留类型数据，不做去重。
+
 ### appControl
 
 `getPidTree`获取所有进程树，包括pid、ppid、名称、内存使用
@@ -220,6 +254,24 @@ const el = render.getXdgSurfaceEle(renderId);
 
 ```typescript
 const keyCode = MInputMap.mapKeyCode("KeyA");
+```
+
+abs 轴转换工具，abs 值统一为小数（abs值比上 abs 范围，即量程占比），需要目标坐标时再映射：
+
+```typescript
+// abs 值 → 小数：(值 - min) / (max - min)，min=0 时即 值 ÷ 量程；无量程信息返回 undefined
+const ratio = MInputMap.absRatio(info, code, value);
+
+// abs 轴量程（absInfo，旧固件/读取失败时 MT 定位轴可回退 touchInfo）
+const range = MInputMap.absRange(info, code);
+
+// 触屏/数位板的 X/Y 轴（单点 ABS_X/ABS_Y 优先，其次多点 ABS_MT_POSITION_*）→ 小数转换
+const abs = MInputMap.absPosMapping(info);
+if (abs) {
+    const x = abs.ratioX(value) * (window.innerWidth - 1); // 需要时再映射到目标坐标
+    const y = abs.ratioY(value) * (window.innerHeight - 1);
+    // abs.xCode / abs.yCode 为使用的轴码，便于和事件 code 比较
+}
 ```
 
 ## MSetting
@@ -277,6 +329,8 @@ client.keyboard.sendKey(keyCode, "pressed" | "released");
 ```
 
 ## 输入处理
+
+推荐用聚合层统一输入：捕获 DOM 原生事件（只收 `isTrusted`，合成事件不回流）与 input api（evdev）事件，区分来源、融合（evdev EV_SYN 帧合并、相对位移积分、绝对轴映射、滚轮换算）后传给 `MSysApi.inputSim` 模拟 DOM 事件，下面的转发处理照旧消费 DOM 事件即可（两种输入来源走同一条路径）。`desktop/offical/src/main.ts` 的"输入聚合层"是完整参考实现。
 
 ```typescript
 function sendPointerEvent(type, p) {

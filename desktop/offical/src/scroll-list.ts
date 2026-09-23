@@ -355,6 +355,9 @@ export function dynamicScrollList<T>(options: {
     let touchStartPos = 0;
     let touchStartScroll = 0;
     let snapTimer: ReturnType<typeof setTimeout> | null = null;
+    // 合成事件（inputSim 模拟）没有活动指针，setPointerCapture 会失败，
+    // 用拖拽指针 id 兜底，保证合成事件拖拽与指针捕获表现一致
+    let dragPointerId: number | null = null;
 
     function snapToNearest() {
         const targetPage = Math.round(currentScroll / itemSize);
@@ -392,8 +395,9 @@ export function dynamicScrollList<T>(options: {
         lastTouchPos = touchStartPos;
         lastTouchTime = Date.now();
         touchVelocity = 0;
+        dragPointerId = e.pointerId;
         try {
-            // 合成事件（如 evdev 注入）没有活动指针，无法捕获，忽略
+            // 合成事件（如 inputSim 模拟）没有活动指针，无法捕获，忽略
             container.el.setPointerCapture(e.pointerId);
         } catch {
             // ignore
@@ -402,7 +406,7 @@ export function dynamicScrollList<T>(options: {
 
     container.el.addEventListener("pointermove", (e) => {
         if (!dragbymouse && e.pointerType === "mouse") return;
-        if (!container.el.hasPointerCapture(e.pointerId)) return;
+        if (!container.el.hasPointerCapture(e.pointerId) && dragPointerId !== e.pointerId) return;
         e.preventDefault();
         const pos = vertical ? e.clientY : e.clientX;
         const now = Date.now();
@@ -418,6 +422,7 @@ export function dynamicScrollList<T>(options: {
 
     container.el.addEventListener("pointerup", (e) => {
         if (!dragbymouse && e.pointerType === "mouse") return;
+        if (dragPointerId === e.pointerId) dragPointerId = null;
         if (snap) {
             const velocity = touchVelocity * 1000;
             if (Math.abs(velocity) > minVelocity) {

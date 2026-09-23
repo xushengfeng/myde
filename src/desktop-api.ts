@@ -1,10 +1,12 @@
 import type { InputManager } from "myde-input";
 import type { Connect } from "./connect/connect";
+import { absPosMapping, absRange, absRatio } from "./input_map/abs";
 import { mapKeyCode } from "./input_map/web2x";
 import type { nowConfig } from "./setting/config";
 import type { setting } from "./setting/setting";
 import { getPid, getPidTree } from "./sys_api/app_control";
 import type { tray } from "./sys_api/appIndicator";
+import type { inputSim } from "./sys_api/input_sim";
 import { getDesktopEntries, getDesktopEntry, getDesktopIcon, refreshDesktopEntries } from "./sys_api/application";
 import type { blue } from "./sys_api/blue";
 import type { display } from "./sys_api/display";
@@ -40,6 +42,7 @@ export const _myde = {
         network: undefined as unknown as network,
         display: undefined as unknown as display,
         input: undefined as unknown as InputManager,
+        inputSim: undefined as unknown as inputSim,
         volume: undefined as unknown as volumeControl,
         appControl: {
             getPidTree,
@@ -48,6 +51,9 @@ export const _myde = {
     },
     MInputMap: {
         mapKeyCode,
+        absRange,
+        absRatio,
+        absPosMapping,
     },
     MUtils: {
         renderToolsHtmlEl,
@@ -77,5 +83,14 @@ export type {
     Result,
     TouchInfo,
 } from "myde-input";
+export type { AbsRatioMapping } from "./input_map/abs";
+export type {
+    InputSimHost,
+    InputSource,
+    SimEventInit,
+    UniInputEvent,
+    UniKeyEvent,
+    UniPointerEvent,
+} from "./sys_api/input_sim";
 export type { renderTools } from "./wayland/render_tools";
 export type { WaylandClient, WaylandWinId } from "./wayland/server";
