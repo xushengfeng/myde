@@ -508,11 +508,16 @@ interface ImageKV {
 
 **并行注意**：两轨都重度编辑 `server.ts`（T2 改 handler 内的 emit 行，T1 搬 handler），**不宜真正并行**；但可各自独立 commit/revert。
 
-### Phase 0 — 安全网与工具（1 项，先做）
+### Phase 0 — 安全网与工具（纯工具 + 现有行为基线，**不新增任何协议实现**）
+
 - [ ] 修复 `check_proto_code/check.ts`（P11）：改为扫描 `protocols/**` 目录 + `module.ts` 的 handlers，而非 grep `server.ts`
-- [ ] 补 1 条 xdg 窗口端到端测试（创建→configure→resize→关闭），作为后续阶段回归基线
-- [ ] `package.json` 增加 `gen:protocols` script；`typecheck` 覆盖 desktop/test/mock
-- 验收：现有 `dma-buf.test.ts`、`keyboard.test.ts` 通过；新 e2e 通过
+- [ ] `package.json` 增加 `gen:protocols` script；`typecheck` 覆盖 `desktop/**`、`test/mock/**`（修 P8）
+- [ ] **榨取现有 e2e 断言**（用已有的 `dmabuf_one_frame`，不写新客户端、不补协议）：`windowCreated` 恰好一次、`renderId` 非空、`set_title` 回传、`focus()` 后 `windowResized`/state 事件、`close()` 后 `windowClosed` + 服务端存活
+- [ ] **已知缺陷基线文档**：`ack_configure` 未实现、serial 硬编码 `1`/`:1069/:1449/:2085/:2135`、错误处理缺失 —— 记录为"重构期间**不得恶化**"的既存缺陷，测试**不断言其应有行为**
+
+> 原则：Phase 0 只断言**现在已成立的行为**。需要新增协议才能测的场景，挪到对应阶段与改动同步写（见 §9）。
+
+验收：现有 3 个测试 + 新增断言全绿；`check_proto_code` 扫目录可用；typecheck 覆盖 4 个 Scene 实现
 
 ### Phase 1 — 建接口与入口收敛（纯新增）
 - [ ] 新建 `module.ts`（CoreApi/Hooks/ModuleCtx/WaylandDataRegistry/ClientEvents/SceneCmd 类型）
@@ -545,6 +550,8 @@ interface ImageKV {
 - [ ] `wl_surface.commit` 的 `:1066-1072`（xdg configure 扫描）、`:1095-1115`（viewport 内联合成）→ `SurfaceHooks.onCommit`
 - [ ] `:1141-1145`（destroy 清 cursor）→ `onDestroy`；`:2385/:2390` → `SeatHooks.onFocus`
 - [ ] `win()` 剩余 hit-test 下沉 `windows_store`；`WaylandClient` 类消解，只剩 `host/client.ts`
+- [ ] **configure 握手语义补全**：实现 `xdg_surface.ack_configure` + serial 计数器（替换硬编码 `serial:1` 于 `:1069/:1449/:2085/:2135`）——属本阶段握手重写范围，**不是凭空新增**
+- [ ] **xdg 生命周期 e2e**（与上一项同步）：创建→configure→ack→commit→resize→关闭，断言事件恰好一次 + 无对象泄漏
 - [ ] `server.ts` 最终删除或退化为 re-export shim（**建议直接删除**，强制所有调用方走 `index.ts`）
 - 验收：`server.ts` 不存在或 <100 行；`protocols/**` 互相无 import（除 xdg-decoration 类链式依赖）；全部测试通过
 
@@ -579,12 +586,25 @@ interface ImageKV {
 | 层 | 手段 | 阶段 |
 |---|---|---|
 | 编解码 | 现有 `utils/wayland-codec.test.ts` | 已有 |
-| 协议模块单测 | 新增：构造 `ModuleCtx` fake（注入 stub CoreApi + fake scene），直接调 handler——**Phase 1 引入 fake ctx 后才可行** | Phase 0 起补 |
-| 端到端 | 现有 2 条 + 新增 xdg 窗口生命周期 1 条 | Phase 0 |
+| **现有行为基线** | 榨取 `dmabuf_one_frame`：窗口事件序列、focus/close、服务端存活 | Phase 0 |
+| 协议模块单测 | fake `ModuleCtx`（stub CoreApi + fake scene）直接调 handler | Phase 1 后 |
+| 端到端（按改动同步补） | 见下表 | 与改动同阶段 |
 | 静态覆盖 | `check_proto_code` 改扫目录 | Phase 0 |
-| 接口漂移 | typecheck 覆盖 4 个 scene 实现 | Phase 0 |
+| 接口漂移 | typecheck 覆盖 4 个 Scene 实现 | Phase 0 |
 
-**关键前置**：Phase 0 的 e2e 基线必须先绿，否则 Phase 3-5 无回归依据（现仅有 pixel/按键两条断言，覆盖不足）。
+**测试与阶段的对应**（新增协议才能测的，不在 Phase 0 做）：
+
+| 测试 | 前置改动 | 阶段 |
+|---|---|---|
+| cursor（图像/枚举/hide 三态） | CursorStore + `cursor.changed` 事件 | Phase 2 同步 |
+| clipboard copy/paste | clipboard 域事件 | Phase 2 同步 |
+| subsurface 父子/销毁级联 | core 拆分 + `:1147` todo 修复 | Phase 3 同步 |
+| shm buffer 路径 | core surface 拆分 | Phase 3 同步 |
+| viewporter 合成 | 模块迁移 + `onCommit` 钩子 | Phase 4 同步 |
+| **xdg 生命周期 + `ack_configure` 实现 + serial 计数** | configure 握手重写（本就属该阶段范围） | **Phase 5 同步** |
+| role 冲突等错误路径 | 错误处理实现 | 随实现补 |
+
+**关键前置**：Phase 0 的基线必须先绿，否则 Phase 3-5 无回归依据（现有断言仅 pixel/按键两条，不碰 configure/geometry）。
 
 ---
 
@@ -595,7 +615,7 @@ interface ImageKV {
 | `commit` 钩子化改变时序（`:1066/:1095`） | 高 | Phase 5 单独进行；逐行对齐语义；先写 e2e 断言 configure 序列 |
 | 事件分域破坏 4 个桌面实现 + mock | 中 | Phase 2 一次性改完，不留兼容别名（前提：不稳定，允许破坏） |
 | 拆分期间双改冲突（生成物/类型路径） | 中 | Phase 1 先落接口，Phase 3 起才动文件布局；生成物路径不变 |
-| 测试安全网薄 | 高 | Phase 0 强制先补 e2e 与 fake ctx，否则不进 Phase 3 |
+| 测试安全网薄 | 高 | Phase 0 只建**现有行为基线**（工具 + 榨取既有 e2e 断言），不新增协议；协议类测试与对应改动**同阶段落地**，否则不进下一阶段 |
 | `emitSync` 移除导致窗口初始尺寸回归 | 中 | `surfaceBounds.request` 保留同步应答语义（EventEmitter `request` 支持），仅换 API 形态 |
 | `SceneCmd`/`ImageKV` 切分遗漏隐式依赖 | 中 | 先迁 cursor（图像 + 语义两分支都要过）作为样板，验证通道完备性 |
 | ~~dmabuf/共享纹理依赖 electron 渲染环境~~ | 低 | **不拆分**：electron 是既定运行环境（GPU/dmabuf 需要，且已有 electron 测试），保持现状 |
