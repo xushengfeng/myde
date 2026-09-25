@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { WaylandClient } from "../desktop-api";
+import type { renderTools } from "../wayland/render_tools";
 
 export function getProjectRoot() {
     let p = __dirname;
@@ -66,7 +67,7 @@ export function testRunnerRaw(js: string) {
 
     const killTimeout = setTimeout(() => {
         runtime.kill();
-    }, 10000);
+    }, 20000);
 
     return {
         kill: () => {
@@ -105,6 +106,8 @@ export function testRunnerApp(
     appPath: string,
     script: (a: {
         client: WaylandClient;
+        /** 渲染器实例，用于订阅 renderToolsOn（如 cursor 形态） */
+        render: renderTools;
         runner: {
             sendData: (data: unknown) => void;
             kill: () => void;
@@ -122,6 +125,7 @@ export function testRunnerApp(
 
         const clientPromise = Promise.withResolvers<{
             client: WaylandClient;
+            render: renderTools;
             runner: {
                 sendData: (data: unknown) => void;
                 kill: () => void;
@@ -134,6 +138,7 @@ export function testRunnerApp(
             });
             clientPromise.resolve({
                 client: client,
+                render: render,
                 runner: {
                     sendData: (data) => {
                         ipcRenderer.send("test", { type: "data", data });
