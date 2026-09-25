@@ -98,7 +98,7 @@ async function createWin() {
 
     if (dev) main_window.webContents.openDevTools();
     if (runAsDesktop) {
-        mainWin.webContents.on("console-message", ({ message, level, lineNumber }) => {
+        mainWin.webContents.on("console-message", ({ message, level: _level, lineNumber }) => {
             // if (level === "error")
             console.log(`console-message: lineNumber=${lineNumber}, message=${JSON.stringify(message)}`);
         });

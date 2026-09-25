@@ -14,7 +14,8 @@ export class blue {
         await this.dbus.connect();
         const s = await this.client.getService("org.bluez");
         const adapter = await s.getObject("/org/bluez/hci0");
-        const infc = await adapter.getInterface("org.bluez.Adapter1");
+        // 获取 Adapter1 接口本身有副作用（建立接口代理），返回值未用到
+        await adapter.getInterface("org.bluez.Adapter1");
 
         const objects = await (await this.client.getService("org.bluez")).getObject("/");
         const introspectable = await objects.getInterface("org.freedesktop.DBus.ObjectManager");

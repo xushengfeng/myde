@@ -1,0 +1,39 @@
+// 仅用于 `pnpm typecheck` 的全量类型检查配置。
+// 与 tsconfig.node/web.json 分开：那两个带 composite + references，配合 --noEmit 会导致
+// 引用输出永远生成不出来（TS6305/TS6307），因此它们只服务于构建，不用于检查。
+// 这里去掉 composite、开启 noEmit，一次覆盖 src + desktop + test + script。
+// test/log_viewer 是独立子包（自带 package.json/tsconfig/vitest），由自己的 vue-tsc 检查，不纳入本配置。
+{
+    "compilerOptions": {
+        "target": "esnext",
+        "module": "esnext",
+        "sourceMap": false,
+        "strict": true,
+        "jsx": "preserve",
+        "esModuleInterop": true,
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "forceConsistentCasingInFileNames": true,
+        "skipLibCheck": true,
+        "noEmit": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noImplicitAny": false,
+        "noImplicitReturns": true,
+        "types": ["node"]
+    },
+    "include": [
+        "src/**/*.ts",
+        "desktop/*/src/**/*.ts",
+        "test/**/*.ts",
+        "script/**/*.ts",
+        "electron.vite.config.*",
+        "lib/**/*.ts"
+    ],
+    "exclude": [
+        "**/dist/**",
+        "**/node_modules/**",
+        "test/offical/**",
+        "test/log_viewer/**"
+    ]
+}

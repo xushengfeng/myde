@@ -285,7 +285,7 @@ export class MockVolumeManager {
     }
 }
 
-function createMockVolume(log: (...args: unknown[]) => void): MockType<volumeControl> {
+function createMockVolume(log: (...args: any[]) => void): MockType<volumeControl> {
     const manager = new MockVolumeManager(log);
     return manager.createMock();
 }

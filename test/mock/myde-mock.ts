@@ -4,7 +4,7 @@ import type { Item } from "../../src/sys_api/app_control";
 import type { tray } from "../../src/sys_api/appIndicator";
 import type { MenuItem } from "../../src/sys_api/menu";
 import type { blue } from "../../src/sys_api/blue";
-import type { display } from "../../src/sys_api/display";
+import type { display, Rect, Transform } from "../../src/sys_api/display";
 import type { InputManager } from "myde-input";
 import { absPosMapping, absRange, absRatio } from "../../src/input_map/abs";
 import { inputSim } from "../../src/sys_api/input_sim";
@@ -12,7 +12,6 @@ import type { MprisEvents, mpris } from "../../src/sys_api/mpris";
 import type { network } from "../../src/sys_api/network";
 import type { NotificationData, NotificationEvents, notification } from "../../src/sys_api/notification";
 import type { power } from "../../src/sys_api/power";
-import type { volumeControl } from "../../src/sys_api/volume";
 import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools";
 import type { MockRenderTools } from "./render-tools";
 import type { MockVolumeManager } from "./volume-mock";
@@ -585,6 +584,7 @@ export class MockTrayManager {
             async init() {
                 manager.log("tray.init");
             },
+            ev: new EventEmitter<{ new: [string]; remove: [string]; menuUpdate: [] }>(),
             tarysService: manager.items as any,
         };
     }
@@ -748,7 +748,6 @@ export class MockBlueManager {
     private devices = new Map<string, MockBlueDevice>();
     private powered = false;
     private adapterName = "mock-adapter";
-    private discovering = false;
     private log: (...args: any[]) => void;
 
     constructor(log: (...args: any[]) => void) {
@@ -792,11 +791,9 @@ export class MockBlueManager {
             },
             async startDiscovery() {
                 manager.log("blue.startDiscovery");
-                manager.discovering = true;
             },
             async stopDiscovery() {
                 manager.log("blue.stopDiscovery");
-                manager.discovering = false;
             },
             getDevices() {
                 return Array.from(manager.devices.values()) as any;
@@ -1027,8 +1024,8 @@ function createMockDisplay(log: (...args: any[]) => void): MockType<display> {
         async setWindowSize(_width: number, _height: number) {
             log("display.setWindowSize", _width, _height);
         },
-        async renderToScreen(_screenIndex: number, _rects: any[], _transforms?: any[]) {
-            log("display.renderToScreen", _screenIndex, _rects, _transforms);
+        async renderToScreen(screenIndex: number, rect: Rect, transform?: Transform) {
+            log("display.renderToScreen", screenIndex, rect, transform);
         },
         async getScreens() {
             return [];

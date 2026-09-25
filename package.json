@@ -10,7 +10,7 @@
         "dev": "electron-vite --ignoreConfigWarning dev",
         "build": "electron-vite --ignoreConfigWarning build",
         "build:remote-connect": "cd src/remote_connect && pnpm build",
-        "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+        "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
         "desktop:simpletest": "export desktop=':test' && electron-vite --ignoreConfigWarning preview",
         "desktop:offical": "cd desktop/offical && npm run build && cd ../.. && export desktop='desktop/offical' && electron-vite --ignoreConfigWarning preview",
         "desktop:remote": "cd desktop/remote && npm run build && cd ../.. && export desktop='desktop/remote' && electron-vite --ignoreConfigWarning preview",

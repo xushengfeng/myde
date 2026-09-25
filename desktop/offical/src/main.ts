@@ -614,6 +614,7 @@ class stateMachine<T extends string, subT extends T> {
                             this.setState(n.n);
                             return true;
                         }
+                        return undefined;
                     });
                 }
             }
@@ -1270,6 +1271,9 @@ const _desktopRegistry = new Registry();
 // 聚合硬件和桌面注册，广播出去，接收其他广播
 // 事件中枢，可以被脚本、ai控制
 const _hubRegistry = new Registry<RegistrySchema>();
+// 预留：桌面注册与事件中枢尚未接线，void 引用以满足 noUnusedLocals
+void _desktopRegistry;
+void _hubRegistry;
 
 function updateTime() {
     const now = new Date();

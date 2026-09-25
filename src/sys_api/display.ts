@@ -10,14 +10,14 @@ interface Screen {
     refresh_rate: number;
 }
 
-interface Rect {
+export interface Rect {
     x: number;
     y: number;
     width: number;
     height: number;
 }
 
-interface Transform {
+export interface Transform {
     rotation?: number;
 }
 

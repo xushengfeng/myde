@@ -285,6 +285,7 @@ describe("connect", () => {
                         bins: [],
                     };
                 }
+                return undefined;
             });
             await a.sendTo({
                 targetId: [Connect.targetId(bid)],

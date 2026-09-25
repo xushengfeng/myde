@@ -161,7 +161,18 @@ export class RemoteRender implements renderTools {
         });
     }
 
-    getXdgSurfaceEle(id: string) {
+    /**
+     * 光标暂未走远程通道传输。
+     * TODO(Phase 2)：cursor 改由 CursorStore + SceneCmd/ImageKV 承载后，
+     * 本方法随 renderTools.setCursor 一并删除。
+     */
+    setCursor(
+        _canvas: OffscreenCanvas | string | undefined,
+        _hotspotX: number,
+        _hotspotY: number,
+    ): void {}
+
+    getXdgSurfaceEle(_id: string) {
         return {
             getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }),
         };
@@ -325,7 +336,7 @@ export class RemoteRender implements renderTools {
             }
         }
 
-        for (const [id, state] of this.popupMap) {
+        for (const [_id, state] of this.popupMap) {
             if (state.parentId === toplevelId) {
                 this.server.sendTo({
                     targetId: "anytarget",

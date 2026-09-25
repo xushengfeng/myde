@@ -143,6 +143,7 @@ export class Connect {
                 this.connectInit(connect);
                 return { json: { connectId, pin }, bins: [] };
             }
+            return undefined;
         });
     }
     private connectInit(connect: SConnect) {
