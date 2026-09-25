@@ -160,12 +160,21 @@ server.on("connection", (socket) => {
 });
 
 ipcMain.on("test", (_, data) => {
+    // 测试数据必须同步写到 fd 1：console.log 对管道是异步写入，
+    // 紧接着 app.quit() 会让这行 JSON 还没落进管道就丢失，父进程收不到任何数据
+    const writeLine = (line: string) => {
+        try {
+            require("node:fs").writeSync(1, line + "\n");
+        } catch {
+            console.log(line);
+        }
+    };
     if (data.type === "kill") {
-        app.quit();
+        setTimeout(() => app.quit(), 100);
     } else if (data.type === "data") {
-        console.log(JSON.stringify(data.data));
+        writeLine(JSON.stringify(data.data));
     } else if (data.type === "applog") {
-        console.log(JSON.stringify({ applog: data.data }));
+        writeLine(JSON.stringify({ applog: data.data }));
     }
 });
 

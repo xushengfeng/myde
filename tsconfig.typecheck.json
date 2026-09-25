@@ -28,6 +28,7 @@
         "test/**/*.ts",
         "script/**/*.ts",
         "electron.vite.config.*",
+        "vitest.config.*",
         "lib/**/*.ts"
     ],
     "exclude": [

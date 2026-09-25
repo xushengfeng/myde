@@ -52,8 +52,12 @@ export function testRunnerRaw(js: string) {
             try {
                 const jsonData = JSON.parse(lineData);
                 out.push(jsonData);
+                return;
             } catch {}
         }
+        // 非 JSON 行是 electron 主进程/桌面侧的普通输出，
+        // 直接丢弃会让模板内的报错完全不可见，转发到 stderr 便于排查
+        process.stderr.write(lineData);
     });
     runtime.stderr?.on("data", (data) => {
         const lineData = data.toString();
@@ -70,12 +74,30 @@ export function testRunnerRaw(js: string) {
             clearTimeout(killTimeout);
         },
         waitExit: () =>
-            new Promise<unknown[]>((resolve) =>
-                runtime.on("exit", () => {
-                    resolve(out);
+            new Promise<unknown[]>((resolve) => {
+                let exited = false;
+                let stdoutEnded = false;
+                let graceTimer: ReturnType<typeof setTimeout> | undefined;
+                const finish = () => {
                     clearTimeout(killTimeout);
-                }),
-            ),
+                    if (graceTimer) clearTimeout(graceTimer);
+                    resolve(out);
+                };
+                const maybeFinish = () => {
+                    if (exited && stdoutEnded) finish();
+                };
+                runtime.on("exit", () => {
+                    exited = true;
+                    maybeFinish();
+                    // 进程退出事件可能早于 stdout 读完最后一条 JSON，
+                    // 只监听 exit 会丢掉紧邻 kill 之前发送的数据
+                    graceTimer = setTimeout(finish, 500);
+                });
+                runtime.stdout?.on("end", () => {
+                    stdoutEnded = true;
+                    maybeFinish();
+                });
+            }),
     };
 }
 
@@ -128,7 +150,10 @@ export function testRunnerApp(
             ipcRenderer.send("test", { type: "applog", data: data.toString() });
         });
     });
-    const app = `const appPath="${appPath}"\n${baseTeamplate}\n${`(${script.toString()})(await clientPromise.promise)`}`;
+    // baseTeamplate 是函数体原文，末尾没有分号；若直接拼接下一行以 `(` 开头的脚本调用，
+    // JS 会按 ASI 规则把两行合并成一条调用链（p.stdout.on(...)(fn)）→ TypeError 中止整个模块，
+    // 导致后面的测试脚本永远执行不到。补分号强制语句结束。
+    const app = `const appPath="${appPath}"\n${baseTeamplate};\n${`(${script.toString()})(await clientPromise.promise)`}`;
     const r = testRunnerRaw(app);
     return r;
 }
