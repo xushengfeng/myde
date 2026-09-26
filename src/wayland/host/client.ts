@@ -25,8 +25,6 @@ import type { renderTools } from "../render_tools";
 import { CursorStore } from "../state/cursor_store";
 import { SeatStore } from "../state/seat_store";
 import { type WindowRecord, WindowsStore } from "../state/windows_store";
-import { createFormatTableBuffer, DRM_FORMAT } from "../utils/dma-buf";
-import { newFd } from "../utils/fd";
 import type { WaylandObjectId, WaylandOp, WaylandProtocol } from "../utils/wayland-binary";
 import { WaylandArgType } from "../utils/wayland-binary";
 import { WaylandDecoder } from "../utils/wayland-decoder";
@@ -384,6 +382,15 @@ class xdgSurfaceData {
 
 const globalsByInterface = new Map(protocolModules.flatMap((m) => m.globals.map((g) => [g.name, g] as const)));
 
+/**
+ * 各模块声明的 surface 钩子。core 不 import 扩展，靠这里聚合后触发——
+ * 这是 core → 扩展唯一的反向通道（正向依赖走 ctx.core）。
+ */
+const commitHooks = protocolModules.flatMap((m) => (m.hooks.onCommit ? [m.hooks.onCommit] : []));
+const frameHooks = protocolModules.flatMap((m) => (m.hooks.onFrame ? [m.hooks.onFrame] : []));
+const destroyHooks = protocolModules.flatMap((m) => (m.hooks.onDestroy ? [m.hooks.onDestroy] : []));
+const focusHooks = protocolModules.flatMap((m) => (m.hooks.onFocus ? [m.hooks.onFocus] : []));
+
 export class WaylandClient {
     logConfig = {
         receive: true,
@@ -607,6 +614,22 @@ export class WaylandClient {
                 seat: { focus: () => this.seat.focus(), nextSerial: () => this.seat.nextSerial() },
             },
             domain: { xdgSurface: this.dataManager.xdgSurface },
+            notify: {
+                commit: (surfaceId) => {
+                    for (const h of commitHooks) h(surfaceId, this.ctx);
+                },
+                frame: (surfaceId, canvas, pending) => {
+                    let out = canvas;
+                    for (const h of frameHooks) out = h(surfaceId, out, pending, this.ctx) ?? out;
+                    return out;
+                },
+                destroy: (surfaceId) => {
+                    for (const h of destroyHooks) h(surfaceId, this.ctx);
+                },
+                focus: (surfaceId) => {
+                    for (const h of focusHooks) h(surfaceId, this.ctx);
+                },
+            },
             state: { windows: this.windows, cursor: this.cursor, seat: this.seat },
             client: {
                 id: this.id,
@@ -838,170 +861,7 @@ export class WaylandClient {
             this.windows.notifyClosed(x.id);
         });
 
-        isOp("zwp_linux_dmabuf_v1.create_params", (x) => {
-            const params = this.getObject(x.args.params_id);
-            params.data = { planes: [] };
-        });
-        isOp("zwp_linux_dmabuf_v1.get_surface_feedback", (x) => {
-            const feedbackId = x.args.id;
-            this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
-        });
-        isOp("zwp_linux_dmabuf_v1.get_default_feedback", (x) => {
-            const feedbackId = x.args.id;
-
-            const formatTable = createFormatTableBuffer([
-                { format: DRM_FORMAT.DRM_FORMAT_ARGB8888, modifier: 0n },
-                { format: DRM_FORMAT.DRM_FORMAT_ABGR8888, modifier: 0n },
-                { format: DRM_FORMAT.DRM_FORMAT_NV12, modifier: 0n },
-                { format: DRM_FORMAT.DRM_FORMAT_NV16, modifier: 0n },
-                { format: DRM_FORMAT.DRM_FORMAT_P010, modifier: 0n },
-            ]);
-            const { fd } = newFd(new Uint8Array(formatTable.buffer));
-            this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.format_table", {
-                fd: fd,
-                size: formatTable.byteLength,
-            });
-
-            const r = fs.statSync("/dev/dri/renderD128"); // todo
-            const buffer = Buffer.alloc(8);
-            buffer.writeBigUInt64LE(BigInt(r.rdev));
-            const a = new Uint8Array(buffer.buffer);
-            this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.main_device", { device: a });
-
-            this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_target_device", {
-                device: a,
-            });
-            this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_formats", {
-                indices: new Uint16Array([0, 1, 2, 3, 4]),
-            });
-            this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_flags", {
-                flags: getEnumValue("zwp_linux_dmabuf_feedback_v1.tranche_flags", []),
-            });
-            this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_done", {});
-
-            this.sendMessageX(feedbackId, "zwp_linux_dmabuf_feedback_v1.done", {});
-        });
-        isOp("zwp_linux_buffer_params_v1.add", (x) => {
-            const params = this.getObject(x.id);
-            params.data.planes[x.args.plane_idx] = {
-                fd: x.args.fd,
-                plane_idx: x.args.plane_idx,
-                offset: x.args.offset,
-                stride: x.args.stride,
-                modifier_hi: x.args.modifier_hi,
-                modifier_lo: x.args.modifier_lo,
-            };
-        });
-        isOp("zwp_linux_buffer_params_v1.create_immed", (x) => {
-            const params = this.getObject(x.id);
-            if (!params.data) {
-                console.error("No planes data for create_immed");
-                return;
-            }
-            const planes = params.data.planes;
-            const bufferId = x.args.buffer_id;
-            const buffer = this.getObject(bufferId);
-            buffer.data = { type: "dmabuf", planes, width: x.args.width, height: x.args.height, format: x.args.format };
-        });
-
-        isOp("wp_viewporter.get_viewport", (x) => {
-            const viewportId = x.args.id;
-            const surfaceId = x.args.surface;
-            const surface = this.getObject(surfaceId);
-            if (!surface) {
-                console.error(`Surface ${surfaceId} not found for get_viewport`);
-                return;
-            }
-            if (surface.data.current.viewport) {
-                if (surface.data.current.viewport.source || surface.data.current.viewport.destination) {
-                    this.postError("wp_viewporter", x.id, "viewport_exists", "Surface already has a viewport");
-                    return;
-                }
-            }
-            surface.data.pending.viewport = {};
-            const viewport = this.getObject(viewportId);
-            viewport.data = { surface: surfaceId };
-        });
-        isOp("wp_viewport.set_source", (x) => {
-            const viewport = this.getObject(x.id);
-            const surfaceId = viewport.data.surface;
-            const surface = this.getObject(surfaceId);
-            const viewportData = surface.data.pending.viewport;
-            if (viewportData) {
-                if (x.args.width === -1 && x.args.height === -1 && x.args.x === -1 && x.args.y === -1) {
-                    viewportData.source = undefined;
-                    return;
-                } else if (x.args.width <= 0 || x.args.height <= 0 || x.args.x < 0 || x.args.y < 0) {
-                    this.postError("wp_viewport", x.id, "bad_value", "Invalid source rectangle");
-                    return;
-                } else if (
-                    x.args.x + x.args.width > surface.data.canvas.width ||
-                    x.args.y + x.args.height > surface.data.canvas.height
-                ) {
-                    this.postError(
-                        "wp_viewport",
-                        x.id,
-                        "out_of_buffer",
-                        "Source rectangle exceeds surface buffer bounds",
-                    );
-                    return;
-                }
-                viewportData.source = {
-                    x: x.args.x,
-                    y: x.args.y,
-                    width: x.args.width,
-                    height: x.args.height,
-                };
-            }
-        });
-        isOp("wp_viewport.set_destination", (x) => {
-            const viewport = this.getObject(x.id);
-            const surfaceId = viewport.data.surface;
-            const surface = this.getObject(surfaceId);
-            const viewportData = surface.data.pending.viewport;
-            if (viewportData) {
-                if (x.args.width === -1 && x.args.height === -1) {
-                    viewportData.destination = undefined;
-                    return;
-                } else if (x.args.width <= 0 || x.args.height <= 0) {
-                    this.postError("wp_viewport", x.id, "bad_value", "Invalid destination rectangle");
-                    return;
-                } else if (
-                    Number.isSafeInteger(x.args.width) === false ||
-                    Number.isSafeInteger(x.args.height) === false
-                ) {
-                    this.postError("wp_viewport", x.id, "bad_size", "Width or height is not a safe integer");
-                    return;
-                }
-                viewportData.destination = {
-                    width: x.args.width,
-                    height: x.args.height,
-                };
-            }
-        });
-        isOp("wp_viewport.destroy", (x) => {
-            const viewport = this.getObject(x.id);
-            const surfaceId = viewport.data.surface;
-            const surface = this.getObject(surfaceId);
-            if (surface) {
-                delete surface.data.pending.viewport;
-            }
-        });
-
         // todo wp_cursor_shape_manager_v1.get_tablet_tool_v2 暂不实现，平板工具支持后再加
-        isOp("wp_cursor_shape_manager_v1.get_pointer", (x) => {
-            this.getObject(x.args.cursor_shape_device).data = { pointer: x.args.pointer };
-        });
-        isOp("wp_cursor_shape_device_v1.set_shape", (x) => {
-            // todo serial 校验wl_pointer.enter的serial，不匹配时忽略
-            const shape = getEnumName("wp_cursor_shape_device_v1.shape", x.args.shape);
-            if (!shape) {
-                this.postError("wp_cursor_shape_device_v1", x.id, "invalid_shape", `Invalid shape ${x.args.shape}`);
-                return;
-            }
-            // 语义光标替换之前的surface光标（与wl_pointer.set_cursor混用，后到者生效）
-            this.cursor.setShape(shape);
-        });
 
         isOp("zwp_text_input_manager_v1.create_text_input", (x) => {
             const textInputId = x.args.id;

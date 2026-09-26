@@ -10,6 +10,9 @@ import { seatModule } from "./core/seat";
 import { shmModule } from "./core/shm";
 import { subsurfaceModule } from "./core/subsurface";
 import { surfaceModule } from "./core/surface";
+import { cursorShapeModule } from "./cursor_shape";
+import { dmabufModule } from "./dmabuf";
+import { viewporterModule } from "./viewporter";
 
 /**
  * 全部协议模块清单（运行期聚合，替代原 `supportedProtocols` 的手工 if 链）。
@@ -27,6 +30,9 @@ export const protocolModules: readonly ProtocolModule[] = [
     pointerModule,
     registryModule,
     outputModule,
+    viewporterModule,
+    cursorShapeModule,
+    dmabufModule,
     subsurfaceModule,
     dataDeviceModule,
 ];

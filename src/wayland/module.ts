@@ -304,9 +304,21 @@ export interface CoreApi {
 
 /** core 不 import 扩展，扩展注册回调；这是唯一的反向通道 */
 export interface SurfaceHooks {
-    /** 现 server.ts:1066-1072（发 xdg configure）、:1095-1115（viewporter 合成） */
+    /** buffer 已应用、像素尚未合成：xdg 在此按尺寸变化发 configure */
     onCommit?(surfaceId: SurfaceId, ctx: ModuleCtx): void;
-    /** 现 server.ts:1141-1145（destroy 清 cursor）、:1147 的 todo 级联清理 */
+    /**
+     * 像素已合成、渲染之前：可返回替换后的画布（viewporter 之类做后处理）。
+     * 与 onCommit 分开是因为两者时机不同——合成逻辑必须在 damage 绘制之后。
+     *
+     * `pending` 是本次 commit 的双缓冲状态（合并进 current 之前的那份），
+     * 原实现读的就是它，原样传下去以保持行为一致。
+     */
+    onFrame?(
+        surfaceId: SurfaceId,
+        canvas: OffscreenCanvas,
+        pending: WaylandSurfaceData,
+        ctx: ModuleCtx,
+    ): OffscreenCanvas | void;
     onDestroy?(surfaceId: SurfaceId, ctx: ModuleCtx): void;
 }
 
@@ -464,6 +476,18 @@ export interface ModuleCtx {
     domain: { xdgSurface: XdgSurfaceApi };
     /** 语义状态单写入点 */
     state: { windows: WindowsApi; cursor: CursorApi; seat: SeatApi };
+    /**
+     * core → 扩展的反向通知（唯一通道，扩展以 `hooks` 声明、core 只负责触发）。
+     * core 不 import 扩展，所以这里聚合自 `protocolModules`。
+     */
+    notify: {
+        /** buffer 已应用、像素尚未合成 */
+        commit(surfaceId: SurfaceId): void;
+        /** 像素已合成、渲染之前；返回（可能被替换的）画布 */
+        frame(surfaceId: SurfaceId, canvas: OffscreenCanvas, pending: WaylandSurfaceData): OffscreenCanvas;
+        destroy(surfaceId: SurfaceId): void;
+        focus(surfaceId: SurfaceId | undefined): void;
+    };
     /** 客户端自身 */
     client: ClientApi;
     /** 场景投影（Phase 6 可能瘦身为 SceneCmd 分发，像素走 ImageKV） */

@@ -191,28 +191,8 @@ export const surfaceModule = defineModule({
                 if (image instanceof VideoFrame) {
                     image.close();
                 }
-                let fcanvas = canvas;
-                if (data.viewport && (data.viewport.destination || data.viewport.source)) {
-                    const source = data.viewport.source;
-                    const destination = data.viewport.destination;
-                    let dwidth = 1;
-                    let dheight = 1;
-                    if (!destination && source) {
-                        dwidth = source.width;
-                        dheight = source.height;
-                    } else if (destination) {
-                        dwidth = destination.width;
-                        dheight = destination.height;
-                    }
-                    const ncanvas = new OffscreenCanvas(dwidth, dheight);
-                    const sctx = ncanvas.getContext("2d");
-                    if (source) {
-                        sctx?.drawImage(canvas, source.x, source.y, source.width, source.height, 0, 0, dwidth, dheight);
-                    } else {
-                        sctx?.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, dwidth, dheight);
-                    }
-                    fcanvas = ncanvas;
-                }
+                // 像素已合成、渲染之前交给扩展后处理（viewporter 的裁剪缩放）
+                const fcanvas = ctx.notify.frame(surfaceId, canvas, data);
                 ctx.core.surface.renderWlSurface(surfaceId, fcanvas);
 
                 // 只有当前光标surface才推送光标，隐藏后commit不应重新显示
@@ -237,6 +217,7 @@ export const surfaceModule = defineModule({
             const surfaceId = x.id;
             // 光标surface销毁后隐藏光标
             ctx.state.cursor.hide(surfaceId);
+            ctx.notify.destroy(surfaceId);
             ctx.core.surface.destroyWlSurface(surfaceId);
             // todo 相关的如subsurface、xdgsurface等
         },
