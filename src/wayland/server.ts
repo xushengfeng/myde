@@ -31,6 +31,7 @@ import { InputEventCodes } from "../input_codes/types";
 import type { WaylandData, WaylandObjectId2, WaylandObjectId3, WaylandWinId } from "./module";
 import type { renderTools } from "./render_tools";
 import { CursorStore } from "./state/cursor_store";
+import { SeatStore } from "./state/seat_store";
 import { type WindowRecord, WindowsStore } from "./state/windows_store";
 import { createFormatTableBuffer, DRM_FORMAT } from "./utils/dma-buf";
 import { WaylandEncoder } from "./utils/wayland-encoder";
@@ -563,27 +564,18 @@ class WaylandClient {
     private nextObjectId: number = 0xff000000;
     /** 光标的唯一写入点（见 state/cursor_store.ts） */
     private cursor: CursorStore;
+    /** 输入设备侧状态（见 state/seat_store.ts） */
+    private seat: SeatStore;
     /** 窗口记录与窗口事件的唯一持有者（见 state/windows_store.ts） */
     private windows: WindowsStore;
     private obj2: Partial<{
-        focusSurface: WaylandObjectId2<"wl_surface"> | null;
-        focusSurfaceType: "main" | "popup" | null;
         textInputV1: {
             focus: WaylandObjectId | null;
             m: Map<WaylandObjectId2<"zwp_text_input_v1">, { focus: boolean; serial: number }>;
         };
-        serial: number;
         dataDevices: Set<WaylandObjectId2<"wl_data_device">>;
         pendingPaste: { offerId: WaylandObjectId; fd: number; mime: string; timeout: NodeJS.Timeout };
-        modifiers: Set<number>;
     }> & {
-        seats: Map<
-            WaylandObjectId2<"wl_seat">,
-            {
-                pointer?: WaylandObjectId2<"wl_pointer">;
-                keyboard?: WaylandObjectId2<"wl_keyboard">;
-            }
-        >;
         /** text-input-v3，焦点跟随键盘焦点 */
         textInputV3: {
             /** 当前文本输入焦点surface，null表示无焦点 */
@@ -635,14 +627,13 @@ class WaylandClient {
         this.pid = socket.pid;
         this.objects = new Map();
         this.obj2 = {
-            modifiers: new Set(),
-            seats: new Map(),
             textInputV3: { focus: null, m: new Map() },
             textInputOwner: null,
             appid: undefined,
             xdg_wm_base: new Set(),
         };
         this.cursor = new CursorStore(render);
+        this.seat = new SeatStore();
         // 窗口事件的对外出口：Phase 2 仍是 client 级，Phase 6 只改这里
         this.windows = new WindowsStore({
             created: (wid, renderId) => this.emit("windowCreated", wid, renderId),
@@ -788,7 +779,7 @@ class WaylandClient {
             }
             if (proto.name === "wl_seat") {
                 const id = _id as WaylandObjectId2<"wl_seat">;
-                this.obj2.seats.set(id, {});
+                this.seat.addSeat(id);
                 this.sendMessageX(id, "wl_seat.name", { name: "seat0" });
                 this.sendMessageX(id, "wl_seat.capabilities", {
                     capabilities: getEnumValue("wl_seat.capability", ["pointer", "keyboard"]),
@@ -1093,7 +1084,7 @@ class WaylandClient {
 
         isOp("wl_seat.get_pointer", (x) => {
             const pointerId = x.args.id;
-            const seat = this.obj2.seats.get(x.id);
+            const seat = this.seat.get(x.id);
             if (!seat) {
                 console.warn(`Seat ${x.id} not found for get_pointer`);
                 return;
@@ -1102,7 +1093,7 @@ class WaylandClient {
         });
         isOp("wl_seat.get_keyboard", (x) => {
             const keyboardId = x.args.id;
-            const seat = this.obj2.seats.get(x.id);
+            const seat = this.seat.get(x.id);
             if (!seat) {
                 console.warn(`Seat ${x.id} not found for get_keyboard`);
                 return;
@@ -1974,12 +1965,12 @@ class WaylandClient {
         this.sendMessageImm(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
     }
     private getPointers() {
-        return Array.from(this.obj2.seats.values())
+        return Array.from(this.seat.all())
             .map((s) => s.pointer)
             .filter((p) => p !== undefined);
     }
     private getKeyboards() {
-        return Array.from(this.obj2.seats.values())
+        return Array.from(this.seat.all())
             .map((s) => s.keyboard)
             .filter((k) => k !== undefined);
     }
@@ -2127,15 +2118,17 @@ class WaylandClient {
 
                     if (inSurface) {
                         const { id: s, x: nx, y: ny } = inSurface;
-                        if (this.obj2.focusSurface !== s) {
-                            if (this.obj2.focusSurface && this.objects.has(this.obj2.focusSurface)) {
+                        const prevFocus = this.seat.focus();
+                        const prevFocusType = this.seat.focusType();
+                        if (prevFocus !== s) {
+                            if (prevFocus && this.objects.has(prevFocus)) {
                                 for (const p of this.getPointers())
                                     this.sendMessageImm(p, "wl_pointer.leave", {
                                         serial: 0,
-                                        surface: this.obj2.focusSurface,
+                                        surface: prevFocus,
                                     });
-                                if (this.obj2.focusSurfaceType === "main" && reasonSurfaceType === "main")
-                                    this.keyboard.blurSurface(this.obj2.focusSurface); // todo popup
+                                if (prevFocusType === "main" && reasonSurfaceType === "main")
+                                    this.keyboard.blurSurface(prevFocus); // todo popup
                             }
                             for (const p of this.getPointers()) {
                                 this.sendMessageImm(p, "wl_pointer.enter", {
@@ -2146,13 +2139,9 @@ class WaylandClient {
                                 });
                                 this.sendMessageImm(p, "wl_pointer.frame", {});
                             }
-                            if (
-                                (this.obj2.focusSurfaceType === "main" || !this.obj2.focusSurfaceType) &&
-                                reasonSurfaceType === "main"
-                            )
+                            if ((prevFocusType === "main" || !prevFocusType) && reasonSurfaceType === "main")
                                 this.keyboard.focusSurface(s);
-                            this.obj2.focusSurface = s;
-                            this.obj2.focusSurfaceType = reasonSurfaceType;
+                            this.seat.setFocus(s, reasonSurfaceType);
                         }
                         return { x: nx, y: ny };
                     }
@@ -2279,8 +2268,7 @@ class WaylandClient {
             this.textInputV3Blur(id);
         },
         sendKey: (key: number, state: "pressed" | "released") => {
-            const s = this.obj2.serial ?? 1;
-            this.obj2.serial = s + 2;
+            const s = this.seat.nextSerial();
             for (const k of this.getKeyboards())
                 this.sendMessageImm(k, "wl_keyboard.key", {
                     serial: s,
@@ -2303,11 +2291,11 @@ class WaylandClient {
             };
 
             const bit = modKeyToBit[key];
-            if (bit !== undefined && this.obj2.modifiers) {
-                if (isPressed) this.obj2.modifiers.add(bit);
-                else this.obj2.modifiers.delete(bit);
+            if (bit !== undefined) {
+                if (isPressed) this.seat.addModifier(bit);
+                else this.seat.removeModifier(bit);
 
-                const mods_depressed = this.computeModsDepressed();
+                const mods_depressed = this.seat.modifierMask();
                 const mods_latched = 0; // todo not tracking latched in this implementation
                 const mods_locked = 0; // todo not tracking locked separately here
 
@@ -2405,14 +2393,6 @@ class WaylandClient {
         ti.focus = null;
     }
 
-    private computeModsDepressed(): number {
-        if (!this.obj2.modifiers) return 0;
-        let mask = 0;
-        for (const b of this.obj2.modifiers) {
-            mask |= 1 << b;
-        }
-        return mask;
-    }
     paste: (text: string) => void = (text: string) => {
         if (!this.obj2.pendingPaste) {
             console.warn("No pending paste request");
