@@ -1,5 +1,18 @@
 {
     "$schema": "https://biomejs.dev/schemas/2.2.4/schema.json",
+    "files": {
+        "includes": [
+            "**",
+            "!**/node_modules",
+            "!**/.git",
+            "!build",
+            "!out",
+            "!dist",
+            "!src/wayland/protocols/protocols.json",
+            "!src/wayland/protocols/wayland-types.ts",
+            "!src/input_codes/types.ts"
+        ]
+    },
     "formatter": {
         "indentStyle": "space",
         "indentWidth": 4,
