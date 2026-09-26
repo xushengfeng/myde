@@ -29,85 +29,12 @@ import { InputEventCodes } from "../input_codes/types";
 import { createFormatTableBuffer, DRM_FORMAT } from "./utils/dma-buf";
 import { getRectKeyPoint } from "./utils/xdg";
 import type { renderTools } from "./render_tools";
+import type { WaylandData, WaylandObjectId2, WaylandObjectId3 } from "./module";
 import { buildXkb } from "myde-xcb";
 
 export { WaylandClient, WaylandServer };
 
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
-type WaylandObjectId2<t extends WaylandInterfaces> = number & { __brand: "WaylandObjectId"; __interface: t };
-type WaylandObjectId3<t extends string> = number & { __brand: "WaylandObjectId"; __interface: t };
-
-type WaylandSurfaceData = {
-    buffer?: { id: WaylandObjectId2<"wl_buffer"> };
-    damageList?: { x: number; y: number; width: number; height: number }[];
-    damageBufferList?: { x: number; y: number; width: number; height: number }[];
-    callback?: WaylandObjectId2<"wl_callback">;
-    inputRegion?: WaylandData["wl_region"]["rects"];
-    viewport?: {
-        source?: { x: number; y: number; width: number; height: number };
-        destination?: { width: number; height: number };
-    };
-};
-
-type WaylandData = {
-    wl_shm_pool: { fd: number };
-    wl_surface: {
-        // 直接把buf传递出去是不是更有效呢，让渲染器读fd
-        canvas: OffscreenCanvas;
-        current: WaylandSurfaceData;
-        pending: WaylandSurfaceData;
-        // wl_pointer.set_cursor的hotspot，不是双缓冲状态，立即生效并被后续commit沿用
-        cursorHotspot?: { x: number; y: number };
-    };
-    wl_buffer:
-        | { type: "shm"; fd: number; offset: number; stride: number; imageData: ImageData }
-        | {
-              type: "dmabuf";
-              planes: {
-                  fd: number;
-                  plane_idx: number;
-                  offset: number;
-                  stride: number;
-                  modifier_hi: number;
-                  modifier_lo: number;
-              }[];
-              width: number;
-              height: number;
-              format: number;
-          };
-    wl_region: {
-        rects: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
-    };
-    xdg_wm_base: { pingSerials: Map<number, () => void> };
-    xdg_positioner: {
-        size: { width: number; height: number };
-        anchor_rect: { x: number; y: number; width: number; height: number };
-        anchor: number;
-        gravity: number;
-        constraint_adjustment: number;
-        offset: { x: number; y: number };
-        reactive: boolean;
-        parent_size: { parent_width: number; parent_height: number };
-    };
-    wl_data_source: { offers: string[] };
-    zwp_linux_buffer_params_v1: {
-        planes: {
-            fd: number;
-            plane_idx: number;
-            offset: number;
-            stride: number;
-            modifier_hi: number;
-            modifier_lo: number;
-        }[];
-    };
-    wp_viewport: {
-        surface: WaylandObjectId2<"wl_surface">;
-    };
-    wp_cursor_shape_device_v1: {
-        // 绑定的指针设备，目前只有wl_pointer
-        pointer: WaylandObjectId2<"wl_pointer">;
-    };
-};
 
 /** zwp_text_input_v3 的状态，双缓冲（pending -> commit -> current） */
 type TextInputV3State = {
