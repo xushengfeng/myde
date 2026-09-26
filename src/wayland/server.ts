@@ -3,15 +3,9 @@ const path = require("node:path") as typeof import("node:path");
 const { sharedTexture } = require("electron") as typeof import("electron");
 
 const usocket = require("myde-unix-socket") as typeof import("myde-unix-socket");
-import type { UServer, USocket } from "myde-unix-socket";
 
-import {
-    WaylandArgType,
-    type WaylandOp,
-    type WaylandName,
-    type WaylandObjectId,
-    type WaylandProtocol,
-} from "./utils/wayland-binary";
+import type { UServer, USocket } from "myde-unix-socket";
+import WaylandProtocolsJSON from "./protocols/protocols.json?raw";
 import {
     type WaylandEnumObj,
     type WaylandEventObj,
@@ -19,18 +13,27 @@ import {
     type WaylandInterfaces,
     type WaylandRequestObj,
 } from "./protocols/wayland-types";
+import {
+    WaylandArgType,
+    type WaylandName,
+    type WaylandObjectId,
+    type WaylandOp,
+    type WaylandProtocol,
+} from "./utils/wayland-binary";
 import { WaylandDecoder } from "./utils/wayland-decoder";
-import WaylandProtocolsJSON from "./protocols/protocols.json?raw";
+
 const WaylandProtocolsx = JSON.parse(WaylandProtocolsJSON) as Record<string, WaylandProtocol[]>;
 const WaylandProtocols = Object.fromEntries(Object.values(WaylandProtocolsx).flatMap((v) => v.map((p) => [p.name, p])));
-import { WaylandEncoder } from "./utils/wayland-encoder";
+
+import { buildXkb } from "myde-xcb";
 
 import { InputEventCodes } from "../input_codes/types";
-import { createFormatTableBuffer, DRM_FORMAT } from "./utils/dma-buf";
-import { getRectKeyPoint } from "./utils/xdg";
-import type { renderTools } from "./render_tools";
 import type { WaylandData, WaylandObjectId2, WaylandObjectId3 } from "./module";
-import { buildXkb } from "myde-xcb";
+import type { renderTools } from "./render_tools";
+import { CursorStore } from "./state/cursor_store";
+import { createFormatTableBuffer, DRM_FORMAT } from "./utils/dma-buf";
+import { WaylandEncoder } from "./utils/wayland-encoder";
+import { getRectKeyPoint } from "./utils/xdg";
 
 export { WaylandClient, WaylandServer };
 
@@ -225,13 +228,6 @@ function tryX<t>(f: () => t): [Error, null] | [null, t] {
     } catch (e) {
         return [e as Error, null];
     }
-}
-
-function snapshotCanvas(canvas: OffscreenCanvas): OffscreenCanvas {
-    // 画布可能被后续渲染复用/清空，复制一份供外部持有
-    const snapshot = new OffscreenCanvas(canvas.width, canvas.height);
-    snapshot.getContext("2d")?.drawImage(canvas, 0, 0);
-    return snapshot;
 }
 
 class wlSurfaceData {
@@ -565,12 +561,11 @@ class WaylandClient {
     private protoVersions: Map<string, number> = new Map();
     private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
     private nextObjectId: number = 0xff000000;
-    private render: renderTools;
+    /** 光标的唯一写入点（见 state/cursor_store.ts） */
+    private cursor: CursorStore;
     private obj2: Partial<{
         focusSurface: WaylandObjectId2<"wl_surface"> | null;
         focusSurfaceType: "main" | "popup" | null;
-        // 当前光标surface，null表示隐藏光标
-        cursorSurface: WaylandObjectId2<"wl_surface"> | null;
         textInputV1: {
             focus: WaylandObjectId | null;
             m: Map<WaylandObjectId2<"zwp_text_input_v1">, { focus: boolean; serial: number }>;
@@ -657,7 +652,7 @@ class WaylandClient {
             appid: undefined,
             xdg_wm_base: new Set(),
         };
-        this.render = render;
+        this.cursor = new CursorStore(render);
         this.wlSurface = new wlSurfaceData(render);
         this.dataManager = {
             wlSubSurface: new wlSubSurfaceData(this.wlSurface),
@@ -1043,10 +1038,7 @@ class WaylandClient {
                 this.wlSurface.renderWlSurface(surfaceId, fcanvas);
 
                 // 只有当前光标surface才推送光标，隐藏后commit不应重新显示
-                if (this.obj2.cursorSurface === surfaceId) {
-                    const hotspot = surface.data.cursorHotspot;
-                    this.render.setCursor(snapshotCanvas(fcanvas), hotspot?.x ?? 0, hotspot?.y ?? 0);
-                }
+                this.cursor.updateFrame(surfaceId, fcanvas);
             }
 
             requestAnimationFrame(() => {
@@ -1065,11 +1057,8 @@ class WaylandClient {
         });
         isOp("wl_surface.destroy", (x) => {
             const surfaceId = x.id;
-            if (this.obj2.cursorSurface === surfaceId) {
-                // 光标surface销毁后隐藏光标
-                this.obj2.cursorSurface = null;
-                this.render.setCursor(undefined, 0, 0);
-            }
+            // 光标surface销毁后隐藏光标
+            this.cursor.hide(surfaceId);
             this.wlSurface.destroyWlSurface(surfaceId);
             // todo 相关的如subsurface、xdgsurface等
         });
@@ -1139,11 +1128,11 @@ class WaylandClient {
             const surfaceId = x.args.surface;
             if (!surfaceId) {
                 // surface为null时隐藏光标
-                this.obj2.cursorSurface = null;
-                this.render.setCursor(undefined, 0, 0);
+                this.cursor.hide();
                 return;
             }
-            const s = this.getObject(surfaceId);
+            // 校验 surface 存在（无效 id 走 postError）
+            this.getObject(surfaceId);
             const [roleError] = tryX(() => {
                 this.wlSurface.setWlSurfaceRole(surfaceId, "cursor");
             });
@@ -1151,19 +1140,11 @@ class WaylandClient {
                 this.postError("wl_pointer", x.id, "role", "Surface already has another role");
                 return;
             }
-            this.obj2.cursorSurface = surfaceId;
-
-            // hotspot立即生效，之后的commit沿用
-            s.data.cursorHotspot = {
-                x: x.args.hotspot_x,
-                y: x.args.hotspot_y,
-            };
-
-            // surface已有内容时立即更新光标，不需要等下一次commit
-            const frame = this.wlSurface.getWlSurface(surfaceId).frame;
-            if (frame) {
-                this.render.setCursor(snapshotCanvas(frame), s.data.cursorHotspot.x, s.data.cursorHotspot.y);
-            }
+            this.cursor.setSurface(
+                surfaceId,
+                { x: x.args.hotspot_x, y: x.args.hotspot_y },
+                this.wlSurface.getWlSurface(surfaceId).frame,
+            );
         });
         isOp("wl_region.add", (x) => {
             const region = this.getObject(x.id);
@@ -1662,8 +1643,7 @@ class WaylandClient {
                 return;
             }
             // 语义光标替换之前的surface光标（与wl_pointer.set_cursor混用，后到者生效）
-            this.obj2.cursorSurface = null;
-            this.render.setCursor(shape, 0, 0);
+            this.cursor.setShape(shape);
         });
 
         isOp("zwp_text_input_manager_v1.create_text_input", (x) => {

@@ -9,14 +9,9 @@
  * 注意这里的 WaylandDataRegistry 是当前中央表的快照，Phase 3 起逐条移进
  * 各协议文件的 `declare module`，最终 module.ts 只留空壳。
  */
-import type {
-    WaylandEnumObj,
-    WaylandEventObj,
-    WaylandInterfaces,
-    WaylandRequestObj,
-} from "./protocols/wayland-types";
-import type { WaylandName, WaylandObjectId, WaylandOp, WaylandProtocol } from "./utils/wayland-binary";
+import type { WaylandEnumObj, WaylandEventObj, WaylandInterfaces, WaylandRequestObj } from "./protocols/wayland-types";
 import type { renderTools } from "./render_tools";
+import type { WaylandName, WaylandObjectId, WaylandOp, WaylandProtocol } from "./utils/wayland-binary";
 
 // ───────────────────────── 对象 id（品牌类型） ─────────────────────────
 // 从 server.ts 上移：这是纯类型，属于契约而非实现。
@@ -56,8 +51,6 @@ export interface WaylandDataRegistry {
         canvas: OffscreenCanvas;
         current: WaylandSurfaceData;
         pending: WaylandSurfaceData;
-        // wl_pointer.set_cursor 的 hotspot，非双缓冲状态，立即生效并被后续 commit 沿用
-        cursorHotspot?: { x: number; y: number };
     };
     wl_buffer:
         | { type: "shm"; fd: number; offset: number; stride: number; imageData: ImageData }
@@ -168,10 +161,7 @@ export interface ProtocolModule {
  * 装配期还会校验同一 `接口.请求` 被两个模块声明（现在 Map.set 会静默覆盖）。
  */
 export function defineModule(def: ProtocolModuleDef): ProtocolModule {
-    const entries = Object.entries(def.requests ?? {}) as [
-        RequestKey,
-        NonNullable<RequestHandlers[RequestKey]>,
-    ][];
+    const entries = Object.entries(def.requests ?? {}) as [RequestKey, NonNullable<RequestHandlers[RequestKey]>][];
     return {
         name: def.name,
         globals: def.globals ?? [],
