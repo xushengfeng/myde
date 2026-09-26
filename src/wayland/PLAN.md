@@ -1,8 +1,25 @@
 # server.ts 架构重构计划
 
-> 状态：草案（未实施）
+> 状态：**进行中** —— Phase 0 基本完成（仅剩 `gen:protocols` script），Phase 1 起未开始。进度见下方「进度速览」。
 > 前提：当前版本不稳定，**允许破坏性变更**，不做兼容层/废弃期，一步到位。
 > 目标：外部调用 API 更简洁，内部新增协议更方便。
+
+## 进度速览
+
+> 标记：✅ 已完成 ／ ⚠️ 部分 ／ ➖ 弃用或已调整 ／ ⬜ 未开始
+
+| 项 | 状态 | 出处 |
+|---|---|---|
+| typecheck 覆盖扩大到 `desktop/**`、`test/mock/**`、`script/**` 并修复暴露的 13 处问题 | ✅ | `832032d` |
+| 测试基建 4 处 bug（ASI 分号、stdout 丢弃、`waitExit` 竞态、按下标取值） | ✅ 计划外新增 | `d7767e9` |
+| `vitest.config.ts` `fileParallelism:false`（固定 socket 名 `my-wayland-server-0` 并行互删） | ✅ 计划外新增 | `d7767e9` |
+| `RemoteRender` 补 `setCursor` no-op（P8 实证） | ✅ | `832032d` |
+| 现有行为基线 → 实际交付为独立窗口生命周期 e2e | ✅ 交付形态已变 | `8eedf5f` |
+| `testRunnerApp` 暴露 `render`、`killTimeout` 10s→20s | ✅ 计划外新增 | `8eedf5f` |
+| 已知缺陷基线（`ack_configure` 未实现、serial 硬编码、错误处理缺失） | ⚠️ 已记录于 §1 P-系列与 commit，未单列文档 | — |
+| 修复 `check_proto_code` 扫目录 | ➖ 弃用：重构时才有用，或可能被替换（改为在 Phase 3 期间评估） | — |
+| `package.json` 加 `gen:protocols` script | ⬜ | — |
+| Phase 1 及以后 | ⬜ | — |
 
 ---
 
@@ -28,7 +45,7 @@
 | P8 | `renderTools` 19 方法 × 4 实现无同步保障 | `render_tools.d.ts:8-26` | 接口一改 4 处漂移，typecheck 抓不到 |
 | P9 | `emitSync("windowBound")` 同步阻塞拉取 | `:1444` | 时序脆弱，测试易死锁 |
 | P10 | ~~模块级副作用：import 即 `require("electron")`~~ **判定为不处理**：GPU 渲染/dmabuf 本就需要 electron 独特 API，且已有调起 electron 的测试（`test_runner`、`test/electron_app`），electron 依赖是合理前提 | `:3, :2686-2710` | 仅将公开入口收敛到 `index.ts`，**不做 electron 延迟初始化拆分** |
-| P11 | `check_proto_code/check.ts` 靠 grep `server.ts` 源码统计覆盖率 | `script/check_proto_code/check.ts:31-45` | 把"协议代码必须在 server.ts"固化，拆分即打破 |
+| P11 | ~~`check_proto_code/check.ts` 靠 grep `server.ts` 源码统计覆盖率~~ **已弃用**（重构时才有用，或可能被替换；Phase 3 拆分时必须改或删） | `script/check_proto_code/check.ts:31-45` | 拆分即失效 |
 | P12 | 无协议级测试脚手架，仅 2 条端到端链路 | `src/wayland/test/` | 重构无安全网 |
 
 ---
@@ -548,14 +565,16 @@ interface ImageKV {
 
 ### Phase 0 — 安全网与工具（纯工具 + 现有行为基线，**不新增任何协议实现**）
 
-- [ ] 修复 `check_proto_code/check.ts`（P11）：改为扫描 `protocols/**` 目录 + `module.ts` 的 handlers，而非 grep `server.ts`
-- [ ] `package.json` 增加 `gen:protocols` script；`typecheck` 覆盖 `desktop/**`、`test/mock/**`（修 P8）
-- [ ] **榨取现有 e2e 断言**（用已有的 `dmabuf_one_frame`，不写新客户端、不补协议）：`windowCreated` 恰好一次、`renderId` 非空、`set_title` 回传、`focus()` 后 `windowResized`/state 事件、`close()` 后 `windowClosed` + 服务端存活
-- [ ] **已知缺陷基线文档**：`ack_configure` 未实现、serial 硬编码 `1`/`:1069/:1449/:2085/:2135`、错误处理缺失 —— 记录为"重构期间**不得恶化**"的既存缺陷，测试**不断言其应有行为**
+- [x] ~~修复 `check_proto_code/check.ts`（P11）~~ **➡️ 弃用**：重构时才有用，且可能被整体替换；移出 Phase 0，改为 Phase 3 拆分期间再评估（届时必须改或删，否则脚本会因 `server.ts` 消失而失效）
+- [x] `typecheck` 覆盖 `desktop/**`、`test/mock/**`、`script/**`（修 P8）——**已完成** `832032d`，暴露并修复 13 处（含 `RemoteRender` 缺 `setCursor`、`test/mock` 三处 API 漂移）
+- [ ] `package.json` 增加 `gen:protocols` script
+- [x] **现有行为基线**——**已完成，交付形态变化**：原计划"榨取 `dmabuf_one_frame` 断言"，实际发现原有两个 e2e 全部失败，先修基建（`d7767e9`），再交付独立的 `src/wayland/test/window.test.ts`（`8eedf5f`），覆盖 `windowCreated` 恰好一次、`renderId`、预览绿色像素、`windowResized`、`windowMaximized`、cursor 形态、`windowClosed`——**超出原计划范围**
+- [x] **测试基建修复**（计划外）：ASI 分号缺失导致模板中止、runner 丢弃非 JSON stdout、`waitExit` 只监听 `exit` 的竞态、`dma-buf` 按下标取 `result[0]`；另加 `vitest.config.ts` 串行化（固定 socket 名并行互删）、`testRunnerApp` 暴露 `render`、`killTimeout` 10s→20s
+- [x] **已知缺陷基线**——**⚠️ 部分完成**：`ack_configure` 未实现、serial 硬编码 `1`（`:1069/:1449/:2085/:2135`）已记录在 §1 P 系列与 commit；错误处理缺失沿用 `src/wayland/readme.md:3`。未单列独立文档，测试也**未断言其应有行为**（`window.test.ts` 不碰 ack/serial）
 
 > 原则：Phase 0 只断言**现在已成立的行为**。需要新增协议才能测的场景，挪到对应阶段与改动同步写（见 §9）。
 
-验收：现有 3 个测试 + 新增断言全绿；`check_proto_code` 扫目录可用；typecheck 覆盖 4 个 Scene 实现
+验收：**已达** —— 全量 20 文件 / 200 测试全绿；typecheck 0 错误（394 文件）。剩余 `gen:protocols` script 未做。
 
 ### Phase 1 — 建接口与入口收敛（纯新增）
 - [ ] 新建 `module.ts`（CoreApi/Hooks/ModuleCtx/WaylandDataRegistry/ClientEvents/SceneCmd 类型）
@@ -611,9 +630,13 @@ interface ImageKV {
 - `src/renderer/view/desktop-test.ts`、`src/test_runner/test_runner.ts`
 - `src/wayland/test/*.test.ts`、`test/mock/*`（API 适配）
 - `desktop/{example,offical,remote}/src`（API 适配；remote 含 `RemoteRender`）
-- `script/check_proto_code/check.ts`（扫描目标）
-- `package.json`（`gen:protocols`、typecheck 范围）
+- ~~`script/check_proto_code/check.ts`（扫描目标）~~ **➡️ 已弃用**，Phase 3 拆分时改或删
+- `package.json`（`gen:protocols` script ⬜ 未做；typecheck 范围 ✅ 已完成）
 - `desktop/readme.md`、`src/wayland/readme.md`、`AGENTS.md`
+- `src/test_runner/test_runner.ts`（✅ 已改：暴露 `render`、`killTimeout` 20s、4 处 bug 修复）
+- `src/main/main.ts`（✅ 已改：测试数据同步写 fd、kill 延迟退出）
+- `vitest.config.ts`（✅ 新增：`fileParallelism:false`，待 socket 名改为实例唯一后可移除）
+- `src/wayland/test/window.test.ts`（✅ 新增：窗口生命周期 e2e）
 
 **新增**：`module.ts`、`index.ts`、`host/*`、`state/*`、`protocols/**`、`state` 单测、1 条 xdg e2e
 
@@ -623,28 +646,29 @@ interface ImageKV {
 
 ## 9. 测试策略
 
-| 层 | 手段 | 阶段 |
-|---|---|---|
-| 编解码 | 现有 `utils/wayland-codec.test.ts` | 已有 |
-| **现有行为基线** | 榨取 `dmabuf_one_frame`：窗口事件序列、focus/close、服务端存活 | Phase 0 |
-| 协议模块单测 | fake `ModuleCtx`（stub CoreApi + fake scene）直接调 handler | Phase 1 后 |
-| 端到端（按改动同步补） | 见下表 | 与改动同阶段 |
-| 静态覆盖 | `check_proto_code` 改扫目录 | Phase 0 |
-| 接口漂移 | typecheck 覆盖 4 个 Scene 实现 | Phase 0 |
+| 层 | 手段 | 阶段 | 状态 |
+|---|---|---|---|
+| 编解码 | 现有 `utils/wayland-codec.test.ts` | 已有 | ✅ |
+| 现有行为基线 | `src/wayland/test/window.test.ts`：窗口创建/预览像素/resize/maximize/cursor/关闭 | Phase 0 | ✅ `8eedf5f` |
+| 基建 | e2e runner 4 处 bug + `fileParallelism:false` | Phase 0 | ✅ `d7767e9` |
+| 协议模块单测 | fake `ModuleCtx`（stub CoreApi + fake scene）直接调 handler | Phase 1 后 | ⬜ |
+| 端到端（按改动同步补） | 见下表 | 与改动同阶段 | ⬜ |
+| 静态覆盖 | ~~`check_proto_code` 改扫目录~~ | ➖ 弃用 | ➖ |
+| 接口漂移 | typecheck 覆盖全部 Scene 实现（实为 `src/**+desktop/**+test/**+script/**` 394 文件） | Phase 0 | ✅ `832032d` |
 
 **测试与阶段的对应**（新增协议才能测的，不在 Phase 0 做）：
 
-| 测试 | 前置改动 | 阶段 |
-|---|---|---|
-| cursor（图像/枚举/hide 三态） | CursorStore + `cursor.changed` 事件 | Phase 2 同步 |
-| clipboard copy/paste | clipboard 域事件 | Phase 2 同步 |
-| subsurface 父子/销毁级联 | core 拆分 + `:1147` todo 修复 | Phase 3 同步 |
-| shm buffer 路径 | core surface 拆分 | Phase 3 同步 |
-| viewporter 合成 | 模块迁移 + `onCommit` 钩子 | Phase 4 同步 |
-| **xdg 生命周期 + `ack_configure` 实现 + serial 计数** | configure 握手重写（本就属该阶段范围） | **Phase 5 同步** |
-| role 冲突等错误路径 | 错误处理实现 | 随实现补 |
+| 测试 | 前置改动 | 阶段 | 状态 |
+|---|---|---|---|
+| cursor `image`/`hidden` 分支 | CursorStore + `cursor.changed` 事件（**`shape` 分支已由 `window.test.ts` 覆盖**，走的是现 `render.on`） | Phase 2 同步 | ⬜ |
+| clipboard copy/paste | clipboard 域事件 | Phase 2 同步 | ⬜ |
+| subsurface 父子/销毁级联 | core 拆分 + `:1147` todo 修复 | Phase 3 同步 | ⬜ |
+| shm buffer 路径 | core surface 拆分 | Phase 3 同步 | ⬜ |
+| viewporter 合成 | 模块迁移 + `onCommit` 钩子 | Phase 4 同步 | ⬜ |
+| **xdg configure 序列 + `ack_configure` 实现 + serial 计数** | configure 握手重写（本就属该阶段范围）。**注**：`window.test.ts` 已覆盖窗口生命周期，此处只补 ack/serial 序列断言，两者不重复 | **Phase 5 同步** | ⬜ |
+| role 冲突等错误路径 | 错误处理实现 | 随实现补 | ⬜ |
 
-**关键前置**：Phase 0 的基线必须先绿，否则 Phase 3-5 无回归依据（现有断言仅 pixel/按键两条，不碰 configure/geometry）。
+**前置已满足**：Phase 0 基线（`window.test.ts` + 修复后的两个 e2e）已全绿，Phase 3-5 具备回归依据。
 
 ---
 
@@ -655,7 +679,9 @@ interface ImageKV {
 | `commit` 钩子化改变时序（`:1066/:1095`） | 高 | Phase 5 单独进行；逐行对齐语义；先写 e2e 断言 configure 序列 |
 | 事件分域破坏 4 个桌面实现 + mock | 中 | Phase 2 一次性改完，不留兼容别名（前提：不稳定，允许破坏） |
 | 拆分期间双改冲突（生成物/类型路径） | 中 | Phase 1 先落接口，Phase 3 起才动文件布局；生成物路径不变 |
-| 测试安全网薄 | 高 | Phase 0 只建**现有行为基线**（工具 + 榨取既有 e2e 断言），不新增协议；协议类测试与对应改动**同阶段落地**，否则不进下一阶段 |
+| ~~测试安全网薄~~ | 已消除 | ✅ Phase 0 已交付：`window.test.ts` + 修复后的两个 e2e（全量 20 文件 / 200 测试全绿）；协议类测试仍与对应改动**同阶段落地**，否则不进下一阶段 |
+| 固定 wayland socket 名 `my-wayland-server-0` 令测试无法并行 | 中 | 现以 `vitest.config.ts` `fileParallelism:false` 兜底（代价：全量串行变慢）；根治需把 socket 名改为实例唯一——**服务端行为变更，待确认** |
+| `check_proto_code` 在 `server.ts` 拆分后失效 | 中 | 已弃用（P11）；Phase 3 拆分时必须改或删，否则 CI 报假错 |
 | `emitSync` 移除导致窗口初始尺寸回归 | 中 | `surfaceBounds.request` 保留同步应答语义（EventEmitter `request` 支持），仅换 API 形态 |
 | `SceneCmd`/`ImageKV` 切分遗漏隐式依赖 | 中 | 先迁 cursor（图像 + 语义两分支都要过）作为样板，验证通道完备性 |
 | ~~dmabuf/共享纹理依赖 electron 渲染环境~~ | 低 | **不拆分**：electron 是既定运行环境（GPU/dmabuf 需要，且已有 electron 测试），保持现状 |
@@ -668,7 +694,7 @@ interface ImageKV {
 2. `protocols/**` 文件间无相互 import（链式依赖除外）；新增协议只写 1 个文件 + 白名单 1 行
 3. 桌面侧 API：事件/查询/控制都在 **server 级**（全局 `WinHandle`，payload 自包含、无 `renderId` 二元组、无反查）、无 `onSync`；桌面不再需要 `for (client of server.clients)` 遍历与 `createWindowId` 拼接
 4. cursor 状态单写入点，`obj2` 巨型袋消失
-5. `typecheck` 覆盖全部 4 个 Scene 实现；覆盖率脚本扫描目录
+5. typecheck 全绿且覆盖 `src/**`、`desktop/*/src/**`、`test/**`、`script/**`（~~覆盖率脚本扫描~~ 已随 P11 弃用）
 6. 全部 e2e + 单测通过；`desktop/readme.md` 与 `AGENTS.md` 更新
 
 ---
