@@ -1,5 +1,5 @@
 import { buildXkb } from "myde-xcb";
-import { defineModule } from "../../module";
+import { defineModule, type WaylandObjectId2 } from "../../module";
 import { newFd } from "../../utils/fd";
 import { getEnumValue } from "../../utils/wayland-proto";
 
@@ -10,6 +10,20 @@ import { getEnumValue } from "../../utils/wayland-proto";
  */
 export const seatModule = defineModule({
     name: "wl_seat",
+    globals: [
+        {
+            name: "wl_seat",
+            version: 1,
+            onBind: (msg, ctx) => {
+                const id = msg.id as WaylandObjectId2<"wl_seat">;
+                ctx.state.seat.addSeat(id);
+                ctx.send(id, "wl_seat.name", { name: "seat0" });
+                ctx.send(id, "wl_seat.capabilities", {
+                    capabilities: getEnumValue("wl_seat.capability", ["pointer", "keyboard"]),
+                });
+            },
+        },
+    ],
     requests: {
         "wl_seat.get_pointer": (x, ctx) => {
             const pointerId = x.args.id;

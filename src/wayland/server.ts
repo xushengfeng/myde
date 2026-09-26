@@ -487,6 +487,9 @@ class xdgSurfaceData {
     }
 }
 
+/** 接口名 → 该模块声明的 global（绑定时初始化），由 protocolModules 聚合 */
+const globalsByInterface = new Map(protocolModules.flatMap((m) => m.globals.map((g) => [g.name, g] as const)));
+
 class WaylandClient {
     logConfig = {
         receive: true,
@@ -703,6 +706,8 @@ class WaylandClient {
                         (function* () {
                             for (const [name, protocol] of waylandProtocolsNameMap) yield { name, protocol };
                         })(),
+                    byName: (name) => waylandProtocolsNameMap.get(name),
+                    globalOf: (iface) => globalsByInterface.get(iface),
                 },
                 buffer: { get: (id) => this.getObjectOption(id)?.data },
                 seat: { focus: () => this.seat.focus(), nextSerial: () => this.seat.nextSerial() },
@@ -748,65 +753,6 @@ class WaylandClient {
             // @ts-expect-error
             m.set(op, f);
         }
-        isOp("wl_registry.bind", (x) => {
-            const name = x.args.name as WaylandName;
-            const _id = x.args.id;
-            const proto = waylandProtocolsNameMap.get(name);
-            if (!proto) {
-                console.warn(`Unknown global name: ${name}`);
-                return;
-            }
-            this.objects.set(_id, { protocol: proto, data: undefined });
-            this.protoVersions.set(proto.name, x.args._version);
-            console.log(`Client ${this.id} bound ${proto.name} to id ${_id}`);
-
-            // todo 添加自定义
-
-            if (proto.name === "wl_shm") {
-                const id = _id as WaylandObjectId2<"wl_shm">;
-                this.sendMessageX(id, "wl_shm.format", {
-                    format: getEnumValue("wl_shm.format", "argb8888"),
-                });
-                this.sendMessageX(id, "wl_shm.format", {
-                    format: getEnumValue("wl_shm.format", "xrgb8888"),
-                });
-            }
-            if (proto.name === "wl_seat") {
-                const id = _id as WaylandObjectId2<"wl_seat">;
-                this.seat.addSeat(id);
-                this.sendMessageX(id, "wl_seat.name", { name: "seat0" });
-                this.sendMessageX(id, "wl_seat.capabilities", {
-                    capabilities: getEnumValue("wl_seat.capability", ["pointer", "keyboard"]),
-                });
-            }
-            if (proto.name === "wl_output") {
-                const id = _id as WaylandObjectId2<"wl_output">;
-                this.sendMessageX(id, "wl_output.name", { name: "output0" });
-                this.sendMessageX(id, "wl_output.description", { description: "Output 0" });
-                this.sendMessageX(id, "wl_output.mode", {
-                    width: 1920,
-                    height: 1080,
-                    refresh: 60000,
-                    flags: getEnumValue("wl_output.mode", "current"),
-                });
-                this.sendMessageX(id, "wl_output.geometry", {
-                    x: 0,
-                    y: 0,
-                    physical_width: 344,
-                    physical_height: 194,
-                    make: "",
-                    model: "",
-                    subpixel: getEnumValue("wl_output.subpixel", "unknown"),
-                    transform: getEnumValue("wl_output.transform", "normal"),
-                });
-                this.sendMessageX(id, "wl_output.done", {});
-            }
-            if (proto.name === "xdg_wm_base") {
-                const id = _id as WaylandObjectId2<"xdg_wm_base">;
-                this.obj2.xdg_wm_base.add(id);
-                this.getObject(id).data = { pingSerials: new Map() };
-            }
-        });
 
         // 客户端想要从 compositor 接收数据（粘贴）
 

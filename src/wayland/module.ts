@@ -290,8 +290,12 @@ export interface XdgSurfaceApi {
 }
 
 export interface RegistryApi {
-    /** 当前所有 global，供 wl_display.get_registry 广播（现 waylandProtocolsNameMap，server.ts:835-842） */
+    /** 当前所有 global，供 wl_display.get_registry 广播 */
     globals(): Iterable<{ name: WaylandName; protocol: WaylandProtocol }>;
+    /** 按全局 name（数字）查协议 */
+    byName(name: WaylandName): WaylandProtocol | undefined;
+    /** 按接口名查该模块声明的 global（绑定时初始化用，替代原 if 链） */
+    globalOf(interfaceName: string): ModuleGlobal | undefined;
 }
 
 export interface BufferApi {

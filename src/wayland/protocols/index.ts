@@ -2,8 +2,10 @@ import type { ProtocolModule } from "../module";
 import { compositorModule } from "./core/compositor";
 import { dataDeviceModule } from "./core/data_device";
 import { displayModule } from "./core/display";
+import { outputModule } from "./core/output";
 import { pointerModule } from "./core/pointer";
 import { regionModule } from "./core/region";
+import { registryModule } from "./core/registry";
 import { seatModule } from "./core/seat";
 import { shmModule } from "./core/shm";
 import { subsurfaceModule } from "./core/subsurface";
@@ -23,6 +25,8 @@ export const protocolModules: readonly ProtocolModule[] = [
     surfaceModule,
     seatModule,
     pointerModule,
+    registryModule,
+    outputModule,
     subsurfaceModule,
     dataDeviceModule,
 ];

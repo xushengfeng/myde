@@ -1,4 +1,5 @@
-import { defineModule } from "../../module";
+import { defineModule, type WaylandObjectId2 } from "../../module";
+import { getEnumValue } from "../../utils/wayland-proto";
 
 /**
  * wl_shm
@@ -7,6 +8,17 @@ import { defineModule } from "../../module";
  */
 export const shmModule = defineModule({
     name: "wl_shm",
+    globals: [
+        {
+            name: "wl_shm",
+            version: 1,
+            onBind: (msg, ctx) => {
+                const id = msg.id as WaylandObjectId2<"wl_shm">;
+                ctx.send(id, "wl_shm.format", { format: getEnumValue("wl_shm.format", "argb8888") });
+                ctx.send(id, "wl_shm.format", { format: getEnumValue("wl_shm.format", "xrgb8888") });
+            },
+        },
+    ],
     requests: {
         "wl_shm.create_pool": (x, ctx) => {
             const fd = x.args.fd;
