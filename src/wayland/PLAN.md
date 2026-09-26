@@ -1,6 +1,6 @@
 # server.ts 架构重构计划
 
-> 状态：**进行中** —— Phase 0 基本完成（仅剩 `gen:protocols` script），Phase 1 ✅，**Phase 2 基本完成**（三个 Store 已落地，text-input 仲裁推迟到 Phase 3-5）。下一步 Phase 3（拆 core 模块）。**场景层重构搁置**、**server 打平在 Phase 6**、**remote 只保证 typecheck**。进度见下方「进度速览」。
+> 状态：**进行中** —— Phase 0 ✅（仅剩 `gen:protocols` script）、Phase 1 ✅、Phase 2 ✅（text-input 仲裁推迟至 3-5）、**Phase 3 管道与 region 样板 ✅，其余 core 模块迁移未做**。**场景层重构搁置**、**server 打平在 Phase 6**、**remote 只保证 typecheck**。进度见「进度速览」。
 > 前提：当前版本不稳定，**允许破坏性变更**，不做兼容层/废弃期，一步到位。
 > 目标：外部调用 API 更简洁，内部新增协议更方便。
 
@@ -26,7 +26,10 @@
 | **remote 桌面测试策略** | ➖ 不做行为测试，仅保证 typecheck 覆盖其全部实现 | 决定于本次 |
 | Phase 2 · 三个 Store 抽取（对外形状不变） | ✅ `2f61a24` `4f4f114` `d7cbf2a` | — |
 | Phase 2 · text-input v1/v3 仲裁归属 | ⬜ ➡️ 推迟到 Phase 3-5（模块边界 + 零覆盖） | — |
-| Phase 3 及以后 | ⬜ | — |
+| Phase 3 · 管道（ModuleCtx 实现、模块注册、分发合并、冲突校验） | ✅ | `5f8e548` |
+| Phase 3 · region 样板（含状态声明合并） | ✅ | `5f8e548` `2371bf1` |
+| Phase 3 · 其余 core 模块迁移 | ⬜ | — |
+| Phase 4 及以后 | ⬜ | — |
 
 ---
 
@@ -621,10 +624,21 @@ interface ImageKV {
 2. `set_title` 是**先发事件后改记录**，保持原样未"顺手修正"
 
 ### Phase 3 — 拆 core 模块（内部，不改外 API）
-- [ ] `protocols/core/{display,registry,shm,compositor,region}.ts` 迁出（handler `:828-1000` 附近）
-- [ ] `host/client.ts` 保留 ID 表/分发；`host/registry.ts` 替代 bind if 链（P5）
-- [ ] `WaylandData` 中央表改为声明合并（P3）
-- 验收：行为不变，覆盖率检查脚本通过
+
+**管道（已就绪，后续迁移只做「搬 handler + `this`→`ctx`」）**：
+- [x] `ModuleCtx` 真实实现：`buildCtx()` 接上对象表 / 事件通道 / `CoreApi` / scene —— `5f8e548`
+- [x] `protocols/index.ts` 模块清单 + `assertModuleConflicts()` 请求键冲突校验（原 `Map.set` 静默覆盖）—— `5f8e548`
+- [x] 分发合并：模块 handler 并进 `newOp()` 的同一张表，与 `isOp` 共用 `m.get()` 路径 —— `5f8e548`
+- [x] **样板** `protocols/core/region.ts`：3 个 handler 迁出 + 状态类型走 `declare module`（中央表条目删除后仍编译）—— `5f8e548` `2371bf1`
+- [x] 样板配套：`RequestMsg` 的 id 按 `"接口.请求"` 推品牌（handler 无需 cast）、`postError` 用 `ErrorCode<I>` 去掉 `@ts-expect-error`
+
+**剩余迁移**：
+- [ ] 其余 core handler 迁出（`display`/`registry`/`shm`/`shm_pool`/`compositor`/`seat`/`pointer`/`keyboard`/`output`/`data_device`…）
+- [ ] `host/registry.ts` 替代 `wl_registry.bind` 的字符串 if 链（P5），各模块用 `globals[].onBind` 声明绑定时初始化
+- [ ] `host/client.ts`：`WaylandClient` 从 `server.ts` 拆出（机械移动，建议放在迁移完成后一次性做）
+- [ ] 每迁一个模块补 fake-ctx 单测（仿 `region.test.ts`）
+
+验收：行为不变、typecheck 0、全量测试绿、`git diff desktop/` 为空；~~覆盖率脚本~~ 已随 P11 弃用
 
 ### Phase 4 — 拆低耦合扩展（样板）
 - [ ] `viewporter.ts`（现 `:1642-1724`，仅依赖 `wl_surface`）
