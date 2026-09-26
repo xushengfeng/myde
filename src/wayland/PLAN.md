@@ -1,6 +1,6 @@
 # server.ts 架构重构计划
 
-> 状态：**进行中** —— Phase 0 基本完成（仅剩 `gen:protocols` script），**Phase 1 已完成**（`index.ts` 入口收敛 + `module.ts`/`scene/types.ts` 契约）。下一步 Phase 2。进度见下方「进度速览」。
+> 状态：**进行中** —— Phase 0 基本完成（仅剩 `gen:protocols` script），**Phase 1 已完成**。下一步 Phase 2（Store 抽取，对外不变）。**场景层重构搁置**、**server 打平后移至 Phase 6**、**remote 只保证 typecheck**。进度见下方「进度速览」。
 > 前提：当前版本不稳定，**允许破坏性变更**，不做兼容层/废弃期，一步到位。
 > 目标：外部调用 API 更简洁，内部新增协议更方便。
 
@@ -21,6 +21,9 @@
 | `package.json` 加 `gen:protocols` script | ⬜ | — |
 | Phase 1 · `index.ts` 入口收敛 | ✅ | `0c19daa` |
 | Phase 1 · `module.ts` / `scene/types.ts` 契约 | ✅ | `c8ccf43` |
+| **场景层重构（§6）** | ⏸ **搁置**：SceneSink 形态与 `renderToolsOn` 去留待再设计，`renderTools` 保持不变 | 决定于本次 |
+| **server 级打平** | ➡️ **移到最后**（原 Phase 2 → 现 Phase 6），桌面只迁一次 | 决定于本次 |
+| **remote 桌面测试策略** | ➖ 不做行为测试，仅保证 typecheck 覆盖其全部实现 | 决定于本次 |
 | Phase 2 及以后 | ⬜ | — |
 
 ---
@@ -490,6 +493,13 @@ export type { WaylandServer, ServerEvents, WindowInfo, WinHandle, CursorState, .
 
 ## 6. 场景层：surfaceId 寻址的融合 API + 图片 KV（P6/P8）
 
+> ### ⏸ 本节整体搁置（暂不实施）
+> 需要先定两件事，**当前 `renderTools` / `renderToolsOn` / `SceneCmd` 保持不变**：
+> 1. `SceneSink` 形态——方法式（`renderTools` 瘦身，改动小、remote 只删 `setCursor`）还是命令式（`apply(SceneCmd)` 单方法，接口最窄但 `remote-render.ts` 362 行要重写）
+> 2. `renderToolsOn` 三条中继的去留——实测 `setCursor`（`:136-138`）、`asToplevel`（`:107-114`）、`destroyXdgSurfaceEle(toplevel)`（`:83-92`）**都不碰 DOM，纯事件中继**，且与已有的 `windowCreated/windowClosed` 重复，属语义事件而非渲染
+>
+> `scene/types.ts` 的 `SceneCmd`/`ImageKV` 已作为契约落地（Phase 1 `c8ccf43`），但**尚无实现方使用**。
+
 > 设计约束（明确记录）：
 > - `renderTools` 存在的目的是**远程**——操作与像素都要能序列化发送。
 > - **client API 不与 DOM/canvas 实现融合**：融合的是**寻址方式（surfaceId）**，不是实现。DOM 细节一旦进入 client API 就无法远程。
@@ -550,8 +560,9 @@ interface ImageKV {
 | 轨道 | 内容 | 阶段 | 独立价值（只做这条也有意义） |
 |---|---|---|---|
 | **T1 内部**：协议模块化 | 拆 `server.ts`、CoreApi/Hooks、模块声明 | 3-5 | 新协议 1 个文件；不做则外部 API 再干净，底层仍是 god file |
-| **T2 外部**：client API | **server 级打平**（事件/查询/控制上提 + 全局 WinHandle）、事件分域、Control 门面、SceneCmd/渲染契约 | 2, 6 | 桌面调用简洁、11 处遍历消失；不做则新协议再多，对外仍难用 |
-| **共享**：前提 | 安全网、接口与入口、**状态 Store 抽取** | 0, 1, 2a | 两轨都依赖 |
+| **T2 外部**：client API | **server 级打平**（事件/查询/控制上提 + 全局 WinHandle）、事件分域、Control 门面 | **6**（最后） | 桌面调用简洁、11 处遍历消失；不做则新协议再多，对外仍难用 |
+| **共享**：前提 | 安全网、接口与入口、**状态 Store 抽取** | 0, 1, 2 | 两轨都依赖 |
+| ⏸ 场景层 | SceneSink 形态、`renderToolsOn` 去留 | 搁置 | 见 §6 |
 
 **共享接缝（必须先落，否则两轨互相牵制）**：`WindowsStore`/`CursorStore`/`SeatStore` 从 `obj2`（`:642-684`）抽出。它是 T1 handler 摆脱 `this` 的前提，也是 T2 事件的数据源。缺了它，handler 搬出 `WaylandClient` 时会连带 `this.emit(...)`/`this.obj2` 一起搬走——等于迁两次。
 
@@ -560,10 +571,15 @@ interface ImageKV {
 2. `emitSync("windowBound")`（`:1444`）跨轨：T2 换 request/respond，T1 的 xdg_shell 调用点跟着改
 3. `renderTools` 契约（删 `setCursor`/`on()`）既是外部 API 又是协议写入点 → 归 T2，以 cursor 作交汇样板
 
-**推荐顺序**：`0 → 1 → 2a(Store) → 2b(外部 API) → 3 → 4 → 5`
-先改外部的理由：桌面侧（`desktop×3` + `desktop-test` + `test_runner` + `test/mock`）**一次性迁完**，此后内部拆分对桌面零影响；反之先拆内部，`emit` 点会随 handler 被移动两次。
+**推荐顺序**：`0 → 1 → 2(Store，对外不变) → 3 → 4 → 5 → 6(对外打平) → 7`
 
-**并行注意**：两轨都重度编辑 `server.ts`（T2 改 handler 内的 emit 行，T1 搬 handler），**不宜真正并行**；但可各自独立 commit/revert。
+两边**各只动一次**：
+- **handler 只动一次**——Phase 2 把 handler 内的 `this.emit(...)` 换成写 Store（内部形态），Phase 3-5 搬 handler 时搬的是「写 Store」这个稳定调用，Phase 6 只改 Store 的**出口**，handler 不再动
+- **桌面只迁一次**——Phase 2 对外事件名与形状保持不变，Phase 2-5 全程 `git diff desktop/` 为空；所有外部调用方式的变更集中在 Phase 6
+
+代价：外部 API 的收益要等到最后才兑现（原先设想先改外部）。换来的是 Phase 3-5 那段最高风险的内部拆分期间，桌面侧完全静止，回归面只有 e2e。
+
+**并行注意**：两轨都重度编辑 `server.ts`（Phase 2 与 Phase 3 都会碰 handler），**不宜真正并行**；但可各自独立 commit/revert。
 
 ### Phase 0 — 安全网与工具（纯工具 + 现有行为基线，**不新增任何协议实现**）
 
@@ -589,14 +605,13 @@ interface ImageKV {
 
 验收：**已达** —— typecheck 0 错误、20 文件 / 200 测试全绿，行为不变。
 
-### Phase 2 — 语义状态 Store + server 级打平（改外部 API，破坏性）
-- [ ] `state/cursor_store.ts`：收敛 4 处 `render.setCursor`（`:1121/:1144/:1216/:1238/:1739`）与 `onCursorUpdata`（P4/P6）
-- [ ] `state/windows_store.ts`：`obj2.windows` 上收，事件分域 + `WindowInfo`（P7）
+### Phase 2 — 语义状态 Store（**内部整理，不改对外事件形状**）
+- [ ] `state/cursor_store.ts`：收敛 4 处 `render.setCursor`（`:1121/:1144/:1216/:1238/:1739`）——对外仍由现有 `render.on({onCursorUpdata})` 送达
+- [ ] `state/windows_store.ts`：`obj2.windows` 上收；handler 改为写 Store，**对外仍按现名发 `windowCreated/windowResized/…`**（Store 出口先用薄适配层）
 - [ ] `state/seat_store.ts`：焦点/serial/textInput 仲裁（`:2436-2490`）
-- [ ] **全局窗口身份**：`WinHandle` 单调递增、`handle → (client, winId)` 反查表（对象 id 是客户端本地的，实测会撞）
-- [ ] **server 级 fan-in**：server 订阅各 client 事件并转发；client 断开时统一关闭其全部窗口（§5.1）
-- [ ] 按 §5 改造对外事件/查询/Control；更新 `desktop/readme.md`、`desktop/{example,offical,remote}`、`desktop-test.ts`、`test_runner`、`test/mock`（11 处 `for (client of server.clients)` 消失）
-- 验收：e2e 全绿；`RemoteRender` 不再需要 `setCursor`；桌面侧编译通过；桌面代码不再需要自己拼 `createWindowId`
+- [ ] handler 内的 `this.emit(...)`（`:1459/:1465/:1548/:1552/:1559/:1562/:1573/:1296/:1354`）改为写 Store
+- **约束**：本阶段**不动** `desktop/*`、`desktop-test`、`test/mock` 的调用方式——外部 API 变更全部集中到 Phase 6，桌面只迁一次
+- 验收：e2e 全绿、typecheck 全绿、**桌面侧零改动**（`git diff desktop/` 为空）
 
 ### Phase 3 — 拆 core 模块（内部，不改外 API）
 - [ ] `protocols/core/{display,registry,shm,compositor,region}.ts` 迁出（handler `:828-1000` 附近）
@@ -621,7 +636,17 @@ interface ImageKV {
 - [ ] `server.ts` 最终删除或退化为 re-export shim（**建议直接删除**，强制所有调用方走 `index.ts`）
 - 验收：`server.ts` 不存在或 <100 行；`protocols/**` 互相无 import（除 xdg-decoration 类链式依赖）；全部测试通过
 
-### Phase 6 — 文档与收尾
+### Phase 6 — 对外 API 打平与重塑（破坏性，**放在最后**）
+> 原本属于 Phase 2，现后移：内部整理（Phase 2-5）全部不碰外部调用方式，桌面**只在这一阶段迁一次**。
+
+- [ ] **全局窗口身份**：`WinHandle` 单调递增、`handle → (client, winId)` 反查表（对象 id 是客户端本地的，实测会撞）
+- [ ] **server 级 fan-in**：server 订阅各 client 事件转发；client 断开时统一关闭其全部窗口（§5.1）
+- [ ] 按 §5 改造对外事件/查询/Control（`ServerEvents`、`WindowInfo`、`CursorState` 在此落地）
+- [ ] 更新 `desktop/readme.md`、`desktop/{example,offical,remote}`、`desktop-test.ts`、`test_runner`、`test/mock`（11 处 `for (client of server.clients)` 消失，`createWindowId` 拼接消失）
+- [ ] 若届时 §6 场景层已解封：一并处理 `renderToolsOn` 三条中继的去留
+- 验收：e2e 全绿；桌面代码不再自己拼 `createWindowId`；`git diff desktop/` 本阶段有意变更且 typecheck 覆盖其全部实现
+
+### Phase 7 — 文档与收尾
 - [ ] `src/wayland/readme.md` 增加"新增协议指南"（§4.5 清单）
 - [ ] `desktop/readme.md:371-418` 按 §5 更新
 - [ ] AGENTS.md 的"新增 wayland 协议"流程更新
@@ -663,6 +688,8 @@ interface ImageKV {
 | 静态覆盖 | ~~`check_proto_code` 改扫目录~~ | ➖ 弃用 | ➖ |
 | 接口漂移 | typecheck 覆盖全部 Scene 实现（实为 `src/**+desktop/**+test/**+script/**` 394 文件） | Phase 0 | ✅ `832032d` |
 
+> **remote 桌面（`desktop/remote`）不做行为测试**：网络链路难以在 e2e 里复现，验收标准降为**类型不报错**——由 typecheck 覆盖其全部实现保证（`RemoteRender implements renderTools`）。凡改动 `renderTools`/场景契约，只需 `pnpm typecheck` 绿即可，不写 remote 行为测试。
+
 **测试与阶段的对应**（新增协议才能测的，不在 Phase 0 做）：
 
 | 测试 | 前置改动 | 阶段 | 状态 |
@@ -690,7 +717,8 @@ interface ImageKV {
 | 固定 wayland socket 名 `my-wayland-server-0` 令测试无法并行 | 中 | 现以 `vitest.config.ts` `fileParallelism:false` 兜底（代价：全量串行变慢）；根治需把 socket 名改为实例唯一——**服务端行为变更，待确认** |
 | `check_proto_code` 在 `server.ts` 拆分后失效 | 中 | 已弃用（P11）；Phase 3 拆分时必须改或删，否则 CI 报假错 |
 | `emitSync` 移除导致窗口初始尺寸回归 | 中 | `surfaceBounds.request` 保留同步应答语义（EventEmitter `request` 支持），仅换 API 形态 |
-| `SceneCmd`/`ImageKV` 切分遗漏隐式依赖 | 中 | 先迁 cursor（图像 + 语义两分支都要过）作为样板，验证通道完备性 |
+| ~~`SceneCmd`/`ImageKV` 切分遗漏隐式依赖~~ | — | ⏸ 场景层已整体搁置（§6），该风险随之后延；恢复时先以 cursor 作交汇样板 |
+| remote 桌面行为回归不可测 | 低 | 已接受：仅以 typecheck 覆盖其全部实现作为验收，不写行为测试 |
 | ~~dmabuf/共享纹理依赖 electron 渲染环境~~ | 低 | **不拆分**：electron 是既定运行环境（GPU/dmabuf 需要，且已有 electron 测试），保持现状 |
 
 ---
