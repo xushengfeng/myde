@@ -1,4 +1,10 @@
-import { defineModule, type TextInputV3Data } from "../../module";
+import {
+    defineModule,
+    type ClientState,
+    type ModuleCtx,
+    type SurfaceId,
+    type TextInputV3Data,
+} from "../../module";
 import { newTextInputV3State } from "../../utils/text_input";
 import { getEnumName } from "../../utils/wayland-proto";
 
@@ -9,8 +15,42 @@ import { getEnumName } from "../../utils/wayland-proto";
  *
  * 由 server.ts 的 newOp() 迁出；handler 只认 ctx，不接触 WaylandClient。
  */
+/** 键盘焦点跟随：enter 发给所有 text_input 对象（协议要求），leave 后状态失效 */
+function v3Focus(ti: ClientState["textInputV3"], surface: SurfaceId, ctx: ModuleCtx): void {
+    if (ti.focus === surface) return;
+    if (ti.focus !== null) v3Blur(ti, ti.focus, ctx);
+    ti.focus = surface;
+    for (const [id, t] of ti.m) {
+        t.entered = true;
+        ctx.sendNow(id, "zwp_text_input_v3.enter", { surface });
+    }
+}
+
+function v3Blur(ti: ClientState["textInputV3"], surface: SurfaceId, ctx: ModuleCtx): void {
+    if (ti.focus !== surface) return;
+    for (const [id, t] of ti.m) {
+        if (!t.entered) continue;
+        t.entered = false;
+        ctx.sendNow(id, "zwp_text_input_v3.leave", { surface });
+        t.current = newTextInputV3State();
+        t.pending = newTextInputV3State();
+    }
+    ti.focus = null;
+}
+
 export const textInputV3Module = defineModule({
     name: "text-input-unstable-v3",
+    hooks: {
+        /** 键盘焦点变化由 core 触发；v3 的 enter/leave 跟随键盘焦点（v1 不跟） */
+        onFocus: (surfaceId, ctx) => {
+            const ti = ctx.client.state.textInputV3;
+            if (surfaceId === undefined) {
+                if (ti.focus !== null) v3Blur(ti, ti.focus, ctx);
+                return;
+            }
+            v3Focus(ti, surfaceId, ctx);
+        },
+    },
     requests: {
         "zwp_text_input_manager_v3.get_text_input": (x, ctx) => {
             const textInputId = x.args.id;

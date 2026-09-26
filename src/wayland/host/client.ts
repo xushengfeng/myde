@@ -18,7 +18,6 @@ import type { renderTools } from "../render_tools";
 import { CursorStore } from "../state/cursor_store";
 import { SeatStore } from "../state/seat_store";
 import { type WindowRecord, WindowsStore } from "../state/windows_store";
-import { newTextInputV3State } from "../utils/text_input";
 import type { WaylandObjectId, WaylandOp, WaylandProtocol } from "../utils/wayland-binary";
 import { WaylandArgType } from "../utils/wayland-binary";
 import { WaylandDecoder } from "../utils/wayland-decoder";
@@ -1180,12 +1179,12 @@ export class WaylandClient {
                     group: 0,
                 });
             }
-            this.textInputV3Focus(id);
+            this.ctx.notify.focus(id);
         },
         blurSurface: (id: WaylandObjectId2<"wl_surface">) => {
             for (const k of this.getKeyboards())
                 this.sendMessageImm(k, "wl_keyboard.leave", { serial: 0, surface: id });
-            this.textInputV3Blur(id);
+            this.ctx.notify.focus(undefined);
         },
         sendKey: (key: number, state: "pressed" | "released") => {
             const s = this.seat.nextSerial();
@@ -1288,30 +1287,6 @@ export class WaylandClient {
     };
 
     /** text-input-v3焦点跟随键盘焦点 */
-    private textInputV3Focus(surface: WaylandObjectId2<"wl_surface">) {
-        const ti = this.obj2.textInputV3;
-        if (ti.focus === surface) return;
-        if (ti.focus !== null) this.textInputV3Blur(ti.focus);
-        ti.focus = surface;
-        // 协议要求enter发给所有text_input对象
-        for (const [id, t] of ti.m) {
-            t.entered = true;
-            this.sendMessageImm(id, "zwp_text_input_v3.enter", { surface });
-        }
-    }
-    private textInputV3Blur(surface: WaylandObjectId2<"wl_surface">) {
-        const ti = this.obj2.textInputV3;
-        if (ti.focus !== surface) return;
-        for (const [id, t] of ti.m) {
-            if (!t.entered) continue;
-            t.entered = false;
-            this.sendMessageImm(id, "zwp_text_input_v3.leave", { surface });
-            // leave后状态失效，客户端需重新enable并提交
-            t.current = newTextInputV3State();
-            t.pending = newTextInputV3State();
-        }
-        ti.focus = null;
-    }
 
     paste: (text: string) => void = (text: string) => {
         if (!this.obj2.pendingPaste) {
