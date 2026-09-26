@@ -1,6 +1,6 @@
 # server.ts 架构重构计划
 
-> 状态：**进行中** —— Phase 0 基本完成（仅剩 `gen:protocols` script），**Phase 1 已完成**。下一步 Phase 2（Store 抽取，对外不变）。**场景层重构搁置**、**server 打平后移至 Phase 6**、**remote 只保证 typecheck**。进度见下方「进度速览」。
+> 状态：**进行中** —— Phase 0 基本完成（仅剩 `gen:protocols` script），Phase 1 ✅，**Phase 2 基本完成**（三个 Store 已落地，text-input 仲裁推迟到 Phase 3-5）。下一步 Phase 3（拆 core 模块）。**场景层重构搁置**、**server 打平在 Phase 6**、**remote 只保证 typecheck**。进度见下方「进度速览」。
 > 前提：当前版本不稳定，**允许破坏性变更**，不做兼容层/废弃期，一步到位。
 > 目标：外部调用 API 更简洁，内部新增协议更方便。
 
@@ -24,7 +24,9 @@
 | **场景层重构（§6）** | ⏸ **搁置**：SceneSink 形态与 `renderToolsOn` 去留待再设计，`renderTools` 保持不变 | 决定于本次 |
 | **server 级打平** | ➡️ **移到最后**（原 Phase 2 → 现 Phase 6），桌面只迁一次 | 决定于本次 |
 | **remote 桌面测试策略** | ➖ 不做行为测试，仅保证 typecheck 覆盖其全部实现 | 决定于本次 |
-| Phase 2 及以后 | ⬜ | — |
+| Phase 2 · 三个 Store 抽取（对外形状不变） | ✅ `2f61a24` `4f4f114` `d7cbf2a` | — |
+| Phase 2 · text-input v1/v3 仲裁归属 | ⬜ ➡️ 推迟到 Phase 3-5（模块边界 + 零覆盖） | — |
+| Phase 3 及以后 | ⬜ | — |
 
 ---
 
@@ -564,7 +566,7 @@ interface ImageKV {
 | **共享**：前提 | 安全网、接口与入口、**状态 Store 抽取** | 0, 1, 2 | 两轨都依赖 |
 | ⏸ 场景层 | SceneSink 形态、`renderToolsOn` 去留 | 搁置 | 见 §6 |
 
-**共享接缝（必须先落，否则两轨互相牵制）**：`WindowsStore`/`CursorStore`/`SeatStore` 从 `obj2`（`:642-684`）抽出。它是 T1 handler 摆脱 `this` 的前提，也是 T2 事件的数据源。缺了它，handler 搬出 `WaylandClient` 时会连带 `this.emit(...)`/`this.obj2` 一起搬走——等于迁两次。
+**共享接缝（必须先落，否则两轨互相牵制）**：✅ **已落地** —— `WindowsStore`/`CursorStore`/`SeatStore` 已从 `obj2` 抽出（Phase 2，`2f61a24`/`4f4f114`/`d7cbf2a`）。它是 T1 handler 摆脱 `this` 的前提，也是 T2 事件的数据源。缺了它，handler 搬出 `WaylandClient` 时会连带 `this.emit(...)`/`this.obj2` 一起搬走——等于迁两次。
 
 **三处真实耦合点**：
 1. `emit` 调用点**全部位于 handler 内部**（`:1459/:1465/:1548/:1552/:1559/:1562/:1573/:1296/:1354`）——T2 改这些行，T1 移动这些行
@@ -606,12 +608,17 @@ interface ImageKV {
 验收：**已达** —— typecheck 0 错误、20 文件 / 200 测试全绿，行为不变。
 
 ### Phase 2 — 语义状态 Store（**内部整理，不改对外事件形状**）
-- [ ] `state/cursor_store.ts`：收敛 4 处 `render.setCursor`（`:1121/:1144/:1216/:1238/:1739`）——对外仍由现有 `render.on({onCursorUpdata})` 送达
-- [ ] `state/windows_store.ts`：`obj2.windows` 上收；handler 改为写 Store，**对外仍按现名发 `windowCreated/windowResized/…`**（Store 出口先用薄适配层）
-- [ ] `state/seat_store.ts`：焦点/serial/textInput 仲裁（`:2436-2490`）
-- [ ] handler 内的 `this.emit(...)`（`:1459/:1465/:1548/:1552/:1559/:1562/:1573/:1296/:1354`）改为写 Store
+- [x] `state/cursor_store.ts`：收敛 `render.setCursor` 全部调用点 —— **已完成** `2f61a24`，`cursorHotspot` 不再属于对象状态，`WaylandClient.render` 字段成为死代码并删除
+- [x] `state/windows_store.ts`：`obj2.windows` 上收，窗口事件改为写 Store —— **已完成** `4f4f114`
+- [x] `state/seat_store.ts`：焦点/serial/修饰键/seat 记录 —— **已完成** `d7cbf2a`
+- [ ] **text-input v1/v3 仲裁**（原属 seat_store）**➡️ 推迟到 Phase 3-5**：它决定两个未来模块的边界（各协议私有状态 vs 共享仲裁点），且**零测试覆盖**，拆 `text_input_*.ts` 时与归属一起定
+- [x] handler 内的 `this.emit(...)` 改为写 Store —— **窗口事件完成**；`copy`/`paste`/`appid`/`close` 不属窗口域，随 Phase 6 的域事件一起处理
 - **约束**：本阶段**不动** `desktop/*`、`desktop-test`、`test/mock` 的调用方式——外部 API 变更全部集中到 Phase 6，桌面只迁一次
-- 验收：e2e 全绿、typecheck 全绿、**桌面侧零改动**（`git diff desktop/` 为空）
+- 验收：**已达** —— typecheck 0 错误、全量 20 文件 / 200 测试全绿、`git diff desktop/` 为空
+
+**Phase 2 挖出的两处顺序契约**（原本只隐含在调用点里，现已写进 Store 注释）：
+1. `xdg_toplevel.destroy` 是「删记录 → `toplevelDestroyed` → 发 `windowClosed`」三步，中间那步会触发桌面可见的 `onToplevelRemove`，两者先后桌面能观察到 —— 所以 Store 拆成 `remove()` + `notifyClosed()` 两步保住顺序
+2. `set_title` 是**先发事件后改记录**，保持原样未"顺手修正"
 
 ### Phase 3 — 拆 core 模块（内部，不改外 API）
 - [ ] `protocols/core/{display,registry,shm,compositor,region}.ts` 迁出（handler `:828-1000` 附近）
