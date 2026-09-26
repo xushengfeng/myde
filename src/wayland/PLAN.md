@@ -1,6 +1,6 @@
 # server.ts 架构重构计划
 
-> 状态：**进行中** —— Phase 0 ✅（仅剩 `gen:protocols` script）、Phase 1 ✅、Phase 2 ✅（text-input 仲裁推迟至 3-5）、**Phase 3 管道与 region 样板 ✅，其余 core 模块迁移未做**。**场景层重构搁置**、**server 打平在 Phase 6**、**remote 只保证 typecheck**。进度见「进度速览」。
+> 状态：**进行中** —— Phase 0 ✅（仅剩 `gen:protocols` script）、Phase 1 ✅、Phase 2 ✅（text-input 仲裁推迟至 4-5）、**Phase 3 ✅**（core 全部迁出，`server.ts` 降至 129 行）。**场景层重构搁置**、**server 打平在 Phase 6**、**remote 只保证 typecheck**。进度见「进度速览」。
 > 前提：当前版本不稳定，**允许破坏性变更**，不做兼容层/废弃期，一步到位。
 > 目标：外部调用 API 更简洁，内部新增协议更方便。
 
@@ -28,7 +28,8 @@
 | Phase 2 · text-input v1/v3 仲裁归属 | ⬜ ➡️ 推迟到 Phase 3-5（模块边界 + 零覆盖） | — |
 | Phase 3 · 管道（ModuleCtx 实现、模块注册、分发合并、冲突校验） | ✅ | `5f8e548` |
 | Phase 3 · region 样板（含状态声明合并） | ✅ | `5f8e548` `2371bf1` |
-| Phase 3 · 其余 core 模块迁移 | ⬜ | — |
+| Phase 3 · 24 个 core handler 迁出 + bind if 链 + 状态类型声明合并 + `host/client.ts` | ✅ | `ed567c2` `7bd7ac3` `3c82091` `d5563a2` |
+| Phase 3 · 46 个扩展 handler（现居 `host/client.ts`） | ⬜ → 归 Phase 4-5 | — |
 | Phase 4 及以后 | ⬜ | — |
 
 ---
@@ -122,30 +123,31 @@ src/wayland/
   index.ts                 # 新增：唯一对外入口（createServer、类型 re-export）
   PLAN.md                  # 本文件
   readme.md                # 协议清单（保留）
-  module.ts                # 新增：所有共享接口与类型，零实现、零副作用
+  module.ts                # 契约：共享接口与类型，零实现、零副作用
   host/
-    server.ts              # WaylandServer：socket 监听、建连、模块装配
-    client.ts              # WaylandClient：objects ID 表、解码分发、deleteObj/postError
-    registry.ts            # global 注册表与 bind 分发（替代 if 链）
-    encoder.ts             # sendMessage*（由现 server.ts:1941-2061 迁出）
+    client.ts              # ✅ WaylandClient：对象表、解码分发、ModuleCtx、窗口门面
+                           #    + 46 个扩展 handler（Phase 4-5 迁出对象）
+  server.ts                # ✅ 仅剩 WaylandServer（监听/建连）+ initWaylandProtocols，129 行
   state/
-    cursor_store.ts        # CursorStore：唯一 cursor 状态写入点
-    windows_store.ts       # WindowsStore：窗口快照与生命周期
-    seat_store.ts          # 焦点、serial、textInput 仲裁
+    cursor_store.ts        # ✅ CursorStore：唯一 cursor 状态写入点
+    windows_store.ts       # ✅ WindowsStore：窗口记录与窗口事件
+    seat_store.ts          # ✅ SeatStore：焦点、serial、修饰键、seat 记录
   protocols/
-    core/…                 # 每个 core 接口一个文件（surface.ts 最大）
-    xdg_shell.ts
-    viewporter.ts
-    dmabuf.ts
-    text_input_v1.ts / text_input_v3.ts
-    cursor_shape.ts
-    clipboard.ts
-    index.ts               # 模块清单（替代 supportedProtocols 的运行时部分）
+    core/…                 # ✅ 11 个 core 模块（display/registry/compositor/surface/
+                           #    shm/seat/pointer/subsurface/data_device/output/region）
+    xdg_shell.ts           # ⬜ Phase 5
+    viewporter.ts / dmabuf.ts / cursor_shape.ts      # ⬜ Phase 4
+    text_input_v1.ts / text_input_v3.ts             # ⬜ Phase 4-5
+    index.ts               # ✅ 模块清单 + 请求键冲突校验
   scene/
-    types.ts               # SceneCmd 定义 + ImageKV 接口（纯值，可序列化）
-    render_tools.d.ts      # SceneSink 接口（现 renderTools 瘦身而来）
-    render_tools_el.ts     # DOM 实现：保留 subsurface/xdg 布局细节 + 像素读写
-  utils/                   # 编解码、dma-buf、xdg 工具（保留）
+    types.ts               # ✅ SceneCmd + ImageKV（Phase 1；实现层随 §6 搁置）
+    render_tools.d.ts      # ⏸ 现状保持
+    render_tools_el.ts     # ⏸ 现状保持
+  utils/
+    wayland-proto.ts       # ✅ 协议元数据表、全局 name 表、枚举助手、brand 助手
+    fd.ts                  # ✅ newFd（随 data_device 迁出）
+    shared_texture.ts      # ✅ 共享纹理接收（随 wl_surface.attach 迁出）
+    wayland-encoder/decoder, dma-buf, xdg       # 原有
   protocols/               # 生成物 protocols.json + wayland-types.ts（保留路径）
   test/
 ```
@@ -625,20 +627,32 @@ interface ImageKV {
 
 ### Phase 3 — 拆 core 模块（内部，不改外 API）
 
-**管道（已就绪，后续迁移只做「搬 handler + `this`→`ctx`」）**：
-- [x] `ModuleCtx` 真实实现：`buildCtx()` 接上对象表 / 事件通道 / `CoreApi` / scene —— `5f8e548`
+**全部完成**（✅ = `5f8e548` `2371bf1` `9a92104` `875cb7d` `ed567c2` `7bd7ac3` `d5563a2` `3c82091`）：
+- [x] `ModuleCtx` 真实实现：`buildCtx()` 接上对象表 / 事件通道 / `CoreApi` / 域服务 / 语义 Store / 客户端自身 —— `875cb7d`
 - [x] `protocols/index.ts` 模块清单 + `assertModuleConflicts()` 请求键冲突校验（原 `Map.set` 静默覆盖）—— `5f8e548`
 - [x] 分发合并：模块 handler 并进 `newOp()` 的同一张表，与 `isOp` 共用 `m.get()` 路径 —— `5f8e548`
-- [x] **样板** `protocols/core/region.ts`：3 个 handler 迁出 + 状态类型走 `declare module`（中央表条目删除后仍编译）—— `5f8e548` `2371bf1`
-- [x] 样板配套：`RequestMsg` 的 id 按 `"接口.请求"` 推品牌（handler 无需 cast）、`postError` 用 `ErrorCode<I>` 去掉 `@ts-expect-error`
+- [x] **24 个 core handler 全部迁出** → `protocols/core/{display,registry,compositor,surface,shm,seat,pointer,subsurface,data_device,output,region}.ts`（11 个模块，800 行）—— `ed567c2` `7bd7ac3`
+- [x] **P5** `wl_registry.bind` 的字符串 if 链 → 各模块 `globals[].onBind`（`wl_output` 为此单开模块：它只有绑定自报、零请求）—— `7bd7ac3`；`xdg_wm_base` 分支暂留 registry 模块，标了 Phase 5 TODO
+- [x] **P3** 对象状态类型移入各自 `declare module`，`WaylandDataRegistry` 只剩 5 个扩展条目（xdg×2 / dmabuf / viewport / cursor-shape）—— `3c82091`
+- [x] **`host/client.ts`**：`WaylandClient` 从 `server.ts` 拆出 —— `d5563a2`
+- [x] 依赖下沉 `utils/`：`wayland-proto.ts`（协议元数据 + 枚举助手 + 全局 name 表）、`fd.ts`、`shared_texture.ts` —— `9a92104` 等
 
-**剩余迁移**：
-- [ ] 其余 core handler 迁出（`display`/`registry`/`shm`/`shm_pool`/`compositor`/`seat`/`pointer`/`keyboard`/`output`/`data_device`…）
-- [ ] `host/registry.ts` 替代 `wl_registry.bind` 的字符串 if 链（P5），各模块用 `globals[].onBind` 声明绑定时初始化
-- [ ] `host/client.ts`：`WaylandClient` 从 `server.ts` 拆出（机械移动，建议放在迁移完成后一次性做）
-- [ ] 每迁一个模块补 fake-ctx 单测（仿 `region.test.ts`）
+**形态调整**：原计划的 `host/registry.ts` 由 **`protocols/core/registry.ts`（bind 的通用部分）+ `utils/wayland-proto.ts`（global 注册表）** 取代——bind 的分发本就该跟着模块走，不该再在 host 里开一个文件。
 
-验收：行为不变、typecheck 0、全量测试绿、`git diff desktop/` 为空；~~覆盖率脚本~~ 已随 P11 弃用
+**现状**：
+| 文件 | 行数 | 内容 |
+|---|---|---|
+| `server.ts` | **129** | 只剩 `WaylandServer`（监听/建连）、`initWaylandProtocols` |
+| `host/client.ts` | 1882 | 对象表、解码分发、`ModuleCtx`、窗口门面，**以及 46 个扩展 handler（`newOp()`）** ← Phase 4-5 的迁移对象 |
+| `protocols/core/*` | 800 | 11 个 core 模块 + region 单测 |
+| `module.ts` | 471 | 契约（含只剩 5 条的中央表） |
+
+**Phase 4-5 待办**：
+- [ ] 46 个扩展 handler 从 `host/client.ts` 迁出（xdg / text-input v1,v3 / dmabuf / viewporter / cursor-shape）
+- [ ] 中央表剩余 5 条随各自模块迁走
+- [ ] 每迁一个模块补 fake-ctx 单测（仿 `region.test.ts`；目前只有 region 有）
+
+验收：**已达** —— 行为不变（21 文件 / 202 测试全绿）、typecheck 0、`git diff desktop/` 为空；~~覆盖率脚本~~ 已随 P11 弃用
 
 ### Phase 4 — 拆低耦合扩展（样板）
 - [ ] `viewporter.ts`（现 `:1642-1724`，仅依赖 `wl_surface`）
