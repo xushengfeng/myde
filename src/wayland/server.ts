@@ -29,10 +29,15 @@ import { buildXkb } from "myde-xcb";
 
 import { InputEventCodes } from "../input_codes/types";
 import type {
+    ClientState,
     DataOf,
     ErrorCode,
     ModuleCtx,
     RequestMsg,
+    TextInputV3Data,
+    TextInputV3State,
+    WaylandClientEventMap,
+    WaylandClientSyncEventMap,
     WaylandObjectId2,
     WaylandObjectId3,
     WaylandWinId,
@@ -51,18 +56,6 @@ export { WaylandClient, WaylandServer };
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
 
 /** zwp_text_input_v3 的状态，双缓冲（pending -> commit -> current） */
-type TextInputV3State = {
-    /** 是否启用文本输入 */
-    enabled: boolean;
-    surroundingText: { text: string; cursor: number; anchor: number };
-    /** 周围文本变化原因，应用到current后重置为input_method */
-    textChangeCause: "input_method" | "other";
-    contentHint: number;
-    contentPurpose: number;
-    /** 光标矩形（surface坐标），null表示客户端不支持 */
-    cursorRect: { x: number; y: number; width: number; height: number } | null;
-};
-
 function newTextInputV3State(): TextInputV3State {
     return {
         enabled: false,
@@ -74,25 +67,10 @@ function newTextInputV3State(): TextInputV3State {
     };
 }
 
-type TextInputV3Data = {
-    /** 是否收到enter，即文本输入焦点在本对象上 */
-    entered: boolean;
-    /** 客户端commit计数，作为done事件的serial */
-    commitCount: number;
-    /** 已应用的状态 */
-    current: TextInputV3State;
-    /** 待commit应用的状态 */
-    pending: TextInputV3State;
-};
-
 /**
  * v1/v3是竞争协议，按协议（manager）一侧仲裁、后激活者胜出：
  * zwp_text_input_v1.activate / zwp_text_input_v3.enable 后到者抢占，文本只发给持有对象
  */
-type TextInputOwner =
-    | { protocol: "v1"; id: WaylandObjectId2<"zwp_text_input_v1"> }
-    | { protocol: "v3"; id: WaylandObjectId2<"zwp_text_input_v3"> };
-
 type WaylandObjectX<T extends WaylandInterfaces> = {
     protocol: WaylandProtocol;
     data: DataOf<T>;
@@ -101,24 +79,6 @@ type WaylandObjectX<T extends WaylandInterfaces> = {
 interface WaylandServerEventMap {
     newClient: (client: WaylandClient, clientId: string) => void;
     clientClose: (client: WaylandClient, clientId: string) => void;
-}
-
-interface WaylandClientEventMap {
-    close: () => void;
-    windowCreated: (xdgToplevelId: WaylandWinId, renderId: string) => void;
-    windowClosed: (xdgToplevelId: WaylandWinId) => void;
-    windowStartMove: (xdgToplevelId: WaylandWinId) => void;
-    windowResized: (xdgToplevelId: WaylandWinId, width: number, height: number) => void;
-    windowMaximized: (xdgToplevelId: WaylandWinId) => void;
-    windowUnMaximized: (xdgToplevelId: WaylandWinId) => void;
-    appid: (id: string) => void;
-    title: (xdgToplevelId: WaylandWinId, title: string) => void;
-    copy: (text: string) => void;
-    paste: () => void;
-}
-
-interface WaylandClientSyncEventMap {
-    windowBound?: () => { width: number; height: number } | undefined;
 }
 
 function waylandName(name: number): WaylandName {
@@ -581,25 +541,8 @@ class WaylandClient {
     private seat: SeatStore;
     /** 窗口记录与窗口事件的唯一持有者（见 state/windows_store.ts） */
     private windows: WindowsStore;
-    private obj2: Partial<{
-        textInputV1: {
-            focus: WaylandObjectId | null;
-            m: Map<WaylandObjectId2<"zwp_text_input_v1">, { focus: boolean; serial: number }>;
-        };
-        dataDevices: Set<WaylandObjectId2<"wl_data_device">>;
-        pendingPaste: { offerId: WaylandObjectId; fd: number; mime: string; timeout: NodeJS.Timeout };
-    }> & {
-        /** text-input-v3，焦点跟随键盘焦点 */
-        textInputV3: {
-            /** 当前文本输入焦点surface，null表示无焦点 */
-            focus: WaylandObjectId2<"wl_surface"> | null;
-            m: Map<WaylandObjectId2<"zwp_text_input_v3">, TextInputV3Data>;
-        };
-        /** v1/v3竞争仲裁的持有对象，null表示无激活的text_input */
-        textInputOwner: TextInputOwner | null;
-        xdg_wm_base: Set<WaylandObjectId2<"xdg_wm_base">>;
-        appid: undefined | string;
-    };
+    /** 客户端级状态；形状定义在 module.ts 的 ClientState（原 obj2 内联类型） */
+    private obj2: ClientState;
     private wlSurface: wlSurfaceData;
     private dataManager: {
         wlSubSurface: wlSubSurfaceData;
@@ -730,6 +673,7 @@ class WaylandClient {
         return {
             objects: {
                 get: (id) => this.getObject(id),
+                getOption: (id) => this.getObjectOption(id),
                 getData: (id) => this.getObject(id).data,
                 setData: (id, data) => {
                     this.getObject(id).data = data;
@@ -752,6 +696,8 @@ class WaylandClient {
             postError: (iface, id, code, message) => this.postError(iface, id, code, message),
             core: {
                 surface: {
+                    addWlSurface: (id) => this.wlSurface.addWlSurface(id),
+                    getWlSurface: (id) => this.wlSurface.getWlSurface(id),
                     getRole: (id) => this.wlSurface.getWlSurface(id).role,
                     setRole: (id, role) => {
                         try {
@@ -764,6 +710,18 @@ class WaylandClient {
                     },
                     getSize: (id) => this.wlSurface.getWlSurface(id).size,
                     getFrame: (id) => this.wlSurface.getWlSurface(id).frame,
+                    updateWlSurfaceSize: (id, w, h) => this.wlSurface.updateWlSurfaceSize(id, w, h),
+                    setWlSurfaceOffset: (id, x, y) => this.wlSurface.setWlSurfaceOffset(id, x, y),
+                    renderWlSurface: (id, canvas) => this.wlSurface.renderWlSurface(id, canvas),
+                    destroyWlSurface: (id) => this.wlSurface.destroyWlSurface(id),
+                    idScope: (id) => this.wlSurface.idScope(id),
+                },
+                subsurface: {
+                    setWlSubSurface: (sub, parent, child) =>
+                        this.dataManager.wlSubSurface.setWlSubSurface(sub, parent, child),
+                    setPosition: (id, x, y) => this.dataManager.wlSubSurface.setPosition(id, x, y),
+                    destroySubSurface: (id) => this.dataManager.wlSubSurface.destroySubSurface(id),
+                    getChildrenDeep: (parent) => this.dataManager.wlSubSurface.getChildrenDeep(parent),
                 },
                 registry: {
                     globals: () =>
@@ -773,6 +731,16 @@ class WaylandClient {
                 },
                 buffer: { get: (id) => this.getObjectOption(id)?.data },
                 seat: { focus: () => this.seat.focus(), nextSerial: () => this.seat.nextSerial() },
+            },
+            domain: { xdgSurface: this.dataManager.xdgSurface },
+            state: { windows: this.windows, cursor: this.cursor, seat: this.seat },
+            client: {
+                id: this.id,
+                displayId: this.displayId,
+                protoVersions: this.protoVersions,
+                state: this.obj2,
+                emit: this.emit.bind(this),
+                emitSync: this.emitSync.bind(this),
             },
             scene: this.render,
         };

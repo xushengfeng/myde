@@ -1,12 +1,6 @@
-import type { SurfaceId, WaylandObjectId2 } from "../module";
+import type { FocusType, SeatRecord, SurfaceId, WaylandObjectId2 } from "../module";
 
-export interface SeatRecord {
-    pointer?: WaylandObjectId2<"wl_pointer">;
-    keyboard?: WaylandObjectId2<"wl_keyboard">;
-}
-
-/** 焦点来源：主 surface 还是 popup —— 决定键盘焦点要不要跟着切 */
-export type FocusType = "main" | "popup" | null;
+export type { FocusType, SeatRecord };
 
 /**
  * 输入设备侧状态（原散在 `obj2.seats/serial/focusSurface/focusSurfaceType/modifiers`）。

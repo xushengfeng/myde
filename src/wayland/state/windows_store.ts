@@ -1,10 +1,6 @@
-import type { WaylandWinId } from "../module";
+import type { FocusType, SeatRecord, WaylandWinId, WindowRecord } from "../module";
 
-export interface WindowRecord {
-    actived: boolean;
-    box: { width: number; height: number };
-    title: string;
-}
+export type { FocusType, SeatRecord, WindowRecord };
 
 /**
  * 对外出口。Phase 2 仍是 client 级事件（薄适配层在 server.ts 构造时注入），

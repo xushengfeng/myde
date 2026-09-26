@@ -179,6 +179,8 @@ export interface ObjectInfo<I extends WaylandInterfaces> {
 
 export interface ObjectApi {
     get<I extends WaylandInterfaces>(id: WaylandObjectId2<I>): ObjectInfo<I>;
+    /** 对象不存在时返回 undefined（不发协议错误） */
+    getOption<I extends WaylandInterfaces>(id: WaylandObjectId2<I> | undefined): ObjectInfo<I> | undefined;
     getData<I extends WaylandInterfaces>(id: WaylandObjectId2<I>): DataOf<I>;
     setData<I extends WaylandInterfaces>(id: WaylandObjectId2<I>, data: DataOf<I>): void;
     /** 服务端自发对象（wl_callback、wl_data_offer…） */
@@ -224,12 +226,65 @@ export interface EventApi {
 
 export type SurfaceRole = "subsurface" | "toplevel" | "popup" | "cursor";
 
+export interface WlSurfaceInfo {
+    role: SurfaceRole | undefined;
+    size: { w: number; h: number };
+    /** 最近一次合成输出的画布，可能与 surface 画布共用，取用时需要复制 */
+    frame?: OffscreenCanvas;
+}
+
 export interface WlSurfaceApi {
+    /** wl_compositor.create_surface：登记 surface 并建出场景节点 */
+    addWlSurface(id: SurfaceId): void;
+    getWlSurface(id: SurfaceId): WlSurfaceInfo;
     getRole(id: SurfaceId): SurfaceRole | undefined;
     /** false = role 冲突（对应现 WaylandSurfaceRoleError → 客户端 bad_surface） */
     setRole(id: SurfaceId, role: SurfaceRole): boolean;
     getSize(id: SurfaceId): { w: number; h: number };
     getFrame(id: SurfaceId): OffscreenCanvas | undefined;
+    updateWlSurfaceSize(id: SurfaceId, w: number, h: number): void;
+    setWlSurfaceOffset(id: SurfaceId, x: number, y: number): void;
+    /** 提交合成后的帧到场景 */
+    renderWlSurface(id: SurfaceId, canvas: OffscreenCanvas): void;
+    destroyWlSurface(id: SurfaceId): void;
+    /** 渲染侧不透明 id：同一 surface 在不同 renderer 下 id 不同 */
+    idScope(id: unknown): string;
+}
+
+export type SubSurfaceId = WaylandObjectId2<"wl_subsurface">;
+export type XdgSurfaceId = WaylandObjectId2<"xdg_surface">;
+export type XdgToplevelId = WaylandObjectId2<"xdg_toplevel">;
+export type XdgPopupId = WaylandObjectId2<"xdg_popup">;
+
+export interface SubSurfaceApi {
+    /** 返回 bad_surface / bad_parent 或 true，由调用方转成协议错误 */
+    setWlSubSurface(sub: SubSurfaceId, parent: SurfaceId, child: SurfaceId): "bad_surface" | "bad_parent" | true;
+    setPosition(id: SubSurfaceId, x: number, y: number): void;
+    destroySubSurface(id: SubSurfaceId): void;
+    getChildrenDeep(parent: SurfaceId): {
+        id: SurfaceId;
+        offsetRect: { x: number; y: number; w: number; h: number };
+    }[];
+}
+
+export interface XdgSurfaceInfo {
+    surface: SurfaceId;
+    winGeo?: { x: number; y: number; w: number; h: number };
+    offset: { x: number; y: number };
+    xdg_role?: XdgToplevelId | XdgPopupId;
+    parent: XdgSurfaceId | undefined;
+    children: XdgSurfaceId[];
+}
+
+export interface XdgSurfaceApi {
+    addXdgSurface(id: XdgSurfaceId, wlSurface: SurfaceId): void;
+    getXdgSurface(id: XdgSurfaceId): XdgSurfaceInfo;
+    setXdgSurfaceSize(id: XdgSurfaceId, x: number, y: number, w: number, h: number): void;
+    getXdgSurfaceByToplevel(id: XdgToplevelId): XdgSurfaceId | undefined;
+    getXdgSurfaceByPopup(id: XdgPopupId): XdgSurfaceId | undefined;
+    setAsToplevel(id: XdgSurfaceId, toplevelId: XdgToplevelId): void;
+    popupDestroyed(popupId: XdgPopupId): void;
+    toplevelDestroyed(toplevelId: XdgToplevelId): void;
 }
 
 export interface RegistryApi {
@@ -256,6 +311,7 @@ export interface WlSeatApi {
  */
 export interface CoreApi {
     surface: WlSurfaceApi;
+    subsurface: SubSurfaceApi;
     registry: RegistryApi;
     buffer: BufferApi;
     seat: WlSeatApi;
@@ -276,6 +332,139 @@ export interface SeatHooks {
     onFocus?(surfaceId: SurfaceId | undefined, ctx: ModuleCtx): void;
 }
 
+
+// ───────────── 客户端级状态与事件（原 obj2 与事件表，Phase 3 上移） ─────────────
+
+export type TextInputV3State = {
+    /** 是否启用文本输入 */
+    enabled: boolean;
+    surroundingText: { text: string; cursor: number; anchor: number };
+    /** 周围文本变化原因，应用到current后重置为input_method */
+    textChangeCause: "input_method" | "other";
+    contentHint: number;
+    contentPurpose: number;
+    /** 光标矩形（surface坐标），null表示客户端不支持 */
+    cursorRect: { x: number; y: number; width: number; height: number } | null;
+};
+
+export type TextInputV3Data = {
+    /** 是否收到enter，即文本输入焦点在本对象上 */
+    entered: boolean;
+    /** 客户端commit计数，作为done事件的serial */
+    commitCount: number;
+    /** 已应用的状态 */
+    current: TextInputV3State;
+    /** 待commit应用的状态 */
+    pending: TextInputV3State;
+};
+
+export type TextInputOwner =
+    | { protocol: "v1"; id: WaylandObjectId2<"zwp_text_input_v1"> }
+    | { protocol: "v3"; id: WaylandObjectId2<"zwp_text_input_v3"> };
+
+export interface WaylandClientEventMap {
+    close: () => void;
+    windowCreated: (xdgToplevelId: WaylandWinId, renderId: string) => void;
+    windowClosed: (xdgToplevelId: WaylandWinId) => void;
+    windowStartMove: (xdgToplevelId: WaylandWinId) => void;
+    windowResized: (xdgToplevelId: WaylandWinId, width: number, height: number) => void;
+    windowMaximized: (xdgToplevelId: WaylandWinId) => void;
+    windowUnMaximized: (xdgToplevelId: WaylandWinId) => void;
+    appid: (id: string) => void;
+    title: (xdgToplevelId: WaylandWinId, title: string) => void;
+    copy: (text: string) => void;
+    paste: () => void;
+}
+
+export interface WaylandClientSyncEventMap {
+    windowBound?: () => { width: number; height: number } | undefined;
+}
+// ───────────── 语义 Store 与客户端自身（结构化实现，由 host 注入） ─────────────
+
+export interface WindowRecord {
+    actived: boolean;
+    box: { width: number; height: number };
+    title: string;
+}
+
+export interface WindowsApi {
+    /** 活的 Map：桌面与 mock 会直接遍历/增删它 */
+    readonly wins: Map<WaylandWinId, WindowRecord>;
+    get(id: WaylandWinId): WindowRecord | undefined;
+    created(id: WaylandWinId, renderId: string): void;
+    /** 仅移除记录；destroy 流程里 xdg 清理夹在 remove 与 notifyClosed 之间（顺序对桌面可见） */
+    remove(id: WaylandWinId): void;
+    notifyClosed(id: WaylandWinId): void;
+    setTitle(id: WaylandWinId, title: string): void;
+    resized(id: WaylandWinId, width: number, height: number): void;
+    startMove(id: WaylandWinId): void;
+    setMaximized(id: WaylandWinId, maximized: boolean): void;
+}
+
+export interface CursorApi {
+    setSurface(id: SurfaceId, hotspot: { x: number; y: number }, frame?: OffscreenCanvas): void;
+    updateFrame(id: SurfaceId, frame: OffscreenCanvas): void;
+    hide(id?: SurfaceId): void;
+    setShape(shape: string): void;
+    isCursorSurface(id: SurfaceId): boolean;
+}
+
+/** 焦点来源：主 surface 还是 popup —— 决定键盘焦点要不要跟着切 */
+export type FocusType = "main" | "popup" | null;
+
+export interface SeatRecord {
+    pointer?: WaylandObjectId2<"wl_pointer">;
+    keyboard?: WaylandObjectId2<"wl_keyboard">;
+}
+
+export interface SeatApi {
+    addSeat(id: WaylandObjectId2<"wl_seat">): void;
+    get(id: WaylandObjectId2<"wl_seat">): SeatRecord | undefined;
+    all(): IterableIterator<SeatRecord>;
+    nextSerial(): number;
+    addModifier(bit: number): void;
+    removeModifier(bit: number): void;
+    modifierMask(): number;
+    focus(): SurfaceId | null;
+    focusType(): FocusType;
+    setFocus(surface: SurfaceId | null, type: FocusType): void;
+}
+
+/** 原 obj2 的剩余字段：clipboard、text-input 仲裁、appid 等 */
+export interface ClientState {
+    textInputV1?: {
+        focus: WaylandObjectId | null;
+        m: Map<WaylandObjectId2<"zwp_text_input_v1">, { focus: boolean; serial: number }>;
+    };
+    dataDevices?: Set<WaylandObjectId2<"wl_data_device">>;
+    pendingPaste?: { offerId: WaylandObjectId; fd: number; mime: string; timeout: NodeJS.Timeout };
+    /** text-input-v3，焦点跟随键盘焦点 */
+    textInputV3: {
+        focus: SurfaceId | null;
+        m: Map<WaylandObjectId2<"zwp_text_input_v3">, TextInputV3Data>;
+    };
+    /** v1/v3 竞争仲裁的持有对象，null 表示无激活的 text_input */
+    textInputOwner: TextInputOwner | null;
+    xdg_wm_base: Set<WaylandObjectId2<"xdg_wm_base">>;
+    appid: string | undefined;
+}
+
+export interface ClientApi {
+    /** 连接 id，仅日志用 */
+    id: string;
+    displayId: WaylandObjectId2<"wl_display">;
+    /** 协议版本继承表（bind 时按父对象版本补） */
+    protoVersions: Map<string, number>;
+    /** 客户端级状态（原 obj2） */
+    state: ClientState;
+    /** client 级事件；Phase 6 上提 server 级后改由 Store 出口 */
+    emit<K extends keyof WaylandClientEventMap>(event: K, ...args: Parameters<WaylandClientEventMap[K]>): void;
+    emitSync<K extends keyof WaylandClientSyncEventMap>(
+        event: K,
+        ...args: Parameters<NonNullable<WaylandClientSyncEventMap[K]>>
+    ): ReturnType<NonNullable<WaylandClientSyncEventMap[K]>> | undefined;
+}
+
 // ───────────────────────── handler 运行时上下文 ─────────────────────────
 
 /**
@@ -287,9 +476,14 @@ export interface ModuleCtx {
     send: EventApi["send"];
     sendNow: EventApi["sendNow"];
     postError: EventApi["postError"];
-    /** 扩展唯一可依赖的 core 面 */
+    /** core 面：扩展唯一可依赖的东西 */
     core: CoreApi;
-    /** 场景投影（Phase 2 瘦身为 SceneCmd 分发，像素走 ImageKV） */
+    /** 过渡：xdg 域服务，Phase 5 随 xdgSurfaceData 迁入 xdg 模块后删除 */
+    domain: { xdgSurface: XdgSurfaceApi };
+    /** 语义状态单写入点 */
+    state: { windows: WindowsApi; cursor: CursorApi; seat: SeatApi };
+    /** 客户端自身 */
+    client: ClientApi;
+    /** 场景投影（Phase 6 可能瘦身为 SceneCmd 分发，像素走 ImageKV） */
     scene: renderTools;
-    // state: { cursor: CursorStore; windows: WindowsStore; seat: SeatStore };  // Phase 2 随 Store 落地
 }
