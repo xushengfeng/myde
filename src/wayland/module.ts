@@ -6,8 +6,8 @@
  * 否则协议模块之间会重新形成环。
  *
  * Phase 1 先建立契约本身；各接口的实现随 Phase 3-5 拆分落地。
- * 注意这里的 WaylandDataRegistry 是当前中央表的快照，Phase 3 起逐条移进
- * 各协议文件的 `declare module`，最终 module.ts 只留空壳。
+ * 注意这里的 WaylandDataRegistry 仍是多数协议状态的中央表；随 Phase 3-5 逐条
+ * 移进各协议文件的 `declare module`（region 已作为样板迁出），最终只留空壳。
  */
 import type { WaylandEnumObj, WaylandEventObj, WaylandInterfaces, WaylandRequestObj } from "./protocols/wayland-types";
 import type { renderTools } from "./render_tools";
@@ -35,7 +35,8 @@ export type WaylandSurfaceData = {
     damageList?: { x: number; y: number; width: number; height: number }[];
     damageBufferList?: { x: number; y: number; width: number; height: number }[];
     callback?: WaylandObjectId2<"wl_callback">;
-    inputRegion?: WaylandData["wl_region"]["rects"];
+    /** 与 wl_region 模块声明的 rects 同形；此处内联以免 module.ts 反向依赖声明方 */
+    inputRegion?: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
     viewport?: {
         source?: { x: number; y: number; width: number; height: number };
         destination?: { width: number; height: number };
@@ -44,8 +45,8 @@ export type WaylandSurfaceData = {
 
 /**
  * 每种接口挂在对象上的状态形状。
- * 各协议文件用 `declare module "../module" { interface WaylandDataRegistry { ... } }` 追加，
- * 不再改这里的中央表。
+ * 各协议文件用 `declare module`（模块说明符按该文件到 module.ts 的相对路径写）
+ * 追加自己的条目，不再改这里。
  */
 export interface WaylandDataRegistry {
     wl_shm_pool: { fd: number };
@@ -70,9 +71,6 @@ export interface WaylandDataRegistry {
               height: number;
               format: number;
           };
-    wl_region: {
-        rects: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
-    };
     xdg_wm_base: { pingSerials: Map<number, () => void> };
     xdg_positioner: {
         size: { width: number; height: number };
@@ -103,9 +101,6 @@ export interface WaylandDataRegistry {
         pointer: WaylandObjectId2<"wl_pointer">;
     };
 }
-
-/** 兼容 server.ts 现有写法；协议模块请直接用 WaylandDataRegistry */
-export type WaylandData = WaylandDataRegistry;
 
 export type DataOf<I extends WaylandInterfaces> = I extends keyof WaylandDataRegistry
     ? WaylandDataRegistry[I]

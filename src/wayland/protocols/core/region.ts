@@ -1,5 +1,14 @@
 import { defineModule } from "../../module";
 
+// 状态类型归本模块声明，不再登记 module.ts 的中央表（P3）
+declare module "../../module" {
+    interface WaylandDataRegistry {
+        wl_region: {
+            rects: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
+        };
+    }
+}
+
 /**
  * wl_region：矩形集合，供 wl_surface.set_input_region 等使用。
  *
