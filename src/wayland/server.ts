@@ -5,9 +5,7 @@ const { sharedTexture } = require("electron") as typeof import("electron");
 const usocket = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
 import type { UServer, USocket } from "myde-unix-socket";
-import WaylandProtocolsJSON from "./protocols/protocols.json?raw";
 import {
-    type WaylandEnumObj,
     type WaylandEventObj,
     WaylandEventOpcode,
     type WaylandInterfaces,
@@ -22,8 +20,6 @@ import {
 } from "./utils/wayland-binary";
 import { WaylandDecoder } from "./utils/wayland-decoder";
 
-const WaylandProtocolsx = JSON.parse(WaylandProtocolsJSON) as Record<string, WaylandProtocol[]>;
-const WaylandProtocols = Object.fromEntries(Object.values(WaylandProtocolsx).flatMap((v) => v.map((p) => [p.name, p])));
 
 import { buildXkb } from "myde-xcb";
 
@@ -49,6 +45,13 @@ import { SeatStore } from "./state/seat_store";
 import { type WindowRecord, WindowsStore } from "./state/windows_store";
 import { createFormatTableBuffer, DRM_FORMAT } from "./utils/dma-buf";
 import { WaylandEncoder } from "./utils/wayland-encoder";
+import {
+    getEnumName,
+    getEnumValue,
+    tryX,
+    waylandObjectId,
+    WaylandProtocols,
+} from "./utils/wayland-proto";
 import { getRectKeyPoint } from "./utils/xdg";
 
 export { WaylandClient, WaylandServer };
@@ -83,16 +86,6 @@ interface WaylandServerEventMap {
 
 function waylandName(name: number): WaylandName {
     return name as WaylandName;
-}
-
-function waylandObjectId<T extends number | undefined, i extends WaylandInterfaces>(
-    id: T,
-    _interface: i,
-): T extends number ? WaylandObjectId2<i> : undefined {
-    if (id === undefined) {
-        return undefined as any;
-    }
-    return id as any;
 }
 
 const waylandProtocolsNameMap = new Map<WaylandName, WaylandProtocol>();
@@ -191,15 +184,6 @@ class WaylandServer {
 }
 
 class WaylandSurfaceRoleError extends Error {}
-
-function tryX<t>(f: () => t): [Error, null] | [null, t] {
-    try {
-        const r = f();
-        return [null, r];
-    } catch (e) {
-        return [e as Error, null];
-    }
-}
 
 class wlSurfaceData {
     private wl_surface: Record<
@@ -2537,37 +2521,6 @@ function parseArgs(decoder: WaylandDecoder, args: WaylandOp["args"]) {
         }
     }
     return parsed;
-}
-
-function getEnumValue<T extends keyof WaylandEnumObj>(enumName: T, value: WaylandEnumObj[T] | WaylandEnumObj[T][]) {
-    const [pName, enumN] = enumName.split(".");
-    const proto = WaylandProtocols[pName];
-    if (!proto) throw new Error(`Protocol ${pName} cannot find`);
-    if (!proto.enum) throw new Error(`Protocol ${proto.name} has no enums`);
-    const e = proto.enum.find((e) => e.name === enumN);
-    if (!e) throw new Error(`Enum ${enumN} not found in protocol ${proto.name}`);
-    if (Array.isArray(value)) {
-        if (e.bitfield) {
-            const b = value.map((i) => e.enum[i]).reduce((acc, curr) => acc | curr, 0);
-            return b;
-        } else {
-            throw new Error(`Enum ${enumName} is not a bitfield`);
-        }
-    } else {
-        const entry = e.enum[value];
-        if (entry === undefined) throw new Error(`Value ${value} not found in enum ${enumName}`);
-        return entry;
-    }
-}
-
-function getEnumName<T extends keyof WaylandEnumObj>(enumName: T, value: number): WaylandEnumObj[T] | undefined {
-    const [pName, enumN] = enumName.split(".");
-    const proto = WaylandProtocols[pName];
-    if (!proto) throw new Error(`Protocol ${pName} cannot find`);
-    if (!proto.enum) throw new Error(`Protocol ${proto.name} has no enums`);
-    const e = proto.enum.find((e) => e.name === enumN);
-    if (!e) throw new Error(`Enum ${enumN} not found in protocol ${proto.name}`);
-    return Object.entries(e.enum).find(([, v]) => v === value)?.[0] as WaylandEnumObj[T] | undefined;
 }
 
 function newFd(data: string | Uint8Array): { fd: number; size: number } {
