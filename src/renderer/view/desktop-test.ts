@@ -8,7 +8,7 @@ import { _myde as myde } from "../../desktop-api";
 import { getDesktopEntries, getDesktopIcon } from "../../sys_api/application";
 import { type ImComposeState, inputMethod, type inputMethodContext } from "../../sys_api/input_method";
 import { renderToolsHtmlEl } from "../../wayland/render_tools_el";
-import type { WaylandClient } from "../../wayland/server";
+import type { WaylandClient } from "../../wayland";
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
     for (const [_id, client] of server.clients) {
