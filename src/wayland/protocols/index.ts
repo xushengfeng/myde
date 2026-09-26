@@ -12,6 +12,8 @@ import { subsurfaceModule } from "./core/subsurface";
 import { surfaceModule } from "./core/surface";
 import { cursorShapeModule } from "./ext/cursor_shape";
 import { dmabufModule } from "./ext/dmabuf";
+import { textInputV1Module } from "./ext/text_input_v1";
+import { textInputV3Module } from "./ext/text_input_v3";
 import { viewporterModule } from "./ext/viewporter";
 import { xdgShellModule } from "./ext/xdg_shell";
 
@@ -35,6 +37,8 @@ export const protocolModules: readonly ProtocolModule[] = [
     cursorShapeModule,
     dmabufModule,
     xdgShellModule,
+    textInputV1Module,
+    textInputV3Module,
     subsurfaceModule,
     dataDeviceModule,
 ];

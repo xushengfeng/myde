@@ -1,14 +1,19 @@
+/**
+ * WaylandServer：连接生命周期（socket 监听、建连）与协议模块装配。
+ * 单个连接的全部职责在 ./client.ts。
+ */
+
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 
 const usocket = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
 import type { UServer, USocket } from "myde-unix-socket";
-import { WaylandClient } from "./host/client";
-import { assertModuleConflicts } from "./protocols/index";
-import type { renderTools } from "./render_tools";
-import type { WaylandName } from "./utils/wayland-binary";
-import { WaylandProtocols, waylandProtocolsNameMap } from "./utils/wayland-proto";
+import { assertModuleConflicts } from "../protocols/index";
+import type { renderTools } from "../render_tools";
+import type { WaylandName } from "../utils/wayland-binary";
+import { WaylandProtocols, waylandProtocolsNameMap } from "../utils/wayland-proto";
+import { WaylandClient } from "./client";
 
 export { WaylandClient, WaylandServer };
 

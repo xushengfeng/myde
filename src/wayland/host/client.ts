@@ -6,8 +6,6 @@ import type {
     ErrorCode,
     ModuleCtx,
     RequestMsg,
-    TextInputV3Data,
-    TextInputV3State,
     WaylandClientEventMap,
     WaylandClientSyncEventMap,
     WaylandObjectId2,
@@ -15,28 +13,17 @@ import type {
     WaylandWinId,
 } from "../module";
 import { protocolModules } from "../protocols/index";
-import {
-    type WaylandEventObj,
-    WaylandEventOpcode,
-    type WaylandInterfaces,
-    type WaylandRequestObj,
-} from "../protocols/wayland-types";
+import { type WaylandEventObj, WaylandEventOpcode, type WaylandInterfaces } from "../protocols/wayland-types";
 import type { renderTools } from "../render_tools";
 import { CursorStore } from "../state/cursor_store";
 import { SeatStore } from "../state/seat_store";
 import { type WindowRecord, WindowsStore } from "../state/windows_store";
+import { newTextInputV3State } from "../utils/text_input";
 import type { WaylandObjectId, WaylandOp, WaylandProtocol } from "../utils/wayland-binary";
 import { WaylandArgType } from "../utils/wayland-binary";
 import { WaylandDecoder } from "../utils/wayland-decoder";
 import { WaylandEncoder } from "../utils/wayland-encoder";
-import {
-    getEnumName,
-    getEnumValue,
-    tryX,
-    WaylandProtocols,
-    waylandObjectId,
-    waylandProtocolsNameMap,
-} from "../utils/wayland-proto";
+import { getEnumValue, tryX, WaylandProtocols, waylandObjectId, waylandProtocolsNameMap } from "../utils/wayland-proto";
 
 const fs = require("node:fs") as typeof import("node:fs");
 
@@ -48,17 +35,6 @@ const fs = require("node:fs") as typeof import("node:fs");
  */
 
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
-
-function newTextInputV3State(): TextInputV3State {
-    return {
-        enabled: false,
-        surroundingText: { text: "", cursor: 0, anchor: 0 },
-        textChangeCause: "input_method",
-        contentHint: 0,
-        contentPurpose: 0,
-        cursorRect: null,
-    };
-}
 
 type WaylandObjectX<T extends WaylandInterfaces> = {
     protocol: WaylandProtocol;
@@ -661,124 +637,10 @@ export class WaylandClient {
 
     private newOp() {
         const m = new Map<string, (x: ParsedMessage & { args: any }) => void>();
-        type ExtractInterface<T extends string> = T extends `${infer I}.${string}` ? I : never;
-        function isOp<T extends keyof WaylandRequestObj>(
-            op: T,
-            f: (x: ParsedMessage & { args: WaylandRequestObj[T]; id: WaylandObjectId2<ExtractInterface<T>> }) => void,
-        ) {
-            // @ts-expect-error
-            m.set(op, f);
-        }
 
         // 客户端想要从 compositor 接收数据（粘贴）
 
         // todo wp_cursor_shape_manager_v1.get_tablet_tool_v2 暂不实现，平板工具支持后再加
-
-        isOp("zwp_text_input_manager_v1.create_text_input", (x) => {
-            const textInputId = x.args.id;
-            if (!this.obj2.textInputV1) this.obj2.textInputV1 = { focus: null, m: new Map() };
-            this.obj2.textInputV1.m.set(textInputId, { focus: false, serial: 1 });
-        });
-        isOp("zwp_text_input_v1.activate", (x) => {
-            this.sendMessageX(x.id, "zwp_text_input_v1.enter", { surface: x.args.surface });
-            // v1/v3竞争仲裁：后激活者胜出
-            this.obj2.textInputOwner = { protocol: "v1", id: x.id };
-            if (!this.obj2.textInputV1) return;
-            for (const [k, v] of this.obj2.textInputV1.m) {
-                if (k !== x.id && v.focus) {
-                    this.sendMessageX(k, "zwp_text_input_v1.leave", {});
-                    v.focus = false;
-                }
-                if (k === x.id) {
-                    v.focus = true;
-                }
-            }
-        });
-        isOp("zwp_text_input_v1.deactivate", (x) => {
-            if (this.obj2.textInputV1?.m.get(x.id)?.focus !== true) {
-                return;
-            }
-            this.sendMessageX(x.id, "zwp_text_input_v1.leave", {});
-            if (!this.obj2.textInputV1) return;
-            const t = this.obj2.textInputV1.m.get(x.id);
-            if (t) t.focus = false;
-            if (this.obj2.textInputOwner?.id === x.id) this.obj2.textInputOwner = null;
-        });
-        isOp("zwp_text_input_v1.commit_state", (x) => {
-            const xx = this.obj2.textInputV1?.m.get(x.id);
-            if (xx) {
-                xx.serial = x.args.serial;
-            }
-        });
-
-        isOp("zwp_text_input_manager_v3.get_text_input", (x) => {
-            const textInputId = x.args.id;
-            // todo seat参数，目前只有单seat
-            const data: TextInputV3Data = {
-                entered: false,
-                commitCount: 0,
-                current: newTextInputV3State(),
-                pending: newTextInputV3State(),
-            };
-            this.obj2.textInputV3.m.set(textInputId, data);
-            // 对象创建晚于焦点变化时补发enter
-            const focus = this.obj2.textInputV3.focus;
-            if (focus !== null) {
-                data.entered = true;
-                this.sendMessageImm(textInputId, "zwp_text_input_v3.enter", { surface: focus });
-            }
-        });
-        isOp("zwp_text_input_v3.destroy", (x) => {
-            this.obj2.textInputV3.m.delete(x.id);
-            if (this.obj2.textInputOwner?.id === x.id) this.obj2.textInputOwner = null;
-        });
-        isOp("zwp_text_input_v3.enable", (x) => {
-            const t = this.obj2.textInputV3.m.get(x.id);
-            if (!t) return;
-            // enable会重置所有状态，客户端需重新提交
-            t.pending = newTextInputV3State();
-            t.pending.enabled = true;
-            // v1/v3竞争仲裁：后激活者胜出
-            this.obj2.textInputOwner = { protocol: "v3", id: x.id };
-        });
-        isOp("zwp_text_input_v3.disable", (x) => {
-            const t = this.obj2.textInputV3.m.get(x.id);
-            if (!t) return;
-            // disable同样使状态失效
-            t.pending = newTextInputV3State();
-            if (this.obj2.textInputOwner?.id === x.id) this.obj2.textInputOwner = null;
-        });
-        isOp("zwp_text_input_v3.set_surrounding_text", (x) => {
-            const t = this.obj2.textInputV3.m.get(x.id);
-            if (!t) return;
-            t.pending.surroundingText = { text: x.args.text, cursor: x.args.cursor, anchor: x.args.anchor };
-        });
-        isOp("zwp_text_input_v3.set_text_change_cause", (x) => {
-            const t = this.obj2.textInputV3.m.get(x.id);
-            if (!t) return;
-            const cause = getEnumName("zwp_text_input_v3.change_cause", x.args.cause);
-            t.pending.textChangeCause = cause === "other" ? "other" : "input_method";
-        });
-        isOp("zwp_text_input_v3.set_content_type", (x) => {
-            const t = this.obj2.textInputV3.m.get(x.id);
-            if (!t) return;
-            t.pending.contentHint = x.args.hint;
-            t.pending.contentPurpose = x.args.purpose;
-        });
-        isOp("zwp_text_input_v3.set_cursor_rectangle", (x) => {
-            const t = this.obj2.textInputV3.m.get(x.id);
-            if (!t) return;
-            t.pending.cursorRect = { x: x.args.x, y: x.args.y, width: x.args.width, height: x.args.height };
-        });
-        isOp("zwp_text_input_v3.commit", (x) => {
-            const t = this.obj2.textInputV3.m.get(x.id);
-            if (!t) return;
-            t.current = { ...t.pending };
-            // change_cause只作用于本次commit，应用后重置
-            t.pending.textChangeCause = "input_method";
-            t.commitCount++;
-            this.sendMessageImm(x.id, "zwp_text_input_v3.done", { serial: t.commitCount });
-        });
 
         // 协议模块的请求并入同一张分发表（Phase 3 起迁出的协议都走这里）。
         // 模块 handler 与 isOp 的接收形状同构（id/proto/op/args），差别只在 brand 与 args 泛型，此处桥接。

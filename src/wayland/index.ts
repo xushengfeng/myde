@@ -5,8 +5,8 @@
  * `server.ts` 后续会被拆分直至删除，调用方一律从这里导入，届时内部怎么改都不影响调用点。
  */
 
+import { WaylandServer } from "./host/server";
 import type { renderTools } from "./render_tools";
-import { WaylandServer } from "./server";
 
 /**
  * 创建 wayland 服务端。
@@ -16,6 +16,7 @@ export function createServer(op: { render: renderTools; socketDir?: string }): W
     return new WaylandServer({ socketDir: op.socketDir, render: op.render });
 }
 
+export { WaylandClient } from "./host/client";
+export { WaylandServer } from "./host/server";
 export type { WaylandWinId } from "./module";
 export type { renderTools, renderToolsOn } from "./render_tools";
-export { WaylandClient, WaylandServer } from "./server";

@@ -1,6 +1,6 @@
 import { defineModule, type WaylandObjectId2 } from "../../module";
-import { getRectKeyPoint } from "../../utils/xdg";
 import { getEnumValue, waylandObjectId } from "../../utils/wayland-proto";
+import { getRectKeyPoint } from "../../utils/xdg";
 
 /**
  * xdg-shell
