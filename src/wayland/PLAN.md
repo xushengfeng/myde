@@ -1,6 +1,6 @@
 # server.ts 架构重构计划
 
-> 状态：**进行中** —— Phase 0 基本完成（仅剩 `gen:protocols` script），Phase 1 完成 `index.ts` 入口收敛（剩 `module.ts`）。进度见下方「进度速览」。
+> 状态：**进行中** —— Phase 0 基本完成（仅剩 `gen:protocols` script），**Phase 1 已完成**（`index.ts` 入口收敛 + `module.ts`/`scene/types.ts` 契约）。下一步 Phase 2。进度见下方「进度速览」。
 > 前提：当前版本不稳定，**允许破坏性变更**，不做兼容层/废弃期，一步到位。
 > 目标：外部调用 API 更简洁，内部新增协议更方便。
 
@@ -20,7 +20,7 @@
 | 修复 `check_proto_code` 扫目录 | ➖ 弃用：重构时才有用，或可能被替换（改为在 Phase 3 期间评估） | — |
 | `package.json` 加 `gen:protocols` script | ⬜ | — |
 | Phase 1 · `index.ts` 入口收敛 | ✅ | `0c19daa` |
-| Phase 1 · `module.ts` 共享接口 | ⬜ | — |
+| Phase 1 · `module.ts` / `scene/types.ts` 契约 | ✅ | `c8ccf43` |
 | Phase 2 及以后 | ⬜ | — |
 
 ---
@@ -59,7 +59,7 @@
    外部（桌面）           │  src/wayland/index.ts  ← 唯一公开入口      │
   ───────────────         │  createServer() / WaylandServer          │
    client.windows.*  ────▶│                                          │
-   client.cursor.*   ────▶│  对外：ClientEvents + Windows + Cursor   │
+   client.cursor.*   ────▶│  对外：ServerEvents + Windows + Cursor   │
    client.window.*   ◀────│        + Control（request/respond）      │
    render 订阅语义  ◀─────│                                          │
                           └───────────────┬──────────────────────────┘
@@ -579,10 +579,15 @@ interface ImageKV {
 验收：**已达** —— 全量 20 文件 / 200 测试全绿；typecheck 0 错误（394 文件）。剩余 `gen:protocols` script 未做。
 
 ### Phase 1 — 建接口与入口收敛（纯新增）
-- [ ] 新建 `module.ts`（CoreApi/Hooks/ModuleCtx/WaylandDataRegistry/ClientEvents/SceneCmd 类型）
+- [x] 新建 `module.ts`：品牌类型（`WaylandObjectId2/3`）、状态表（`WaylandDataRegistry`，由中央表上移）、`ProtocolModule`/`RequestHandlers`/`defineModule`、`ModuleCtx`/`ObjectApi`/`EventApi`、`CoreApi`、`SurfaceHooks`/`SeatHooks` —— **已完成** `c8ccf43`
+- [x] 新建 `scene/types.ts`（`SceneCmd` + `ImageKV`）—— **归属调整**：原清单把它列在 `module.ts`，实际是渲染契约，协议模块不该因它依赖 module.ts（与 §3 目录一致）
 - [x] 新建 `index.ts` 作为唯一公开入口；`sys_api/run.ts`、`desktop-api.ts`、`desktop-test.ts` 改从 `index.ts` 导入 —— **已完成** `0c19daa`，`server.ts` 在 `src/wayland/` 之外的引用已清零，顺带引入 `createServer({ render, socketDir })` 统一创建签名
 - [x] **保留** electron 依赖与现有副作用（GPU/dmabuf 必需，已有 electron 测试），不延迟初始化 —— 已在 P10 判定，无待办
-- 验收：不改任何行为 ✅（typecheck 0 错误、20 文件 / 200 测试全绿）
+- ➖ **`ServerEvents` 移到 Phase 2**：它依赖 `WindowInfo`/`WinHandle`/`CursorState`，属 server 级打平的对外面，与事件接线一起落地更不易返工（原清单里的 `ClientEvents` 已随打平改名）
+
+**Phase 1 各接口的实现尚未存在**——`ObjectApi`/`EventApi`/`CoreApi` 是空契约，落地在 Phase 3-5；当前无调用方，纯类型。
+
+验收：**已达** —— typecheck 0 错误、20 文件 / 200 测试全绿，行为不变。
 
 ### Phase 2 — 语义状态 Store + server 级打平（改外部 API，破坏性）
 - [ ] `state/cursor_store.ts`：收敛 4 处 `render.setCursor`（`:1121/:1144/:1216/:1238/:1739`）与 `onCursorUpdata`（P4/P6）
@@ -640,7 +645,7 @@ interface ImageKV {
 - `vitest.config.ts`（✅ 新增：`fileParallelism:false`，待 socket 名改为实例唯一后可移除）
 - `src/wayland/test/window.test.ts`（✅ 新增：窗口生命周期 e2e）
 
-**新增**：`module.ts`、`index.ts`、`host/*`、`state/*`、`protocols/**`、`state` 单测、1 条 xdg e2e
+**新增**：`module.ts`（✅ Phase 1）、`scene/types.ts`（✅ Phase 1）、`index.ts`（✅ Phase 1）、`host/*`、`state/*`、`protocols/**`、`state` 单测、1 条 xdg configure 序列 e2e
 
 **不动**：`src/wayland/utils/*`（编解码独立可单测，`wayland-codec.test.ts` 保留）、`script/wayland/gen_protocols.ts`（仅加白名单行）、生成物
 
