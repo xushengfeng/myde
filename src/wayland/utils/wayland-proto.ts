@@ -3,12 +3,14 @@
 import type { WaylandObjectId2 } from "../module";
 import WaylandProtocolsJSON from "../protocols/protocols.json?raw";
 import type { WaylandEnumObj, WaylandInterfaces } from "../protocols/wayland-types";
-import type { WaylandProtocol } from "./wayland-binary";
+import type { WaylandName, WaylandProtocol } from "./wayland-binary";
 
 const WaylandProtocolsx = JSON.parse(WaylandProtocolsJSON) as Record<string, WaylandProtocol[]>;
 const WaylandProtocols = Object.fromEntries(Object.values(WaylandProtocolsx).flatMap((v) => v.map((p) => [p.name, p])));
 
 export { WaylandProtocols };
+/** 全局 name（数字）→ 协议；由 WaylandServer 启动时经 initWaylandProtocols 填充 */
+export const waylandProtocolsNameMap = new Map<WaylandName, WaylandProtocol>();
 
 export function getEnumValue<T extends keyof WaylandEnumObj>(
     enumName: T,
