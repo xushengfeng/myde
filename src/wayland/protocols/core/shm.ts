@@ -6,6 +6,29 @@ import { getEnumValue } from "../../utils/wayland-proto";
  *
  * 由 server.ts 的 newOp() 迁出；handler 只认 ctx，不接触 WaylandClient。
  */
+// 状态类型归本模块声明，不再登记 module.ts 的中央表（P3）
+declare module "../../module" {
+    interface WaylandDataRegistry {
+        wl_shm_pool: { fd: number };
+        wl_buffer:
+            | { type: "shm"; fd: number; offset: number; stride: number; imageData: ImageData }
+            | {
+                  type: "dmabuf";
+                  planes: {
+                      fd: number;
+                      plane_idx: number;
+                      offset: number;
+                      stride: number;
+                      modifier_hi: number;
+                      modifier_lo: number;
+                  }[];
+                  width: number;
+                  height: number;
+                  format: number;
+              };
+    }
+}
+
 export const shmModule = defineModule({
     name: "wl_shm",
     globals: [

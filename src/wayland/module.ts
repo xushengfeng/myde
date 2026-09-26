@@ -49,28 +49,6 @@ export type WaylandSurfaceData = {
  * 追加自己的条目，不再改这里。
  */
 export interface WaylandDataRegistry {
-    wl_shm_pool: { fd: number };
-    wl_surface: {
-        canvas: OffscreenCanvas;
-        current: WaylandSurfaceData;
-        pending: WaylandSurfaceData;
-    };
-    wl_buffer:
-        | { type: "shm"; fd: number; offset: number; stride: number; imageData: ImageData }
-        | {
-              type: "dmabuf";
-              planes: {
-                  fd: number;
-                  plane_idx: number;
-                  offset: number;
-                  stride: number;
-                  modifier_hi: number;
-                  modifier_lo: number;
-              }[];
-              width: number;
-              height: number;
-              format: number;
-          };
     xdg_wm_base: { pingSerials: Map<number, () => void> };
     xdg_positioner: {
         size: { width: number; height: number };
@@ -82,7 +60,6 @@ export interface WaylandDataRegistry {
         reactive: boolean;
         parent_size: { parent_width: number; parent_height: number };
     };
-    wl_data_source: { offers: string[] };
     zwp_linux_buffer_params_v1: {
         planes: {
             fd: number;
