@@ -1,6 +1,6 @@
 # server.ts 架构重构计划
 
-> 状态：**进行中** —— Phase 0 基本完成（仅剩 `gen:protocols` script），Phase 1 起未开始。进度见下方「进度速览」。
+> 状态：**进行中** —— Phase 0 基本完成（仅剩 `gen:protocols` script），Phase 1 完成 `index.ts` 入口收敛（剩 `module.ts`）。进度见下方「进度速览」。
 > 前提：当前版本不稳定，**允许破坏性变更**，不做兼容层/废弃期，一步到位。
 > 目标：外部调用 API 更简洁，内部新增协议更方便。
 
@@ -19,7 +19,9 @@
 | 已知缺陷基线（`ack_configure` 未实现、serial 硬编码、错误处理缺失） | ⚠️ 已记录于 §1 P-系列与 commit，未单列文档 | — |
 | 修复 `check_proto_code` 扫目录 | ➖ 弃用：重构时才有用，或可能被替换（改为在 Phase 3 期间评估） | — |
 | `package.json` 加 `gen:protocols` script | ⬜ | — |
-| Phase 1 及以后 | ⬜ | — |
+| Phase 1 · `index.ts` 入口收敛 | ✅ | `0c19daa` |
+| Phase 1 · `module.ts` 共享接口 | ⬜ | — |
+| Phase 2 及以后 | ⬜ | — |
 
 ---
 
@@ -578,9 +580,9 @@ interface ImageKV {
 
 ### Phase 1 — 建接口与入口收敛（纯新增）
 - [ ] 新建 `module.ts`（CoreApi/Hooks/ModuleCtx/WaylandDataRegistry/ClientEvents/SceneCmd 类型）
-- [ ] 新建 `index.ts` 作为唯一公开入口；`sys_api/run.ts`、`desktop-api.ts` 改从 `index.ts` 导入
-- [ ] **保留** electron 依赖与现有副作用（GPU/dmabuf 必需，已有 electron 测试），不延迟初始化
-- 验收：不改任何行为，typecheck + 全部测试通过
+- [x] 新建 `index.ts` 作为唯一公开入口；`sys_api/run.ts`、`desktop-api.ts`、`desktop-test.ts` 改从 `index.ts` 导入 —— **已完成** `0c19daa`，`server.ts` 在 `src/wayland/` 之外的引用已清零，顺带引入 `createServer({ render, socketDir })` 统一创建签名
+- [x] **保留** electron 依赖与现有副作用（GPU/dmabuf 必需，已有 electron 测试），不延迟初始化 —— 已在 P10 判定，无待办
+- 验收：不改任何行为 ✅（typecheck 0 错误、20 文件 / 200 测试全绿）
 
 ### Phase 2 — 语义状态 Store + server 级打平（改外部 API，破坏性）
 - [ ] `state/cursor_store.ts`：收敛 4 处 `render.setCursor`（`:1121/:1144/:1216/:1238/:1739`）与 `onCursorUpdata`（P4/P6）
