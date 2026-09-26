@@ -7,12 +7,10 @@ ignoredBuiltDependencies:
   - esbuild
 
 minimumReleaseAgeExclude:
-  - myde-xcb@0.1.0
-  - myde-xcb@0.1.1
+  - myde-xcb@0.1.0 || 0.1.1
   - myde-remote-connect@0.0.5
-  - myde-ui@0.0.4
-  - myde-ui@0.0.5
-  - myde-ui@0.0.7
+  - myde-ui@0.0.4 || 0.0.5 || 0.0.7
+  - myde-input@1.0.1
 
 onlyBuiltDependencies:
   - '@biomejs/biome'

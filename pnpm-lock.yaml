@@ -21,8 +21,8 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
       myde-input:
-        specifier: file:../myde-input
-        version: file:../myde-input
+        specifier: ^1.0.1
+        version: 1.0.1
       myde-pam-client:
         specifier: ^0.1.0
         version: 0.1.0
@@ -1611,8 +1611,8 @@ packages:
   myde-dbus@0.4.0:
     resolution: {integrity: sha512-P+Aw60YIR+GjK+EbS7Kwzpczs7eA4zq8ApMi/ttNoov6uNEy8spcBIkuzj9GyG17DueRAF9ZBlUTpcnpw7IF0A==}
 
-  myde-input@file:../myde-input:
-    resolution: {directory: ../myde-input, type: directory}
+  myde-input@1.0.1:
+    resolution: {integrity: sha512-GcbIYTuu7sNfUWZRzK2k3X8E4h0B7mW6skd0P7O/O80LuqBdkunsGGCWBBB2uYPWIvsrjWP2p5q9QuWXiV+Rmw==}
 
   myde-pam-client@0.1.0:
     resolution: {integrity: sha512-6xzfSvs/L+h0UARuqx23B8TWnj+iOblRUSpTPR/TiMVO/a30CysZaE0XVHIXOnuUIpqv+4QjSK2ZXrgSYubWjA==}
@@ -3632,7 +3632,7 @@ snapshots:
 
   myde-dbus@0.4.0: {}
 
-  myde-input@file:../myde-input:
+  myde-input@1.0.1:
     dependencies:
       msgpackr: 1.12.1
 
