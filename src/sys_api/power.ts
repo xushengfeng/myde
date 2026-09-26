@@ -1,4 +1,4 @@
-import { dbusClient, dbusInterface, type dbusIO } from "myde-dbus";
+import { dbusClient, type dbusInterface, type dbusIO } from "myde-dbus";
 
 export class power {
     private dbus: dbusIO;

@@ -31,7 +31,7 @@ for (const i of fs.readFileSync(chPath, "utf-8").split("\n")) {
                 }
             }
         } else {
-            codeMap.set(match[1], parseInt(match[2]));
+            codeMap.set(match[1], parseInt(match[2], 10));
         }
         const v = codeMap.get(match[1]);
         console.log(match[1], v);
@@ -52,5 +52,5 @@ for (const [k, v] of codeMap) {
 }
 TypeLines.push("}");
 
-fs.writeFileSync(outputTypesPath, TypeLines.join("\n") + "\n", "utf-8");
+fs.writeFileSync(outputTypesPath, `${TypeLines.join("\n")}\n`, "utf-8");
 console.log(`已自动生成事件类型枚举和参数类型: ${outputTypesPath}`);

@@ -39,7 +39,7 @@ describe("dma-buf", () => {
         expect(preview, `未收到预览数据，实际收到: ${JSON.stringify(result).slice(0, 300)}`).toBeDefined();
         // biome-ignore lint/style/noNonNullAssertion: 上面已断言存在
         const p = preview!;
-        expect(p.data!.slice(0, 12)).toEqual([0, 0, 0, 255, 1, 0, 1, 255, 2, 0, 2, 255]);
+        expect(p.data?.slice(0, 12)).toEqual([0, 0, 0, 255, 1, 0, 1, 255, 2, 0, 2, 255]);
         expect(p.everyZero).toBe(false);
         expect(p.size).toBe(256 * 256 * 4);
         expect(p.width).toBe(256);

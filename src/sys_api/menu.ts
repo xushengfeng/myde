@@ -1,6 +1,6 @@
-import { dbusVariant, type dbusClient, type dbusInterface, type DBusType, type DBusTypes } from "myde-dbus";
-import { getDesktopIcon } from "./application";
+import { type DBusType, type DBusTypes, type dbusClient, type dbusInterface, dbusVariant } from "myde-dbus";
 import { EventEmitter } from "../event-emitter/event-emitter";
+import { getDesktopIcon } from "./application";
 
 export type MenuItem = {
     id: number;

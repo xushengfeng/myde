@@ -1,5 +1,4 @@
 import { addStyle, initDKH, pack } from "dkh-ui";
-import type { MenuItem } from "../../../../src/sys_api/menu";
 import type { renderTools } from "../../../../src/wayland/render_tools";
 import {
     createMockClient,

@@ -10,7 +10,7 @@ module.exports = ({ createWindow }) => {
 };
 
 // 也可以直接作为渲染进程执行
-if (typeof document !== 'undefined') {
+if (typeof document !== "undefined") {
     document.body.innerHTML = `
         <div style="padding:20px;font-family:system-ui">
             <h1>Hello Electron</h1>

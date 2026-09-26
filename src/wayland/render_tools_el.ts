@@ -1,4 +1,4 @@
-import { ele, type ElType, view } from "dkh-ui";
+import { type ElType, ele, view } from "dkh-ui";
 import type { renderTools, renderToolsOn } from "./render_tools";
 
 export class renderToolsHtmlEl implements renderTools {

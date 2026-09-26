@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { volumeControl } from "../volume";
 
 describe("volumeControl", () => {
@@ -66,9 +66,9 @@ describe("volumeControl", () => {
 
     it("events", async () => {
         const volume = new volumeControl();
-        
+
         const events: string[] = [];
-        
+
         volume.ev.on("deviceAdd", (device) => {
             events.push(`deviceAdd: ${device.name}`);
             console.log(`[EVENT] Device added: ${device.name}`);
@@ -90,10 +90,10 @@ describe("volumeControl", () => {
         });
 
         await volume.init();
-        
+
         // Wait a bit for potential events
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
         console.log("Events collected:", events);
         expect(volume).toBeDefined();
     });

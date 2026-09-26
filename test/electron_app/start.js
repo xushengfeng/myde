@@ -104,14 +104,14 @@ if (!process.versions.electron) {
     function loadContent(win, opts) {
         if (opts.html) {
             if (opts.html.startsWith("<")) {
-                win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(opts.html));
+                win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(opts.html)}`);
             } else {
                 win.loadFile(opts.html);
             }
         } else if (opts.js) {
             const jsPath = path.resolve(opts.js);
             const html = wrapJS(jsPath);
-            win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+            win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
         }
     }
 

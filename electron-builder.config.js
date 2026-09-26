@@ -27,11 +27,11 @@ const build = {
         ],
         files: [],
     },
-    afterPack: async (c) => {},
+    afterPack: async (_c) => {},
 };
 
 /** @type {string[]|undefined} */
-// @ts-ignore
+// @ts-expect-error
 const files = build.linux?.files;
 
 const ignoreDir = [

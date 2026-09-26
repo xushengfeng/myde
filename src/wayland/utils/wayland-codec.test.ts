@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { WaylandObjectId } from "./wayland-binary";
 import { WaylandDecoder } from "./wayland-decoder";
 import { WaylandEncoder } from "./wayland-encoder";
-import type { WaylandObjectId } from "./wayland-binary";
 
 function codecTest(write: (e: WaylandEncoder) => void, read: (d: WaylandDecoder) => void) {
     const encoder = new WaylandEncoder();

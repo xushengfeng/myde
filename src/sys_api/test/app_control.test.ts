@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getPidTree, getPid } from "../app_control";
+import { getPid, getPidTree } from "../app_control";
 
 describe("app_control", () => {
     it("should get process tree for current process", async () => {

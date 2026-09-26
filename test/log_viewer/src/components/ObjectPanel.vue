@@ -1,40 +1,38 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { ObjInstance } from '../parser'
+import { computed } from "vue";
+import type { ObjInstance } from "../parser";
 
 const props = defineProps<{
-  objects: Map<string, ObjInstance[]>
-  instances: ObjInstance[]
-  selectedUid: number
-  objFilter: string
-  hideDead: boolean
-}>()
+    objects: Map<string, ObjInstance[]>;
+    instances: ObjInstance[];
+    selectedUid: number;
+    objFilter: string;
+    hideDead: boolean;
+}>();
 
-const emit = defineEmits<{
-  'update:objFilter': [value: string]
-  'update:hideDead': [value: boolean]
-  'select': [uid: number]
-}>()
+const _emit = defineEmits<{
+    "update:objFilter": [value: string];
+    "update:hideDead": [value: boolean];
+    select: [uid: number];
+}>();
 
-const filteredObjects = computed(() => {
-  let objs: ObjInstance[] = []
-  for (const [, insts] of props.objects) {
-    objs.push(...insts)
-  }
-  if (props.hideDead) objs = objs.filter(o => o.alive)
-  if (props.objFilter) {
-    const q = props.objFilter.toLowerCase()
-    objs = objs.filter(o =>
-      o.type.toLowerCase().includes(q) || String(o.id).includes(q)
-    )
-  }
-  objs.sort((a, b) => {
-    if (a.alive !== b.alive) return a.alive ? -1 : 1
-    if (a.type !== b.type) return a.type.localeCompare(b.type)
-    return a.id - b.id
-  })
-  return objs
-})
+const _filteredObjects = computed(() => {
+    let objs: ObjInstance[] = [];
+    for (const [, insts] of props.objects) {
+        objs.push(...insts);
+    }
+    if (props.hideDead) objs = objs.filter((o) => o.alive);
+    if (props.objFilter) {
+        const q = props.objFilter.toLowerCase();
+        objs = objs.filter((o) => o.type.toLowerCase().includes(q) || String(o.id).includes(q));
+    }
+    objs.sort((a, b) => {
+        if (a.alive !== b.alive) return a.alive ? -1 : 1;
+        if (a.type !== b.type) return a.type.localeCompare(b.type);
+        return a.id - b.id;
+    });
+    return objs;
+});
 </script>
 
 <template>

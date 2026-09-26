@@ -1,4 +1,5 @@
 import type { FSWatcher } from "node:fs";
+
 const fs = require("node:fs/promises") as typeof import("node:fs/promises");
 const fsSync = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
@@ -318,8 +319,4 @@ async function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<st
     }
 }
 
-export { getDesktopEntry };
-export { getDesktopEntries };
-export { getDesktopIcon };
-export { refreshDesktopEntries };
-export { stopWatching };
+export { getDesktopEntries, getDesktopEntry, getDesktopIcon, refreshDesktopEntries, stopWatching };

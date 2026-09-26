@@ -1,66 +1,66 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { ParsedLine, ObjInstance } from '../parser'
+import { computed } from "vue";
+import type { ObjInstance, ParsedLine } from "../parser";
 
 const props = defineProps<{
-  instances: ObjInstance[]
-  lines: ParsedLine[]
-  selectedUid: number
-  highlightLine: number
-}>()
+    instances: ObjInstance[];
+    lines: ParsedLine[];
+    selectedUid: number;
+    highlightLine: number;
+}>();
 
-const emit = defineEmits<{
-  'jump-to': [idx: number]
-  'obj-click': [uid: number]
-}>()
+const _emit = defineEmits<{
+    "jump-to": [idx: number];
+    "obj-click": [uid: number];
+}>();
 
 const inst = computed<ObjInstance | null>(() => {
-  if (props.selectedUid < 0) return null
-  return props.instances[props.selectedUid] ?? null
-})
+    if (props.selectedUid < 0) return null;
+    return props.instances[props.selectedUid] ?? null;
+});
 
-const relatedLines = computed<ParsedLine[]>(() => {
-  if (!inst.value) return []
-  const uid = inst.value.uid
-  return props.lines.filter(l => l.refUids.has(uid))
-})
+const _relatedLines = computed<ParsedLine[]>(() => {
+    if (!inst.value) return [];
+    const uid = inst.value.uid;
+    return props.lines.filter((l) => l.refUids.has(uid));
+});
 
-const creationChain = computed<ObjInstance[]>(() => {
-  if (!inst.value) return []
-  const chain: ObjInstance[] = []
-  let cur: ObjInstance | null = inst.value
-  const visited = new Set<number>()
-  while (cur && !visited.has(cur.uid)) {
-    visited.add(cur.uid)
-    chain.unshift(cur)
-    cur = cur.parentUid >= 0 ? props.instances[cur.parentUid] : null
-  }
-  return chain
-})
+const _creationChain = computed<ObjInstance[]>(() => {
+    if (!inst.value) return [];
+    const chain: ObjInstance[] = [];
+    let cur: ObjInstance | null = inst.value;
+    const visited = new Set<number>();
+    while (cur && !visited.has(cur.uid)) {
+        visited.add(cur.uid);
+        chain.unshift(cur);
+        cur = cur.parentUid >= 0 ? props.instances[cur.parentUid] : null;
+    }
+    return chain;
+});
 
-const children = computed<ObjInstance[]>(() => {
-  if (!inst.value) return []
-  const uid = inst.value.uid
-  return props.instances.filter(i => i.parentUid === uid)
-})
+const _children = computed<ObjInstance[]>(() => {
+    if (!inst.value) return [];
+    const uid = inst.value.uid;
+    return props.instances.filter((i) => i.parentUid === uid);
+});
 
-function lineSummary(line: ParsedLine): string {
-  let s = `${line.objType}#${line.objId}.${line.method}`
-  if (line.args) {
-    const a = line.args.length > 60 ? line.args.substring(0, 57) + '...' : line.args
-    s += `(${a})`
-  }
-  return s
+function _lineSummary(line: ParsedLine): string {
+    let s = `${line.objType}#${line.objId}.${line.method}`;
+    if (line.args) {
+        const a = line.args.length > 60 ? `${line.args.substring(0, 57)}...` : line.args;
+        s += `(${a})`;
+    }
+    return s;
 }
 
-function highlightObj(text: string, target: ObjInstance): string {
-  const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const pattern = new RegExp(`(${escapeRegex(target.type)}#${target.id})`, 'g')
-  return esc.replace(pattern, '<span class="hl-obj">$1</span>')
+function _highlightObj(text: string, target: ObjInstance): string {
+    const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const pattern = new RegExp(`(${escapeRegex(target.type)}#${target.id})`, "g");
+    return esc.replace(pattern, '<span class="hl-obj">$1</span>');
 }
 
 function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 </script>
 

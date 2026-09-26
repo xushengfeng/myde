@@ -31,10 +31,5 @@
         "vitest.config.*",
         "lib/**/*.ts"
     ],
-    "exclude": [
-        "**/dist/**",
-        "**/node_modules/**",
-        "test/offical/**",
-        "test/log_viewer/**"
-    ]
+    "exclude": ["**/dist/**", "**/node_modules/**", "test/offical/**", "test/log_viewer/**"]
 }

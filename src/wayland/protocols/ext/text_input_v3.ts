@@ -1,10 +1,4 @@
-import {
-    defineModule,
-    type ClientState,
-    type ModuleCtx,
-    type SurfaceId,
-    type TextInputV3Data,
-} from "../../module";
+import { type ClientState, defineModule, type ModuleCtx, type SurfaceId, type TextInputV3Data } from "../../module";
 import { newTextInputV3State } from "../../utils/text_input";
 import { getEnumName } from "../../utils/wayland-proto";
 

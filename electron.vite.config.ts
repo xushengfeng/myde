@@ -1,5 +1,5 @@
-import { defineConfig } from "electron-vite";
 import * as path from "node:path";
+import { defineConfig } from "electron-vite";
 
 export default defineConfig({
     main: {},

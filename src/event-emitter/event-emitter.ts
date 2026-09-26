@@ -133,11 +133,15 @@ export class EventEmitter<T extends EventMap = EventMap, R extends RequestEventM
         return this.listenerCount(event) > 0;
     }
 
-    respond<K extends keyof R>(event: K, handler: RequestHandler<R[K]["args"], R[K]["result"]>, options?: EventEmitterOptions): () => void {
+    respond<K extends keyof R>(
+        event: K,
+        handler: RequestHandler<R[K]["args"], R[K]["result"]>,
+        options?: EventEmitterOptions,
+    ): () => void {
         if (!this.responders.has(event)) {
             this.responders.set(event, new Set());
         }
-        this.responders.get(event)!.add(handler);
+        this.responders.get(event)?.add(handler);
 
         const cleanup = () => {
             this.responders.get(event)?.delete(handler);

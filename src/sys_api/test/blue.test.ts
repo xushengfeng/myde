@@ -1,6 +1,7 @@
 import { dbusIO } from "myde-dbus";
 import { describe, it } from "vitest";
 import { blue } from "../blue";
+
 const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
 function newSocket() {

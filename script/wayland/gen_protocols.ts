@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as xml2js from "xml2js";
 import { fileURLToPath } from "node:url";
-import type { WaylandProtocol, WaylandArgType } from "../../src/wayland/utils/wayland-binary";
+import * as xml2js from "xml2js";
+import type { WaylandArgType, WaylandProtocol } from "../../src/wayland/utils/wayland-binary";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -275,5 +275,5 @@ for (const protos of Object.values(allResults)) {
 }
 waylandTypeLines.push("};");
 
-fs.writeFileSync(outputTypesPath, waylandTypeLines.join("\n") + "\n", "utf-8");
+fs.writeFileSync(outputTypesPath, `${waylandTypeLines.join("\n")}\n`, "utf-8");
 console.log(`已自动生成事件类型枚举和参数类型: ${outputTypesPath}`);

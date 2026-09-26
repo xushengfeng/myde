@@ -1,9 +1,9 @@
 // Status Notifier Item also Tray
 
-import { dbusClient, type dbusInterface, type DBusTypes, type dbusIO } from "myde-dbus";
+import { type DBusTypes, dbusClient, type dbusInterface, type dbusIO } from "myde-dbus";
+import { EventEmitter } from "../event-emitter/event-emitter";
 import { getDesktopIcon } from "./application";
 import { dbusMenu } from "./menu";
-import { EventEmitter } from "../event-emitter/event-emitter";
 
 export class tray {
     // private sniHost: dbusServer; // todo 实现watcher

@@ -107,7 +107,7 @@ class App {
         ridInput.value = localStorage.getItem("myde-remote-id") || "";
 
         document.getElementById("conn-head")!.onclick = () => {
-            if (this.connected) document.getElementById("conn")!.classList.toggle("collapsed");
+            if (this.connected) document.getElementById("conn")?.classList.toggle("collapsed");
         };
         const go = () => {
             const id = (document.getElementById("rid") as HTMLInputElement).value.trim();
@@ -158,7 +158,7 @@ class App {
             await xx.waitForPair();
             this.connected = true;
             this.setStatus("Connected", true);
-            document.getElementById("conn")!.classList.add("collapsed");
+            document.getElementById("conn")?.classList.add("collapsed");
             this.onConnected();
         } catch (err) {
             console.error("pairing failed:", err);
@@ -267,7 +267,7 @@ class App {
         };
         this.setupTileInput(tile.querySelector(".carea") as HTMLElement, tid);
         this.toplevelEls.set(tid, tile);
-        document.getElementById("wins")!.appendChild(tile);
+        document.getElementById("wins")?.appendChild(tile);
 
         if (this.connected) {
             this.connect.sendTo({

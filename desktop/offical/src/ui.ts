@@ -1,9 +1,9 @@
-import { button, type ElType, image, spacer, view, trackPoint, pack } from "dkh-ui";
+import { button, type ElType, image, pack, spacer, trackPoint, view } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
-import { carousel, dynamicScrollList } from "./scroll-list";
-import type { BindingSource } from "./registry";
 import type { MenuItem } from "../../../src/sys_api/menu";
 import { getIconXEl } from "./icon";
+import type { BindingSource } from "./registry";
+import { carousel, dynamicScrollList } from "./scroll-list";
 
 export function sSize(s: 1 | 1.5 | 2 | 2.5 | 3 | 3.5 | 4 | 4.5 | 5 | 5.5 | 6 | 6.5 | 7 | 7.7 | 8 | 9 | 10 | 11 | 12) {
     const baseSize = 12;

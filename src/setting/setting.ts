@@ -113,8 +113,7 @@ export class setting<mainSetting extends Record<string, unknown>> {
                 if (
                     namespaceObj &&
                     typeof namespaceObj === "object" &&
-                    namespaceObj !== null &&
-                    namespaceObj[namespace] &&
+                    namespaceObj?.[namespace] &&
                     key in namespaceObj[namespace]
                 ) {
                     return namespaceObj[namespace][key as string] as moreSetting[K];

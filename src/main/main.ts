@@ -164,7 +164,7 @@ ipcMain.on("test", (_, data) => {
     // 紧接着 app.quit() 会让这行 JSON 还没落进管道就丢失，父进程收不到任何数据
     const writeLine = (line: string) => {
         try {
-            require("node:fs").writeSync(1, line + "\n");
+            require("node:fs").writeSync(1, `${line}\n`);
         } catch {
             console.log(line);
         }

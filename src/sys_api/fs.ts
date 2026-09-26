@@ -1,6 +1,6 @@
-const fs = require("fs") as typeof import("fs");
-const fsp = require("fs/promises") as typeof import("fs/promises");
-const path = require("path") as typeof import("path");
+const fs = require("node:fs") as typeof import("fs");
+const fsp = require("node:fs/promises") as typeof import("fs/promises");
+const path = require("node:path") as typeof import("path");
 
 class vfs {
     private basePath: string;

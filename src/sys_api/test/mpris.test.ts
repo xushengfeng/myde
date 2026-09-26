@@ -1,6 +1,7 @@
-import { mpris } from "../mpris";
 import { dbusIO } from "myde-dbus";
 import { describe, it } from "vitest";
+import { mpris } from "../mpris";
+
 const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
 function newSocket() {

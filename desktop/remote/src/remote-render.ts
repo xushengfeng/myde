@@ -166,11 +166,7 @@ export class RemoteRender implements renderTools {
      * TODO：cursor 改由 CursorStore + SceneCmd/ImageKV 承载后，
      * 本方法随 renderTools.setCursor 一并删除。
      */
-    setCursor(
-        _canvas: OffscreenCanvas | string | undefined,
-        _hotspotX: number,
-        _hotspotY: number,
-    ): void {}
+    setCursor(_canvas: OffscreenCanvas | string | undefined, _hotspotX: number, _hotspotY: number): void {}
 
     getXdgSurfaceEle(_id: string) {
         return {

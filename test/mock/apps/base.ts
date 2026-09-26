@@ -263,7 +263,7 @@ export abstract class MockApp {
             // 触发windowClosed事件
             this.client.emit("windowClosed", this.windowId);
             this.client.getWindows().delete(this.windowId);
-            
+
             // 如果所有窗口都关闭了，触发close事件
             if (this.client.getWindows().size === 0) {
                 this.client.emit("close");

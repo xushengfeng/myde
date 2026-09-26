@@ -1,35 +1,27 @@
 {
-  "compilerOptions": {
-    "target": "esnext",
-    "module": "esnext",
-    "sourceMap": false,
-    "strict": true,
-    "jsx": "preserve",
-    "esModuleInterop": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noImplicitAny": false,
-    "noImplicitReturns": true,
-    "composite": true,
-    "types": [
-      "node"
+    "compilerOptions": {
+        "target": "esnext",
+        "module": "esnext",
+        "sourceMap": false,
+        "strict": true,
+        "jsx": "preserve",
+        "esModuleInterop": true,
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "forceConsistentCasingInFileNames": true,
+        "skipLibCheck": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noImplicitAny": false,
+        "noImplicitReturns": true,
+        "composite": true,
+        "types": ["node"],
+        "lib": ["ESNext", "DOM", "DOM.Iterable"]
+    },
+    "references": [
+        {
+            "path": "./tsconfig.node.json"
+        }
     ],
-    "lib": [
-      "ESNext",
-      "DOM",
-      "DOM.Iterable"
-    ]
-  },
-  "references": [
-    {
-      "path": "./tsconfig.node.json"
-    }
-  ],
-  "include": [
-    "src/renderer/**/*.ts"
-  ]
+    "include": ["src/renderer/**/*.ts"]
 }
