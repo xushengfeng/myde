@@ -1,4 +1,3 @@
-import type { WaylandObjectId2 } from "../../module";
 import { defineModule } from "../../module";
 import { DRM_FORMAT } from "../../utils/dma-buf";
 import { importSharedTexture } from "../../utils/shared_texture";
@@ -146,31 +145,14 @@ export const surfaceModule = defineModule({
                     width = image.width;
                     height = image.height;
                 }
-                if (width !== canvas.width || height !== canvas.height) {
+                const sizeChanged = width !== canvas.width || height !== canvas.height;
+                if (sizeChanged) {
                     canvas.width = width;
                     canvas.height = height;
                     ctx.core.surface.updateWlSurfaceSize(surfaceId, width, height);
-                    // for (const [id, p] of ctx.objects.entries()) {
-                    //     if (p.protocol.name === "xdg_toplevel") {
-                    // ctx.sendMessage(id, 0, {
-                    //     width: canvas.width,
-                    //     height: canvas.height,
-                    //     states: new Uint8Array([
-                    //         WaylandProtocols.xdg_toplevel.enum![2].enum.resizing,
-                    //         WaylandProtocols.xdg_toplevel.enum![2].enum.activated,
-                    //     ]),
-                    // });
-                    // todo 考虑实际窗口的几何，否则有外边框的会变大
-                    //     }
-                    // }
-                    for (const [id, p] of ctx.objects.entries()) {
-                        if (p.protocol.name === "xdg_surface") {
-                            ctx.send(id as WaylandObjectId2<"xdg_surface">, "xdg_surface.configure", {
-                                serial: 1,
-                            });
-                        }
-                    }
                 }
+                // buffer 已应用、像素尚未合成：交给扩展（xdg 在此按尺寸变化发 configure）
+                ctx.notify.commit(surfaceId, sizeChanged);
 
                 const damageList = [...(data.damageList || []), ...(data.damageBufferList || [])];
                 // todo 有区别，但现在先不处理

@@ -13,6 +13,7 @@ import { surfaceModule } from "./core/surface";
 import { cursorShapeModule } from "./ext/cursor_shape";
 import { dmabufModule } from "./ext/dmabuf";
 import { viewporterModule } from "./ext/viewporter";
+import { xdgShellModule } from "./ext/xdg_shell";
 
 /**
  * 全部协议模块清单（运行期聚合，替代原 `supportedProtocols` 的手工 if 链）。
@@ -33,6 +34,7 @@ export const protocolModules: readonly ProtocolModule[] = [
     viewporterModule,
     cursorShapeModule,
     dmabufModule,
+    xdgShellModule,
     subsurfaceModule,
     dataDeviceModule,
 ];

@@ -25,9 +25,12 @@ describe("协议模块注册", () => {
         expect(names).toContain("linux-dmabuf-v1");
     });
 
-    it("core 模块没有声明反向钩子，扩展才有", () => {
-        const withHooks = protocolModules.filter((m) => m.hooks.onFrame || m.hooks.onCommit);
-        expect(withHooks.map((m) => m.name)).toEqual(["viewporter"]);
+    it("core 模块不声明反向钩子，扩展才有", () => {
+        const withHooks = protocolModules
+            .filter((m) => m.hooks.onFrame || m.hooks.onCommit || m.hooks.onDestroy)
+            .map((m) => m.name)
+            .sort();
+        expect(withHooks).toEqual(["viewporter", "xdg-shell"]);
     });
 });
 

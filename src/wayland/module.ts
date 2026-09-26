@@ -262,6 +262,8 @@ export interface XdgSurfaceApi {
     getXdgSurfaceByToplevel(id: XdgToplevelId): XdgSurfaceId | undefined;
     getXdgSurfaceByPopup(id: XdgPopupId): XdgSurfaceId | undefined;
     setAsToplevel(id: XdgSurfaceId, toplevelId: XdgToplevelId): void;
+    setAsPopup(id: XdgSurfaceId, popupId: XdgPopupId, parent: XdgSurfaceId): void;
+    setOffset(id: XdgSurfaceId, x: number, y: number): void;
     popupDestroyed(popupId: XdgPopupId): void;
     toplevelDestroyed(toplevelId: XdgToplevelId): void;
 }
@@ -304,8 +306,11 @@ export interface CoreApi {
 
 /** core 不 import 扩展，扩展注册回调；这是唯一的反向通道 */
 export interface SurfaceHooks {
-    /** buffer 已应用、像素尚未合成：xdg 在此按尺寸变化发 configure */
-    onCommit?(surfaceId: SurfaceId, ctx: ModuleCtx): void;
+    /**
+     * buffer 已应用、像素尚未合成。`sizeChanged` 为本次 commit 是否改变了 surface 尺寸
+     * ——xdg 只在此时发 configure。
+     */
+    onCommit?(surfaceId: SurfaceId, sizeChanged: boolean, ctx: ModuleCtx): void;
     /**
      * 像素已合成、渲染之前：可返回替换后的画布（viewporter 之类做后处理）。
      * 与 onCommit 分开是因为两者时机不同——合成逻辑必须在 damage 绘制之后。
@@ -482,7 +487,7 @@ export interface ModuleCtx {
      */
     notify: {
         /** buffer 已应用、像素尚未合成 */
-        commit(surfaceId: SurfaceId): void;
+        commit(surfaceId: SurfaceId, sizeChanged: boolean): void;
         /** 像素已合成、渲染之前；返回（可能被替换的）画布 */
         frame(surfaceId: SurfaceId, canvas: OffscreenCanvas, pending: WaylandSurfaceData): OffscreenCanvas;
         destroy(surfaceId: SurfaceId): void;
