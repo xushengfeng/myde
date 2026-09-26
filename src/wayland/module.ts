@@ -49,34 +49,6 @@ export type WaylandSurfaceData = {
  * 追加自己的条目，不再改这里。
  */
 export interface WaylandDataRegistry {
-    xdg_wm_base: { pingSerials: Map<number, () => void> };
-    xdg_positioner: {
-        size: { width: number; height: number };
-        anchor_rect: { x: number; y: number; width: number; height: number };
-        anchor: number;
-        gravity: number;
-        constraint_adjustment: number;
-        offset: { x: number; y: number };
-        reactive: boolean;
-        parent_size: { parent_width: number; parent_height: number };
-    };
-    zwp_linux_buffer_params_v1: {
-        planes: {
-            fd: number;
-            plane_idx: number;
-            offset: number;
-            stride: number;
-            modifier_hi: number;
-            modifier_lo: number;
-        }[];
-    };
-    wp_viewport: {
-        surface: SurfaceId;
-    };
-    wp_cursor_shape_device_v1: {
-        // 绑定的指针设备，目前只有 wl_pointer
-        pointer: WaylandObjectId2<"wl_pointer">;
-    };
 }
 
 export type DataOf<I extends WaylandInterfaces> = I extends keyof WaylandDataRegistry
