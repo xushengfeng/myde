@@ -340,94 +340,132 @@ ctx.send(toplevelId, "xdg_toplevel.configure", { width, states: new Uint32Array(
 
 ## 5. 对外 API（破坏性，桌面侧）
 
-现行契约见 `desktop/readme.md:371-418`、导出见 `src/desktop-api.ts:97-98`。重构后：
+现行契约见 `desktop/readme.md:371-418`、导出见 `src/desktop-api.ts:97-98`。重构后**以 server 为主通道**。
 
-### 5.1 事件分域 + 完整 payload
+### 5.1 打平原则：事件与查询上提到 server，用全局 handle
+
+**现状是桌面在替服务端做聚合**——`desktop/example/src/index.ts:24-25` 自己拼全局窗口 ID：
 
 ```ts
-interface ClientEvents {
+function createWindowId(clientId: string, windowId: WaylandWinId): MWinId {
+    return `${clientId}-${windowId}` as MWinId;
+}
+```
+
+配合 `desktop/example` + `desktop-test` **共 11 处** `for (const [clientId, client] of server.clients)` 遍历、`topWindow = { clientId, winId, zIndex }` 复合记录——跨客户端聚合、生成全局身份、清理断开客户端的残留窗口，全都是桌面的负担。
+
+**硬约束**：Wayland 对象 ID 由**客户端本地分配**（实测两个客户端可同时用 `id: 9`），扁平事件不能直接用 windowId，必须有服务端全局身份：
+
+```ts
+type WinHandle = string;   // 服务端单调递增："w1"、"w2"…
+
+interface WindowInfo {
+    handle: WinHandle;
+    clientId: string;                 // 需要按客户端过滤时用
+    appid: string;
+    title: string;
+    rect: { x: number; y: number; w: number; h: number };
+    states: { activated: boolean; maximized: boolean; minimized: boolean };
+    renderId: string;
+}
+```
+
+选单调递增而非拼 `clientId-windowId`：客户端断开重连后对象 id 会复用，递增 handle 不会串台，桌面也不用再拼字符串。
+
+**新增机制**（都不重）：
+1. server 订阅每个 client 的事件做 fan-in 转发（薄适配层）
+2. 全局窗口表 `handle → (client, winId)`
+3. **client 断开时由 server 统一关闭该客户端全部窗口**——现在 `clientClose` 只删 client，窗口残留靠桌面自己兜，交给 server 反而更可靠
+
+### 5.2 事件：server 级、按域分组、payload 自包含
+
+```ts
+interface ServerEvents {
     window: {
-        created(snap: WindowSnapshot): void;
-        closed(id: WindowId): void;
-        resized(id: WindowId, rect: Rect): void;
-        stateChanged(id: WindowId, states: WindowStates): void;  // maximized/activated/minimized
-        moved(id: WindowId): void;
-        titleChanged(id: WindowId, title: string): void;
-        appidChanged(id: WindowId, appid: string): void;
+        created(info: WindowInfo): void;
+        changed(info: WindowInfo): void;     // rect/states/title/appid 任一变化，字段自包含，无需反查
+        closed(handle: WinHandle): void;
+        startMove(handle: WinHandle): void;
     };
-    cursor: { changed(state: CursorState): void };
+    cursor: { changed(clientId: string, state: CursorState): void };
     clipboard: { copy(text: string): void; pasteRequested(): void };
-    closed(): void;   // client 断开，替代现 "close"
+    client: { opened(clientId: string): void; closed(clientId: string): void };
 }
 
 type CursorState =
     | { kind: "hidden" }
-    | { kind: "shape"; shape: CursorShape; hotspot: { x: 0; y: 0 } }        // cursor-shape，纯枚举可序列化
+    | { kind: "shape"; shape: CursorShape; hotspot: { x: 0; y: 0 } }   // 纯枚举，可序列化
     | { kind: "image"; canvas: OffscreenCanvas; hotspot: Point; surfaceId?: SurfaceId };
 ```
 
-**合并/替换**：`windowCreated+windowClosed+windowStartMove+windowMaximized+windowUnMaximized+title+appid+copy+paste+close`（10 个平铺事件）→ 4 个域。`windowCreated(id, renderId)` 二元组取消，`renderId` 内嵌进 `WindowSnapshot`。
+**合并/替换**：`windowCreated+windowClosed+windowStartMove+windowMaximized+windowUnMaximized+title+appid+copy+paste+close`（10 个平铺事件、且需逐 client 订阅）→ 4 个域、server 一次订阅覆盖全部客户端。`windowCreated(id, renderId)` 二元组取消，`renderId` 内嵌 `WindowInfo`。
 
-### 5.2 窗口快照（消除反查）
+### 5.3 查询：`server.windows`，不再遍历 clients
 
 ```ts
-interface WindowSnapshot {
-    id: WindowId;
-    renderId: string;
-    title: string;
-    appid: string;
-    rect: { x: number; y: number; w: number; h: number };
-    states: WindowStates;
-    preview(): OffscreenCanvas | Promise<OffscreenCanvas>;   // 现 win().getPreview()
-}
+server.windows.list(): WindowInfo[]                 // 替代 for (client of server.clients) 收集
+server.windows.get(handle): WindowInfo | undefined
+server.cursor.get(clientId): CursorState
 ```
 
-### 5.3 控制门面：`win()` → 统一 Control（request/respond）
+### 5.4 控制：handle → 内部反查 client
 
 用 `src/event-emitter/event-emitter.ts` 的 `request/respond` 替代现 `win()` 手工对象（`server.ts:2097-2360`）与 `emitSync`（P9）：
 
 ```ts
 // 查询
-await client.request("window.get", id): WindowSnapshot
-await client.request("window.getBounds", id): Rect        // 替代 onSync("windowBound") 的反向：桌面提供可用空间
-// 命令
-client.notify("window.focus" | "window.blur" | "window.close", id)
-client.notify("window.setSize", id, { width, height })
-client.notify("window.maximize" | "window.unmaximize" | "window.minimize", id)
-client.notify("window.startMove", id)
-// 输入注入（原 win().point.*、client.keyboard.*）
-client.notify("input.pointer", id, event)
-client.notify("input.scroll", id, event)
-client.notify("input.key", id, key, "pressed" | "released")
-client.notify("input.text", id, text, preedit)
-// 桌面提供窗口可用空间（替代 onSync("windowBound")）
-client.respond("surfaceBounds.request", (ev) => ({ width, height }))
+await server.request("window.get", handle): WindowInfo
+await server.request("window.getBounds", handle): Rect
+// 窗口命令
+server.notify("window.focus" | "window.blur" | "window.close", handle)
+server.notify("window.setSize", handle, { width, height })
+server.notify("window.maximize" | "window.unmaximize" | "window.minimize", handle)
+// 输入注入（原 win().point.*、client.keyboard.*），内部 handle → (client, winId)
+server.notify("input.pointer", handle, event)
+server.notify("input.scroll", handle, event)
+server.notify("input.key", handle, key, "pressed" | "released")
+server.notify("input.text", handle, text, preedit)
+// 桌面提供可用空间（替代现 onSync("windowBound")，原来是逐 client 注册）
+server.respond("surfaceBounds.request", () => ({ width, height }))
 ```
 
 `win.point.updatePointerFocus`（`:2157-2360`，约 200 行 hit-test）下沉到 `state/windows_store.ts`，不再挂在 win 对象上。
 
-### 5.4 入口与导出
+### 5.5 哪些**不**打平（保留 per-client 出口）
+
+| 走 server（主通道） | 保留 `server.clients` |
+|---|---|
+| window / cursor / clipboard 的事件、查询、命令 | 连接生命周期、remote/调试等需要底层 client 的场景 |
+| 输入注入（经 handle 反查） | 桌面明确要拿到具体 client 对象时 |
+
+**增量而非替代**：`server.clients` 不删除，但桌面的常规路径不再需要它，11 处遍历消失。
+
+### 5.6 入口与导出
 
 ```ts
 // src/wayland/index.ts（唯一入口）
 export function createServer(op: { render: SceneSink; socketDir?: string }): WaylandServer;
-export type { WaylandServer, Client, ClientEvents, WindowSnapshot, CursorState, ... };
+export type { WaylandServer, ServerEvents, WindowInfo, WinHandle, CursorState, ... };
 ```
 
 - `src/sys_api/run.ts` 改为从 `index.ts` 导入（收敛公开入口；electron 依赖保留，见 P10 判定）
 - `src/desktop-api.ts:97-98` 的导出改为从 `index.ts` re-export
-- 删除对 `WaylandClient` 具体类的类型暴露，改暴露 `Client` 接口（桌面不需要内部类）
+- 删除对 `WaylandClient` 具体类的类型暴露；`Client` 仅在需要低层访问时导出
 
-### 5.5 迁移对照（桌面侧）
+### 5.7 迁移对照（桌面侧）
 
 | 现在 | 之后 |
 |---|---|
-| `client.on("windowCreated", (id, renderId) => ...)` | `client.on("window.created", (snap) => ...)` |
-| `client.on("windowResized", (id, w, h))` + `win().getReRect()` | `client.on("window.resized", (id, rect))` + `client.request("window.get", id)` |
-| `client.win(id)?.focus()` | `client.notify("window.focus", id)` |
-| `client.onSync("windowBound", () => ({w,h}))` | `client.respond("surfaceBounds.request", ...)` |
-| `render.on({ onCursorUpdata })` | `client.on("cursor.changed", ...)` |
-| `win.point.renderId()` | `snap.renderId` |
+| `server.on("newClient", (c,id) => c.on("windowCreated", …))` | `server.on("window.created", (info) => …)` |
+| `for (const [cid, c] of server.clients)` 收集窗口 | `server.windows.list()` |
+| `createWindowId(clientId, windowId)` 自己拼 | `info.handle` |
+| `client.on("windowResized", (id, w, h))` + `win().getReRect()` | `server.on("window.changed", info)` |
+| `client.win(id)?.focus()` | `server.notify("window.focus", handle)` |
+| `client.onSync("windowBound", () => ({w,h}))` | `server.respond("surfaceBounds.request", …)` |
+| `render.on({ onCursorUpdata })` | `server.on("cursor.changed", …)` |
+| `win.point.renderId()` | `info.renderId` |
+
+影响面：`desktop/{example,offical,remote}`、`desktop-test.ts`、`test/mock` 全部要改——它们在 Phase 2 本来就要动一次，打平**没有额外成本**。
 
 ---
 
@@ -493,7 +531,7 @@ interface ImageKV {
 | 轨道 | 内容 | 阶段 | 独立价值（只做这条也有意义） |
 |---|---|---|---|
 | **T1 内部**：协议模块化 | 拆 `server.ts`、CoreApi/Hooks、模块声明 | 3-5 | 新协议 1 个文件；不做则外部 API 再干净，底层仍是 god file |
-| **T2 外部**：client API | 事件分域、Control 门面、SceneCmd/渲染契约 | 2, 6 | 桌面调用简洁；不做则新协议再多，对外仍难用 |
+| **T2 外部**：client API | **server 级打平**（事件/查询/控制上提 + 全局 WinHandle）、事件分域、Control 门面、SceneCmd/渲染契约 | 2, 6 | 桌面调用简洁、11 处遍历消失；不做则新协议再多，对外仍难用 |
 | **共享**：前提 | 安全网、接口与入口、**状态 Store 抽取** | 0, 1, 2a | 两轨都依赖 |
 
 **共享接缝（必须先落，否则两轨互相牵制）**：`WindowsStore`/`CursorStore`/`SeatStore` 从 `obj2`（`:642-684`）抽出。它是 T1 handler 摆脱 `this` 的前提，也是 T2 事件的数据源。缺了它，handler 搬出 `WaylandClient` 时会连带 `this.emit(...)`/`this.obj2` 一起搬走——等于迁两次。
@@ -525,12 +563,14 @@ interface ImageKV {
 - [ ] **保留** electron 依赖与现有副作用（GPU/dmabuf 必需，已有 electron 测试），不延迟初始化
 - 验收：不改任何行为，typecheck + 全部测试通过
 
-### Phase 2 — 语义状态 Store（改外部 API，破坏性）
+### Phase 2 — 语义状态 Store + server 级打平（改外部 API，破坏性）
 - [ ] `state/cursor_store.ts`：收敛 4 处 `render.setCursor`（`:1121/:1144/:1216/:1238/:1739`）与 `onCursorUpdata`（P4/P6）
-- [ ] `state/windows_store.ts`：`obj2.windows` 上收，事件分域 + `WindowSnapshot`（P7）
+- [ ] `state/windows_store.ts`：`obj2.windows` 上收，事件分域 + `WindowInfo`（P7）
 - [ ] `state/seat_store.ts`：焦点/serial/textInput 仲裁（`:2436-2490`）
-- [ ] 按 §5 改造对外事件与 Control；更新 `desktop/readme.md`、`desktop/{example,offical,remote}`、`desktop-test.ts`、`test_runner`、`test/mock`
-- 验收：e2e 全绿；`RemoteRender` 不再需要 `setCursor`；桌面侧编译通过
+- [ ] **全局窗口身份**：`WinHandle` 单调递增、`handle → (client, winId)` 反查表（对象 id 是客户端本地的，实测会撞）
+- [ ] **server 级 fan-in**：server 订阅各 client 事件并转发；client 断开时统一关闭其全部窗口（§5.1）
+- [ ] 按 §5 改造对外事件/查询/Control；更新 `desktop/readme.md`、`desktop/{example,offical,remote}`、`desktop-test.ts`、`test_runner`、`test/mock`（11 处 `for (client of server.clients)` 消失）
+- 验收：e2e 全绿；`RemoteRender` 不再需要 `setCursor`；桌面侧编译通过；桌面代码不再需要自己拼 `createWindowId`
 
 ### Phase 3 — 拆 core 模块（内部，不改外 API）
 - [ ] `protocols/core/{display,registry,shm,compositor,region}.ts` 迁出（handler `:828-1000` 附近）
@@ -626,7 +666,7 @@ interface ImageKV {
 
 1. `src/wayland/server.ts` 删除，全部经 `index.ts` 导入
 2. `protocols/**` 文件间无相互 import（链式依赖除外）；新增协议只写 1 个文件 + 白名单 1 行
-3. 桌面侧 API：事件按域、payload 自包含（无 `renderId` 二元组、无反查）、无 `onSync`
+3. 桌面侧 API：事件/查询/控制都在 **server 级**（全局 `WinHandle`，payload 自包含、无 `renderId` 二元组、无反查）、无 `onSync`；桌面不再需要 `for (client of server.clients)` 遍历与 `createWindowId` 拼接
 4. cursor 状态单写入点，`obj2` 巨型袋消失
 5. `typecheck` 覆盖全部 4 个 Scene 实现；覆盖率脚本扫描目录
 6. 全部 e2e + 单测通过；`desktop/readme.md` 与 `AGENTS.md` 更新
@@ -714,11 +754,19 @@ declare module "../module" {
 }
 // 用法：ctx.objects.setData(id, {...}) / ctx.objects.getData<xdg_surface>(id)
 
-// ③ 跨协议语义状态：集中在 state/，单写入点，桌面与渲染都从这里读
-class WindowsStore {           // 替代 obj2.windows（:648）+ xdgSurfaceData 部分字段
-    #wins = new Map<WinId, WindowSnapshot>();
-    upsert(snap) { …; this.emit("created"|"changed", snap); }
-    get(id): WindowSnapshot | undefined;
+// ③ 跨协议语义状态：集中在 state/，单写入点，桌面与渲染都从这里读。
+//    注意是 server 级（跨客户端），不是 per-client：WinHandle 在这里分配，
+//    断开清理也在这里做 —— 这样 server.windows.list() 才有唯一数据源
+class WindowsStore {
+    #wins = new Map<WinHandle, WindowInfo & { client: ClientRef }>();
+    /** 由 client 的 xdg_shell 模块调用，内部完成 handle 分配与反查表维护 */
+    upsert(clientId: string, winId: WaylandWinId, patch: Partial<WindowInfo>): WinHandle;
+    remove(handle: WinHandle): void;
+    /** client 断开时批量移除其全部窗口，并 emit closed —— 替代桌面自己兜残留 */
+    removeByClient(clientId: string): WinHandle[];
+    list(): WindowInfo[];                       // server.windows.list()
+    resolve(handle: WinHandle): { client: ClientRef; winId: WaylandWinId } | undefined;
+    get(handle: WinHandle): WindowInfo | undefined;
     hasPendingConfigure(surfaceId): boolean;
 }
 ```
@@ -767,41 +815,40 @@ import { createServer } from "src/wayland";       // 唯一入口
 
 const { server, runApp } = createServer({ render });
 
-// —— 事件：按域、payload 自包含 ——
-server.on("newClient", (client) => {
-    client.on("window.created", (snap) => {
-        // snap: { id, renderId, title, appid, rect, states } —— 一次拿全，无需反查
-        taskbar.add(snap);
-        render.focus(snap.renderId);
-    });
-    client.on("window.resized", (id, rect) => taskbar.resize(id, rect));
-    client.on("cursor.changed", (s) => {
-        if (s.kind === "shape") osd.showCursorIcon(s.shape);      // 纯枚举，远程可透传
-        else if (s.kind === "image") osd.setCursor(s.canvas, s.hotspot);
-        else osd.hideCursor();
-    });
-    client.on("clipboard.copy", (text) => clip.set(text));
-
-    // —— 反向：桌面提供可用空间（替代 onSync("windowBound")）——
-    client.respond("surfaceBounds.request", () => ({ width: screen.w, height: screen.h }));
+// —— 事件：server 级一次订阅覆盖所有客户端，payload 自包含 ——
+server.on("window.created", (info) => {
+    // info: { handle, clientId, renderId, title, appid, rect, states } —— 一次拿全，无需反查
+    taskbar.add(info);
+    render.focus(info.renderId);
 });
+server.on("window.changed", (info) => taskbar.update(info));
+server.on("cursor.changed", (clientId, s) => {
+    if (s.kind === "shape") osd.showCursorIcon(s.shape);      // 纯枚举，远程可透传
+    else if (s.kind === "image") osd.setCursor(s.canvas, s.hotspot);
+    else osd.hideCursor();
+});
+server.on("clipboard.copy", (text) => clip.set(text));
 
-// —— 查询 ——
-const snap = await client.request("window.get", id);     // WindowSnapshot
-const ok = await client.request("window.getBounds", id); // {width,height}
+// —— 桌面提供可用空间（替代原来逐 client 注册的 onSync("windowBound")）——
+server.respond("surfaceBounds.request", () => ({ width: screen.w, height: screen.h }));
 
-// —— 命令（原 win().xxx 打平）——
-client.notify("window.focus", id);
-client.notify("window.setSize", id, { width: 800, height: 600 });
-client.notify("window.maximize", id);
-client.notify("window.close", id);
+// —— 查询：不再遍历 server.clients ——
+const all = server.windows.list();                            // WindowInfo[]
+const info = await server.request("window.get", handle);      // WindowInfo
+const rect = await server.request("window.getBounds", handle);
+
+// —— 命令（原 win().xxx，经 handle 反查到具体 client）——
+server.notify("window.focus", handle);
+server.notify("window.setSize", handle, { width: 800, height: 600 });
+server.notify("window.maximize", handle);
+server.notify("window.close", handle);
 
 // —— 输入注入（原 win().point.* / client.keyboard.*）——
-client.notify("input.pointer", id, { type: "move", x, y });
-client.notify("input.key", id, code, "pressed");
+server.notify("input.pointer", handle, { type: "move", x, y });
+server.notify("input.key", handle, code, "pressed");
 ```
 
-对照现契约 `desktop/readme.md:371-418`：`client.win(id)?.focus()` → `client.notify("window.focus", id)`；`windowCreated(id, renderId)` 二元组消失；`win.point.renderId()` → `snap.renderId`。
+对照现契约 `desktop/readme.md:371-418`：`server.on("newClient")` + 逐 client 订阅 → `server.on("window.created")`；11 处 `for (client of server.clients)` → `server.windows.list()`；桌面自己拼的 `createWindowId(clientId, windowId)` → `info.handle`；`client.win(id)?.focus()` → `server.notify("window.focus", handle)`；`windowCreated(id, renderId)` 二元组与 `win.point.renderId()` 一并消失。
 
 ### 12.5 同一流程在远程下（证明通道完备）
 
@@ -827,8 +874,8 @@ class ImageKVRemote {                                             // 像素单�
 协议侧                              传输                     桌面/渲染侧
 ────────────────────────────────────────────────────────────────────
 wl_surface.commit → 帧像素     →  ImageKV: {sid → bytes}  →  render_tools_el.drawImage(sid, bytes)
-windows_store.upsert(snapshot) →  client.on("window.created", snap)   // 结构化，不经 scene
-cursor store.set(shape)        →  client.on("cursor.changed", {kind:"shape", shape:"grab"})
+windows_store.upsert(info)      →  server.on("window.created", info)   // 结构化，不经 scene
+cursor store.set(shape)        →  server.on("cursor.changed", cid, {kind:"shape", shape:"grab"})
 xdg 布局（anchor/offset/geo）  →  SceneCmd {op:"xdgGeo", sid, w,h}    →  DOM 细节在 render_tools_el
 ```
 
