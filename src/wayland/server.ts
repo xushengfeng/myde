@@ -1,28 +1,9 @@
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
-const { sharedTexture } = require("electron") as typeof import("electron");
 
 const usocket = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
 import type { UServer, USocket } from "myde-unix-socket";
-import {
-    type WaylandEventObj,
-    WaylandEventOpcode,
-    type WaylandInterfaces,
-    type WaylandRequestObj,
-} from "./protocols/wayland-types";
-import {
-    WaylandArgType,
-    type WaylandName,
-    type WaylandObjectId,
-    type WaylandOp,
-    type WaylandProtocol,
-} from "./utils/wayland-binary";
-import { WaylandDecoder } from "./utils/wayland-decoder";
-
-
-import { buildXkb } from "myde-xcb";
-
 import { InputEventCodes } from "../input_codes/types";
 import type {
     ClientState,
@@ -39,19 +20,28 @@ import type {
     WaylandWinId,
 } from "./module";
 import { assertModuleConflicts, protocolModules } from "./protocols/index";
+import {
+    type WaylandEventObj,
+    WaylandEventOpcode,
+    type WaylandInterfaces,
+    type WaylandRequestObj,
+} from "./protocols/wayland-types";
 import type { renderTools } from "./render_tools";
 import { CursorStore } from "./state/cursor_store";
 import { SeatStore } from "./state/seat_store";
 import { type WindowRecord, WindowsStore } from "./state/windows_store";
 import { createFormatTableBuffer, DRM_FORMAT } from "./utils/dma-buf";
-import { WaylandEncoder } from "./utils/wayland-encoder";
+import { newFd } from "./utils/fd";
 import {
-    getEnumName,
-    getEnumValue,
-    tryX,
-    waylandObjectId,
-    WaylandProtocols,
-} from "./utils/wayland-proto";
+    WaylandArgType,
+    type WaylandName,
+    type WaylandObjectId,
+    type WaylandOp,
+    type WaylandProtocol,
+} from "./utils/wayland-binary";
+import { WaylandDecoder } from "./utils/wayland-decoder";
+import { WaylandEncoder } from "./utils/wayland-encoder";
+import { getEnumName, getEnumValue, tryX, WaylandProtocols, waylandObjectId } from "./utils/wayland-proto";
 import { getRectKeyPoint } from "./utils/xdg";
 
 export { WaylandClient, WaylandServer };
@@ -668,6 +658,7 @@ class WaylandClient {
                     return id as WaylandObjectId2<typeof iface>;
                 },
                 delete: (id) => this.deleteObj(id),
+                entries: () => this.objects.entries(),
                 has: (id) => this.objects.has(id),
                 bind: (msg) => {
                     this.objects.set(msg.id, { protocol: msg.protocol, data: undefined });
@@ -757,23 +748,6 @@ class WaylandClient {
             // @ts-expect-error
             m.set(op, f);
         }
-
-        isOp("wl_display.sync", (x) => {
-            const callbackId = x.args.callback;
-            this.sendMessageImm(this.displayId, "wl_display.delete_id", { id: callbackId });
-
-            this.sendMessageX(callbackId, "wl_callback.done", { callback_data: 0 });
-        });
-        isOp("wl_display.get_registry", (x) => {
-            const registryId = x.args.registry;
-            for (const [i, proto] of waylandProtocolsNameMap) {
-                this.sendMessageX(registryId, "wl_registry.global", {
-                    name: i,
-                    interface: proto.name,
-                    version: proto.version,
-                });
-            }
-        });
         isOp("wl_registry.bind", (x) => {
             const name = x.args.name as WaylandName;
             const _id = x.args.id;
@@ -833,452 +807,8 @@ class WaylandClient {
                 this.getObject(id).data = { pingSerials: new Map() };
             }
         });
-        isOp("wl_shm.create_pool", (x) => {
-            const fd = x.args.fd;
-            this.getObject(x.args.id).data = { fd };
-        });
-        isOp("wl_compositor.create_surface", (x) => {
-            const surfaceId = x.args.id;
-            const surface = this.getObject(surfaceId);
-            surface.data = { canvas: new OffscreenCanvas(1, 1), current: {}, pending: {} };
-            this.wlSurface.addWlSurface(surfaceId);
-        });
-        isOp("wl_shm_pool.create_buffer", (x) => {
-            const thisObj = this.getObject(x.id);
-            const buffer = this.getObject(x.args.id);
-            const imageData = new ImageData(x.args.width, x.args.height);
-            buffer.data = {
-                type: "shm",
-                fd: thisObj.data.fd,
-                offset: x.args.offset,
-                stride: x.args.stride,
-                imageData: imageData,
-            };
-        });
-        isOp("wl_surface.attach", (x) => {
-            const surface = this.getObject(x.id);
-            const bufferId = waylandObjectId(x.args.buffer, "wl_buffer");
-            // todo attach(null)应该unmap，commit后视为无内容（如隐藏光标surface）
-            if (!bufferId) return;
-            surface.data.pending.buffer = { id: bufferId };
-        });
-        isOp("wl_surface.damage", (x) => {
-            const surface = this.getObject(x.id);
-            const damageList = surface.data.pending.damageList || [];
-            damageList.push({
-                x: x.args.x,
-                y: x.args.y,
-                width: x.args.width,
-                height: x.args.height,
-            });
-            surface.data.pending.damageList = damageList;
-        });
-        isOp("wl_surface.damage_buffer", (x) => {
-            const surface = this.getObject(x.id);
-            const damageBufferList = surface.data.pending.damageBufferList || [];
-            damageBufferList.push({
-                x: x.args.x,
-                y: x.args.y,
-                width: x.args.width,
-                height: x.args.height,
-            });
-            surface.data.pending.damageBufferList = damageBufferList;
-        });
-        isOp("wl_surface.frame", (x) => {
-            const callbackId = x.args.callback;
-            const surface = this.getObject(x.id);
-            surface.data.pending.callback = callbackId;
-        });
-        isOp("wl_surface.commit", async (x) => {
-            const surfaceId = x.id;
-            const surface = this.getObject(surfaceId);
-            const data = surface.data.pending;
-            surface.data.current = Object.assign({}, surface.data.current, data);
-            surface.data.pending = {};
-            const canvas = surface.data.canvas;
-            // biome-ignore lint/style/noNonNullAssertion: 忽略小概率
-            const ctx = canvas.getContext("2d")!;
-            const buffer = data.buffer;
-            const bufferId = buffer?.id;
-            const bufferObj = this.getObjectOption(bufferId)?.data;
-            if (!bufferObj) {
-            } else {
-                let image: ImageData | VideoFrame;
-                if (bufferObj.type === "shm") {
-                    image = bufferObj.imageData;
-
-                    const buffern = new Uint8ClampedArray(bufferObj.stride * image.height);
-                    try {
-                        fs.readSync(bufferObj.fd, buffern, 0, buffern.length, bufferObj.offset);
-                    } catch (error) {
-                        console.error("Error reading shm buffer:", error);
-                    }
-                    // todo 模块读取
-                    const rgba = new Uint8ClampedArray(image.width * image.height * 4);
-                    for (let y = 0; y < image.height; y++) {
-                        for (let x = 0; x < image.width; x++) {
-                            const ri = y * bufferObj.stride + x * 4;
-                            const i = (y * image.width + x) * 4;
-                            rgba[i] = buffern[ri + 2];
-                            rgba[i + 1] = buffern[ri + 1];
-                            rgba[i + 2] = buffern[ri];
-                            rgba[i + 3] = buffern[ri + 3];
-                        }
-                    }
-
-                    image.data.set(rgba);
-                } else {
-                    const modifierX = bufferObj.planes[0];
-                    const modifier = (modifierX.modifier_hi << 32) | modifierX.modifier_lo;
-
-                    const format =
-                        bufferObj.format === DRM_FORMAT.DRM_FORMAT_ARGB8888
-                            ? "bgra"
-                            : bufferObj.format === DRM_FORMAT.DRM_FORMAT_ABGR8888
-                              ? "rgba"
-                              : bufferObj.format === DRM_FORMAT.DRM_FORMAT_NV12
-                                ? "nv12"
-                                : bufferObj.format === DRM_FORMAT.DRM_FORMAT_NV16
-                                  ? "nv16"
-                                  : bufferObj.format === DRM_FORMAT.DRM_FORMAT_P010
-                                    ? "p010le"
-                                    : "bgra";
-
-                    const t = await importSharedTexture({
-                        textureInfo: {
-                            handle: {
-                                nativePixmap: {
-                                    planes: bufferObj.planes.map((p) => ({
-                                        stride: p.stride,
-                                        offset: p.offset,
-                                        size: p.stride * bufferObj.height,
-                                        fd: p.fd,
-                                    })),
-                                    modifier: modifier.toString(),
-                                    supportsZeroCopyWebGpuImport: true,
-                                },
-                            },
-                            codedSize: { height: bufferObj.height, width: bufferObj.width },
-                            pixelFormat: format,
-                        },
-                    });
-
-                    image = t.getVideoFrame();
-                    t.release();
-                }
-                let width = 0,
-                    height = 0;
-                if (image instanceof VideoFrame) {
-                    width = image.codedWidth;
-                    height = image.codedHeight;
-                } else {
-                    width = image.width;
-                    height = image.height;
-                }
-                if (width !== canvas.width || height !== canvas.height) {
-                    canvas.width = width;
-                    canvas.height = height;
-                    this.wlSurface.updateWlSurfaceSize(surfaceId, width, height);
-                    // for (const [id, p] of this.objects) {
-                    //     if (p.protocol.name === "xdg_toplevel") {
-                    // this.sendMessage(id, 0, {
-                    //     width: canvas.width,
-                    //     height: canvas.height,
-                    //     states: new Uint8Array([
-                    //         WaylandProtocols.xdg_toplevel.enum![2].enum.resizing,
-                    //         WaylandProtocols.xdg_toplevel.enum![2].enum.activated,
-                    //     ]),
-                    // });
-                    // todo 考虑实际窗口的几何，否则有外边框的会变大
-                    //     }
-                    // }
-                    for (const [id, p] of this.objects) {
-                        if (p.protocol.name === "xdg_surface") {
-                            this.sendMessageX(id as WaylandObjectId2<"xdg_surface">, "xdg_surface.configure", {
-                                serial: 1,
-                            });
-                        }
-                    }
-                }
-
-                const damageList = [...(data.damageList || []), ...(data.damageBufferList || [])];
-                // todo 有区别，但现在先不处理
-                if (damageList.length) {
-                    for (const damage of damageList) {
-                        const dw = Math.min(canvas.width, damage.width);
-                        const dh = Math.min(canvas.height, damage.height);
-                        if (image instanceof VideoFrame) {
-                            ctx.clearRect(damage.x, damage.y, dw, dh);
-                            ctx.drawImage(image, damage.x, damage.y, dw, dh, damage.x, damage.y, dw, dh);
-                        } else ctx.putImageData(image, 0, 0, damage.x, damage.y, dw, dh);
-                    }
-                } else {
-                    if (image instanceof VideoFrame) {
-                        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-                    } else ctx.putImageData(image, 0, 0);
-                }
-                if (image instanceof VideoFrame) {
-                    image.close();
-                }
-                let fcanvas = canvas;
-                if (data.viewport && (data.viewport.destination || data.viewport.source)) {
-                    const source = data.viewport.source;
-                    const destination = data.viewport.destination;
-                    let dwidth = 1;
-                    let dheight = 1;
-                    if (!destination && source) {
-                        dwidth = source.width;
-                        dheight = source.height;
-                    } else if (destination) {
-                        dwidth = destination.width;
-                        dheight = destination.height;
-                    }
-                    const ncanvas = new OffscreenCanvas(dwidth, dheight);
-                    const sctx = ncanvas.getContext("2d");
-                    if (source) {
-                        sctx?.drawImage(canvas, source.x, source.y, source.width, source.height, 0, 0, dwidth, dheight);
-                    } else {
-                        sctx?.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, dwidth, dheight);
-                    }
-                    fcanvas = ncanvas;
-                }
-                this.wlSurface.renderWlSurface(surfaceId, fcanvas);
-
-                // 只有当前光标surface才推送光标，隐藏后commit不应重新显示
-                this.cursor.updateFrame(surfaceId, fcanvas);
-            }
-
-            requestAnimationFrame(() => {
-                const bufferId = data.buffer?.id;
-                if (bufferId) {
-                    this.sendMessageImm(bufferId, "wl_buffer.release", {});
-                }
-                const x = data.callback;
-                if (x) {
-                    this.sendMessageImm(x, "wl_callback.done", { callback_data: Date.now() });
-                    this.sendMessageImm(this.displayId, "wl_display.delete_id", {
-                        id: x,
-                    });
-                }
-            });
-        });
-        isOp("wl_surface.destroy", (x) => {
-            const surfaceId = x.id;
-            // 光标surface销毁后隐藏光标
-            this.cursor.hide(surfaceId);
-            this.wlSurface.destroyWlSurface(surfaceId);
-            // todo 相关的如subsurface、xdgsurface等
-        });
-        isOp("wl_surface.set_input_region", (x) => {
-            const surface = this.getObject(x.id);
-            console.error("re", x.args);
-            const region = this.getObjectOption(waylandObjectId(x.args.region, "wl_region"));
-            surface.data.pending.inputRegion = region?.data.rects;
-        });
-        isOp("wl_surface.offset", (x) => {
-            this.wlSurface.setWlSurfaceOffset(x.id, x.args.x, x.args.y);
-        });
-        isOp("wl_subcompositor.get_subsurface", (x) => {
-            const r = this.dataManager.wlSubSurface.setWlSubSurface(
-                x.args.id,
-                waylandObjectId(x.args.parent, "wl_surface"),
-                waylandObjectId(x.args.surface, "wl_surface"),
-            );
-
-            if (r === "bad_surface")
-                this.postError("wl_subcompositor", x.id, "bad_surface", "Surface already has a role");
-            else if (r === "bad_parent")
-                this.postError("wl_subcompositor", x.id, "bad_parent", "Parent cannot be itself");
-            if (r !== true) return;
-        });
-        isOp("wl_subsurface.set_position", (x) => {
-            this.dataManager.wlSubSurface.setPosition(x.id, x.args.x, x.args.y);
-        });
-        isOp("wl_subsurface.destroy", (x) => {
-            this.dataManager.wlSubSurface.destroySubSurface(x.id);
-        });
-
-        isOp("wl_seat.get_pointer", (x) => {
-            const pointerId = x.args.id;
-            const seat = this.seat.get(x.id);
-            if (!seat) {
-                console.warn(`Seat ${x.id} not found for get_pointer`);
-                return;
-            }
-            seat.pointer = pointerId;
-        });
-        isOp("wl_seat.get_keyboard", (x) => {
-            const keyboardId = x.args.id;
-            const seat = this.seat.get(x.id);
-            if (!seat) {
-                console.warn(`Seat ${x.id} not found for get_keyboard`);
-                return;
-            }
-            seat.keyboard = keyboardId;
-            this.sendMessageX(keyboardId, "wl_keyboard.repeat_info", {
-                rate: 25,
-                delay: 600,
-            });
-
-            const keymapStr = buildXkb();
-            const { fd, size } = newFd(keymapStr);
-
-            this.sendMessageX(keyboardId, "wl_keyboard.keymap", {
-                format: getEnumValue("wl_keyboard.keymap_format", "xkb_v1"),
-                fd: fd,
-                size: size,
-            });
-        });
-        isOp("wl_pointer.set_cursor", (x) => {
-            // todo serial
-            // todo wlsurface.offset
-            const surfaceId = x.args.surface;
-            if (!surfaceId) {
-                // surface为null时隐藏光标
-                this.cursor.hide();
-                return;
-            }
-            // 校验 surface 存在（无效 id 走 postError）
-            this.getObject(surfaceId);
-            const [roleError] = tryX(() => {
-                this.wlSurface.setWlSurfaceRole(surfaceId, "cursor");
-            });
-            if (roleError instanceof WaylandSurfaceRoleError) {
-                this.postError("wl_pointer", x.id, "role", "Surface already has another role");
-                return;
-            }
-            this.cursor.setSurface(
-                surfaceId,
-                { x: x.args.hotspot_x, y: x.args.hotspot_y },
-                this.wlSurface.getWlSurface(surfaceId).frame,
-            );
-        });
-        isOp("wl_data_device_manager.create_data_source", (x) => {
-            const src = this.getObject(x.args.id);
-            src.data = { offers: [] };
-        });
-        isOp("wl_data_device_manager.get_data_device", (x) => {
-            const ddId = x.args.id;
-            const dataDevices = this.obj2.dataDevices || new Set();
-            dataDevices.add(ddId);
-            this.obj2.dataDevices = dataDevices;
-        });
-        isOp("wl_data_source.offer", (x) => {
-            const src = this.getObject(x.id);
-            if (!src) return;
-            src.data.offers.push(x.args.mime_type);
-            console.log(`wl_data_source#${x.id} offer ${x.args.mime_type}`);
-        });
 
         // 客户端想要从 compositor 接收数据（粘贴）
-        isOp("wl_data_offer.receive", (x) => {
-            const offerId = x.id;
-            const mime = x.args.mime_type;
-            const fd = x.args.fd;
-
-            // fallback: compositor-local paste flow – keep pendingPaste and emit paste for external handler
-            if (this.obj2.pendingPaste) {
-                console.warn("Existing pending paste request - rejecting previous");
-                try {
-                    fs.closeSync(this.obj2.pendingPaste.fd);
-                } catch {
-                    // ignore
-                }
-                clearTimeout(this.obj2.pendingPaste.timeout);
-                this.obj2.pendingPaste = undefined;
-            }
-
-            const timeout = setTimeout(() => {
-                if (!this.obj2.pendingPaste) return;
-                console.warn("paste request timed out");
-                try {
-                    fs.closeSync(this.obj2.pendingPaste.fd);
-                } catch {
-                    // ignore
-                }
-                this.obj2.pendingPaste = undefined;
-            }, 10000);
-
-            this.obj2.pendingPaste = { offerId, fd, mime, timeout };
-            this.emit("paste");
-        });
-        isOp("wl_data_device.set_selection", (x) => {
-            const srcId = waylandObjectId(x.args.source, "wl_data_source");
-            if (!srcId) {
-                console.log("Selection cleared");
-                return;
-            }
-
-            const src = this.getObject(srcId);
-            if (!src) {
-                console.warn(`Selection source ${srcId} not found`);
-                return;
-            }
-
-            const offers = src.data.offers;
-            // 优先尝试 text/plain;charset=utf-8，然后 text/plain
-            let mime = offers.find((m: string) => /text\/plain.*utf-?8/i.test(m));
-            if (!mime) mime = offers.find((m: string) => /^text\/plain($|;)/i.test(m));
-            if (!mime) {
-                // 回退到第一个 offer
-                mime = offers[0];
-            }
-
-            if (!mime) {
-                console.log(`No offered mime types from source ${srcId}`);
-                return;
-            }
-
-            // 创建一个临时 fd 传给客户端，让客户端往里面写入数据
-            const { fd } = newFd("");
-
-            try {
-                // 发送请求，要求客户端把 mime 类型的数据写入我们提供的 fd
-                this.sendMessageImm(srcId, "wl_data_source.send", { mime_type: mime, fd: fd });
-
-                // TODO: 使用基于 EOF 的读取更优雅，但客户端行为差异导致未能稳定工作，
-                // 先回退到简单的延时读取（不优雅），以后再改进为可靠的 EOF/poll 检测。
-                setTimeout(() => {
-                    try {
-                        const st = fs.fstatSync(fd);
-                        const len = Number(st.size) || 0;
-                        if (len === 0) {
-                            // 若 size 为 0，尝试读取最多 64KB 的数据
-                            const tryBuf = new Uint8Array(65536);
-                            let read = 0;
-                            try {
-                                read = fs.readSync(fd, tryBuf, 0, tryBuf.length, 0);
-                            } catch {
-                                // ignore
-                            }
-                            const content = Buffer.from(tryBuf.buffer, tryBuf.byteOffset, read).toString("utf8");
-                            console.log(`Clipboard (from ${srcId}) [len=${read}]:`, content);
-                        } else {
-                            const arr = new Uint8Array(len);
-                            fs.readSync(fd, arr, 0, len, 0);
-                            const content = Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength).toString("utf8");
-                            console.log(`Clipboard (from ${srcId}) [len=${len}]:`, content);
-                            this.emit("copy", content);
-                        }
-                    } catch (err) {
-                        console.error("Error reading selection fd:", err);
-                    } finally {
-                        try {
-                            fs.closeSync(fd);
-                        } catch {
-                            // ignore
-                        }
-                    }
-                }, 200);
-            } catch (err) {
-                console.error("Error sending wl_data_source.send:", err);
-                try {
-                    fs.closeSync(fd);
-                } catch {
-                    // ignore
-                }
-            }
-        });
 
         isOp("xdg_wm_base.get_xdg_surface", (x) => {
             const surfaceId = waylandObjectId(x.args.surface, "wl_surface");
@@ -2522,44 +2052,3 @@ function parseArgs(decoder: WaylandDecoder, args: WaylandOp["args"]) {
     }
     return parsed;
 }
-
-function newFd(data: string | Uint8Array): { fd: number; size: number } {
-    const tmpPath = `/dev/shm/wl-fd-${crypto.randomUUID()}`;
-    const fd = fs.openSync(tmpPath, "w+");
-    if (typeof data === "string") {
-        fs.writeFileSync(fd, data);
-    } else {
-        fs.writeFileSync(fd, data);
-    }
-    fs.unlinkSync(tmpPath); // unlink but keep fd open
-    return {
-        fd,
-        size: typeof data === "string" ? Buffer.byteLength(data) : data.length,
-    };
-}
-
-let sharedTextureCounter = 1;
-const sharedTextureCbMap = new Map<number, (cb: ReturnType<typeof sharedTexture.importSharedTexture>) => void>();
-async function importSharedTexture(
-    options: Parameters<typeof sharedTexture.importSharedTexture>[0],
-): Promise<ReturnType<typeof sharedTexture.importSharedTexture>> {
-    const id = sharedTextureCounter++;
-    const { promise, resolve } = Promise.withResolvers<ReturnType<typeof sharedTexture.importSharedTexture>>();
-    sharedTextureCbMap.set(id, resolve);
-    const fds = options.textureInfo.handle.nativePixmap?.planes.map((p) => p.fd);
-
-    if (fds !== undefined) ipc.write({ data: Buffer.from(JSON.stringify({ id, options })), fds }, () => {});
-    return promise;
-}
-
-sharedTexture.setSharedTextureReceiver(async (cb, id) => {
-    const receiver = sharedTextureCbMap.get(id);
-    if (receiver) {
-        receiver(cb.importedSharedTexture);
-        sharedTextureCbMap.delete(id);
-    } else {
-        console.error(`No receiver found for shared texture id ${id}`);
-    }
-});
-
-const ipc = new usocket.USocket({ path: "/tmp/myde.sock" });

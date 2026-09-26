@@ -187,6 +187,8 @@ export interface ObjectApi {
     create<I extends WaylandInterfaces>(iface: I): WaylandObjectId2<I>;
     delete(id: WaylandObjectId): void;
     has(id: WaylandObjectId): boolean;
+    /** 遍历全部对象（按协议名过滤等场景） */
+    entries(): IterableIterator<[WaylandObjectId, ObjectInfo<WaylandInterfaces>]>;
     /**
      * `wl_registry.bind` 的新对象接口由全局 name 决定，是唯一无法在编译期确定 brand 的入口，
      * 由 registry 模块内部完成 brand。
@@ -331,7 +333,6 @@ export interface SeatHooks {
     /** 现 server.ts:2385/:2390（键盘焦点驱动 text-input enter/leave） */
     onFocus?(surfaceId: SurfaceId | undefined, ctx: ModuleCtx): void;
 }
-
 
 // ───────────── 客户端级状态与事件（原 obj2 与事件表，Phase 3 上移） ─────────────
 
