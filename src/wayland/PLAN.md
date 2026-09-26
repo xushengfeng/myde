@@ -1,6 +1,6 @@
 # server.ts 架构重构计划
 
-> 状态：**进行中** —— Phase 0 ✅（仅剩 `gen:protocols` script）、Phase 1 ✅、Phase 2 ✅（text-input 仲裁推迟至 4-5）、**Phase 3 ✅**（core 全部迁出，`server.ts` 降至 129 行）。**场景层重构搁置**、**server 打平在 Phase 6**、**remote 只保证 typecheck**。进度见「进度速览」。
+> 状态：**进行中** —— Phase 0 ✅（仅剩 `gen:protocols` script）、Phase 1 ✅、Phase 2 ✅（text-input 仲裁推迟至 4-5）、**Phase 3 ✅**（core 全部迁出，`server.ts` 降至 129 行）、**Phase 4 ✅**（扩展三模块 + 反向钩子）。下一步 Phase 5。**场景层重构搁置**、**server 打平在 Phase 6**、**remote 只保证 typecheck**。进度见「进度速览」。
 > 前提：当前版本不稳定，**允许破坏性变更**，不做兼容层/废弃期，一步到位。
 > 目标：外部调用 API 更简洁，内部新增协议更方便。
 
@@ -30,7 +30,8 @@
 | Phase 3 · region 样板（含状态声明合并） | ✅ | `5f8e548` `2371bf1` |
 | Phase 3 · 24 个 core handler 迁出 + bind if 链 + 状态类型声明合并 + `host/client.ts` | ✅ | `ed567c2` `7bd7ac3` `3c82091` `d5563a2` |
 | Phase 3 · 46 个扩展 handler（现居 `host/client.ts`） | ⬜ → 归 Phase 4-5 | — |
-| Phase 4 及以后 | ⬜ | — |
+| Phase 4 · viewporter / cursor-shape / dmabuf + 反向钩子机制 | ✅ | 见 Phase 4 |
+| Phase 5（xdg 22 + text-input 13 = 35 handler，现居 `host/client.ts`） | ⬜ | — |
 
 ---
 
@@ -654,12 +655,25 @@ interface ImageKV {
 
 验收：**已达** —— 行为不变（21 文件 / 202 测试全绿）、typecheck 0、`git diff desktop/` 为空；~~覆盖率脚本~~ 已随 P11 弃用
 
-### Phase 4 — 拆低耦合扩展（样板）
-- [ ] `viewporter.ts`（现 `:1642-1724`，仅依赖 `wl_surface`）
-- [ ] `cursor_shape.ts`（现 `:1727-1740`）
-- [ ] `dmabuf.ts`（现 `:1576-1640`）
-- [ ] 三个模块的 commit/focus 依赖改走 Hooks
-- 验收：每个模块零 `import` 其他协议文件；e2e 通过
+### Phase 4 — 拆低耦合扩展 ✅ **完成**
+
+- [x] `viewporter.ts`（4 handler）+ `hooks.onFrame` —— `commit 里的内联合成逻辑随之搬进模块`
+- [x] `cursor_shape.ts`（2 handler）
+- [x] `dmabuf.ts`（5 handler）
+- [x] **反向钩子机制落地**（此前只有接口声明）：`host/client.ts` 聚合 `protocolModules` 的 hooks，`ctx.notify.{commit,frame,destroy,focus}` 触发
+- [x] `modules.test.ts`（5 测试）：模块注册完整性、请求键无冲突、cursor-shape 行为
+- 验收：**已达** —— 每个模块零 `import` 其他协议文件；typecheck 0；22 文件 / 207 测试全绿
+
+**关键设计：钩子分两阶段**
+| 钩子 | 时机 | 用途 |
+|---|---|---|
+| `onCommit` | buffer 已应用、**像素尚未合成** | xdg 发 configure（Phase 5） |
+| `onFrame` | 像素已合成、**渲染之前**，可返回替换画布 | viewporter 裁剪缩放 |
+
+两者不能合并：合成必须在 damage 绘制之后，合并成一个 `onCommit` 会让 viewport 拿到还没画完的画布。
+
+**⚠️ 既存缺陷基线新增一条**（与 `protoVersions` 空转、`ack_configure` 未实现并列，均**未顺手修**）：
+> `wp_viewport` 只在设置它的那次 commit 生效——`wl_surface.commit` 读的是 `pending.viewport` 而非合并后的 `current.viewport`，所以 viewport 不跨帧保持。按协议规范应读 current，但这段零测试覆盖，改成 current 无法验证，先原样保留（`onFrame` 因此特意传 pending 而非 current）。
 
 ### Phase 5 — 攻 xdg-shell 与反向耦合（最难）
 - [ ] `protocols/xdg_shell.ts`：`xdgSurfaceData`（`:480-620`）+ handler（`:1376-1574`）迁出，`this.wl_surface` → `ctx.core.surface`
