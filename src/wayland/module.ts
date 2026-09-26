@@ -115,13 +115,16 @@ export type DataOf<I extends WaylandInterfaces> = I extends keyof WaylandDataReg
 
 export type RequestKey = keyof WaylandRequestObj;
 
-export interface RequestMsg<K extends RequestKey = RequestKey> {
+/** 由 `"接口.请求"` 推出被调对象的品牌类型，handler 里无需再 cast */
+type BrandedId<K extends string> = K extends `${infer I}.${string}` ? WaylandObjectId3<I> : never;
+
+export type RequestMsg<K extends RequestKey = RequestKey> = {
     /** 被调用的对象（wl_display 特例为 1） */
-    id: WaylandObjectId;
+    id: BrandedId<K>;
     proto: WaylandProtocol;
     op: WaylandOp;
     args: WaylandRequestObj[K];
-}
+};
 
 /** 书写态用对象字面量：键名写错编译期报错，args 按键精确推导 */
 export type RequestHandlers = {
@@ -245,8 +248,8 @@ export interface BufferApi {
 }
 
 export interface WlSeatApi {
-    /** 当前键盘焦点 surface（现 obj2.focusSurface） */
-    focus(): SurfaceId | undefined;
+    /** 当前键盘焦点 surface（现 obj2.focusSurface），null 表示无焦点 */
+    focus(): SurfaceId | null;
     /** 分配 serial（现 obj2.serial，server.ts:2393-2394） */
     nextSerial(): number;
 }

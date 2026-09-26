@@ -28,7 +28,16 @@ const WaylandProtocols = Object.fromEntries(Object.values(WaylandProtocolsx).fla
 import { buildXkb } from "myde-xcb";
 
 import { InputEventCodes } from "../input_codes/types";
-import type { WaylandData, WaylandObjectId2, WaylandObjectId3, WaylandWinId } from "./module";
+import type {
+    DataOf,
+    ErrorCode,
+    ModuleCtx,
+    RequestMsg,
+    WaylandObjectId2,
+    WaylandObjectId3,
+    WaylandWinId,
+} from "./module";
+import { assertModuleConflicts, protocolModules } from "./protocols/index";
 import type { renderTools } from "./render_tools";
 import { CursorStore } from "./state/cursor_store";
 import { SeatStore } from "./state/seat_store";
@@ -86,7 +95,7 @@ type TextInputOwner =
 
 type WaylandObjectX<T extends WaylandInterfaces> = {
     protocol: WaylandProtocol;
-    data: T extends keyof WaylandData ? WaylandData[T] : never;
+    data: DataOf<T>;
 };
 
 interface WaylandServerEventMap {
@@ -150,6 +159,7 @@ class WaylandServer {
         this.clients = new Map(); // 存储连接的客户端
 
         initWaylandProtocols();
+        assertModuleConflicts();
 
         console.log("Support protocols:", Object.keys(WaylandProtocols));
 
@@ -562,8 +572,11 @@ class WaylandClient {
     private protoVersions: Map<string, number> = new Map();
     private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
     private nextObjectId: number = 0xff000000;
+    private render: renderTools;
     /** 光标的唯一写入点（见 state/cursor_store.ts） */
     private cursor: CursorStore;
+    /** 协议模块看到的 host 能力面 —— module.ts 契约的真实实现 */
+    public readonly ctx: ModuleCtx;
     /** 输入设备侧状态（见 state/seat_store.ts） */
     private seat: SeatStore;
     /** 窗口记录与窗口事件的唯一持有者（见 state/windows_store.ts） */
@@ -632,6 +645,7 @@ class WaylandClient {
             appid: undefined,
             xdg_wm_base: new Set(),
         };
+        this.render = render;
         this.cursor = new CursorStore(render);
         this.seat = new SeatStore();
         // 窗口事件的对外出口：Phase 2 仍是 client 级，Phase 6 只改这里
@@ -649,6 +663,7 @@ class WaylandClient {
             wlSubSurface: new wlSubSurfaceData(this.wlSurface),
             xdgSurface: new xdgSurfaceData(this.wlSurface),
         };
+        this.ctx = this.buildCtx();
         socket.on("data", (data, fds) => {
             this.handleClientMessage(data, fds);
         });
@@ -708,6 +723,59 @@ class WaylandClient {
                 this.events.close = [];
             }
         }
+    }
+
+    /** 把 module.ts 的空契约接上真实实现；协议模块只认这里，不接触 WaylandClient 本身 */
+    private buildCtx(): ModuleCtx {
+        return {
+            objects: {
+                get: (id) => this.getObject(id),
+                getData: (id) => this.getObject(id).data,
+                setData: (id, data) => {
+                    this.getObject(id).data = data;
+                },
+                create: (iface) => {
+                    const id = this.allocateObjectId();
+                    this.objects.set(id, { protocol: WaylandProtocols[iface], data: undefined });
+                    return id as WaylandObjectId2<typeof iface>;
+                },
+                delete: (id) => this.deleteObj(id),
+                has: (id) => this.objects.has(id),
+                bind: (msg) => {
+                    this.objects.set(msg.id, { protocol: msg.protocol, data: undefined });
+                },
+            },
+            /** 入队，本批消息处理完统一 flush */
+            send: (target, event, args) => this.sendMessageX(target, event, args),
+            /** 立即写 socket */
+            sendNow: (target, event, args) => this.sendMessageImm(target, event, args),
+            postError: (iface, id, code, message) => this.postError(iface, id, code, message),
+            core: {
+                surface: {
+                    getRole: (id) => this.wlSurface.getWlSurface(id).role,
+                    setRole: (id, role) => {
+                        try {
+                            this.wlSurface.setWlSurfaceRole(id, role);
+                            return true;
+                        } catch (e) {
+                            if (e instanceof WaylandSurfaceRoleError) return false;
+                            throw e;
+                        }
+                    },
+                    getSize: (id) => this.wlSurface.getWlSurface(id).size,
+                    getFrame: (id) => this.wlSurface.getWlSurface(id).frame,
+                },
+                registry: {
+                    globals: () =>
+                        (function* () {
+                            for (const [name, protocol] of waylandProtocolsNameMap) yield { name, protocol };
+                        })(),
+                },
+                buffer: { get: (id) => this.getObjectOption(id)?.data },
+                seat: { focus: () => this.seat.focus(), nextSerial: () => this.seat.nextSerial() },
+            },
+            scene: this.render,
+        };
     }
 
     private getObject<T extends WaylandInterfaces>(id: WaylandObjectId2<T>): WaylandObjectX<T> {
@@ -822,10 +890,6 @@ class WaylandClient {
             const surface = this.getObject(surfaceId);
             surface.data = { canvas: new OffscreenCanvas(1, 1), current: {}, pending: {} };
             this.wlSurface.addWlSurface(surfaceId);
-        });
-        isOp("wl_compositor.create_region", (x) => {
-            const region = this.getObject(x.args.id);
-            region.data = { rects: [] };
         });
         isOp("wl_shm_pool.create_buffer", (x) => {
             const thisObj = this.getObject(x.id);
@@ -1136,14 +1200,6 @@ class WaylandClient {
                 { x: x.args.hotspot_x, y: x.args.hotspot_y },
                 this.wlSurface.getWlSurface(surfaceId).frame,
             );
-        });
-        isOp("wl_region.add", (x) => {
-            const region = this.getObject(x.id);
-            region.data.rects.push({ ...x.args, type: "+" });
-        });
-        isOp("wl_region.subtract", (x) => {
-            const region = this.getObject(x.id);
-            region.data.rects.push({ ...x.args, type: "-" });
         });
         isOp("wl_data_device_manager.create_data_source", (x) => {
             const src = this.getObject(x.args.id);
@@ -1731,6 +1787,16 @@ class WaylandClient {
             this.sendMessageImm(x.id, "zwp_text_input_v3.done", { serial: t.commitCount });
         });
 
+        // 协议模块的请求并入同一张分发表（Phase 3 起迁出的协议都走这里）。
+        // 模块 handler 与 isOp 的接收形状同构（id/proto/op/args），差别只在 brand 与 args 泛型，此处桥接。
+        for (const mod of protocolModules) {
+            for (const [key, raw] of mod.requests) {
+                // 几百个 handler 类型的联合签名会把参数收成交集，先折成单一签名再调
+                const handler = raw as unknown as (msg: RequestMsg, ctx: ModuleCtx) => void;
+                m.set(key, (x) => handler(x as unknown as RequestMsg, this.ctx));
+            }
+        }
+
         return {
             isOp: (x: ParsedMessage) => {
                 const f = m.get(`${x.proto.name}.${x.op.name}`);
@@ -1934,14 +2000,13 @@ class WaylandClient {
     private postError<t extends WaylandInterfaces>(
         interface_: t,
         id: WaylandObjectId2<t>,
-        // @ts-expect-error
-        errorCode: WaylandEnumObj[`${t}.error`],
-        message: string = `${interface_} ${errorCode} error`,
+        code: ErrorCode<t>,
+        message: string = `${interface_} ${code} error`,
     ) {
         this.sendMessageX(this.displayId, "wl_display.error", {
             object_id: id,
-            // @ts-expect-error
-            code: getEnumValue(`${interface_}.error`, errorCode),
+            // @ts-expect-error 枚举名由接口名运行期拼出，类型侧无法证明
+            code: getEnumValue(`${interface_}.error`, code),
             message,
         });
     }
