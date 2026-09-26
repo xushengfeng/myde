@@ -59,9 +59,9 @@ export class DBusTestEnv {
     async start(): Promise<void> {
         if (this._started) throw new Error("DBusTestEnv already started");
 
-        if (fs.existsSync(this._socketPath)) {
-            fs.unlinkSync(this._socketPath);
-        }
+        // daemon 可能已自行删除 socket：existsSync 与 unlinkSync 之间存在竞态，
+        // force 会在文件不存在时直接忽略，避免 ENOENT 污染测试结果
+        fs.rmSync(this._socketPath, { force: true });
 
         this.daemon = spawn("dbus-daemon", ["--session", `--address=unix:path=${this._socketPath}`, "--print-address"]);
 
@@ -106,9 +106,9 @@ export class DBusTestEnv {
         this.monitor?.kill();
         this.daemon?.kill();
 
-        if (fs.existsSync(this._socketPath)) {
-            fs.unlinkSync(this._socketPath);
-        }
+        // daemon 可能已自行删除 socket：existsSync 与 unlinkSync 之间存在竞态，
+        // force 会在文件不存在时直接忽略，避免 ENOENT 污染测试结果
+        fs.rmSync(this._socketPath, { force: true });
 
         this.monitor = null;
         this.daemon = null;
