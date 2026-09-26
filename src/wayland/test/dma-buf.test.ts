@@ -3,13 +3,12 @@ import { testRunnerApp } from "../../test_runner/test_runner";
 
 describe("dma-buf", () => {
     it("run test/simple_app/dmabuf_one_frame", { timeout: 15000 }, async () => {
-        const { waitExit } = testRunnerApp("test/simple_app/target/debug/dmabuf_one_frame", ({ client, runner }) => {
-            client.on("windowCreated", (windowId) => {
-                client.win(windowId)?.focus();
+        const { waitExit } = testRunnerApp("test/simple_app/target/debug/dmabuf_one_frame", ({ server, runner }) => {
+            server.on("window.created", (info) => {
+                server.notify("window.focus", info.handle);
                 setTimeout(() => {
-                    const win = client.win(windowId);
-                    if (win) {
-                        const canvas = win.getPreview();
+                    const canvas = server.windows.preview(info.handle);
+                    if (canvas) {
                         // biome-ignore lint/style/noNonNullAssertion: ig
                         const ctx = canvas.getContext("2d")!;
                         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);

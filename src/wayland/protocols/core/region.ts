@@ -1,6 +1,6 @@
 import { defineModule } from "../../module";
 
-// 状态类型归本模块声明，不再登记 module.ts 的中央表（P3）
+// 状态类型归本模块声明（P3）
 declare module "../../module" {
     interface WaylandDataRegistry {
         wl_region: {
@@ -13,7 +13,7 @@ declare module "../../module" {
  * wl_region：矩形集合，供 wl_surface.set_input_region 等使用。
  *
  * `wl_compositor.create_region` 是它的工厂，状态类型也归本模块所有，因此一并放这里。
- * 这是 Phase 3 迁出的样板模块：只认 `ctx`，不 import 任何 host 实现。
+ * 样板模块：只认 `ctx`，不 import 任何 host 实现。
  */
 export const regionModule = defineModule({
     name: "wl_region",

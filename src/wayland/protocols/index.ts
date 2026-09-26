@@ -18,7 +18,7 @@ import { viewporterModule } from "./ext/viewporter";
 import { xdgShellModule } from "./ext/xdg_shell";
 
 /**
- * 全部协议模块清单（运行期聚合，替代原 `supportedProtocols` 的手工 if 链）。
+ * 全部协议模块清单（运行期聚合）。
  *
  * 新增协议：实现一个 `defineModule(...)`，在这里加一行即可。
  * 装配时会校验同一 `接口.请求` 被两个模块声明——现在 `Map.set` 会静默覆盖。

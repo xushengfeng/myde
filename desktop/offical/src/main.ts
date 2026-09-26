@@ -1,14 +1,35 @@
-import { addClass, addStyle, button, check, ele, type ElType, image, pack, setProperty, spacer, view } from "dkh-ui";
-
-import type {
-    DesktopIconConfig,
-    InputManager,
-    UniInputEvent,
-    WaylandClient,
-    WaylandWinId,
-} from "../../../src/desktop-api";
-import { txt } from "dkh-ui";
+import {
+    addClass,
+    addStyle,
+    button,
+    check,
+    type ElType,
+    ele,
+    image,
+    pack,
+    setProperty,
+    spacer,
+    txt,
+    view,
+} from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
+import type { DesktopIconConfig, InputManager, UniInputEvent, WinHandle } from "../../../src/desktop-api";
+import { InputEventCodes } from "../../../src/input_codes/types";
+import type { MenuItem } from "../../../src/sys_api/menu";
+import { Cursor } from "./cursor";
+import { getIconXEl } from "./icon";
+import {
+    BTN_TO_BUTTON,
+    canKey,
+    HI_RES_SCALE,
+    hasRelativeXY,
+    type InputPointerPos,
+    pointerKindOf,
+    ratioToView,
+    WHEEL_STEP,
+} from "./input_evdev";
+import { Registry } from "./registry";
+import { dynamicScrollList } from "./scroll-list";
 import {
     aLineText,
     gGlassStyle,
@@ -23,22 +44,6 @@ import {
     ui,
     vVolume,
 } from "./ui";
-import { dynamicScrollList } from "./scroll-list";
-import { Registry } from "./registry";
-import type { MenuItem } from "../../../src/sys_api/menu";
-import { getIconXEl } from "./icon";
-import { Cursor } from "./cursor";
-import { InputEventCodes } from "../../../src/input_codes/types";
-import {
-    BTN_TO_BUTTON,
-    HI_RES_SCALE,
-    WHEEL_STEP,
-    canKey,
-    hasRelativeXY,
-    type InputPointerPos,
-    pointerKindOf,
-    ratioToView,
-} from "./input_evdev";
 
 // ========== Registry 和 ControlNode ==========
 
@@ -321,7 +326,8 @@ class Tools {
     }
 }
 
-type MWinId = string & { __brand: "MWinId" };
+/** 全局窗口身份：服务端 handle */
+type MWinId = WinHandle;
 
 function 回布局(index: number): { x: number; y: number } {
     const xi = index + 1;
@@ -356,8 +362,8 @@ function 回布局(index: number): { x: number; y: number } {
 class ViewData {
     private views: View[] = [];
     private win2View = new Map<MWinId, View>();
-    private winid2ClientId = new Map<MWinId, { clientId: string; winId: WaylandWinId }>();
-    focusClient: string | undefined;
+    /** 当前聚焦的窗口 handle，键盘按它反查客户端下发 */
+    focusHandle: MWinId | undefined;
     newView() {
         for (let i = 1; i <= this.views.length + 1; i++) {
             const pos = 回布局(i);
@@ -379,42 +385,31 @@ class ViewData {
         this.win2View.set(winid, v);
         this.checkAndRmView();
     }
-    bindWinidClientid(winid: MWinId, clientId: string, winId: WaylandWinId) {
-        this.winid2ClientId.set(winid, { clientId, winId });
-    }
     closeWin(winid: MWinId) {
         this.win2View.delete(winid);
         this.checkAndRmView();
     }
     focusWin(winid: MWinId) {
-        const id = this.winid2ClientId.get(winid);
-        if (!id) {
-            console.warn("cant find clientid", winid);
+        if (!server.server.windows.get(winid)) {
+            console.warn("cant find window", winid);
             return;
         }
-        this.focusClient = id.clientId;
-        for (const [cid, c] of server.server.clients) {
-            for (const [wid] of c.getWindows()) {
-                if (cid === id.clientId && wid === id.winId) {
-                    c.win(wid)?.focus();
-                } else {
-                    c.win(wid)?.blur();
-                }
-            }
+        this.focusHandle = winid;
+        // 目标聚焦、其余失焦，全部经 server 下发
+        for (const info of server.server.windows.list()) {
+            if (info.handle === winid) server.server.notify("window.focus", info.handle);
+            else server.server.notify("window.blur", info.handle);
         }
     }
     blurAll() {
-        this.focusClient = undefined;
-        for (const c of server.server.clients.values()) {
-            for (const w of c.getWindows().keys()) c.win(w)?.blur();
+        this.focusHandle = undefined;
+        for (const info of server.server.windows.list()) {
+            server.server.notify("window.blur", info.handle);
         }
     }
     private checkAndRmView() {
         const allAliveViews = new Set(this.win2View.values());
         this.views = this.views.filter((v) => allAliveViews.has(v));
-    }
-    static winId(clientId: string, windowId: WaylandWinId) {
-        return `${clientId}-${windowId}` as MWinId;
     }
 }
 
@@ -824,33 +819,32 @@ function appIcon(iconPath: () => Promise<string>, name: string) {
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): boolean {
     if (viewAllShowing) return false;
     let hit = false;
-    for (const [_id, client] of server.server.clients) {
-        for (const [winId, _win] of client.getWindows()) {
-            const xwin = client.win(winId);
-            if (!xwin) continue;
-            const rect = render.getXdgSurfaceEle(xwin.point.renderId())?.getBoundingClientRect();
-            if (!rect) continue;
-            const nx = p.x - rect.left;
-            const ny = p.y - rect.top;
-            const inWin = xwin.point.inWin({ x: nx, y: ny });
-            // todo 指针离开窗口时调用point.sendPointerLeave()（待实现）让客户端收到wl_pointer.leave，见server.ts updatePointerFocus
-            if (!inWin) continue;
-            hit = true;
-            xwin.point.sendPointerEvent(type, {
-                x: p.x - rect.left,
-                y: p.y - rect.top,
-                button: p.button,
-            });
-            if (type === "down") {
-                xwin.focus();
-                viewData.focusWin(ViewData.winId(_id, winId));
-                for (const [otherWinId, _otherWin] of client.getWindows()) {
-                    if (otherWinId !== winId) {
-                        client.win(otherWinId)?.blur();
-                    }
+    const handled = new Set<string>();
+    for (const info of server.server.windows.list()) {
+        // 每个客户端只处理第一个命中的窗口
+        if (handled.has(info.clientId)) continue;
+        const rect = render.getXdgSurfaceEle(info.renderId)?.getBoundingClientRect();
+        if (!rect) continue;
+        const nx = p.x - rect.left;
+        const ny = p.y - rect.top;
+        // todo 指针离开窗口时下发 wl_pointer.leave（待 server 提供），见 client.ts updatePointerFocus
+        if (nx < 0 || nx >= info.rect.w || ny < 0 || ny >= info.rect.h) continue;
+        handled.add(info.clientId);
+        hit = true;
+
+        server.server.notify("input.pointer", info.handle, {
+            type,
+            x: p.x - rect.left,
+            y: p.y - rect.top,
+            button: p.button,
+        });
+        if (type === "down") {
+            viewData.focusWin(info.handle);
+            for (const other of server.server.windows.list()) {
+                if (other.clientId === info.clientId && other.handle !== info.handle) {
+                    server.server.notify("window.blur", other.handle);
                 }
             }
-            break;
         }
     }
     return hit;
@@ -858,21 +852,22 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): boolea
 
 function sendScrollEvent(p: WheelEvent) {
     if (viewAllShowing) return;
-    for (const [_, client] of server.server.clients) {
-        for (const [winId, _win] of client.getWindows()) {
-            const xwin = client.win(winId);
-            if (!xwin) continue;
-            const rootEl = render.getXdgSurfaceEle(xwin.point.renderId());
-            if (!rootEl) continue;
-            const rect = rootEl.getBoundingClientRect();
-            const nx = p.x - rect.left;
-            const ny = p.y - rect.top;
-            const inWin = xwin.point.inWin({ x: nx, y: ny });
-            if (!inWin) continue;
-            xwin.point.sendScrollEvent({
-                p: p,
-            });
-        }
+    const handled = new Set<string>();
+    for (const info of server.server.windows.list()) {
+        if (handled.has(info.clientId)) continue;
+        const rootEl = render.getXdgSurfaceEle(info.renderId);
+        if (!rootEl) continue;
+        const rect = rootEl.getBoundingClientRect();
+        const nx = p.x - rect.left;
+        const ny = p.y - rect.top;
+        if (nx < 0 || nx >= info.rect.w || ny < 0 || ny >= info.rect.h) continue;
+        handled.add(info.clientId);
+
+        server.server.notify("input.scroll", info.handle, {
+            deltaX: p.deltaX,
+            deltaY: p.deltaY,
+            deltaZ: p.deltaZ,
+        });
     }
 }
 
@@ -903,129 +898,133 @@ render.on({
             el.remove();
         }
     },
-    onCursorUpdata: (c, hx, hy) => {
-        if (c === undefined) cursor.hide();
-        else if (typeof c === "string") cursor.setShape(c);
-        else cursor.setImage(c, hx, hy);
-    },
 });
 const server = MSysApi.server({ render });
 
-server.server.on("newClient", (client, clientId) => {
-    client.setLogConfig({ receive: [], send: [] });
-    client.onSync("windowBound", () => {
-        const rect = windowEl.el.getBoundingClientRect();
-        return { width: rect.width, height: rect.height };
-    });
-    client.on("windowCreated", (windowId, renderId) => {
-        console.log(`Client ${clientId} created window ${windowId}`, renderId);
-        const v = viewData.newView();
-        const wid = ViewData.winId(clientId, windowId);
-        viewData.moveWinToView(wid, v);
-        viewData.bindWinidClientid(wid, clientId, windowId);
-        // biome-ignore lint/style/noNonNullAssertion: 刚刚创建的，一定有
-        addWindow(v, render.getXdgSurfaceEle(renderId)!, wid);
-        viewData.focusWin(wid);
-        client.win(windowId)?.setWinBoxData({ width: 800, height: 600 });
-        client.win(windowId)?.focus();
-    });
-    client.on("windowClosed", (windowId) => {
-        console.log(`Client ${clientId} deleted window ${windowId}`);
-        const winid = ViewData.winId(clientId, windowId);
-        viewData.closeWin(winid);
-    });
-    client.on("windowStartMove", (windowId) => {
-        const xwin = client.win(windowId);
-        if (!xwin) return;
+// 桌面可用空间
+server.server.respond("surfaceBounds.request", () => {
+    const rect = windowEl.el.getBoundingClientRect();
+    return { width: rect.width, height: rect.height };
+});
 
-        const winEl = render.getXdgSurfaceEle(xwin.point.renderId());
+server.server.on("client.opened", (clientId) => {
+    server.server.clients.get(clientId)?.setLogConfig({ receive: [], send: [] });
+});
+
+/**
+ * 桌面已应用的窗口状态。`window.changed` 是合并事件（rect/states/title/appid 任一变化），
+ * 靠这份本地快照差分出「客户端请求 resize / maximize」。
+ */
+const appliedState = new Map<WinHandle, { w: number; h: number; maximized: boolean }>();
+
+server.server.on("window.created", (info) => {
+    console.log(`Client ${info.clientId} created window ${info.handle}`, info.renderId);
+    const wid = info.handle;
+    appliedState.set(wid, { w: info.rect.w, h: info.rect.h, maximized: false });
+
+    const v = viewData.newView();
+    viewData.moveWinToView(wid, v);
+    // biome-ignore lint/style/noNonNullAssertion: 刚刚创建的，一定有
+    addWindow(v, render.getXdgSurfaceEle(info.renderId)!, wid);
+    viewData.focusWin(wid);
+    server.server.notify("window.setBox", wid, { width: 800, height: 600 });
+});
+
+server.server.on("window.closed", (wid) => {
+    console.log(`window ${wid} closed`);
+    appliedState.delete(wid);
+    viewData.closeWin(wid);
+});
+
+server.server.on("window.startMove", (wid) => {
+    const info = server.server.windows.get(wid);
+    if (!info) return;
+
+    const winEl = render.getXdgSurfaceEle(info.renderId);
+    if (!winEl) return;
+    const rect = winEl.getBoundingClientRect();
+
+    windowCenterManager.pauseCentering(wid);
+
+    const startX = mousePos.x;
+    const startY = mousePos.y;
+
+    const parentRect = winEl.parentElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
+    const origLeft = rect.left - parentRect.left;
+    const origTop = rect.top - parentRect.top;
+
+    function onPointerMove() {
+        const newLeft = Math.round(mousePos.x - startX + origLeft);
+        const newTop = Math.round(mousePos.y - startY + origTop);
         if (!winEl) return;
-        const rect = winEl.getBoundingClientRect();
+        winEl.style.left = `${newLeft}px`;
+        winEl.style.top = `${newTop}px`;
+    }
 
-        const wid = ViewData.winId(clientId, windowId);
-        windowCenterManager.pauseCentering(wid);
+    function cleanup() {
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+        window.removeEventListener("pointercancel", onPointerUp);
+    }
 
-        const startX = mousePos.x;
-        const startY = mousePos.y;
+    function onPointerUp() {
+        cleanup();
+    }
 
-        const parentRect = winEl.parentElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
-        const origLeft = rect.left - parentRect.left;
-        const origTop = rect.top - parentRect.top;
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
+    window.addEventListener("pointercancel", onPointerUp, { once: true });
+});
 
-        function onPointerMove() {
-            const newLeft = Math.round(mousePos.x - startX + origLeft);
-            const newTop = Math.round(mousePos.y - startY + origTop);
-            if (!winEl) return;
-            winEl.style.left = `${newLeft}px`;
-            winEl.style.top = `${newTop}px`;
-        }
+server.server.on("window.changed", (info) => {
+    const applied = appliedState.get(info.handle);
+    if (!applied) return;
+    const winEl = render.getXdgSurfaceEle(info.renderId);
 
-        function cleanup() {
-            window.removeEventListener("pointermove", onPointerMove);
-            window.removeEventListener("pointerup", onPointerUp);
-            window.removeEventListener("pointercancel", onPointerUp);
-        }
-
-        function onPointerUp() {
-            cleanup();
-        }
-
-        window.addEventListener("pointermove", onPointerMove);
-        window.addEventListener("pointerup", onPointerUp, { once: true });
-        window.addEventListener("pointercancel", onPointerUp, { once: true });
-    });
-    client.on("windowMaximized", (windowId) => {
-        const xwin = client.win(windowId);
-        if (!xwin) return;
-
-        const winEl = render.getXdgSurfaceEle(xwin.point.renderId());
-        if (!winEl) return;
-        const width = windowEl.el.offsetWidth;
-        const height = windowEl.el.offsetHeight;
-        pack(winEl).style({
-            width: `${width}px`,
-            height: `${height}px`,
-            left: "0px",
-            top: "0px",
-        });
-        xwin.maximize(width, height);
-    });
-    client.on("windowUnMaximized", (windowId) => {
-        const xwin = client.win(windowId);
-        if (!xwin) return;
-
-        const winEl = render.getXdgSurfaceEle(xwin.point.renderId());
-        if (!winEl) return;
-        const width = 800;
-        const height = 600;
-        pack(winEl).style({
-            width: `${width}px`,
-            height: `${height}px`,
-            left: "0px",
-            top: "0px",
-        });
-        xwin.unmaximize(width, height);
-    });
-    client.on("windowResized", (windowId, width, height) => {
-        const wid = ViewData.winId(clientId, windowId);
-        const winEl = render.getXdgSurfaceEle(client.win(windowId)?.point.renderId() ?? "");
+    // 尺寸变化（来自 xdg_surface.set_window_geometry）
+    if (applied.w !== info.rect.w || applied.h !== info.rect.h) {
+        applied.w = info.rect.w;
+        applied.h = info.rect.h;
         if (winEl) {
+            pack(winEl).style({
+                width: `${info.rect.w}px`,
+                height: `${info.rect.h}px`,
+            });
+            if (windowCenterManager.isEnabled() && !windowCenterManager.isPaused(info.handle)) {
+                windowCenterManager.centerWindow(info.handle);
+            }
+        }
+    }
+
+    // 最大化状态变化（由客户端发起）
+    if (applied.maximized !== info.states.maximized) {
+        applied.maximized = info.states.maximized;
+        if (!winEl) return;
+        if (info.states.maximized) {
+            const width = windowEl.el.offsetWidth;
+            const height = windowEl.el.offsetHeight;
             pack(winEl).style({
                 width: `${width}px`,
                 height: `${height}px`,
+                left: "0px",
+                top: "0px",
             });
-            if (windowCenterManager.isEnabled() && !windowCenterManager.isPaused(wid)) {
-                windowCenterManager.centerWindow(wid);
-            }
+            server.server.notify("window.maximize", info.handle, { width, height });
+        } else {
+            const width = 800;
+            const height = 600;
+            pack(winEl).style({
+                width: `${width}px`,
+                height: `${height}px`,
+                left: "0px",
+                top: "0px",
+            });
+            server.server.notify("window.unmaximize", info.handle, { width, height });
         }
-    });
-});
-server.server.on("clientClose", (client, clientId) => {
-    for (const [winId, _] of client.getWindows()) {
-        const winid = ViewData.winId(clientId, winId);
-        viewData.closeWin(winid);
     }
 });
+
+// 断开时 server 统一补发该客户端全部窗口的 window.closed，上面的 closeWin 已经覆盖
 
 const mainEl = view().style({ width: "100vw", height: "100vh", fontFamily: "sans-serif" }).addInto();
 
@@ -1865,7 +1864,11 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
             ).addInto(appsEl);
         }
     });
-    const nowApps = new Map<string, { iconEl: ElType<HTMLElement>; clients: Set<WaylandClient> }>();
+    /** appid → 图标；「某应用有哪些窗口」直接从 server 的窗口表算 */
+    const nowApps = new Map<string, ElType<HTMLElement>>();
+    const pendingApps = new Set<string>();
+    /** handle → appid：`window.closed` 时窗口已从表里移除，靠它定位是哪个应用没了窗口 */
+    const handleAppid = new Map<WinHandle, string>();
     const preview = view()
         .style({ display: "flex" })
         .on("pointerenter", () => {
@@ -1883,110 +1886,90 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
     });
     autoHide.addState("reset", { v: 0 }, ["hide"]);
     autoHide.addState("hide", { v: 1 }, ["reset"]);
-    async function addAppIcon(c: WaylandClient) {
-        const appid = c.getAppid();
+    async function addAppIcon(appid: string) {
         if (!appid) return;
-        if (nowApps.has(appid)) {
-            // biome-ignore lint/style/noNonNullAssertion: ---
-            nowApps.get(appid)!.clients.add(c);
-            return;
-        }
-        const desk = await MSysApi.getDesktopEntry(appid);
-        const iconPath = async () => (await MSysApi.getDesktopIcon(desk?.icon || "", iconConfig)) || "";
-        const appEl = appIcon(iconPath, desk?.name || appid);
-        appsEl.add(appEl);
-        nowApps.set(appid, { iconEl: appEl, clients: new Set([c]) });
-        appEl.on("click", () => {
-            const data = nowApps.get(appid);
-            if (!data) return;
-            const allWin = Array.from(data.clients).flatMap((c) => Array.from(c.getWindows()));
-            if (allWin.length === 0) return;
-            const focusedWinIndex = allWin.findIndex(([_, w]) => w.actived);
-            if (focusedWinIndex === -1) {
-                jump2Win(ViewData.winId(c.id, allWin[0][0]));
-            } else {
-                const nextIndex = (focusedWinIndex + 1) % allWin.length;
-                jump2Win(ViewData.winId(c.id, allWin[nextIndex][0]));
-            }
-        });
-        appEl
-            .on("pointerenter", () => {
-                const data = nowApps.get(appid);
-                if (!data) return;
-                autoHide.moveTo("reset");
-                preview.clear();
-                if (a === "left" || a === "right") {
-                    preview.style({ flexDirection: "column" });
+        // window.changed 会连发多次，await 期间不能放第二个进来（否则图标重复）
+        if (nowApps.has(appid) || pendingApps.has(appid)) return;
+        pendingApps.add(appid);
+        try {
+            const desk = await MSysApi.getDesktopEntry(appid);
+            const iconPath = async () => (await MSysApi.getDesktopIcon(desk?.icon || "", iconConfig)) || "";
+            const appEl = appIcon(iconPath, desk?.name || appid);
+            appsEl.add(appEl);
+            nowApps.set(appid, appEl);
+            appEl.on("click", () => {
+                const allWin = server.server.windows.list().filter((w) => w.appid === appid);
+                if (allWin.length === 0) return;
+                const focusedWinIndex = allWin.findIndex((w) => w.states.activated);
+                if (focusedWinIndex === -1) {
+                    jump2Win(allWin[0].handle);
                 } else {
-                    preview.style({ flexDirection: "row" });
+                    const nextIndex = (focusedWinIndex + 1) % allWin.length;
+                    jump2Win(allWin[nextIndex].handle);
                 }
-                const allWin = Array.from(data.clients).flatMap((c) =>
-                    Array.from(c.getWindows()).map((x) => ({ ...x[1], id: x[0], c })),
-                );
-
-                preview.clear().add(
-                    allWin.map((x) => {
-                        const el = view();
-                        const titleText = x.c.win(x.id)?.getTitle() || "";
-                        el.add(txt(titleText));
-                        const canvas = ele("canvas").addInto(el);
-                        const win = x.c.win(x.id);
-                        if (!win) return undefined;
-                        const rawCanvas = win.getPreview();
-                        const { w, h } = fitRect({ w: rawCanvas.width, h: rawCanvas.height }, 200, 150);
-                        canvas.attr({ width: w, height: h });
-                        // biome-ignore lint/style/noNonNullAssertion: ---
-                        const ctx = canvas.el.getContext("2d")!;
-                        ctx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, w, h);
-                        el.on("click", () => {
-                            jump2Win(ViewData.winId(x.c.id, x.id));
-                        });
-                        return el;
-                    }),
-                );
-                showTip({ state: "show", anchorEl: appEl.el });
-            })
-            .on("pointerleave", () => {
-                autoHide.moveTo("hide");
             });
-    }
-    for (const [_id, c] of server.server.clients) {
-        addAppIcon(c);
-        bindC(c);
-    }
-    function checkAndTryRm(id: string) {
-        const app = nowApps.get(id);
-        if (!app) return;
-        if (
-            Array.from(app.clients)
-                .map((i) => i.getWindows().size)
-                .reduce((a, b) => a + b, 0) === 0
-        ) {
-            app.iconEl.remove();
-            nowApps.delete(id);
+            appEl
+                .on("pointerenter", () => {
+                    if (!nowApps.has(appid)) return;
+                    autoHide.moveTo("reset");
+                    preview.clear();
+                    if (a === "left" || a === "right") {
+                        preview.style({ flexDirection: "column" });
+                    } else {
+                        preview.style({ flexDirection: "row" });
+                    }
+                    const allWin = server.server.windows.list().filter((w) => w.appid === appid);
+
+                    preview.clear().add(
+                        allWin.map((info) => {
+                            const el = view();
+                            el.add(txt(info.title || ""));
+                            const canvas = ele("canvas").addInto(el);
+                            const rawCanvas = server.server.windows.preview(info.handle);
+                            if (!rawCanvas) return undefined;
+                            const { w, h } = fitRect({ w: rawCanvas.width, h: rawCanvas.height }, 200, 150);
+                            canvas.attr({ width: w, height: h });
+                            // biome-ignore lint/style/noNonNullAssertion: ---
+                            const ctx = canvas.el.getContext("2d")!;
+                            ctx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, w, h);
+                            el.on("click", () => {
+                                jump2Win(info.handle);
+                            });
+                            return el;
+                        }),
+                    );
+                    showTip({ state: "show", anchorEl: appEl.el });
+                })
+                .on("pointerleave", () => {
+                    autoHide.moveTo("hide");
+                });
+        } finally {
+            pendingApps.delete(appid);
         }
     }
-    function bindC(c: WaylandClient) {
-        c.on("appid", () => {
-            addAppIcon(c);
-        });
-        c.on("close", () => {
-            const appid = c.getAppid();
-            if (!appid) return;
-            const app = nowApps.get(appid);
-            if (app) {
-                app.clients.delete(c);
-                checkAndTryRm(appid);
-            }
-        });
-        c.on("windowClosed", () => {
-            const appid = c.getAppid();
-            if (!appid) return;
-            checkAndTryRm(appid);
-        });
+    for (const info of server.server.windows.list()) {
+        if (info.appid) {
+            handleAppid.set(info.handle, info.appid);
+            addAppIcon(info.appid);
+        }
     }
-    server.server.on("newClient", (c, _id) => {
-        bindC(c);
+    function checkAndTryRm(appid: string) {
+        const iconEl = nowApps.get(appid);
+        if (!iconEl) return;
+        if (server.server.windows.list().some((w) => w.appid === appid)) return;
+        iconEl.remove();
+        nowApps.delete(appid);
+    }
+    // 一次订阅覆盖全部客户端：appid 落到窗口上就补图标
+    server.server.on("window.changed", (info) => {
+        if (!info.appid) return;
+        handleAppid.set(info.handle, info.appid);
+        addAppIcon(info.appid);
+    });
+    server.server.on("window.closed", (handle) => {
+        const appid = handleAppid.get(handle);
+        handleAppid.delete(handle);
+        if (appid) checkAndTryRm(appid);
     });
     return appsEl;
 });
@@ -2420,20 +2403,18 @@ body.on("keydown", (e) => {
     if (state.getState() === "normal") {
         e.preventDefault();
         if (e.repeat) return;
-        for (const [id, client] of server.server.clients) {
-            if (id !== viewData.focusClient) continue;
-            client.keyboard.sendKey(MInputMap.mapKeyCode(e.code), "pressed");
-        }
+        const handle = viewData.focusHandle;
+        if (handle === undefined) return;
+        server.server.notify("input.key", handle, MInputMap.mapKeyCode(e.code), "pressed");
     }
 });
 body.on("keyup", (e) => {
     if (state.getState() === "normal") {
         e.preventDefault();
         if (e.repeat) return;
-        for (const [id, client] of server.server.clients) {
-            if (id !== viewData.focusClient) continue;
-            client.keyboard.sendKey(MInputMap.mapKeyCode(e.code), "released");
-        }
+        const handle = viewData.focusHandle;
+        if (handle === undefined) return;
+        server.server.notify("input.key", handle, MInputMap.mapKeyCode(e.code), "released");
     }
 });
 
@@ -2442,6 +2423,13 @@ windowEl.on("wheel", (e) => {
 });
 
 const cursor = new Cursor(cursorEl);
+
+// 光标形态改由 server 事件下发（renderToolsOn.onCursorUpdata 保留给渲染侧，语义相同）
+server.server.on("cursor.changed", (_clientId, state) => {
+    if (state.kind === "hidden") cursor.hide();
+    else if (state.kind === "shape") cursor.setShape(state.shape);
+    else if (state.canvas) cursor.setImage(state.canvas, state.hotspot.x, state.hotspot.y);
+});
 
 // ── 输入聚合层 ────────────────────────────────────────────────────────────────────────────────────
 // DOM 原生事件与 input api（evdev）聚合为统一输入事件流，传入 MSysApi.inputSim 模拟 DOM 事件，
@@ -2532,7 +2520,12 @@ for (const type of SWALLOWED_EVENTS) {
 }
 
 /** 单个 input api（evdev）设备 → 统一输入事件（帧合并后 emit） */
-function useEvdevDevice(input: InputManager, emit: (e: UniInputEvent) => void, pointerPos: InputPointerPos, path: string) {
+function useEvdevDevice(
+    input: InputManager,
+    emit: (e: UniInputEvent) => void,
+    pointerPos: InputPointerPos,
+    path: string,
+) {
     const dev = input.getDevice(path);
     if (!dev) return;
     const info = dev.info;

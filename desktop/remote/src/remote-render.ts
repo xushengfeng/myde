@@ -163,7 +163,7 @@ export class RemoteRender implements renderTools {
 
     /**
      * 光标暂未走远程通道传输。
-     * TODO(Phase 2)：cursor 改由 CursorStore + SceneCmd/ImageKV 承载后，
+     * TODO：cursor 改由 CursorStore + SceneCmd/ImageKV 承载后，
      * 本方法随 renderTools.setCursor 一并删除。
      */
     setCursor(

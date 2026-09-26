@@ -5,16 +5,14 @@
  * utils/wayland-binary、render_tools），**不得 import 任何实现文件**，
  * 否则协议模块之间会重新形成环。
  *
- * Phase 1 先建立契约本身；各接口的实现随 Phase 3-5 拆分落地。
- * 注意这里的 WaylandDataRegistry 仍是多数协议状态的中央表；随 Phase 3-5 逐条
- * 移进各协议文件的 `declare module`（region 已作为样板迁出），最终只留空壳。
+ * `WaylandDataRegistry` 本身是空的：各协议状态由对应文件的 `declare module`
+ * 声明合并进来（`protocols/core/region.ts` 是样板）。
  */
 import type { WaylandEnumObj, WaylandEventObj, WaylandInterfaces, WaylandRequestObj } from "./protocols/wayland-types";
 import type { renderTools } from "./render_tools";
 import type { WaylandName, WaylandObjectId, WaylandOp, WaylandProtocol } from "./utils/wayland-binary";
 
 // ───────────────────────── 对象 id（品牌类型） ─────────────────────────
-// 从 server.ts 上移：这是纯类型，属于契约而非实现。
 // brand 只从三个入口产生：生成类型的 msg.args、host 的 NEW_ID 登记、ctx.objects.create()。
 
 export type WaylandObjectId2<t extends WaylandInterfaces> = number & {
@@ -25,7 +23,7 @@ export type WaylandObjectId3<t extends string> = number & { __brand: "WaylandObj
 
 export type SurfaceId = WaylandObjectId2<"wl_surface">;
 export type BufferId = WaylandObjectId2<"wl_buffer">;
-/** 窗口即 xdg_toplevel 对象；跨客户端会撞，桌面侧全局身份属 Phase 6 的 WinHandle */
+/** 窗口即 xdg_toplevel 对象；跨客户端会撞，桌面侧全局身份是 api.ts 的 WinHandle */
 export type WaylandWinId = WaylandObjectId2<"xdg_toplevel">;
 
 // ───────────────────────── 对象状态类型 ─────────────────────────
@@ -46,7 +44,7 @@ export type WaylandSurfaceData = {
 /**
  * 每种接口挂在对象上的状态形状。
  * 各协议文件用 `declare module`（模块说明符按该文件到 module.ts 的相对路径写）
- * 追加自己的条目，不再改这里。
+ * 追加自己的条目，不动这里。
  */
 // biome-ignore lint/suspicious/noEmptyInterface: 各协议文件靠 declare module 向这个空 interface 合并状态类型，改成 type 会让它们全部失效
 export interface WaylandDataRegistry {}
@@ -245,7 +243,7 @@ export interface RegistryApi {
     globals(): Iterable<{ name: WaylandName; protocol: WaylandProtocol }>;
     /** 按全局 name（数字）查协议 */
     byName(name: WaylandName): WaylandProtocol | undefined;
-    /** 按接口名查该模块声明的 global（绑定时初始化用，替代原 if 链） */
+    /** 按接口名查该模块声明的 global（绑定时初始化用） */
     globalOf(interfaceName: string): ModuleGlobal | undefined;
 }
 
@@ -288,7 +286,7 @@ export interface SurfaceHooks {
      * 与 onCommit 分开是因为两者时机不同——合成逻辑必须在 damage 绘制之后。
      *
      * `pending` 是本次 commit 的双缓冲状态（合并进 current 之前的那份），
-     * 原实现读的就是它，原样传下去以保持行为一致。
+     * 原样传下去。
      */
     onFrame?(
         surfaceId: SurfaceId,
@@ -304,7 +302,7 @@ export interface SeatHooks {
     onFocus?(surfaceId: SurfaceId | undefined, ctx: ModuleCtx): void;
 }
 
-// ───────────── 客户端级状态与事件（原 obj2 与事件表，Phase 3 上移） ─────────────
+// ───────────── 客户端级状态与事件 ─────────────
 
 export type TextInputV3State = {
     /** 是否启用文本输入 */
@@ -333,6 +331,11 @@ export type TextInputOwner =
     | { protocol: "v1"; id: WaylandObjectId2<"zwp_text_input_v1"> }
     | { protocol: "v3"; id: WaylandObjectId2<"zwp_text_input_v3"> };
 
+/**
+ * client 级事件是 **client → server 的内部管道**：
+ * server 订阅后 fan-in 成 `api.ts` 的 server 级事件（handle 化、自包含），
+ * `Client` 接口上不暴露这张表。
+ */
 export interface WaylandClientEventMap {
     close: () => void;
     windowCreated: (xdgToplevelId: WaylandWinId, renderId: string) => void;
@@ -347,15 +350,15 @@ export interface WaylandClientEventMap {
     paste: () => void;
 }
 
-export interface WaylandClientSyncEventMap {
-    windowBound?: () => { width: number; height: number } | undefined;
-}
 // ───────────── 语义 Store 与客户端自身（结构化实现，由 host 注入） ─────────────
 
 export interface WindowRecord {
     actived: boolean;
     box: { width: number; height: number };
     title: string;
+    /** 由桌面命令或客户端 set/unset_maximized 维护，进 WindowInfo.states */
+    maximized: boolean;
+    minimized: boolean;
 }
 
 export interface WindowsApi {
@@ -401,7 +404,7 @@ export interface SeatApi {
     setFocus(surface: SurfaceId | null, type: FocusType): void;
 }
 
-/** 原 obj2 的剩余字段：clipboard、text-input 仲裁、appid 等 */
+/** client 级字段：clipboard、text-input 仲裁、appid 等 */
 export interface ClientState {
     textInputV1?: {
         focus: WaylandObjectId | null;
@@ -426,21 +429,23 @@ export interface ClientApi {
     displayId: WaylandObjectId2<"wl_display">;
     /** 协议版本继承表（bind 时按父对象版本补） */
     protoVersions: Map<string, number>;
-    /** 客户端级状态（原 obj2） */
+    /** 客户端级状态 */
     state: ClientState;
-    /** client 级事件；Phase 6 上提 server 级后改由 Store 出口 */
+    /** client 级事件；server 订阅后 fan-in 成 server 级事件（见 api.ts） */
     emit<K extends keyof WaylandClientEventMap>(event: K, ...args: Parameters<WaylandClientEventMap[K]>): void;
-    emitSync<K extends keyof WaylandClientSyncEventMap>(
-        event: K,
-        ...args: Parameters<NonNullable<WaylandClientSyncEventMap[K]>>
-    ): ReturnType<NonNullable<WaylandClientSyncEventMap[K]>> | undefined;
+    /**
+     * 桌面提供的可用空间。
+     * 必须同步返回——`xdg_surface.get_toplevel` 在同步 handler 里就要填 `configure_bounds`，
+     * 由 `server.respond("surfaceBounds.request", …)` 注册，见 api.ts。
+     */
+    surfaceBounds(): { width: number; height: number } | undefined;
 }
 
 // ───────────────────────── handler 运行时上下文 ─────────────────────────
 
 /**
  * handler 拿得到的一切 —— 把「闭包捕获整个 WaylandClient」收窄成清单。
- * 拆分能成立的前提：handler 移出文件后不再有 `this`，只依赖这里注入的东西。
+ * 拆分能成立的前提：handler 不碰 `this`，只依赖这里注入的东西。
  */
 export interface ModuleCtx {
     objects: ObjectApi;
@@ -449,7 +454,7 @@ export interface ModuleCtx {
     postError: EventApi["postError"];
     /** core 面：扩展唯一可依赖的东西 */
     core: CoreApi;
-    /** 过渡：xdg 域服务，Phase 5 随 xdgSurfaceData 迁入 xdg 模块后删除 */
+    /** 过渡：xdg 域服务，xdgSurfaceData 迁入 xdg 模块后删除 */
     domain: { xdgSurface: XdgSurfaceApi };
     /** 语义状态单写入点 */
     state: { windows: WindowsApi; cursor: CursorApi; seat: SeatApi };
@@ -467,6 +472,6 @@ export interface ModuleCtx {
     };
     /** 客户端自身 */
     client: ClientApi;
-    /** 场景投影（Phase 6 可能瘦身为 SceneCmd 分发，像素走 ImageKV） */
+    /** 场景投影（可能瘦身为 SceneCmd 分发，像素走 ImageKV） */
     scene: renderTools;
 }

@@ -1,27 +1,28 @@
 import { addStyle, initDKH, pack } from "dkh-ui";
-import type { renderTools } from "../../../../src/wayland/render_tools";
 import type { MenuItem } from "../../../../src/sys_api/menu";
+import type { renderTools } from "../../../../src/wayland/render_tools";
 import {
     createMockClient,
-    type MockConfig,
-    MockVfsStore,
-    setGlobalRenderTools,
-    setupMydeMock,
-    MockBlueManager,
-    MockBlueDevice,
-    MockNetworkManager,
-    MockWifiDevice,
+    createMockServer,
     MockAccessPoint,
-    MockPowerManager,
-    MockPowerDevice,
-    MockNotificationManager,
-    MockMprisManager,
-    MockMprisPlayer,
-    MockTrayManager,
-    MockTrayItem,
-    MockVolumeManager,
     MockAudioDevice,
     MockAudioStream,
+    MockBlueDevice,
+    MockBlueManager,
+    type MockConfig,
+    MockMprisManager,
+    MockMprisPlayer,
+    MockNetworkManager,
+    MockNotificationManager,
+    MockPowerDevice,
+    MockPowerManager,
+    MockTrayItem,
+    MockTrayManager,
+    MockVfsStore,
+    MockVolumeManager,
+    MockWifiDevice,
+    setGlobalRenderTools,
+    setupMydeMock,
 } from "../../../../test/mock";
 import { createMockApp, getMockAppIcon, getMockAppList } from "../../../../test/mock/apps";
 import { MockRenderTools } from "../../../../test/mock/render-tools";
@@ -418,16 +419,16 @@ function initMockData() {
 
     // 音频设备示例
     addMockAudioDevice(51, "内置音频模拟立体声", "sink", true, 0.65, false);
-    addMockAudioDevice(52, "内置音频模拟立体声", "source", true, 0.80, false);
-    addMockAudioDevice(53, "USB音频设备", "sink", false, 0.50, false);
+    addMockAudioDevice(52, "内置音频模拟立体声", "source", true, 0.8, false);
+    addMockAudioDevice(53, "USB音频设备", "sink", false, 0.5, false);
     addMockAudioDevice(54, "蓝牙音频", "sink", false, 0.75, true);
 
     // 音频流示例（应用程序）
-    addMockAudioStream(81, "Firefox", "output", 1234, "Firefox", 0.80, false);
-    addMockAudioStream(82, "Spotify", "output", 5678, "Spotify", 0.90, false);
-    addMockAudioStream(83, "Discord", "output", 9012, "Discord", 0.70, false);
+    addMockAudioStream(81, "Firefox", "output", 1234, "Firefox", 0.8, false);
+    addMockAudioStream(82, "Spotify", "output", 5678, "Spotify", 0.9, false);
+    addMockAudioStream(83, "Discord", "output", 9012, "Discord", 0.7, false);
     addMockAudioStream(84, "系统声音", "output", undefined, "system-sounds", 1.0, false);
-    addMockAudioStream(85, "麦克风", "input", 3456, "speech-dispatcher", 0.60, false);
+    addMockAudioStream(85, "麦克风", "input", 3456, "speech-dispatcher", 0.6, false);
 
     // 通知示例
     setTimeout(() => {
@@ -530,56 +531,32 @@ async function init() {
                 return mockData.passwordValid;
             },
             server: (op: { dev?: boolean; render: renderTools }) => {
-                const clients = new Map<number, any>();
-                const listeners = new Map<string, Set<(...args: any[]) => void>>();
-
                 // 使用传入的renderTools（来自op.render）
                 const render = op.render || renderTools;
-
-                const mockServer = {
-                    socketDir: "/tmp/mock",
-                    socketName: "mock-socket",
-                    clients,
-                    on(event: string, cb: (...args: any[]) => void) {
-                        if (!listeners.has(event)) listeners.set(event, new Set());
-                        listeners.get(event)?.add(cb);
-                        return mockServer;
-                    },
-                    off(event: string, cb: (...args: any[]) => void) {
-                        listeners.get(event)?.delete(cb);
-                        return mockServer;
-                    },
-                    emit(event: string, ...args: any[]) {
-                        listeners.get(event)?.forEach((cb) => {
-                            cb(...args);
-                        });
-                    },
-                    destroy() {
-                        clients.clear();
-                        listeners.clear();
-                    },
-                };
+                const mockServer = createMockServer();
 
                 return {
                     runApp: (exec: string) => {
                         // 为每个应用创建新的客户端
-                        const clientId = ++clientIdCounter;
-                        const mockClient = createMockClient();
-                        clients.set(clientId, mockClient);
+                        const clientId = `c${++clientIdCounter}`;
+                        const mockClient = createMockClient({ id: clientId, server: mockServer });
+                        mockServer.clients.set(clientId, mockClient);
 
-                        // 监听客户端的close事件，触发server的clientClose事件
+                        // 断开：与真实实现一致，先由 server 统一关闭该客户端全部窗口，再报 client.closed
                         mockClient.on("close", () => {
-                            clients.delete(clientId);
-                            mockServer.emit("clientClose", mockClient, clientId);
+                            for (const info of mockServer.windows.list()) {
+                                if (info.clientId === clientId) mockServer.closeWindow(info.handle);
+                            }
+                            mockServer.clients.delete(clientId);
+                            mockServer.emit("client.closed", clientId);
                         });
 
-                        // 触发newClient事件
-                        mockServer.emit("newClient", mockClient, clientId);
+                        mockServer.emit("client.opened", clientId);
 
                         // 创建应用，传入render
                         const result = createMockApp(exec, mockClient, render);
                         if (result) {
-                            // 在客户端上触发windowCreated事件，传递renderId
+                            // 应用抛出 windowCreated → server 分配全局 handle 并发 window.created
                             mockClient.emit("windowCreated", result.app.windowId, result.renderId);
                         }
                         return {} as any;

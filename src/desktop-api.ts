@@ -94,4 +94,19 @@ export type {
     UniKeyEvent,
     UniPointerEvent,
 } from "./sys_api/input_sim";
-export type { renderTools, WaylandClient, WaylandWinId } from "./wayland";
+export type {
+    Client,
+    CursorState,
+    PointerCommand,
+    Rect,
+    renderTools,
+    ScrollCommand,
+    ServerEvents,
+    ServerNotifyMap,
+    ServerRequests,
+    Size,
+    WaylandWinId,
+    WindowInfo,
+    WindowStates,
+    WinHandle,
+} from "./wayland";

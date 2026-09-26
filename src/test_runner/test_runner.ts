@@ -2,7 +2,7 @@ import * as child_process from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { WaylandClient } from "../desktop-api";
+import type { WaylandServer } from "../wayland";
 import type { renderTools } from "../wayland/render_tools";
 
 export function getProjectRoot() {
@@ -18,7 +18,7 @@ export function getProjectRoot() {
 
 function getFunctionRawCode(fn: (...args: any[]) => any) {
     const code = fn.toString();
-    const match = code.match(/^\s*\(?\s*([^\)]*)\s*\)?\s*=>\s*{([\s\S]*)}$/);
+    const match = code.match(/^\s*\(?\s*([^)]*)\s*\)?\s*=>\s*{([\s\S]*)}$/);
     if (!match) {
         throw new Error("Cannot parse function code");
     }
@@ -105,8 +105,9 @@ export function testRunnerRaw(js: string) {
 export function testRunnerApp(
     appPath: string,
     script: (a: {
-        client: WaylandClient;
-        /** 渲染器实例，用于订阅 renderToolsOn（如 cursor 形态） */
+        /** wayland 服务端：窗口/光标/剪贴板的事件、查询、命令都在这 */
+        server: WaylandServer;
+        /** 渲染器实例，用于取窗口元素与像素预览 */
         render: renderTools;
         runner: {
             sendData: (data: unknown) => void;
@@ -123,31 +124,9 @@ export function testRunnerApp(
         });
         const server = serverX.server;
 
-        const clientPromise = Promise.withResolvers<{
-            client: WaylandClient;
-            render: renderTools;
-            runner: {
-                sendData: (data: unknown) => void;
-                kill: () => void;
-            };
-        }>();
-
-        server.on("newClient", (client) => {
-            client.onSync("windowBound", () => {
-                return { width: window.innerWidth, height: window.innerHeight };
-            });
-            clientPromise.resolve({
-                client: client,
-                render: render,
-                runner: {
-                    sendData: (data) => {
-                        ipcRenderer.send("test", { type: "data", data });
-                    },
-                    kill: () => {
-                        ipcRenderer.send("test", { type: "kill" });
-                    },
-                },
-            });
+        // 桌面可用空间
+        server.respond("surfaceBounds.request", () => {
+            return { width: window.innerWidth, height: window.innerHeight };
         });
 
         const p = serverX.runApp(`${__dirname.replace("/out/renderer", "")}/${appPath}`);
@@ -155,10 +134,13 @@ export function testRunnerApp(
             ipcRenderer.send("test", { type: "applog", data: data.toString() });
         });
     });
+    // runner 只被拼出来的脚本读取，写成模板内的 TS 常量会触发未使用告警，故拼在字符串侧
+    const runnerCode =
+        "const runner={sendData:(data)=>ipcRenderer.send('test',{type:'data',data}),kill:()=>ipcRenderer.send('test',{type:'kill'})};";
     // baseTeamplate 是函数体原文，末尾没有分号；若直接拼接下一行以 `(` 开头的脚本调用，
     // JS 会按 ASI 规则把两行合并成一条调用链（p.stdout.on(...)(fn)）→ TypeError 中止整个模块，
     // 导致后面的测试脚本永远执行不到。补分号强制语句结束。
-    const app = `const appPath="${appPath}"\n${baseTeamplate};\n${`(${script.toString()})(await clientPromise.promise)`}`;
+    const app = `const appPath="${appPath}"\n${baseTeamplate};\n${runnerCode}\n(${script.toString()})({ server, render, runner })`;
     const r = testRunnerRaw(app);
     return r;
 }

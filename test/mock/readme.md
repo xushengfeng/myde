@@ -110,6 +110,7 @@ volumeManager.addStream(stream);
 | `clearMydeMock` | 函数 | 清除全局myde |
 | `createObservableMock` | 函数 | 创建可观察mock，记录调用 |
 | `createMockClient` | 函数 | 创建mock Wayland客户端 |
+| `createMockServer` | 函数 | 创建mock Wayland服务端（与真实 server 同形） |
 | `createMockWindow` | 函数 | 创建mock窗口 |
 | `MockVfsStore` | 类 | 内存文件系统 |
 | `MockBlueManager` | 类 | 蓝牙设备管理器 |
@@ -202,21 +203,42 @@ interface MockConfig {
 
 ### WaylandServer
 
+与 `src/wayland/host/server.ts` 同形（`createMockServer()` 返回）。
+
 | API | 状态 | 说明 |
 |-----|------|------|
+| `windows.list/get/preview` | ✅ | 全局 handle 表的快照查询 |
+| `cursor.get` | ✅ | 光标状态 |
+| `on/off/emit` | ✅ | `window.*` / `cursor.*` / `clipboard.*` / `client.*` 域事件 |
+| `notify` | ✅ | 窗口命令与输入注入（mock 不模拟客户端） |
+| `respond/request` | ✅ | `surfaceBounds.request`、`window.get`、`window.getBounds` |
+| `openWindow/closeWindow/touchAppid` | ✅ | mock 侧造窗口、关窗口、改 appid |
 | `clients` | ✅ | Map |
-| `on/off/emit` | ✅ | 事件监听 |
 | `destroy` | ✅ | 清理 |
 
 ### WaylandClient
 
+只在应用侧（被模拟的客户端）可见，桌面拿不到。
+
 | API | 状态 | 说明 |
 |-----|------|------|
 | `getWindows` | ✅ | 返回窗口Map |
-| `win` | ✅ | 获取窗口 |
-| `on/onSync` | ✅ | 事件监听 |
-| `keyboard.sendKey` | ✅ | 键盘输入 |
-| `pointer` | ✅ | 鼠标操作 |
+| `getAppid/setAppid` | ✅ | appid 变化会 fan-in 成 `window.changed` |
+| `setLogConfig` | ✅ | 空实现 |
+| `on/emit` | ✅ | `windowCreated/windowClosed/windowStartMove/windowMaximized/windowUnMaximized/close` 会 fan-in 成 server 的域事件 |
+| `close` | ✅ | 触发 `close` |
+
+用法：
+
+```typescript
+const server = createMockServer();
+const client = createMockClient({ id: "c1", server });
+server.clients.set("c1", client);
+server.emit("client.opened", "c1");
+
+server.on("window.created", (info) => console.log(info.handle, info.appid));
+client.emit("windowCreated", "win-1", "render-1"); // → server 发 window.created
+```
 
 ## MockVfsStore
 

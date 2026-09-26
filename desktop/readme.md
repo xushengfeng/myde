@@ -368,54 +368,131 @@ if (abs) {
 
 ## Wayland 服务器
 
-从`MSysApi.server({ render });`导出的`server`变量的进一步用法
+从 `MSysApi.server({ render })` 导出的 `server` 变量的进一步用法。
 
-### 服务器事件
+**server 是主通道**：窗口、光标、剪贴板的事件/查询/命令都在它上面，一次订阅覆盖全部客户端。
+`server.clients` 只留给连接生命周期、remote/调试等明确要底层 client 对象的场景。
 
-一般一个`client`对应一个应用，但是应用可以有多个窗口。有些应用则会多个`client`，每个`client`一个窗口。
+### 窗口身份
+
+Wayland 对象 id 由**客户端本地分配**（实测两个客户端可同时用 `id: 9`），不能当全局身份用。
+服务端因此提供单调递增的 handle（`"w1"`、`"w2"`…）：客户端断开重连后对象 id 会复用，递增 handle 不会串台。
 
 ```typescript
-server.on("newClient", (client, clientId) => {});
-server.on("clientClose", (client, clientId) => {});
+interface WindowInfo {
+    handle: string; // 全局身份，所有命令/查询都用它
+    clientId: string; // 需要按连接过滤时才用
+    appid: string;
+    title: string;
+    rect: { x: number; y: number; w: number; h: number };
+    states: { activated: boolean; maximized: boolean; minimized: boolean };
+    renderId: string; // render.getXdgSurfaceEle(info.renderId)
+}
 ```
 
-### 客户端事件
+`rect` 的 `w`/`h` 是客户端 `set_window_geometry` 声明的尺寸；`x`/`y` 是 surface 局部的几何偏移，
+**不是屏幕位置**（摆放由桌面负责，渲染时几何原点即窗口元素左上角）。
+命中检测用 `0 ≤ p.x < rect.w && 0 ≤ p.y < rect.h`（窗口元素的局部坐标）。
+
+### 事件
 
 ```typescript
-client.onSync("windowBound", () => ({ width: 1920, height: 1080 }));
-client.on("windowCreated", (windowId, renderId) => {});
-client.on("windowClosed", (windowId) => {});
-client.on("windowMaximized", (windowId) => {});
-client.on("windowStartMove", (windowId) => {});
-client.on("close", () => {});
+server.on("window.created", (info: WindowInfo) => {});
+server.on("window.changed", (info) => {}); // rect/states/title/appid 任一变化，payload 自包含
+server.on("window.closed", (handle) => {});
+server.on("window.startMove", (handle) => {});
+server.on("cursor.changed", (clientId, state: CursorState) => {});
+server.on("clipboard.copy", (clientId, text) => {});
+server.on("clipboard.pasteRequested", (clientId) => {});
+server.on("client.opened", (clientId) => {});
+server.on("client.closed", (clientId) => {});
 ```
 
-### 窗口操作
+`window.changed` 是**合并事件**：客户端请求 resize / maximize、改标题、设 `app_id` 都从它下来。
+桌面拿 `info.states` / `info.rect` 与自己已应用的状态做差分即可，参考：
 
 ```typescript
-const win = client.win(windowId);
-win.focus();
-win.blur();
-win.close();
-win.maximize(w, h);
-win.getTitle();
-win.getPreview(); // OffscreenCanvas
-win.point.renderId();
-win.point.inWin({ x, y });
+const applied = new Map<string, { w: number; h: number; maximized: boolean }>();
+server.on("window.created", (info) => {
+    applied.set(info.handle, { w: info.rect.w, h: info.rect.h, maximized: false });
+});
+server.on("window.changed", (info) => {
+    const a = applied.get(info.handle);
+    if (!a) return;
+    if (a.w !== info.rect.w || a.h !== info.rect.h) {
+        // 客户端改了几何
+    }
+    if (a.maximized !== info.states.maximized) {
+        a.maximized = info.states.maximized;
+        // 客户端请求最大化 / 取消
+    }
+});
+```
+
+客户端断开时，server **统一补发**该客户端全部窗口的 `window.closed`，再发 `client.closed`。
+
+### 查询
+
+```typescript
+server.windows.list(); // WindowInfo[]
+server.windows.get(handle); // WindowInfo | undefined
+server.windows.preview(handle); // OffscreenCanvas | undefined（缩略图）
+server.cursor.get(clientId); // CursorState
+await server.request("window.get", handle); // WindowInfo，未知 handle 会 reject
+await server.request("window.getBounds", handle); // Rect
+```
+
+### 窗口命令
+
+```typescript
+server.notify("window.focus", handle);
+server.notify("window.blur", handle);
+server.notify("window.close", handle);
+server.notify("window.setBox", handle, { width, height }); // 只记盒子，不发 configure
+server.notify("window.setSize", handle, { width, height });
+server.notify("window.maximize", handle, { width, height });
+server.notify("window.unmaximize", handle, { width, height });
+server.notify("window.minimize", handle);
 ```
 
 ### 输入事件
 
 ```typescript
-// 它们的x、y或者clientX等应该相对于XdgSurfaceEle左上角
-win.point.sendPointerEvent("move" | "down" | "up", pointerEvent);
-win.point.sendScrollEvent({ p: wheelEvent });
-// mapKeyCode转换过来的
-client.keyboard.sendKey(keyCode, "pressed" | "released");
+// x、y 相对该窗口的 xdg_surface 元素左上角（几何原点）
+server.notify("input.pointer", handle, { type: "move" | "down" | "up", x, y, button });
+server.notify("input.scroll", handle, { deltaX, deltaY, deltaZ });
+// mapKeyCode 转换过来的
+server.notify("input.key", handle, keyCode, "pressed" | "released");
 // 输入法文本（preedit为true表示合成中的预编辑），统一走该入口，
 // 按客户端 text-input 焦点自动分发 zwp_text_input_v1 / zwp_text_input_v3
 //（两者是竞争协议，单客户端内后激活者胜出：v1 activate / v3 enable 抢占，文本只发给持有对象）
-client.keyboard.sendText(text, preedit);
+server.notify("input.text", handle, text, preedit);
+```
+
+键盘与剪贴板是**连接级**的：同一客户端有多个窗口时按 `clientId` 去重后再发，否则会重复收键。
+剪贴板回填也按 `clientId`（事件里带下来的那个），不走 handle：
+
+```typescript
+server.on("clipboard.pasteRequested", (clientId) => {
+    server.notify("clipboard.paste", clientId, "文本");
+});
+server.notify("clipboard.offer", handle); // 获得焦点时把剪贴板 offer 给该客户端
+```
+
+### 桌面提供可用空间
+
+注册一次即可（server 在 `xdg_surface.get_toplevel` 的同步 handler 里取值，所以必须同步返回）：
+
+```typescript
+server.respond("surfaceBounds.request", () => ({ width: window.innerWidth, height: window.innerHeight }));
+```
+
+### 连接
+
+```typescript
+server.on("client.opened", (clientId) => {
+    server.clients.get(clientId)?.setLogConfig({ receive: [], send: [] });
+});
 ```
 
 ## 输入处理
@@ -423,30 +500,29 @@ client.keyboard.sendText(text, preedit);
 推荐用聚合层统一输入：捕获 DOM 原生事件（只收 `isTrusted`，合成事件不回流）与 input api（evdev）事件，区分来源、融合（evdev EV_SYN 帧合并、相对位移积分、绝对轴映射、滚轮换算）后传给 `MSysApi.inputSim` 模拟 DOM 事件，下面的转发处理照旧消费 DOM 事件即可（两种输入来源走同一条路径）。`desktop/offical/src/main.ts` 的"输入聚合层"是完整参考实现。
 
 ```typescript
-function sendPointerEvent(type, p) {
-    for (const [_, client] of server.clients) {
-        for (const [winId] of client.getWindows()) {
-            const xwin = client.win(winId);
-            const el = render.getXdgSurfaceEle(xwin.point.renderId());
-            const rect = el.getBoundingClientRect();
-            const nx = p.x - rect.left,
-                ny = p.y - rect.top;
-
-            // 实际上，对于堆叠桌面，还要看遮挡关系
-            if (xwin.point.inWin({ x: nx, y: ny })) {
-                xwin.point.sendPointerEvent(
-                    type,
-                    new PointerEvent(p.type, {
-                        ...p,
-                        clientX: nx,
-                        clientY: ny,
-                    }),
-                );
-                if (type === "down") xwin.focus();
-                break;
-            }
-        }
+function windowAtPoint(p) {
+    for (const info of server.windows.list()) {
+        const el = render.getXdgSurfaceEle(info.renderId);
+        const rect = el.getBoundingClientRect();
+        const nx = p.x - rect.left,
+            ny = p.y - rect.top;
+        // 实际上，对于堆叠桌面，还要看遮挡关系
+        if (nx >= 0 && nx < info.rect.w && ny >= 0 && ny < info.rect.h) return info;
     }
+    return undefined;
+}
+
+function sendPointerEvent(type, p) {
+    const info = windowAtPoint(p);
+    if (!info) return;
+    const rect = render.getXdgSurfaceEle(info.renderId).getBoundingClientRect();
+    server.notify("input.pointer", info.handle, {
+        type,
+        x: p.x - rect.left,
+        y: p.y - rect.top,
+        button: p.button,
+    });
+    if (type === "down") server.notify("window.focus", info.handle);
 }
 
 document.addEventListener("pointermove", (e) => sendPointerEvent("move", e));
@@ -455,19 +531,26 @@ document.addEventListener("pointerup", (e) => sendPointerEvent("up", e));
 
 document.addEventListener("keydown", (e) => {
     if (e.repeat) return;
-    for (const client of server.clients.values()) {
-        client.keyboard.sendKey(MInputMap.mapKeyCode(e.code), "pressed");
-    }
+    if (focusHandle === undefined) return; // 桌面自己记录的焦点窗口
+    server.notify("input.key", focusHandle, MInputMap.mapKeyCode(e.code), "pressed");
 });
 
 document.addEventListener("wheel", (e) => {
-    for (const [_, client] of server.clients) {
-        for (const [winId] of client.getWindows()) {
-            client.win(winId).point.sendScrollEvent({ p: e });
-            return;
-        }
-    }
+    const info = windowAtPoint(e);
+    if (!info) return;
+    server.notify("input.scroll", info.handle, { deltaX: e.deltaX, deltaY: e.deltaY, deltaZ: e.deltaZ });
 });
+```
+
+要把按键广播给每个连接（而不是只给焦点窗口），按 `clientId` 去重：
+
+```typescript
+const seen = new Set<string>();
+for (const info of server.windows.list()) {
+    if (seen.has(info.clientId)) continue;
+    seen.add(info.clientId);
+    server.notify("input.key", info.handle, keyCode, "pressed");
+}
 ```
 
 ## 启动应用

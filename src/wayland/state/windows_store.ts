@@ -3,8 +3,11 @@ import type { FocusType, SeatRecord, WaylandWinId, WindowRecord } from "../modul
 export type { FocusType, SeatRecord, WindowRecord };
 
 /**
- * 对外出口。Phase 2 仍是 client 级事件（薄适配层在 server.ts 构造时注入），
- * Phase 6 改成 server 级 fan-in 时只动那一处接线，handler 与本类都不用改。
+ * 对外出口。实现方是 `host/client.ts` 构造 `WindowsStore` 时注入的薄适配层，
+ * 它把 Store 调用转成 client 级事件；`host/server.ts` 订阅这些事件做 fan-in，
+ * 分配全局 `WinHandle` 后以 `window.*`（见 api.ts）转发给桌面。
+ *
+ * Store 与协议 handler 都不认识 server，改对外形状只动上面那一层接线。
  */
 export interface WindowsSink {
     created(id: WaylandWinId, renderId: string): void;
@@ -17,10 +20,10 @@ export interface WindowsSink {
 }
 
 /**
- * 窗口记录的唯一持有者（原 `obj2.windows`）。
+ * 窗口记录的唯一持有者。
  *
  * 状态与事件绑在同一次调用里，避免「发了事件但记录没改」这类不同步；
- * 对外事件名与 payload 保持不变，桌面零改动。
+ * 桌面侧看到的 `window.*` 事件由 server fan-in 自本类的 sink。
  */
 export class WindowsStore {
     #wins = new Map<WaylandWinId, WindowRecord>();
@@ -31,9 +34,7 @@ export class WindowsStore {
     }
 
     /**
-     * 暴露**活的 Map**：桌面与 mock 会直接遍历、增删
-     * （`desktop/*`、`desktop-test`、`test/mock/apps/base.ts:78/265`），
-     * 返回副本会破坏它们。Phase 6 收敛为 `list()` 快照时再收口。
+     * 活的 Map，只留给协议模块与 host 内部（`WindowsApi.wins` 契约）。
      */
     get wins(): Map<WaylandWinId, WindowRecord> {
         return this.#wins;
@@ -45,7 +46,13 @@ export class WindowsStore {
 
     /** xdg_surface.get_toplevel */
     created(id: WaylandWinId, renderId: string): void {
-        this.#wins.set(id, { actived: false, box: { width: 0, height: 0 }, title: "" });
+        this.#wins.set(id, {
+            actived: false,
+            box: { width: 0, height: 0 },
+            title: "",
+            maximized: false,
+            minimized: false,
+        });
         this.#sink.created(id, renderId);
     }
 
@@ -64,7 +71,7 @@ export class WindowsStore {
     }
 
     setTitle(id: WaylandWinId, title: string): void {
-        // 先发事件再改记录，与重构前的顺序一致
+        // 先发事件再改记录，顺序对桌面可观察
         this.#sink.titleChanged(id, title);
         const w = this.#wins.get(id);
         if (w) w.title = title;
@@ -79,7 +86,10 @@ export class WindowsStore {
         this.#sink.startMove(id);
     }
 
+    /** 客户端请求最大化/取消最大化：先改记录再发事件，window.changed 的 states 才自包含 */
     setMaximized(id: WaylandWinId, maximized: boolean): void {
+        const w = this.#wins.get(id);
+        if (w) w.maximized = maximized;
         if (maximized) this.#sink.maximized(id);
         else this.#sink.unmaximized(id);
     }

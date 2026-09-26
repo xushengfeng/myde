@@ -51,89 +51,69 @@ function handleInputEvent(event: any, toplevelId: string | null) {
     }
 }
 
+/** 按服务端全局窗口表收集要处理的窗口 */
+function windowsOfClient(clientId: string) {
+    return server.server.windows.list().filter((w) => w.clientId === clientId);
+}
+
 function sendPointerEvent(
     type: "move" | "down" | "up",
     p: { x: number; y: number; button?: number },
     toplevelId: string | null,
 ) {
-    for (const [_id, client] of server.server.clients) {
-        for (const [winId, _win] of client.getWindows()) {
-            const xwin = client.win(winId);
-            if (!xwin) continue;
+    const handled = new Set<string>();
+    for (const info of server.server.windows.list()) {
+        // 每个客户端只处理第一个命中的窗口
+        if (handled.has(info.clientId)) continue;
+        if (toplevelId && info.renderId !== toplevelId) continue;
+        if (p.x < 0 || p.x >= info.rect.w || p.y < 0 || p.y >= info.rect.h) continue;
+        handled.add(info.clientId);
 
-            const renderId = xwin.point.renderId();
+        server.server.notify("input.pointer", info.handle, {
+            type,
+            x: p.x,
+            y: p.y,
+            button: p.button || 0,
+        });
 
-            if (toplevelId && renderId !== toplevelId) continue;
-
-            const inWin = xwin.point.inWin({ x: p.x, y: p.y });
-            if (!inWin) continue;
-
-            xwin.point.sendPointerEvent(
-                type,
-                new PointerEvent(`pointer${type}`, {
-                    clientX: p.x,
-                    clientY: p.y,
-                    button: p.button || 0,
-                }),
-            );
-
-            if (type === "down") {
-                xwin.focus();
-                client.offerTo();
-                for (const [otherWinId, _otherWin] of client.getWindows()) {
-                    if (otherWinId !== winId) {
-                        client.win(otherWinId)?.blur();
-                    }
-                }
+        if (type === "down") {
+            server.server.notify("window.focus", info.handle);
+            server.server.notify("clipboard.offer", info.handle);
+            for (const other of windowsOfClient(info.clientId)) {
+                if (other.handle !== info.handle) server.server.notify("window.blur", other.handle);
             }
-
-            break;
         }
     }
 }
 
 function sendScrollEvent(p: { deltaX: number; deltaY: number }, toplevelId: string | null) {
-    for (const [_, client] of server.server.clients) {
-        for (const [winId, _win] of client.getWindows()) {
-            const xwin = client.win(winId);
-            if (!xwin) continue;
+    const handled = new Set<string>();
+    for (const info of server.server.windows.list()) {
+        if (handled.has(info.clientId)) continue;
+        if (toplevelId && info.renderId !== toplevelId) continue;
+        handled.add(info.clientId);
 
-            const renderId = xwin.point.renderId();
-
-            if (toplevelId && renderId !== toplevelId) continue;
-
-            xwin.point.sendScrollEvent({
-                p: new WheelEvent("wheel", {
-                    deltaX: p.deltaX,
-                    deltaY: p.deltaY,
-                }),
-            });
-
-            break;
-        }
+        server.server.notify("input.scroll", info.handle, {
+            deltaX: p.deltaX,
+            deltaY: p.deltaY,
+            deltaZ: 0,
+        });
     }
 }
 
 function sendKeyEvent(state: "pressed" | "released", code: string) {
     const keyCode = MInputMap.mapKeyCode(code);
-    for (const [_id, client] of server.server.clients) {
-        client.keyboard.sendKey(keyCode, state);
+    const handled = new Set<string>();
+    for (const info of server.server.windows.list()) {
+        if (handled.has(info.clientId)) continue;
+        handled.add(info.clientId);
+        server.server.notify("input.key", info.handle, keyCode, state);
     }
 }
 
 function closeWindow(toplevelId: string) {
-    for (const [_id, client] of server.server.clients) {
-        for (const [winId, _win] of client.getWindows()) {
-            const xwin = client.win(winId);
-            if (!xwin) continue;
-
-            const renderId = xwin.point.renderId();
-            if (renderId === toplevelId) {
-                xwin.close();
-                return;
-            }
-        }
-    }
+    const info = server.server.windows.list().find((w) => w.renderId === toplevelId);
+    if (info) server.server.notify("window.close", info.handle);
 }
 
 connect.addHandler((args) => {

@@ -5,7 +5,7 @@ import { getEnumValue } from "../../utils/wayland-proto";
  * wl_output：目前硬编码单路输出（readme 已注明还没有硬件处理）。
  *
  * 本模块没有请求，只有绑定时的自报——这正是 globals[].onBind 存在的理由：
- * 原先这类初始化散在 wl_registry.bind 的 if 链里，新增 global 必须改中枢。
+ * 每个 global 在自己的模块里登记，中枢不用改。
  */
 export const outputModule = defineModule({
     name: "wl_output",

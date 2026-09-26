@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { testRunnerApp } from "../../test_runner/test_runner";
 import { mapKeyCode } from "../../input_map/web2x";
+import { testRunnerApp } from "../../test_runner/test_runner";
 
 describe("keyboard app", () => {
     it("run test/simple_app/dmabuf_one_frame", { timeout: 8000 }, async () => {
@@ -28,36 +28,34 @@ describe("keyboard app", () => {
         expect(mapKeyCode("ArrowLeft")).toBe(105);
         expect(mapKeyCode("ArrowRight")).toBe(106);
         expect(mapKeyCode("Numpad0")).toBe(82);
-        const { waitExit } = testRunnerApp(`test/electron_app/start.js ${tmpfile}`, ({ client, runner }) => {
-            client.on("windowCreated", (windowId) => {
-                client.win(windowId)?.focus();
+        const { waitExit } = testRunnerApp(`test/electron_app/start.js ${tmpfile}`, ({ server, runner }) => {
+            server.on("window.created", (info) => {
+                server.notify("window.focus", info.handle);
                 setTimeout(() => {
-                    const win = client.win(windowId);
-                    if (win) {
-                        win.point.sendPointerEvent("move", { x: 16, y: 16, button: 0 });
-                        const keys = [30, 48, 28, 57, 103, 108, 105, 106, 82];
-                        for (const [i, key] of keys.entries()) {
-                            setTimeout(
-                                () => {
-                                    client.keyboard.sendKey(key, "pressed");
-                                },
-                                50 * (i * 2 + 1),
-                            );
-                            setTimeout(
-                                () => {
-                                    client.keyboard.sendKey(key, "released");
-                                },
-                                50 * (i * 2 + 2),
-                            );
-                        }
-
+                    if (!server.windows.get(info.handle)) return;
+                    server.notify("input.pointer", info.handle, { type: "move", x: 16, y: 16, button: 0 });
+                    const keys = [30, 48, 28, 57, 103, 108, 105, 106, 82];
+                    for (const [i, key] of keys.entries()) {
                         setTimeout(
                             () => {
-                                runner.kill();
+                                server.notify("input.key", info.handle, key, "pressed");
                             },
-                            50 * (keys.length * 2 + 1),
+                            50 * (i * 2 + 1),
+                        );
+                        setTimeout(
+                            () => {
+                                server.notify("input.key", info.handle, key, "released");
+                            },
+                            50 * (i * 2 + 2),
                         );
                     }
+
+                    setTimeout(
+                        () => {
+                            runner.kill();
+                        },
+                        50 * (keys.length * 2 + 1),
+                    );
                 }, 200);
             });
         });

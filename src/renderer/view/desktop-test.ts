@@ -8,55 +8,49 @@ import { _myde as myde } from "../../desktop-api";
 import { getDesktopEntries, getDesktopIcon } from "../../sys_api/application";
 import { type ImComposeState, inputMethod, type inputMethodContext } from "../../sys_api/input_method";
 import { renderToolsHtmlEl } from "../../wayland/render_tools_el";
-import type { WaylandClient } from "../../wayland";
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent) {
-    for (const [_id, client] of server.clients) {
-        for (const [winId, _win] of client.getWindows()) {
-            const xwin = client.win(winId);
-            if (!xwin) continue;
-            const winel = render.getXdgSurfaceEle(xwin.point.renderId());
-            if (!winel) continue;
-            const rect = winel.getBoundingClientRect();
-            const nx = p.x - rect.left;
-            const ny = p.y - rect.top;
-            const inWin = xwin.point.inWin({ x: nx, y: ny });
-            if (!inWin) continue;
-            xwin.point.sendPointerEvent(
-                type,
-                new PointerEvent(p.type, { ...p, clientX: p.x - rect.left, clientY: p.y - rect.top }),
-            );
-            if (type === "down") {
-                const f = xwin.focus();
-                if (f) client.offerTo();
-                for (const [otherWinId, _otherWin] of client.getWindows()) {
-                    if (otherWinId !== winId) {
-                        client.win(otherWinId)?.blur();
-                    }
+    const handled = new Set<string>();
+    for (const info of server.windows.list()) {
+        // 每个客户端只处理第一个命中的窗口
+        if (handled.has(info.clientId)) continue;
+        const winel = render.getXdgSurfaceEle(info.renderId);
+        if (!winel) continue;
+        const rect = winel.getBoundingClientRect();
+        const nx = p.x - rect.left;
+        const ny = p.y - rect.top;
+        if (nx < 0 || nx >= info.rect.w || ny < 0 || ny >= info.rect.h) continue;
+        handled.add(info.clientId);
+
+        server.notify("input.pointer", info.handle, { type, x: nx, y: ny, button: p.button });
+        if (type === "down") {
+            if (!info.states.activated) {
+                server.notify("window.focus", info.handle);
+                server.notify("clipboard.offer", info.handle);
+            }
+            for (const other of server.windows.list()) {
+                if (other.clientId === info.clientId && other.handle !== info.handle) {
+                    server.notify("window.blur", other.handle);
                 }
             }
-            break;
         }
     }
 }
 
 function sendScrollEvent(p: WheelEvent) {
-    for (const [_, client] of server.clients) {
-        for (const [winId, _win] of client.getWindows()) {
-            const xwin = client.win(winId);
-            if (!xwin) continue;
-            const winel = render.getXdgSurfaceEle(xwin.point.renderId());
-            if (!winel) continue;
-            const rootEl = winel;
-            const rect = rootEl.getBoundingClientRect();
-            const nx = p.x - rect.left;
-            const ny = p.y - rect.top;
-            const inWin = xwin.point.inWin({ x: nx, y: ny });
-            if (!inWin) continue;
-            xwin.point.sendScrollEvent({
-                p: p,
-            });
-        }
+    for (const info of server.windows.list()) {
+        const winel = render.getXdgSurfaceEle(info.renderId);
+        if (!winel) continue;
+        const rect = winel.getBoundingClientRect();
+        const nx = p.x - rect.left;
+        const ny = p.y - rect.top;
+        if (nx < 0 || nx >= info.rect.w || ny < 0 || ny >= info.rect.h) continue;
+
+        server.notify("input.scroll", info.handle, {
+            deltaX: p.deltaX,
+            deltaY: p.deltaY,
+            deltaZ: p.deltaZ,
+        });
     }
 }
 
@@ -114,24 +108,6 @@ render.on({
     onToplevelRemove: (wid) => {
         render.getXdgSurfaceEle(wid)?.remove();
     },
-    onCursorUpdata(c, hx, hy) {
-        console.log("cursor", c, hx, hy);
-
-        if (c === undefined) {
-            mouseEL.style({ opacity: 0 });
-            return;
-        } else {
-            mouseEL.style({ opacity: 1 });
-        }
-        if (typeof c === "string") {
-        } else {
-            const cel = ele("canvas");
-
-            cel.attr({ width: c.width, height: c.height });
-            cel.el.getContext("2d")?.drawImage(c, 0, 0);
-            mouseEL.clear().add(cel.style({ position: "absolute", left: `-${hx}px`, top: `-${hy}px` }));
-        }
-    },
 });
 
 const serverX = myde.MSysApi.server({
@@ -140,47 +116,70 @@ const serverX = myde.MSysApi.server({
 });
 const server = serverX.server;
 
-server.on("newClient", (client, clientId) => {
-    clientData.set(clientId, { client });
-    client.onSync("windowBound", () => {
-        return { width: window.innerWidth, height: window.innerHeight };
-    });
-    client.on("windowCreated", (windowId) => {
-        console.log(`Client ${clientId} created window ${windowId}`);
-        client.win(windowId)?.focus();
-    });
-    client.on("windowClosed", (windowId) => {
-        console.log(`Client ${clientId} deleted window ${windowId}`);
-    });
-    client.on("windowMaximized", (windowId) => {
-        const xwin = client.win(windowId);
-        if (!xwin) return;
+// 桌面可用空间
+server.respond("surfaceBounds.request", () => ({ width: window.innerWidth, height: window.innerHeight }));
 
-        const winEl = render.getXdgSurfaceEle(xwin.point.renderId());
-        if (!winEl) return;
-        const width = window.innerWidth;
-        const height = window.innerHeight;
-        pack(winEl).style({
-            width: `${width}px`,
-            height: `${height}px`,
-            left: "0px",
-            top: "0px",
-        });
-        xwin.maximize(width, height);
-    });
-    client.on("copy", (text: string) => {
-        console.log(`Client ${clientId} copy text:`, text);
-    });
-    client.on("paste", () => {
-        // todo copy后似乎抢占了，如果是自定义粘贴需要重新offer
-        client.paste("hello");
-    });
-});
-server.on("clientClose", (_, clientId) => {
-    clientData.delete(clientId);
+/** 桌面已应用的最大化状态 —— 用来从 window.changed 里认出客户端的 maximize 请求 */
+const maximizedApplied = new Map<string, boolean>();
+
+server.on("window.created", (info) => {
+    console.log(`Client ${info.clientId} created window ${info.handle}`);
+    server.notify("window.focus", info.handle);
 });
 
-const clientData = new Map<string, { client: WaylandClient }>();
+server.on("window.closed", (handle) => {
+    maximizedApplied.delete(handle);
+    console.log(`window ${handle} closed`);
+});
+
+// window.changed 承载 rect / states / title / appid 的变化；这里只认客户端的最大化请求
+server.on("window.changed", (info) => {
+    const prev = maximizedApplied.get(info.handle) ?? false;
+    if (prev === info.states.maximized) return;
+    maximizedApplied.set(info.handle, info.states.maximized);
+    if (!info.states.maximized) return;
+
+    const winEl = render.getXdgSurfaceEle(info.renderId);
+    if (!winEl) return;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    pack(winEl).style({
+        width: `${width}px`,
+        height: `${height}px`,
+        left: "0px",
+        top: "0px",
+    });
+    server.notify("window.maximize", info.handle, { width, height });
+});
+
+server.on("clipboard.copy", (clientId, text) => {
+    console.log(`Client ${clientId} copy text:`, text);
+});
+
+server.on("clipboard.pasteRequested", (clientId) => {
+    // todo copy后似乎抢占了，如果是自定义粘贴需要重新offer
+    server.notify("clipboard.paste", clientId, "hello");
+});
+
+// 光标形态改由 server 事件下发（renderToolsOn.onCursorUpdata 保留给渲染侧，语义相同）
+server.on("cursor.changed", (_clientId, state) => {
+    console.log("cursor", state);
+
+    if (state.kind === "hidden") {
+        mouseEL.style({ opacity: 0 });
+        return;
+    }
+    mouseEL.style({ opacity: 1 });
+    if (state.kind === "shape") return;
+    const c = state.canvas;
+    if (!c) return;
+    const cel = ele("canvas");
+    cel.attr({ width: c.width, height: c.height });
+    cel.el.getContext("2d")?.drawImage(c, 0, 0);
+    mouseEL
+        .clear()
+        .add(cel.style({ position: "absolute", left: `-${state.hotspot.x}px`, top: `-${state.hotspot.y}px` }));
+});
 
 let xServerNum = NaN;
 
@@ -197,6 +196,16 @@ const mouseEL = view().addInto().style({
     transform: "translate(-50%, -50%)",
     zIndex: 9999,
 });
+
+/** 每个客户端发一次：经 handle 反查并按 clientId 去重 */
+function forEachClient(fn: (handle: string) => void) {
+    const seen = new Set<string>();
+    for (const info of server.windows.list()) {
+        if (seen.has(info.clientId)) continue;
+        seen.add(info.clientId);
+        fn(info.handle);
+    }
+}
 
 function mouseMove(x: number, y: number) {
     mouseEL.style({ top: `${y}px`, left: `${x}px` });
@@ -219,15 +228,11 @@ body.on("pointerup", (e) => {
 
 body.on("keydown", (e) => {
     if (e.repeat) return;
-    for (const client of server.clients.values()) {
-        client.keyboard.sendKey(mapKeyCode(e.code), "pressed");
-    }
+    forEachClient((handle) => server.notify("input.key", handle, mapKeyCode(e.code), "pressed"));
 });
 body.on("keyup", (e) => {
     if (e.repeat) return;
-    for (const client of server.clients.values()) {
-        client.keyboard.sendKey(mapKeyCode(e.code), "released");
-    }
+    forEachClient((handle) => server.notify("input.key", handle, mapKeyCode(e.code), "released"));
 });
 
 body.on("wheel", (e) => {
@@ -389,9 +394,7 @@ let imCtx: inputMethodContext | undefined;
 /** 文字上屏去向：显示 + 转发给 wayland 客户端 */
 function imSendText(t: string) {
     imOutLine.el.textContent += t;
-    for (const client of server.clients.values()) {
-        client.keyboard.sendText(t, false);
-    }
+    forEachClient((handle) => server.notify("input.text", handle, t, false));
 }
 
 function imRender(s: ImComposeState) {

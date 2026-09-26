@@ -1,5 +1,6 @@
 import type { USocket } from "myde-unix-socket";
 import { InputEventCodes } from "../../input_codes/types";
+import type { Client, ClientLogConfig, CursorState, PointerCommand, Rect, ScrollCommand } from "../api";
 import type {
     ClientState,
     DataOf,
@@ -7,7 +8,6 @@ import type {
     ModuleCtx,
     RequestMsg,
     WaylandClientEventMap,
-    WaylandClientSyncEventMap,
     WaylandObjectId2,
     WaylandObjectId3,
     WaylandWinId,
@@ -27,10 +27,10 @@ import { getEnumValue, tryX, WaylandProtocols, waylandObjectId, waylandProtocols
 const fs = require("node:fs") as typeof import("node:fs");
 
 /**
- * 单个 wayland 连接：对象表、解码分发、ModuleCtx 构造，以及对桌面暴露的窗口/输入门面。
+ * 单个 wayland 连接：对象表、解码分发、ModuleCtx 构造，以及窗口/输入的执行面。
  *
- * 由 server.ts 拆出（Phase 3）。协议请求本身已在 protocols/** 里，这里只剩 host 职责；
- * 连接生命周期（监听、建连）仍在 WaylandServer。
+ * 协议请求在 protocols/** 里，这里只剩 host 职责；
+ * 连接生命周期（监听、建连）在 WaylandServer。
  */
 
 type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandOp; args: Record<string, any> };
@@ -365,13 +365,20 @@ const frameHooks = protocolModules.flatMap((m) => (m.hooks.onFrame ? [m.hooks.on
 const destroyHooks = protocolModules.flatMap((m) => (m.hooks.onDestroy ? [m.hooks.onDestroy] : []));
 const focusHooks = protocolModules.flatMap((m) => (m.hooks.onFocus ? [m.hooks.onFocus] : []));
 
-export class WaylandClient {
-    logConfig = {
+/**
+ * server 注入的宿主能力。client 只认识这两条，fan-in / handle 分配全在 server（见 host/server.ts）。
+ */
+export interface ClientHost {
+    /** 桌面提供的可用空间（同步；xdg_surface.get_toplevel 要填 configure_bounds） */
+    surfaceBounds(): { width: number; height: number } | undefined;
+    /** 光标状态变化，server 转成 `cursor.changed` 事件 */
+    cursorChanged(state: CursorState): void;
+}
+
+export class WaylandClient implements Client {
+    logConfig: ClientLogConfig = {
         receive: true,
         send: true,
-    } as {
-        receive: true | string[];
-        send: true | string[];
     };
 
     readonly id: string;
@@ -393,7 +400,7 @@ export class WaylandClient {
     private seat: SeatStore;
     /** 窗口记录与窗口事件的唯一持有者（见 state/windows_store.ts） */
     private windows: WindowsStore;
-    /** 客户端级状态；形状定义在 module.ts 的 ClientState（原 obj2 内联类型） */
+    /** 客户端级状态；形状定义在 module.ts 的 ClientState */
     private obj2: ClientState;
     private wlSurface: wlSurfaceData;
     private dataManager: {
@@ -403,37 +410,25 @@ export class WaylandClient {
     // 事件存储
     private events: { [K in keyof WaylandClientEventMap]?: WaylandClientEventMap[K][] } = {};
 
-    private syncHandlers: { [K in keyof WaylandClientSyncEventMap]?: WaylandClientSyncEventMap[K] } = {};
+    /** server 注入的宿主能力（可用空间、光标状态出口） */
+    private host: ClientHost;
 
-    public onSync<K extends keyof WaylandClientSyncEventMap>(
-        event: K,
-        handler: NonNullable<WaylandClientSyncEventMap[K]>,
-    ): () => void {
-        this.syncHandlers[event] = handler;
-        return () => {
-            if (this.syncHandlers[event] === handler) this.syncHandlers[event] = undefined;
-        };
-    }
-
-    public emitSync<K extends keyof WaylandClientSyncEventMap>(
-        event: K,
-        ...args: Parameters<NonNullable<WaylandClientSyncEventMap[K]>>
-    ): ReturnType<NonNullable<WaylandClientSyncEventMap[K]>> | undefined {
-        const h = this.syncHandlers[event];
-        if (!h) return undefined;
-        try {
-            return (h as any)(...(args as any));
-        } catch (err) {
-            console.error("sync handler error for", String(event), err);
-            return undefined;
-        }
-    }
-
-    constructor({ id, socket, render }: { id: string; socket: USocket; render: renderTools }) {
+    constructor({
+        id,
+        socket,
+        render,
+        host,
+    }: {
+        id: string;
+        socket: USocket;
+        render: renderTools;
+        host: ClientHost;
+    }) {
         this.id = id;
         this.socket = socket;
         this.pid = socket.pid;
         this.objects = new Map();
+        this.host = host;
         this.obj2 = {
             textInputV3: { focus: null, m: new Map() },
             textInputOwner: null,
@@ -441,9 +436,9 @@ export class WaylandClient {
             xdg_wm_base: new Set(),
         };
         this.render = render;
-        this.cursor = new CursorStore(render);
+        this.cursor = new CursorStore(render, (state) => host.cursorChanged(state));
         this.seat = new SeatStore();
-        // 窗口事件的对外出口：Phase 2 仍是 client 级，Phase 6 只改这里
+        // 窗口事件的 client 级出口：server 订阅后 fan-in 成 window.*
         this.windows = new WindowsStore({
             created: (wid, renderId) => this.emit("windowCreated", wid, renderId),
             closed: (wid) => this.emit("windowClosed", wid),
@@ -611,7 +606,7 @@ export class WaylandClient {
                 protoVersions: this.protoVersions,
                 state: this.obj2,
                 emit: this.emit.bind(this),
-                emitSync: this.emitSync.bind(this),
+                surfaceBounds: () => this.host.surfaceBounds(),
             },
             scene: this.render,
         };
@@ -641,7 +636,7 @@ export class WaylandClient {
 
         // todo wp_cursor_shape_manager_v1.get_tablet_tool_v2 暂不实现，平板工具支持后再加
 
-        // 协议模块的请求并入同一张分发表（Phase 3 起迁出的协议都走这里）。
+        // 协议模块的请求并入同一张分发表。
         // 模块 handler 与 isOp 的接收形状同构（id/proto/op/args），差别只在 brand 与 args 泛型，此处桥接。
         for (const mod of protocolModules) {
             for (const [key, raw] of mod.requests) {
@@ -868,6 +863,10 @@ export class WaylandClient {
     getAppid() {
         return this.obj2.appid;
     }
+    /** 当前光标状态（server 的 `cursor.get(clientId)` 走这条） */
+    cursorState(): CursorState {
+        return this.cursor.state;
+    }
     getWindows() {
         return this.windows.wins;
     }
@@ -893,268 +892,316 @@ export class WaylandClient {
             .map((s) => s.keyboard)
             .filter((k) => k !== undefined);
     }
-    win(id: WaylandWinId) {
-        const win = this.windows.get(id);
-        if (win === undefined) return undefined;
-        const xdgSurfaceId = this.dataManager.xdgSurface.getXdgSurfaceByToplevel(id);
+    /** xdg_surface（窗口元素）id；窗口不存在时 undefined */
+    private windowXdgSurface(winId: WaylandWinId): WaylandObjectId2<"xdg_surface"> | undefined {
+        return this.dataManager.xdgSurface.getXdgSurfaceByToplevel(winId);
+    }
+
+    /**
+     * 窗口几何：客户端 `xdg_surface.set_window_geometry` 声明的尺寸（未设置时为 surface 尺寸）。
+     * x/y 是 surface 局部偏移，**不是屏幕位置**——详见 api.ts 的 WindowInfo.rect。
+     */
+    windowRect(winId: WaylandWinId): Rect | undefined {
+        const xdgSurfaceId = this.windowXdgSurface(winId);
         if (xdgSurfaceId === undefined) return undefined;
-        const winObj = {
-            setWinBoxData: (box: { width: number; height: number }) => {
-                win.box = box;
-            },
-            focus: () => {
-                if (win.actived) return false;
-                win.actived = true;
-                this.configureWin(id, win);
-                return true;
-            },
-            blur: () => {
-                if (!win.actived) return;
-                win.actived = false;
-                this.configureWin(id, win);
-            },
-            setSize: (w: number, h: number) => {
-                win.box.width = w;
-                win.box.height = h;
-                this.configureWin(id, win);
-            },
-            maximize: (width: number, height: number) => {
-                win.actived = true;
-                win.box.width = width;
-                win.box.height = height;
+        const geo = this.dataManager.xdgSurface.getXdgSurface(xdgSurfaceId).winGeo;
+        if (geo) return { x: geo.x, y: geo.y, w: geo.w, h: geo.h };
+        const size = this.dataManager.xdgSurface.getReRect(xdgSurfaceId);
+        return { x: 0, y: 0, w: size.w, h: size.h };
+    }
 
-                this.sendMessageImm(id, "xdg_toplevel.configure", {
-                    width,
-                    height,
-                    states: new Uint32Array([
-                        getEnumValue("xdg_toplevel.state", "activated"),
-                        getEnumValue("xdg_toplevel.state", "maximized"),
-                    ]),
-                });
-                this.sendMessageImm(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
-            },
-            unmaximize: (width: number, height: number) => {
-                win.box.width = width;
-                win.box.height = height;
-                this.configureWin(id, win);
-            },
-            minimize: () => {
-                win.actived = false;
-                this.configureWin(id, win);
-            },
-            close: () => {
-                this.sendMessageImm(id, "xdg_toplevel.close", {});
-            },
-            point: {
-                renderId: () => this.wlSurface.idScope(xdgSurfaceId),
-                inWin: (p: { x: number; y: number }) => {
-                    const rel = this.dataManager.xdgSurface.getReRect(xdgSurfaceId);
-                    // todo popup
-                    if (p.x < 0 || p.x >= rel.w || p.y < 0 || p.y >= rel.h) return false;
-                    return true; // todo
-                },
-                updatePointerFocus: (p: { x: number; y: number }) => {
-                    const { x, y } = p;
-                    // 获取在哪个xdgsurface上，并区分surface还是popup
-                    let inXdgSurface: WaylandObjectId2<"xdg_surface"> | undefined;
-                    /** 相对于主xdgsurface坐标，适用于popup */
-                    const xdgSurfaceOffset = { x: 0, y: 0 };
-                    let reasonSurfaceType: "main" | "popup" | null = null;
-                    const xdgM = this.dataManager.xdgSurface;
-                    for (const { id: p, offset, size } of xdgM.getChildenDeepOnlyPopup(xdgSurfaceId).toReversed()) {
-                        const offsetX = offset.x;
-                        const offsetY = offset.y;
-                        const offsetX1 = offset.x + size.w;
-                        const offsetY1 = offset.y + size.h;
-                        if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
-                            console.log(`pointer in popup surface ${p}`);
-                            inXdgSurface = p;
-                            xdgSurfaceOffset.x = offset.x;
-                            xdgSurfaceOffset.y = offset.y;
-                            reasonSurfaceType = "popup";
-                            break;
-                        }
-                    }
-                    if (!inXdgSurface) {
-                        if (
-                            0 < x &&
-                            x < xdgM.getReRect(xdgSurfaceId).w &&
-                            0 < y &&
-                            y < xdgM.getReRect(xdgSurfaceId).h
-                        ) {
-                            inXdgSurface = xdgSurfaceId;
-                            xdgSurfaceOffset.x = 0;
-                            xdgSurfaceOffset.y = 0;
-                            reasonSurfaceType = "main";
-                        } else {
-                            return undefined;
-                        }
-                    }
-                    // 获取与xdgsurface相关的所有surface，比如子表面
-                    const surfaces: {
-                        id: WaylandObjectId2<"wl_surface">;
-                        /** 相对于主surface坐标 */
-                        offsetRect: { x: number; y: number; w: number; h: number };
-                    }[] = [];
-                    const mainSurfaceId = xdgM.getXdgSurface(inXdgSurface).surface;
-                    const rel = xdgM.getMainSurfaceRect(inXdgSurface);
-                    const { winGeo: selfOffset = { x: 0, y: 0 } } = xdgM.getXdgSurface(inXdgSurface);
-                    surfaces.push({ id: mainSurfaceId, offsetRect: { x: 0, y: 0, w: rel.w, h: rel.h } });
-                    surfaces.push(...this.dataManager.wlSubSurface.getChildrenDeep(mainSurfaceId));
+    /** 命中检测：p 相对窗口元素左上角（几何原点） */
+    windowInBounds(winId: WaylandWinId, p: { x: number; y: number }): boolean {
+        const xdgSurfaceId = this.windowXdgSurface(winId);
+        if (xdgSurfaceId === undefined) return false;
+        const rel = this.dataManager.xdgSurface.getReRect(xdgSurfaceId);
+        // todo popup
+        if (p.x < 0 || p.x >= rel.w || p.y < 0 || p.y >= rel.h) return false;
+        return true; // todo
+    }
 
-                    let inSurface: { id: WaylandObjectId2<"wl_surface">; x: number; y: number } | undefined;
-                    let canSend = false;
-                    for (const { id: s, offsetRect } of surfaces.toReversed()) {
-                        const offsetX = offsetRect.x - selfOffset.x + xdgSurfaceOffset.x;
-                        const offsetY = offsetRect.y - selfOffset.y + xdgSurfaceOffset.y;
-                        const offsetX1 = offsetRect.x + offsetRect.w - selfOffset.x + xdgSurfaceOffset.x;
-                        const offsetY1 = offsetRect.y + offsetRect.h - selfOffset.y + xdgSurfaceOffset.y;
-                        if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
-                            const nx = x - offsetX;
-                            const ny = y - offsetY;
+    windowTitle(winId: WaylandWinId): string {
+        return this.windows.get(winId)?.title ?? "";
+    }
 
-                            const surfaceInputRegion = this.getObject<"wl_surface">(s).data.current.inputRegion;
-                            if (surfaceInputRegion) {
-                                for (const r of surfaceInputRegion) {
-                                    if (nx >= r.x && nx < r.x + r.width && ny >= r.y && ny < r.y + r.height) {
-                                        if (r.type === "+") {
-                                            canSend = true;
-                                        } else {
-                                            canSend = false;
-                                            break;
-                                        }
-                                    }
-                                }
-                            } else canSend = true;
+    windowPreview(winId: WaylandWinId): OffscreenCanvas | undefined {
+        const xdgSurfaceId = this.windowXdgSurface(winId);
+        if (xdgSurfaceId === undefined) return undefined;
+        const rootSurface = this.dataManager.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
+        return this.getObject(rootSurface).data.canvas;
+    }
 
-                            if (canSend) {
-                                console.log(`pointer in surface ${s}`);
-                                inSurface = { id: s, x: nx, y: ny };
+    setWindowBox(winId: WaylandWinId, box: { width: number; height: number }): void {
+        const win = this.windows.get(winId);
+        if (win === undefined) return;
+        win.box = box;
+    }
+
+    /** 返回 false 表示本来就是激活态，未重复下发 configure */
+    focusWindow(winId: WaylandWinId): boolean {
+        const win = this.windows.get(winId);
+        if (win === undefined) return false;
+        if (win.actived) return false;
+        win.actived = true;
+        win.minimized = false;
+        this.configureWin(winId, win);
+        return true;
+    }
+
+    blurWindow(winId: WaylandWinId): void {
+        const win = this.windows.get(winId);
+        if (win === undefined || !win.actived) return;
+        win.actived = false;
+        this.configureWin(winId, win);
+    }
+
+    setWindowSize(winId: WaylandWinId, w: number, h: number): void {
+        const win = this.windows.get(winId);
+        if (win === undefined) return;
+        win.box.width = w;
+        win.box.height = h;
+        this.configureWin(winId, win);
+    }
+
+    /** 不给 size 时沿用盒子尺寸 */
+    maximizeWindow(winId: WaylandWinId, width?: number, height?: number): void {
+        const win = this.windows.get(winId);
+        if (win === undefined) return;
+        const xdgSurfaceId = this.windowXdgSurface(winId);
+        if (xdgSurfaceId === undefined) return;
+        win.actived = true;
+        win.maximized = true;
+        win.minimized = false;
+        win.box.width = width ?? win.box.width;
+        win.box.height = height ?? win.box.height;
+
+        this.sendMessageImm(winId, "xdg_toplevel.configure", {
+            width: win.box.width,
+            height: win.box.height,
+            states: new Uint32Array([
+                getEnumValue("xdg_toplevel.state", "activated"),
+                getEnumValue("xdg_toplevel.state", "maximized"),
+            ]),
+        });
+        this.sendMessageImm(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
+    }
+
+    unmaximizeWindow(winId: WaylandWinId, width?: number, height?: number): void {
+        const win = this.windows.get(winId);
+        if (win === undefined) return;
+        win.maximized = false;
+        win.box.width = width ?? win.box.width;
+        win.box.height = height ?? win.box.height;
+        this.configureWin(winId, win);
+    }
+
+    minimizeWindow(winId: WaylandWinId): void {
+        const win = this.windows.get(winId);
+        if (win === undefined) return;
+        win.actived = false;
+        win.minimized = true;
+        this.configureWin(winId, win);
+    }
+
+    closeWindow(winId: WaylandWinId): void {
+        if (this.windows.get(winId) === undefined) return;
+        this.sendMessageImm(winId, "xdg_toplevel.close", {});
+    }
+
+    /**
+     * 指针按窗口几何路由：命中则切换焦点并返回 surface 局部坐标。
+     * 留在 host/client.ts（它本质是「指针按窗口几何路由」，属 host 职责），见 PLAN §3.2。
+     */
+    private updatePointerFocus(winId: WaylandWinId, p: { x: number; y: number }): { x: number; y: number } | undefined {
+        const xdgSurfaceId = this.windowXdgSurface(winId);
+        if (xdgSurfaceId === undefined) return undefined;
+        const { x, y } = p;
+        // 获取在哪个xdgsurface上，并区分surface还是popup
+        let inXdgSurface: WaylandObjectId2<"xdg_surface"> | undefined;
+        /** 相对于主xdgsurface坐标，适用于popup */
+        const xdgSurfaceOffset = { x: 0, y: 0 };
+        let reasonSurfaceType: "main" | "popup" | null = null;
+        const xdgM = this.dataManager.xdgSurface;
+        for (const { id: p, offset, size } of xdgM.getChildenDeepOnlyPopup(xdgSurfaceId).toReversed()) {
+            const offsetX = offset.x;
+            const offsetY = offset.y;
+            const offsetX1 = offset.x + size.w;
+            const offsetY1 = offset.y + size.h;
+            if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
+                console.log(`pointer in popup surface ${p}`);
+                inXdgSurface = p;
+                xdgSurfaceOffset.x = offset.x;
+                xdgSurfaceOffset.y = offset.y;
+                reasonSurfaceType = "popup";
+                break;
+            }
+        }
+        if (!inXdgSurface) {
+            if (0 < x && x < xdgM.getReRect(xdgSurfaceId).w && 0 < y && y < xdgM.getReRect(xdgSurfaceId).h) {
+                inXdgSurface = xdgSurfaceId;
+                xdgSurfaceOffset.x = 0;
+                xdgSurfaceOffset.y = 0;
+                reasonSurfaceType = "main";
+            } else {
+                return undefined;
+            }
+        }
+        // 获取与xdgsurface相关的所有surface，比如子表面
+        const surfaces: {
+            id: WaylandObjectId2<"wl_surface">;
+            /** 相对于主surface坐标 */
+            offsetRect: { x: number; y: number; w: number; h: number };
+        }[] = [];
+        const mainSurfaceId = xdgM.getXdgSurface(inXdgSurface).surface;
+        const rel = xdgM.getMainSurfaceRect(inXdgSurface);
+        const { winGeo: selfOffset = { x: 0, y: 0 } } = xdgM.getXdgSurface(inXdgSurface);
+        surfaces.push({ id: mainSurfaceId, offsetRect: { x: 0, y: 0, w: rel.w, h: rel.h } });
+        surfaces.push(...this.dataManager.wlSubSurface.getChildrenDeep(mainSurfaceId));
+
+        let inSurface: { id: WaylandObjectId2<"wl_surface">; x: number; y: number } | undefined;
+        let canSend = false;
+        for (const { id: s, offsetRect } of surfaces.toReversed()) {
+            const offsetX = offsetRect.x - selfOffset.x + xdgSurfaceOffset.x;
+            const offsetY = offsetRect.y - selfOffset.y + xdgSurfaceOffset.y;
+            const offsetX1 = offsetRect.x + offsetRect.w - selfOffset.x + xdgSurfaceOffset.x;
+            const offsetY1 = offsetRect.y + offsetRect.h - selfOffset.y + xdgSurfaceOffset.y;
+            if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
+                const nx = x - offsetX;
+                const ny = y - offsetY;
+
+                const surfaceInputRegion = this.getObject<"wl_surface">(s).data.current.inputRegion;
+                if (surfaceInputRegion) {
+                    for (const r of surfaceInputRegion) {
+                        if (nx >= r.x && nx < r.x + r.width && ny >= r.y && ny < r.y + r.height) {
+                            if (r.type === "+") {
+                                canSend = true;
+                            } else {
+                                canSend = false;
                                 break;
                             }
                         }
                     }
+                } else canSend = true;
 
-                    if (inSurface) {
-                        const { id: s, x: nx, y: ny } = inSurface;
-                        const prevFocus = this.seat.focus();
-                        const prevFocusType = this.seat.focusType();
-                        if (prevFocus !== s) {
-                            if (prevFocus && this.objects.has(prevFocus)) {
-                                for (const p of this.getPointers())
-                                    this.sendMessageImm(p, "wl_pointer.leave", {
-                                        serial: 0,
-                                        surface: prevFocus,
-                                    });
-                                if (prevFocusType === "main" && reasonSurfaceType === "main")
-                                    this.keyboard.blurSurface(prevFocus); // todo popup
-                            }
-                            for (const p of this.getPointers()) {
-                                this.sendMessageImm(p, "wl_pointer.enter", {
-                                    serial: 0,
-                                    surface: s,
-                                    surface_x: nx,
-                                    surface_y: ny,
-                                });
-                                this.sendMessageImm(p, "wl_pointer.frame", {});
-                            }
-                            if ((prevFocusType === "main" || !prevFocusType) && reasonSurfaceType === "main")
-                                this.keyboard.focusSurface(s);
-                            this.seat.setFocus(s, reasonSurfaceType);
-                        }
-                        return { x: nx, y: ny };
-                    }
-                    // todo 指针不在任何surface上时应发送wl_pointer.leave并清除指针焦点
-                    //  现在焦点悬挂：客户端收不到leave（hover状态卡住），重新进来也不发enter、客户端不重发光标
-                    //  还需给桌面新增point.sendPointerLeave()入口（移出窗口时调用，幂等），覆盖移出所有窗口、跨客户端窗口
-                    return undefined;
-                },
-                sendPointerEvent: (type: "move" | "down" | "up", p: { x: number; y: number; button: number }) => {
-                    // px py已经相对主xdg surface了
-                    const pos = winObj.point.updatePointerFocus({ x: p.x, y: p.y });
-                    if (!pos) return;
-                    const { x: nx, y: ny } = pos;
-                    if (type === "move") {
-                        for (const p of this.getPointers()) {
-                            this.sendMessageImm(p, "wl_pointer.motion", {
-                                time: Date.now(),
-                                surface_x: nx,
-                                surface_y: ny,
-                            });
-                            this.sendMessageImm(p, "wl_pointer.frame", {});
-                        }
-                    }
-                    if (type === "down") {
-                        for (const pointer of this.getPointers()) {
-                            this.sendMessageImm(pointer, "wl_pointer.button", {
-                                serial: 0,
-                                time: Date.now(),
-                                button:
-                                    p.button === 0
-                                        ? InputEventCodes.BTN_LEFT
-                                        : p.button === 1
-                                          ? InputEventCodes.BTN_MIDDLE
-                                          : p.button === 2
-                                            ? InputEventCodes.BTN_RIGHT
-                                            : InputEventCodes.BTN_LEFT,
-                                state: getEnumValue("wl_pointer.button_state", "pressed"),
-                            });
-                            this.sendMessageImm(pointer, "wl_pointer.frame", {});
-                        }
-                    }
-                    if (type === "up") {
-                        for (const pointer of this.getPointers()) {
-                            this.sendMessageImm(pointer, "wl_pointer.button", {
-                                serial: 0,
-                                time: Date.now(),
-                                button:
-                                    p.button === 0
-                                        ? InputEventCodes.BTN_LEFT
-                                        : p.button === 1
-                                          ? InputEventCodes.BTN_MIDDLE
-                                          : p.button === 2
-                                            ? InputEventCodes.BTN_RIGHT
-                                            : InputEventCodes.BTN_LEFT,
-                                state: getEnumValue("wl_pointer.button_state", "released"),
-                            });
-                            this.sendMessageImm(pointer, "wl_pointer.frame", {});
-                        }
-                    }
-                },
-                sendScrollEvent: (op: { p: { deltaX: number; deltaY: number; deltaZ: number } }) => {
-                    const { p } = op;
-                    // todo region
-                    const { deltaX, deltaY } = p;
-                    if (deltaX !== 0) {
-                        for (const pointer of this.getPointers())
-                            this.sendMessageImm(pointer, "wl_pointer.axis", {
-                                time: Date.now(),
-                                axis: getEnumValue("wl_pointer.axis", "horizontal_scroll"),
-                                value: deltaX,
-                            });
-                    }
-                    if (deltaY !== 0) {
-                        for (const pointer of this.getPointers())
-                            this.sendMessageImm(pointer, "wl_pointer.axis", {
-                                time: Date.now(),
-                                axis: getEnumValue("wl_pointer.axis", "vertical_scroll"),
-                                value: deltaY,
-                            });
-                    }
-                    for (const pointer of this.getPointers()) this.sendMessageImm(pointer, "wl_pointer.frame", {});
-                },
-            },
-            getPreview: () => {
-                const rootSurface = this.dataManager.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
-                const cs = this.getObject(rootSurface).data.canvas;
-                return cs;
-            },
-            getTitle: () => {
-                return win.title;
-            },
-        };
-        return winObj;
+                if (canSend) {
+                    console.log(`pointer in surface ${s}`);
+                    inSurface = { id: s, x: nx, y: ny };
+                    break;
+                }
+            }
+        }
+
+        if (inSurface) {
+            const { id: s, x: nx, y: ny } = inSurface;
+            const prevFocus = this.seat.focus();
+            const prevFocusType = this.seat.focusType();
+            if (prevFocus !== s) {
+                if (prevFocus && this.objects.has(prevFocus)) {
+                    for (const p of this.getPointers())
+                        this.sendMessageImm(p, "wl_pointer.leave", {
+                            serial: 0,
+                            surface: prevFocus,
+                        });
+                    if (prevFocusType === "main" && reasonSurfaceType === "main") this.keyboard.blurSurface(prevFocus); // todo popup
+                }
+                for (const p of this.getPointers()) {
+                    this.sendMessageImm(p, "wl_pointer.enter", {
+                        serial: 0,
+                        surface: s,
+                        surface_x: nx,
+                        surface_y: ny,
+                    });
+                    this.sendMessageImm(p, "wl_pointer.frame", {});
+                }
+                if ((prevFocusType === "main" || !prevFocusType) && reasonSurfaceType === "main")
+                    this.keyboard.focusSurface(s);
+                this.seat.setFocus(s, reasonSurfaceType);
+            }
+            return { x: nx, y: ny };
+        }
+        // todo 指针不在任何surface上时应发送wl_pointer.leave并清除指针焦点
+        //  现在焦点悬挂：客户端收不到leave（hover状态卡住），重新进来也不发enter、客户端不重发光标
+        //  还需给桌面新增sendPointerLeave()入口（移出窗口时调用，幂等），覆盖移出所有窗口、跨客户端窗口
+        return undefined;
     }
+
+    /** 输入注入：ev.x/y 相对该窗口的 xdg_surface 元素左上角 */
+    sendPointerToWindow(winId: WaylandWinId, ev: PointerCommand): void {
+        // px py已经相对主xdg surface了
+        const pos = this.updatePointerFocus(winId, { x: ev.x, y: ev.y });
+        if (!pos) return;
+        const { x: nx, y: ny } = pos;
+        if (ev.type === "move") {
+            for (const p of this.getPointers()) {
+                this.sendMessageImm(p, "wl_pointer.motion", {
+                    time: Date.now(),
+                    surface_x: nx,
+                    surface_y: ny,
+                });
+                this.sendMessageImm(p, "wl_pointer.frame", {});
+            }
+        }
+        if (ev.type === "down") {
+            for (const pointer of this.getPointers()) {
+                this.sendMessageImm(pointer, "wl_pointer.button", {
+                    serial: 0,
+                    time: Date.now(),
+                    button:
+                        ev.button === 0
+                            ? InputEventCodes.BTN_LEFT
+                            : ev.button === 1
+                              ? InputEventCodes.BTN_MIDDLE
+                              : ev.button === 2
+                                ? InputEventCodes.BTN_RIGHT
+                                : InputEventCodes.BTN_LEFT,
+                    state: getEnumValue("wl_pointer.button_state", "pressed"),
+                });
+                this.sendMessageImm(pointer, "wl_pointer.frame", {});
+            }
+        }
+        if (ev.type === "up") {
+            for (const pointer of this.getPointers()) {
+                this.sendMessageImm(pointer, "wl_pointer.button", {
+                    serial: 0,
+                    time: Date.now(),
+                    button:
+                        ev.button === 0
+                            ? InputEventCodes.BTN_LEFT
+                            : ev.button === 1
+                              ? InputEventCodes.BTN_MIDDLE
+                              : ev.button === 2
+                                ? InputEventCodes.BTN_RIGHT
+                                : InputEventCodes.BTN_LEFT,
+                    state: getEnumValue("wl_pointer.button_state", "released"),
+                });
+                this.sendMessageImm(pointer, "wl_pointer.frame", {});
+            }
+        }
+    }
+
+    /** 滚轮注入（客户端级；server 经 handle 反查到 client 后下发） */
+    sendScroll(ev: ScrollCommand): void {
+        // todo region
+        const { deltaX, deltaY } = ev;
+        if (deltaX !== 0) {
+            for (const pointer of this.getPointers())
+                this.sendMessageImm(pointer, "wl_pointer.axis", {
+                    time: Date.now(),
+                    axis: getEnumValue("wl_pointer.axis", "horizontal_scroll"),
+                    value: deltaX,
+                });
+        }
+        if (deltaY !== 0) {
+            for (const pointer of this.getPointers())
+                this.sendMessageImm(pointer, "wl_pointer.axis", {
+                    time: Date.now(),
+                    axis: getEnumValue("wl_pointer.axis", "vertical_scroll"),
+                    value: deltaY,
+                });
+        }
+        for (const pointer of this.getPointers()) this.sendMessageImm(pointer, "wl_pointer.frame", {});
+    }
+
     async ping() {
         const ps: Promise<void>[] = [];
         for (const id of this.obj2.xdg_wm_base) {

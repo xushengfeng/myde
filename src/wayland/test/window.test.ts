@@ -25,7 +25,7 @@ describe("window", () => {
         const appJs = `
 module.exports = ({ createWindow }) => {
     const win = createWindow({ js: __filename, width: 640, height: 480 });
-    // 客户端主动请求最大化 → xdg_toplevel.set_maximized → 桌面收到 windowMaximized
+    // 客户端主动请求最大化 → xdg_toplevel.set_maximized → 桌面收到 window.changed（states.maximized）
     setTimeout(() => {
         try { win.maximize(); } catch (e) {}
     }, 3500);
@@ -38,7 +38,7 @@ if (typeof document !== "undefined") {
         const tmpfile = `/tmp/myde_window_test_${Date.now()}.js`;
         fs.writeFileSync(tmpfile, appJs);
 
-        const { waitExit } = testRunnerApp(`test/electron_app/start.js ${tmpfile}`, ({ client, render, runner }) => {
+        const { waitExit } = testRunnerApp(`test/electron_app/start.js ${tmpfile}`, ({ server, runner }) => {
             const s: WinSummary = {
                 created: 0,
                 titles: [],
@@ -59,13 +59,18 @@ if (typeof document !== "undefined") {
             /** 无论后续事件是否到达，都要把已有结果交出去 */
             const watchdog = setTimeout(() => finish("watchdog"), 12000);
 
-            client.on("windowCreated", (id, renderId) => {
+            // window.changed 承载 rect / states / title 的变化，桌面按字段差分还原语义
+            let prevRect = { w: 0, h: 0 };
+            let prevTitle = "";
+            let prevMaximized = false;
+
+            server.on("window.created", (info) => {
                 s.created++;
-                s.renderId = renderId;
-                client.win(id)?.focus();
+                s.renderId = info.renderId;
+                server.notify("window.focus", info.handle);
 
                 setTimeout(() => {
-                    const win = client.win(id);
+                    const win = server.windows.get(info.handle);
                     if (!win) {
                         clearTimeout(watchdog);
                         finish("win-lookup-failed");
@@ -73,7 +78,8 @@ if (typeof document !== "undefined") {
                     }
                     // 内容是否真的画出来了：采样预览找绿色
                     try {
-                        const canvas = win.getPreview();
+                        const canvas = server.windows.preview(info.handle);
+                        if (!canvas) throw new Error("no preview yet");
                         const ctx = canvas.getContext("2d")!;
                         const img = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
                         let greenPixels = 0;
@@ -86,45 +92,52 @@ if (typeof document !== "undefined") {
                     } catch (e) {
                         s.stopReason = `preview-failed:${String(e)}`;
                     }
-                    // 桌面主动改尺寸 → xdg_toplevel.configure → 客户端 ack + commit → windowResized
-                    win.setSize(500, 400);
+                    // 桌面主动改尺寸 → xdg_toplevel.configure → 客户端 ack + commit → window.changed
+                    server.notify("window.setSize", info.handle, { width: 500, height: 400 });
                     // 指针移入，触发 wl_pointer.enter，客户端才可能上报光标形态
-                    win.point.sendPointerEvent("move", { x: 120, y: 120, button: 0 });
+                    server.notify("input.pointer", info.handle, { type: "move", x: 120, y: 120, button: 0 });
                 }, 400);
 
-                // 收尾：优先等 windowClosed，超时则带 stopReason 返回
+                // 收尾：优先等 window.closed，超时则带 stopReason 返回
                 clearTimeout(watchdog);
                 setTimeout(() => {
                     if (!closing) {
-                        client.win(id)?.close();
+                        server.notify("window.close", info.handle);
                         setTimeout(() => finish("close-timeout"), 3000);
                     }
                 }, 6500);
             });
 
-            client.on("windowResized", (_id, width, height) => {
-                s.resized.push({ width, height });
+            server.on("window.changed", (info) => {
+                if (info.rect.w !== prevRect.w || info.rect.h !== prevRect.h) {
+                    prevRect = { w: info.rect.w, h: info.rect.h };
+                    s.resized.push({ width: info.rect.w, height: info.rect.h });
+                }
+                if (info.title !== prevTitle) {
+                    prevTitle = info.title;
+                    s.titles.push(info.title);
+                }
+                if (info.states.maximized !== prevMaximized) {
+                    prevMaximized = info.states.maximized;
+                    if (info.states.maximized) s.maximized++;
+                }
             });
-            client.on("windowMaximized", () => {
-                s.maximized++;
-            });
-            client.on("title", (_id, title) => {
-                s.titles.push(title);
-            });
-            client.on("windowClosed", () => {
+            server.on("window.closed", () => {
                 s.closed++;
                 clearTimeout(watchdog);
                 finish();
             });
-            client.on("close", () => {
+            server.on("client.closed", () => {
                 s.clientClosed++;
                 clearTimeout(watchdog);
                 finish("client-disconnect");
             });
-            render.on({
-                onCursorUpdata: (canvas, hx, hy) => {
-                    s.cursors.push({ kind: canvas === undefined ? "hidden" : typeof canvas === "string" ? "shape" : "image", hx, hy });
-                },
+            server.on("cursor.changed", (_clientId, state) => {
+                s.cursors.push({
+                    kind: state.kind === "shape" ? "shape" : state.kind === "hidden" ? "hidden" : "image",
+                    hx: state.kind === "image" ? state.hotspot.x : 0,
+                    hy: state.kind === "image" ? state.hotspot.y : 0,
+                });
             });
         });
 
@@ -139,7 +152,10 @@ if (typeof document !== "undefined") {
         expect(w.renderId).toBeTruthy();
 
         // 内容确实显示出来了（预览里能找到绿色像素）
-        expect(w.preview?.greenPixels ?? 0, `preview=${JSON.stringify(w.preview)} stop=${w.stopReason}`).toBeGreaterThan(0);
+        expect(
+            w.preview?.greenPixels ?? 0,
+            `preview=${JSON.stringify(w.preview)} stop=${w.stopReason}`,
+        ).toBeGreaterThan(0);
 
         // 桌面 resize 生效：客户端回传了新的窗口几何
         expect(w.resized, `stop=${w.stopReason} resized 为空，titles=${JSON.stringify(w.titles)}`).not.toHaveLength(0);

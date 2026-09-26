@@ -7,7 +7,7 @@ import { getRectKeyPoint } from "../../utils/xdg";
  *
  * 由 server.ts 的 newOp() 迁出；handler 只认 ctx，不接触 WaylandClient。
  */
-// 状态类型归本模块声明，不再登记 module.ts 的中央表（P3）
+// 状态类型归本模块声明（P3）
 declare module "../../module" {
     interface WaylandDataRegistry {
         xdg_wm_base: { pingSerials: Map<number, () => void> };
@@ -28,8 +28,7 @@ export const xdgShellModule = defineModule({
     name: "xdg-shell",
     hooks: {
         /**
-         * 由 wl_surface.commit 触发。原实现是 core 里的一段字符串扫描
-         * （遍历对象表找 xdg_surface），现已搬到这里。
+         * 由 wl_surface.commit 触发。
          *
          * 注意保留了原有语义：尺寸一变就给**所有** xdg_surface 发 configure，
          * 而不只是本 surface 对应的那个——是否该收窄属于另一个问题，不在本次改动范围。
@@ -112,7 +111,7 @@ export const xdgShellModule = defineModule({
                     getEnumValue("xdg_toplevel.wm_capabilities", "maximize"),
                 ]),
             });
-            const outerBounds = ctx.client.emitSync("windowBound") || { width: 800, height: 600 };
+            const outerBounds = ctx.client.surfaceBounds() || { width: 800, height: 600 };
             ctx.send(toplevelId, "xdg_toplevel.configure_bounds", {
                 width: outerBounds.width,
                 height: outerBounds.height,

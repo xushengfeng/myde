@@ -1,13 +1,13 @@
+import type { InputManager } from "myde-input";
 import type { DesktopApi } from "../../src/desktop-api";
 import { EventEmitter } from "../../src/event-emitter/event-emitter";
+import { absPosMapping, absRange, absRatio } from "../../src/input_map/abs";
 import type { Item } from "../../src/sys_api/app_control";
 import type { tray } from "../../src/sys_api/appIndicator";
-import type { MenuItem } from "../../src/sys_api/menu";
 import type { blue } from "../../src/sys_api/blue";
 import type { display, Rect, Transform } from "../../src/sys_api/display";
-import type { InputManager } from "myde-input";
-import { absPosMapping, absRange, absRatio } from "../../src/input_map/abs";
 import { inputSim } from "../../src/sys_api/input_sim";
+import type { MenuItem } from "../../src/sys_api/menu";
 import type { MprisEvents, mpris } from "../../src/sys_api/mpris";
 import type { network } from "../../src/sys_api/network";
 import type { NotificationData, NotificationEvents, notification } from "../../src/sys_api/notification";
@@ -53,32 +53,56 @@ export interface MockWaylandWindow {
     getTitle(): string;
 }
 
+/** 与 `src/wayland/api.ts` 的 WindowInfo 同形 */
+export interface MockWindowInfo {
+    handle: string;
+    clientId: string;
+    appid: string;
+    title: string;
+    rect: { x: number; y: number; w: number; h: number };
+    states: { activated: boolean; maximized: boolean; minimized: boolean };
+    renderId: string;
+}
+
+/**
+ * 应用侧（被模拟的 wayland client）。桌面拿不到它 —— 桌面只通过
+ * `server.on/notify/windows.*` 与之交互，client 只负责把语义事实抛给 server。
+ */
 export interface MockWaylandClient {
+    id: string;
     getWindows(): Map<string, MockWaylandWindow>;
-    win(id: string): MockWaylandWindow | undefined;
     getAppid(): string;
     setAppid(appid: string): void;
-    setLogConfig(config: { receive: string[]; send: string[] }): void;
+    setLogConfig(config: { receive: boolean | string[]; send: boolean | string[] }): void;
     on(event: string, cb: (...args: any[]) => void): MockWaylandClient;
-    onSync(event: string, cb: (...args: any[]) => any): MockWaylandClient;
     emit(event: string, ...args: any[]): void;
-    keyboard: {
-        sendKey(code: number, state: string): void;
-    };
-    pointer: {
-        sendMove(x: number, y: number): void;
-        sendButton(button: number, state: string): void;
-    };
     close(): void;
 }
 
+/** 与 `src/wayland/api.ts` 的 ServerEvents / 查询 / notify 同形的 mock 服务端 */
 export interface MockWaylandServer {
     socketDir: string;
     socketName: string;
-    clients: Map<number, MockWaylandClient>;
+    clients: Map<string, MockWaylandClient>;
+    windows: {
+        list(): MockWindowInfo[];
+        get(handle: string): MockWindowInfo | undefined;
+        preview(handle: string): OffscreenCanvas | undefined;
+    };
+    cursor: { get(clientId: string): unknown };
+    /** 造窗口：分配全局 handle 并发出 `window.created` */
+    openWindow(op: { clientId: string; winId?: string; renderId: string; width?: number; height?: number }): string;
+    closeWindow(handle: string): void;
+    closeWindowOf(clientId: string, winId: string): void;
+    handleOf(clientId: string, winId: string): string | undefined;
+    /** client 的 appid 变化后调用，给该客户端每个窗口发 `window.changed` */
+    touchAppid(clientId: string): void;
     on(event: string, cb: (...args: any[]) => void): MockWaylandServer;
     off(event: string, cb: (...args: any[]) => void): MockWaylandServer;
     emit(event: string, ...args: any[]): void;
+    respond(event: string, cb: (...args: any[]) => any): () => void;
+    request(event: string, ...args: any[]): Promise<any>;
+    notify(event: string, ...args: any[]): void;
     destroy(): void;
 }
 
@@ -141,19 +165,26 @@ function createMockRenderTools(): renderTools {
     };
 }
 
-export function createMockClient(): MockWaylandClient {
+export function createMockClient(op?: string | { id?: string; server?: MockWaylandServer }): MockWaylandClient {
+    const id = typeof op === "string" ? op : (op?.id ?? "mock-client");
+    const server = typeof op === "string" ? undefined : op?.server;
     const windows = new Map<string, MockWaylandWindow>();
     const listeners = new Map<string, Set<(...args: any[]) => void>>();
     let appid = "";
 
+    const dispatch = (event: string, ...args: any[]) => {
+        // biome-ignore  lint/suspicious/useIterableCallbackReturn:''
+        listeners.get(event)?.forEach((cb) => cb(...args));
+    };
+
     const client: MockWaylandClient = {
+        id,
         getWindows: () => windows,
-        win: (id: string) => windows.get(id),
         getAppid: () => appid,
-        setAppid: (id: string) => {
-            appid = id;
-            // 触发appid事件
-            listeners.get("appid")?.forEach((cb) => cb(id));
+        setAppid: (next: string) => {
+            appid = next;
+            dispatch("appid", next);
+            server?.touchAppid(id);
         },
         setLogConfig: (_config) => {},
         on(event: string, cb: (...args: any[]) => void) {
@@ -161,30 +192,194 @@ export function createMockClient(): MockWaylandClient {
             listeners.get(event)?.add(cb);
             return client;
         },
-        onSync(event: string, cb: (...args: any[]) => any) {
-            if (!listeners.has(event)) listeners.set(event, new Set());
-            listeners.get(event)?.add(cb);
-            return client;
-        },
+        /**
+         * 应用侧抛出的语义事实：先派发给本 client 的监听者，再 fan-in 到 server
+         * （server 转成 `window.*` 域事件，与真实实现一致）。
+         */
         emit(event: string, ...args: any[]) {
-            // biome-ignore  lint/suspicious/useIterableCallbackReturn:''
-            listeners.get(event)?.forEach((cb) => cb(...args));
-        },
-        keyboard: {
-            sendKey: (_code, _state) => {},
-        },
-        pointer: {
-            sendMove: (_x, _y) => {},
-            sendButton: (_button, _state) => {},
+            dispatch(event, ...args);
+            if (!server) return;
+            const winId = args[0] as string | undefined;
+            const handle = winId === undefined ? undefined : server.handleOf(id, winId);
+            switch (event) {
+                case "windowCreated":
+                    server.openWindow({ clientId: id, winId, renderId: args[1] as string });
+                    break;
+                case "windowClosed":
+                    if (winId) server.closeWindowOf(id, winId);
+                    break;
+                case "windowStartMove":
+                    if (handle) server.emit("window.startMove", handle);
+                    break;
+                case "windowMaximized":
+                    if (handle) server.notify("window.maximize", handle);
+                    break;
+                case "windowUnMaximized":
+                    if (handle) server.notify("window.unmaximize", handle);
+                    break;
+            }
         },
         close() {
-            // 触发close事件
-            listeners.get("close")?.forEach((cb) => cb());
+            dispatch("close");
             windows.clear();
             listeners.clear();
         },
     };
     return client;
+}
+
+/**
+ * 与 `src/wayland/host/server.ts` 同形状的 mock 服务端：
+ * 全局 handle 表、域事件 fan-in、`windows.*` 查询、`notify`/`respond`。
+ * 桌面开发者拿它跑界面，无需真实 dbus/wayland。
+ */
+export function createMockServer(): MockWaylandServer {
+    const listeners = new Map<string, Set<(...args: any[]) => void>>();
+    const responders = new Map<string, (...args: any[]) => any>();
+    const clients = new Map<string, MockWaylandClient>();
+    const infos = new Map<string, MockWindowInfo>();
+    const handleByWin = new Map<string, string>();
+    const winByHandle = new Map<string, string>();
+    let nextHandle = 1;
+
+    const dispatch = (event: string, ...args: any[]) => {
+        // biome-ignore  lint/suspicious/useIterableCallbackReturn:''
+        listeners.get(event)?.forEach((cb) => cb(...args));
+    };
+    const key = (clientId: string, winId: string) => `${clientId}|${winId}`;
+    const changed = (info: MockWindowInfo) => dispatch("window.changed", info);
+
+    const server: MockWaylandServer = {
+        socketDir: "/tmp/mock",
+        socketName: "mock-socket",
+        clients,
+        windows: {
+            list: () => Array.from(infos.values()),
+            get: (handle) => infos.get(handle),
+            preview: (handle) => {
+                const info = infos.get(handle);
+                const winId = winByHandle.get(handle);
+                if (!info || winId === undefined) return undefined;
+                return clients.get(info.clientId)?.getWindows().get(winId)?.getPreview();
+            },
+        },
+        cursor: { get: (clientId) => (clients.has(clientId) ? "default" : undefined) },
+        openWindow(op) {
+            const handle = `w${nextHandle++}`;
+            const info: MockWindowInfo = {
+                handle,
+                clientId: op.clientId,
+                appid: clients.get(op.clientId)?.getAppid() ?? "",
+                title: "",
+                rect: { x: 0, y: 0, w: op.width ?? 0, h: op.height ?? 0 },
+                states: { activated: false, maximized: false, minimized: false },
+                renderId: op.renderId,
+            };
+            infos.set(handle, info);
+            if (op.winId !== undefined) {
+                handleByWin.set(key(op.clientId, op.winId), handle);
+                winByHandle.set(handle, op.winId);
+            }
+            dispatch("window.created", info);
+            return handle;
+        },
+        closeWindow(handle) {
+            if (!infos.delete(handle)) return;
+            winByHandle.delete(handle);
+            for (const [k, v] of handleByWin) if (v === handle) handleByWin.delete(k);
+            dispatch("window.closed", handle);
+        },
+        closeWindowOf(clientId, winId) {
+            const handle = handleByWin.get(key(clientId, winId));
+            if (handle !== undefined) server.closeWindow(handle);
+        },
+        handleOf: (clientId, winId) => handleByWin.get(key(clientId, winId)),
+        touchAppid(clientId) {
+            const appid = clients.get(clientId)?.getAppid() ?? "";
+            for (const info of infos.values()) {
+                if (info.clientId !== clientId) continue;
+                info.appid = appid;
+                changed(info);
+            }
+        },
+        on(event, cb) {
+            if (!listeners.has(event)) listeners.set(event, new Set());
+            listeners.get(event)?.add(cb);
+            return server;
+        },
+        off(event, cb) {
+            listeners.get(event)?.delete(cb);
+            return server;
+        },
+        emit: dispatch,
+        respond(event, cb) {
+            responders.set(event, cb);
+            return () => {
+                if (responders.get(event) === cb) responders.delete(event);
+            };
+        },
+        async request(event, ...args) {
+            const handler = responders.get(event);
+            return handler ? [handler(...args)] : [];
+        },
+        notify(event, ...args) {
+            if (event === "clipboard.paste") return;
+            const handle = args[0] as string;
+            const info = infos.get(handle);
+            if (!info) return;
+            switch (event) {
+                case "window.focus":
+                    info.states.activated = true;
+                    info.states.minimized = false;
+                    changed(info);
+                    break;
+                case "window.blur":
+                    info.states.activated = false;
+                    changed(info);
+                    break;
+                case "window.maximize":
+                    info.states.activated = true;
+                    info.states.maximized = true;
+                    info.states.minimized = false;
+                    changed(info);
+                    break;
+                case "window.unmaximize":
+                    info.states.maximized = false;
+                    changed(info);
+                    break;
+                case "window.minimize":
+                    info.states.activated = false;
+                    info.states.minimized = true;
+                    changed(info);
+                    break;
+                case "window.setSize": {
+                    const size = args[1] as { width: number; height: number };
+                    info.rect = { ...info.rect, w: size.width, h: size.height };
+                    changed(info);
+                    break;
+                }
+                case "window.close":
+                    server.closeWindow(handle);
+                    break;
+                default:
+                    // input.* / clipboard.* / setBox：mock 不模拟客户端
+                    break;
+            }
+        },
+        destroy() {
+            clients.clear();
+            infos.clear();
+            handleByWin.clear();
+            winByHandle.clear();
+            listeners.clear();
+            responders.clear();
+        },
+    };
+
+    // server 自己应答的查询（形状同真实实现）
+    server.respond("window.get", (handle: string) => infos.get(handle));
+    server.respond("window.getBounds", (handle: string) => infos.get(handle)?.rect);
+    return server;
 }
 
 export function createMockWindow(id: string): MockWaylandWindow {
@@ -1323,32 +1518,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         },
         server: (op: { dev?: boolean; render: renderTools }) => {
             log("server", op);
-            const clients = new Map<number, MockWaylandClient>();
-            const listeners = new Map<string, Set<(...args: any[]) => void>>();
-
-            const mockServer: MockWaylandServer = {
-                socketDir: "/tmp/mock",
-                socketName: "mock-socket",
-                clients,
-                on(event: string, cb: (...args: any[]) => void) {
-                    if (!listeners.has(event)) listeners.set(event, new Set());
-                    listeners.get(event)?.add(cb);
-                    return mockServer;
-                },
-                off(event: string, cb: (...args: any[]) => void) {
-                    listeners.get(event)?.delete(cb);
-                    return mockServer;
-                },
-                emit(event: string, ...args: any[]) {
-                    // biome-ignore  lint/suspicious/useIterableCallbackReturn:''
-                    listeners.get(event)?.forEach((cb) => cb(...args));
-                },
-                destroy() {
-                    log("server.destroy");
-                    clients.clear();
-                    listeners.clear();
-                },
-            };
+            const mockServer = createMockServer();
 
             return {
                 runApp: (exec: string, xServerNum?: number) => {

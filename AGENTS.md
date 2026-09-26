@@ -20,7 +20,7 @@
 
 纯node环境，但是dmabuf需要electron渲染进程环境，总之是无dom的electron渲染进程
 
-`src/wayland/server.ts`是各个协议主要实现
+`src/wayland/index.ts`是唯一入口（`createServer` + 对外类型），协议实现都在`src/wayland/protocols/`，连接与事件在`src/wayland/host/`，桌面侧的事件/查询/命令契约在`src/wayland/api.ts`
 
 ## 系统api
 
@@ -51,8 +51,11 @@
 ### 新增wayland协议
 
 - 下载协议xml文件到`script/wayland/xml`
-- 修改`script/wayland/gen_protocols.ts`的`supportedProtocols`变量并运行
-- 编辑`src/wayland/server.ts`
+- 修改`script/wayland/gen_protocols.ts`的`supportedProtocols`变量并运行（`npx tsx script/wayland/gen_protocols.ts`）
+- 新建`src/wayland/protocols/core/`或`src/wayland/protocols/ext/<name>.ts`（唯一必写的文件）
+- 在`src/wayland/protocols/index.ts`的模块清单里登记，并更新`src/wayland/readme.md`的协议清单
+
+完整步骤与不变量见[新增协议指南](src/wayland/readme.md)。注意生成物`protocols/protocols.json`、`protocols/wayland-types.ts`不要格式化。
 
 由于最后窗口需要显示，所以有渲染器这个概念，比如`src/wayland/render_tools_el.ts`就把中间的窗口操作转成dom操作，桌面开发可引用，避免二次开发。当然，无头服务器或者其他可自定义渲染器
 

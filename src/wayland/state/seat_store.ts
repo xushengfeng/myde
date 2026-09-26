@@ -9,11 +9,11 @@ export type { FocusType, SeatRecord };
  * 它们依赖 objects/多路 send，搬进来反而要注入一整套上下文。
  *
  * 配套的 text-input v1/v3 仲裁状态暂留 `obj2`：它牵扯两个未来模块的边界划分
- * （各协议私有状态 vs 共享仲裁点），到 Phase 3-5 拆 text_input_*.ts 时再定归属。
+ * （各协议私有状态 vs 共享仲裁点）。
  */
 export class SeatStore {
     #seats = new Map<WaylandObjectId2<"wl_seat">, SeatRecord>();
-    /** 键盘事件 serial：首值 1、步长 2（与原 obj2.serial 一致） */
+    /** 键盘事件 serial：首值 1、步长 2 */
     #serial = 1;
     #modifiers = new Set<number>();
     #focus: SurfaceId | null = null;
