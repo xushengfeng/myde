@@ -1,6 +1,6 @@
 # server.ts 架构重构计划
 
-> 状态：**进行中** —— Phase 0 ✅（仅剩 `gen:protocols` script）、Phase 1 ✅、Phase 2 ✅（text-input 仲裁推迟至 4-5）、**Phase 3 ✅**（core 全部迁出，`server.ts` 降至 129 行）、**Phase 4 ✅**（扩展三模块 + 反向钩子）。下一步 Phase 5。**场景层重构搁置**、**server 打平在 Phase 6**、**remote 只保证 typecheck**。进度见「进度速览」。
+> 状态：**进行中** —— Phase 0 ✅（仅剩 `gen:protocols` script）、Phase 1 ✅、Phase 2 ✅（text-input 仲裁推迟至 4-5）、**Phase 3 ✅**（core 全部迁出，`server.ts` 降至 129 行）、**Phase 4 ✅**、**Phase 5 ✅**（71 个 handler 全部迁出，`server.ts` 已删除）。下一步 Phase 6（对外 API 打平）。**场景层重构搁置**、**server 打平在 Phase 6**、**remote 只保证 typecheck**。进度见「进度速览」。
 > 前提：当前版本不稳定，**允许破坏性变更**，不做兼容层/废弃期，一步到位。
 > 目标：外部调用 API 更简洁，内部新增协议更方便。
 
@@ -31,7 +31,9 @@
 | Phase 3 · 24 个 core handler 迁出 + bind if 链 + 状态类型声明合并 + `host/client.ts` | ✅ | `ed567c2` `7bd7ac3` `3c82091` `d5563a2` |
 | Phase 3 · 46 个扩展 handler（现居 `host/client.ts`） | ⬜ → 归 Phase 4-5 | — |
 | Phase 4 · viewporter / cursor-shape / dmabuf + 反向钩子机制 | ✅ | 见 Phase 4 |
-| Phase 5（xdg 22 + text-input 13 = 35 handler，现居 `host/client.ts`） | ⬜ | — |
+| Phase 5 · xdg 22 + text-input 13 handler、configure→onCommit、焦点→onFocus、`server.ts` 删除 | ✅ | `1b3e0bc` `f53e2af` 等 |
+| Phase 5 · `ack_configure` + xdg 生命周期 e2e | ➖ 按决定跳过 | — |
+| Phase 5 · `updatePointerFocus` 下沉 | ⚠️ 调整，留 host（依赖面过宽） | — |
 
 ---
 
@@ -675,15 +677,25 @@ interface ImageKV {
 **⚠️ 既存缺陷基线新增一条**（与 `protoVersions` 空转、`ack_configure` 未实现并列，均**未顺手修**）：
 > `wp_viewport` 只在设置它的那次 commit 生效——`wl_surface.commit` 读的是 `pending.viewport` 而非合并后的 `current.viewport`，所以 viewport 不跨帧保持。按协议规范应读 current，但这段零测试覆盖，改成 current 无法验证，先原样保留（`onFrame` 因此特意传 pending 而非 current）。
 
-### Phase 5 — 攻 xdg-shell 与反向耦合（最难）
-- [ ] `protocols/xdg_shell.ts`：`xdgSurfaceData`（`:480-620`）+ handler（`:1376-1574`）迁出，`this.wl_surface` → `ctx.core.surface`
-- [ ] `wl_surface.commit` 的 `:1066-1072`（xdg configure 扫描）、`:1095-1115`（viewport 内联合成）→ `SurfaceHooks.onCommit`
-- [ ] `:1141-1145`（destroy 清 cursor）→ `onDestroy`；`:2385/:2390` → `SeatHooks.onFocus`
-- [ ] `win()` 剩余 hit-test 下沉 `windows_store`；`WaylandClient` 类消解，只剩 `host/client.ts`
-- [ ] **configure 握手语义补全**：实现 `xdg_surface.ack_configure` + serial 计数器（替换硬编码 `serial:1` 于 `:1069/:1449/:2085/:2135`）——属本阶段握手重写范围，**不是凭空新增**
-- [ ] **xdg 生命周期 e2e**（与上一项同步）：创建→configure→ack→commit→resize→关闭，断言事件恰好一次 + 无对象泄漏
-- [ ] `server.ts` 最终删除或退化为 re-export shim（**建议直接删除**，强制所有调用方走 `index.ts`）
-- 验收：`server.ts` 不存在或 <100 行；`protocols/**` 互相无 import（除 xdg-decoration 类链式依赖）；全部测试通过
+### Phase 5 — 攻 xdg-shell 与反向耦合 ✅ **完成**（两项按决定除外）
+
+- [x] `ext/xdg_shell.ts`：22 个 handler 迁出；`domain.xdgSurface` 暂留 host（`win()` 命中测试仍要用）
+- [x] `wl_surface.commit` 的 configure 扫描 → `SurfaceHooks.onCommit`（core 不再认识 `xdg_surface` 这个名字）
+- [x] 键盘焦点 → `SeatHooks.onFocus`：`textInputV3Focus/Blur` 移入 `text_input_v3`，host 只喊「焦点变了」（v1 不跟随，只有 v3 声明）
+- [x] `ext/text_input_v1.ts`（4）+ `ext/text_input_v3.ts`（9）迁出
+- [x] **P3 收尾**：扩展的状态类型也移入各自模块，`WaylandDataRegistry` 归零为纯空壳
+- [x] **`server.ts` 删除** → `host/server.ts`，全部经 `index.ts`（§11 第 1 条）
+- ➖ **`ack_configure` + serial 计数** —— 按决定跳过（属新增实现，不混入重构）
+- ➖ **xdg 生命周期 e2e** —— 同上跳过
+- ⚠️ **`win().point.updatePointerFocus` 下沉 `windows_store`** —— **调整，暂不迁移**：
+  该 hit-test 约 114 行，依赖 objects/send/seat/keyboard/domain **六类**能力面（其中
+  `keyboard` 尚未进 `ModuleCtx`）。硬塞进 `WindowsStore` 会让一个纯状态容器变成带六项
+  依赖的服务，反而更难测。留在 `host/client.ts`（它本质是「指针按窗口几何路由」，
+  属 host 职责）；待 `keyboard` 进契约后再评估是否独立成 `host/pointer.ts`。
+
+**71 个 handler 全部迁出**，`newOp()` 只剩「把 protocolModules 合并进同一张分发表」。
+
+验收：**已达** —— `server.ts` 不存在；`protocols/**` 之间零 `import`；typecheck 0；22 文件 / 207 测试全绿
 
 ### Phase 6 — 对外 API 打平与重塑（破坏性，**放在最后**）
 > 原本属于 Phase 2，现后移：内部整理（Phase 2-5）全部不碰外部调用方式，桌面**只在这一阶段迁一次**。
@@ -774,7 +786,7 @@ interface ImageKV {
 
 ## 11. 验收标准（整体）
 
-1. `src/wayland/server.ts` 删除，全部经 `index.ts` 导入
+1. ✅ `src/wayland/server.ts` 删除，全部经 `index.ts` 导入
 2. `protocols/**` 文件间无相互 import（链式依赖除外）；新增协议只写 1 个文件 + 白名单 1 行
 3. 桌面侧 API：事件/查询/控制都在 **server 级**（全局 `WinHandle`，payload 自包含、无 `renderId` 二元组、无反查）、无 `onSync`；桌面不再需要 `for (client of server.clients)` 遍历与 `createWindowId` 拼接
 4. cursor 状态单写入点，`obj2` 巨型袋消失
