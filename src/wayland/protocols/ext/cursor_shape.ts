@@ -9,10 +9,10 @@ import { getEnumName } from "../../utils/wayland-proto";
 // 状态类型归本模块声明，不再登记 module.ts 的中央表（P3）
 declare module "../../module" {
     interface WaylandDataRegistry {
-    wp_cursor_shape_device_v1: {
-        // 绑定的指针设备，目前只有 wl_pointer
-        pointer: WaylandObjectId2<"wl_pointer">;
-    };
+        wp_cursor_shape_device_v1: {
+            // 绑定的指针设备，目前只有 wl_pointer
+            pointer: WaylandObjectId2<"wl_pointer">;
+        };
     }
 }
 

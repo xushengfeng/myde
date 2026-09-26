@@ -48,8 +48,8 @@ export type WaylandSurfaceData = {
  * 各协议文件用 `declare module`（模块说明符按该文件到 module.ts 的相对路径写）
  * 追加自己的条目，不再改这里。
  */
-export interface WaylandDataRegistry {
-}
+// biome-ignore lint/suspicious/noEmptyInterface: 各协议文件靠 declare module 向这个空 interface 合并状态类型，改成 type 会让它们全部失效
+export interface WaylandDataRegistry {}
 
 export type DataOf<I extends WaylandInterfaces> = I extends keyof WaylandDataRegistry
     ? WaylandDataRegistry[I]
@@ -295,7 +295,7 @@ export interface SurfaceHooks {
         canvas: OffscreenCanvas,
         pending: WaylandSurfaceData,
         ctx: ModuleCtx,
-    ): OffscreenCanvas | void;
+    ): OffscreenCanvas | undefined;
     onDestroy?(surfaceId: SurfaceId, ctx: ModuleCtx): void;
 }
 

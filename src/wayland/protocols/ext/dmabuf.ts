@@ -14,16 +14,16 @@ import { getEnumValue } from "../../utils/wayland-proto";
 // 状态类型归本模块声明，不再登记 module.ts 的中央表（P3）
 declare module "../../module" {
     interface WaylandDataRegistry {
-    zwp_linux_buffer_params_v1: {
-        planes: {
-            fd: number;
-            plane_idx: number;
-            offset: number;
-            stride: number;
-            modifier_hi: number;
-            modifier_lo: number;
-        }[];
-    };
+        zwp_linux_buffer_params_v1: {
+            planes: {
+                fd: number;
+                plane_idx: number;
+                offset: number;
+                stride: number;
+                modifier_hi: number;
+                modifier_lo: number;
+            }[];
+        };
     }
 }
 

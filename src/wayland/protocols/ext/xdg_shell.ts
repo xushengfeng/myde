@@ -10,17 +10,17 @@ import { getRectKeyPoint } from "../../utils/xdg";
 // 状态类型归本模块声明，不再登记 module.ts 的中央表（P3）
 declare module "../../module" {
     interface WaylandDataRegistry {
-    xdg_wm_base: { pingSerials: Map<number, () => void> };
-    xdg_positioner: {
-        size: { width: number; height: number };
-        anchor_rect: { x: number; y: number; width: number; height: number };
-        anchor: number;
-        gravity: number;
-        constraint_adjustment: number;
-        offset: { x: number; y: number };
-        reactive: boolean;
-        parent_size: { parent_width: number; parent_height: number };
-    };
+        xdg_wm_base: { pingSerials: Map<number, () => void> };
+        xdg_positioner: {
+            size: { width: number; height: number };
+            anchor_rect: { x: number; y: number; width: number; height: number };
+            anchor: number;
+            gravity: number;
+            constraint_adjustment: number;
+            offset: { x: number; y: number };
+            reactive: boolean;
+            parent_size: { parent_width: number; parent_height: number };
+        };
     }
 }
 

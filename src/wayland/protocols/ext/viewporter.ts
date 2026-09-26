@@ -8,9 +8,9 @@ import { defineModule } from "../../module";
 // 状态类型归本模块声明，不再登记 module.ts 的中央表（P3）
 declare module "../../module" {
     interface WaylandDataRegistry {
-    wp_viewport: {
-        surface: SurfaceId;
-    };
+        wp_viewport: {
+            surface: SurfaceId;
+        };
     }
 }
 
