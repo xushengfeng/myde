@@ -25,6 +25,8 @@ export type WaylandObjectId3<t extends string> = number & { __brand: "WaylandObj
 
 export type SurfaceId = WaylandObjectId2<"wl_surface">;
 export type BufferId = WaylandObjectId2<"wl_buffer">;
+/** 窗口即 xdg_toplevel 对象；跨客户端会撞，桌面侧全局身份属 Phase 6 的 WinHandle */
+export type WaylandWinId = WaylandObjectId2<"xdg_toplevel">;
 
 // ───────────────────────── 对象状态类型 ─────────────────────────
 

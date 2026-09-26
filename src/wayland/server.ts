@@ -28,9 +28,10 @@ const WaylandProtocols = Object.fromEntries(Object.values(WaylandProtocolsx).fla
 import { buildXkb } from "myde-xcb";
 
 import { InputEventCodes } from "../input_codes/types";
-import type { WaylandData, WaylandObjectId2, WaylandObjectId3 } from "./module";
+import type { WaylandData, WaylandObjectId2, WaylandObjectId3, WaylandWinId } from "./module";
 import type { renderTools } from "./render_tools";
 import { CursorStore } from "./state/cursor_store";
+import { type WindowRecord, WindowsStore } from "./state/windows_store";
 import { createFormatTableBuffer, DRM_FORMAT } from "./utils/dma-buf";
 import { WaylandEncoder } from "./utils/wayland-encoder";
 import { getRectKeyPoint } from "./utils/xdg";
@@ -92,7 +93,6 @@ interface WaylandServerEventMap {
     clientClose: (client: WaylandClient, clientId: string) => void;
 }
 
-export type WaylandWinId = WaylandObjectId2<"xdg_toplevel">;
 interface WaylandClientEventMap {
     close: () => void;
     windowCreated: (xdgToplevelId: WaylandWinId, renderId: string) => void;
@@ -563,6 +563,8 @@ class WaylandClient {
     private nextObjectId: number = 0xff000000;
     /** 光标的唯一写入点（见 state/cursor_store.ts） */
     private cursor: CursorStore;
+    /** 窗口记录与窗口事件的唯一持有者（见 state/windows_store.ts） */
+    private windows: WindowsStore;
     private obj2: Partial<{
         focusSurface: WaylandObjectId2<"wl_surface"> | null;
         focusSurfaceType: "main" | "popup" | null;
@@ -591,17 +593,6 @@ class WaylandClient {
         /** v1/v3竞争仲裁的持有对象，null表示无激活的text_input */
         textInputOwner: TextInputOwner | null;
         xdg_wm_base: Set<WaylandObjectId2<"xdg_wm_base">>;
-        windows: Map<
-            WaylandObjectId2<"xdg_toplevel">,
-            {
-                actived: boolean;
-                box: {
-                    width: number;
-                    height: number;
-                };
-                title: string;
-            }
-        >;
         appid: undefined | string;
     };
     private wlSurface: wlSurfaceData;
@@ -644,7 +635,6 @@ class WaylandClient {
         this.pid = socket.pid;
         this.objects = new Map();
         this.obj2 = {
-            windows: new Map(),
             modifiers: new Set(),
             seats: new Map(),
             textInputV3: { focus: null, m: new Map() },
@@ -653,6 +643,16 @@ class WaylandClient {
             xdg_wm_base: new Set(),
         };
         this.cursor = new CursorStore(render);
+        // 窗口事件的对外出口：Phase 2 仍是 client 级，Phase 6 只改这里
+        this.windows = new WindowsStore({
+            created: (wid, renderId) => this.emit("windowCreated", wid, renderId),
+            closed: (wid) => this.emit("windowClosed", wid),
+            resized: (wid, width, height) => this.emit("windowResized", wid, width, height),
+            startMove: (wid) => this.emit("windowStartMove", wid),
+            maximized: (wid) => this.emit("windowMaximized", wid),
+            unmaximized: (wid) => this.emit("windowUnMaximized", wid),
+            titleChanged: (wid, title) => this.emit("title", wid, title),
+        });
         this.wlSurface = new wlSurfaceData(render);
         this.dataManager = {
             wlSubSurface: new wlSubSurfaceData(this.wlSurface),
@@ -1356,22 +1356,13 @@ class WaylandClient {
             });
             this.sendMessageX(x.id, "xdg_surface.configure", { serial: 1 });
             this.dataManager.xdgSurface.setAsToplevel(xid, toplevelId);
-            this.obj2.windows.set(toplevelId, {
-                actived: false,
-                box: {
-                    width: 0,
-                    height: 0,
-                },
-                title: "",
-            });
-            this.emit("windowCreated", toplevelId, this.wlSurface.idScope(xid));
+            this.windows.created(toplevelId, this.wlSurface.idScope(xid));
         });
         isOp("xdg_surface.set_window_geometry", (x) => {
             const thisXdgSurface = this.dataManager.xdgSurface.getXdgSurface(x.id);
             this.dataManager.xdgSurface.setXdgSurfaceSize(x.id, x.args.x, x.args.y, x.args.width, x.args.height);
             if (thisXdgSurface.xdg_role) {
-                this.emit(
-                    "windowResized",
+                this.windows.resized(
                     thisXdgSurface.xdg_role as WaylandObjectId2<"xdg_toplevel">, // todo check
                     x.args.width,
                     x.args.height,
@@ -1457,28 +1448,25 @@ class WaylandClient {
             }
         });
         isOp("xdg_toplevel.set_title", (x) => {
-            this.emit("title", x.id, x.args.title);
-            const win = this.obj2.windows.get(x.id);
-            if (win) {
-                win.title = x.args.title;
-            }
+            this.windows.setTitle(x.id, x.args.title);
         });
         isOp("xdg_toplevel.move", (x) => {
-            this.emit("windowStartMove", x.id);
+            this.windows.startMove(x.id);
         });
         isOp("xdg_toplevel.set_maximized", (x) => {
-            this.emit("windowMaximized", x.id);
+            this.windows.setMaximized(x.id, true);
         });
         isOp("xdg_toplevel.unset_maximized", (x) => {
-            this.emit("windowUnMaximized", x.id);
+            this.windows.setMaximized(x.id, false);
         });
 
         isOp("xdg_toplevel.destroy", (x) => {
             const xdgSurfaceId = this.dataManager.xdgSurface.getXdgSurfaceByToplevel(x.id);
             if (xdgSurfaceId === undefined) return;
-            this.obj2.windows.delete(x.id);
+            // 顺序对桌面可见：记录删除 → onToplevelRemove → windowClosed
+            this.windows.remove(x.id);
             this.dataManager.xdgSurface.toplevelDestroyed(x.id);
-            this.emit("windowClosed", x.id);
+            this.windows.notifyClosed(x.id);
         });
 
         isOp("zwp_linux_dmabuf_v1.create_params", (x) => {
@@ -1971,15 +1959,9 @@ class WaylandClient {
         return this.obj2.appid;
     }
     getWindows() {
-        return this.obj2.windows as Map<
-            WaylandWinId,
-            typeof this.obj2.windows extends Map<infer _K, infer V> ? V : never
-        >;
+        return this.windows.wins;
     }
-    private configureWin(
-        winid: WaylandObjectId2<"xdg_toplevel">,
-        win: typeof this.obj2.windows extends Map<infer _K, infer V> ? V : never,
-    ) {
+    private configureWin(winid: WaylandWinId, win: WindowRecord) {
         const s: number[] = [];
         if (win.actived) s.push(getEnumValue("xdg_toplevel.state", "activated"));
         this.sendMessageImm(winid, "xdg_toplevel.configure", {
@@ -2002,7 +1984,7 @@ class WaylandClient {
             .filter((k) => k !== undefined);
     }
     win(id: WaylandWinId) {
-        const win = this.obj2.windows.get(id);
+        const win = this.windows.get(id);
         if (win === undefined) return undefined;
         const xdgSurfaceId = this.dataManager.xdgSurface.getXdgSurfaceByToplevel(id);
         if (xdgSurfaceId === undefined) return undefined;
@@ -2468,7 +2450,7 @@ class WaylandClient {
                 fs.closeSync(obj.data.fd);
             }
         }
-        for (const _win of this.obj2.windows.values()) {
+        for (const _win of this.windows.wins.values()) {
             // todo close win
         }
         this.socket.end();
