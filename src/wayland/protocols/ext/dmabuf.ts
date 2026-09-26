@@ -1,10 +1,10 @@
-import { defineModule } from "../module";
-import { createFormatTableBuffer, DRM_FORMAT } from "../utils/dma-buf";
-import { newFd } from "../utils/fd";
+import { defineModule } from "../../module";
+import { createFormatTableBuffer, DRM_FORMAT } from "../../utils/dma-buf";
+import { newFd } from "../../utils/fd";
 
 const fs = require("node:fs") as typeof import("node:fs");
 
-import { getEnumValue } from "../utils/wayland-proto";
+import { getEnumValue } from "../../utils/wayland-proto";
 
 /**
  * linux-dmabuf-v1

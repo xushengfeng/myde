@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ModuleCtx } from "../module";
-import { cursorShapeModule } from "./cursor_shape";
+import { cursorShapeModule } from "./ext/cursor_shape";
 import { assertModuleConflicts, protocolModules } from "./index";
 
 function handler(key: string) {

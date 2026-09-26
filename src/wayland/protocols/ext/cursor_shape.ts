@@ -1,5 +1,5 @@
-import { defineModule } from "../module";
-import { getEnumName } from "../utils/wayland-proto";
+import { defineModule } from "../../module";
+import { getEnumName } from "../../utils/wayland-proto";
 
 /**
  * cursor-shape

@@ -1,4 +1,4 @@
-import { defineModule } from "../module";
+import { defineModule } from "../../module";
 
 /**
  * viewporter
