@@ -23,7 +23,7 @@ export const protocolModules: readonly ProtocolModule[] = [
     textInputV3Module,
 ];
 
-/** 启动时校验请求键冲突，重复即抛 */
+/** 启动时校验请求键与命令键冲突，重复即抛 */
 export function assertModuleConflicts(): void {
     const seen = new Map<string, string>();
     for (const mod of protocolModules) {
@@ -33,6 +33,16 @@ export function assertModuleConflicts(): void {
                 throw new Error(`wayland 请求 ${key} 同时由 ${prev} 与 ${mod.name} 声明`);
             }
             seen.set(key, mod.name);
+        }
+    }
+    const actions = new Map<string, string>();
+    for (const mod of protocolModules) {
+        for (const key of mod.actions.keys()) {
+            const prev = actions.get(key);
+            if (prev) {
+                throw new Error(`桌面命令 ${key} 同时由 ${prev} 与 ${mod.name} 声明`);
+            }
+            actions.set(key, mod.name);
         }
     }
 }

@@ -1,15 +1,18 @@
 import type { USocket } from "myde-unix-socket";
-import { InputEventCodes } from "../../input_codes/types";
-import type { Client, ClientLogConfig, CursorState, PointerCommand, Rect, ScrollCommand } from "../api";
+import type { Client, ClientLogConfig, CursorState, Rect } from "../api";
 import type {
+    ActionArgs,
+    ActionFn,
+    ActionKey,
+    ActionMsg,
     ClientState,
     DataOf,
     ErrorCode,
+    HitTestResult,
     ModuleCtx,
     RequestMsg,
     WaylandClientEventMap,
     WaylandObjectId2,
-    WaylandObjectId3,
     WaylandWinId,
 } from "../module";
 import { protocolModules } from "../protocols/index";
@@ -17,7 +20,7 @@ import { type WaylandEventObj, WaylandEventOpcode, type WaylandInterfaces } from
 import type { renderTools } from "../render_tools";
 import { CursorStore } from "../state/cursor_store";
 import { SeatStore } from "../state/seat_store";
-import { type WindowRecord, WindowsStore } from "../state/windows_store";
+import { WindowsStore } from "../state/windows_store";
 import type { WaylandObjectId, WaylandOp, WaylandProtocol } from "../utils/wayland-binary";
 import { WaylandArgType } from "../utils/wayland-binary";
 import { WaylandDecoder } from "../utils/wayland-decoder";
@@ -364,6 +367,10 @@ const commitHooks = protocolModules.flatMap((m) => (m.hooks.onCommit ? [m.hooks.
 const frameHooks = protocolModules.flatMap((m) => (m.hooks.onFrame ? [m.hooks.onFrame] : []));
 const destroyHooks = protocolModules.flatMap((m) => (m.hooks.onDestroy ? [m.hooks.onDestroy] : []));
 const focusHooks = protocolModules.flatMap((m) => (m.hooks.onFocus ? [m.hooks.onFocus] : []));
+const textInputHooks = protocolModules.flatMap((m) => (m.hooks.onTextInput ? [m.hooks.onTextInput] : []));
+
+/** 桌面命令（`server.notify`）→ 协议模块的 `actions`，与请求分发表同构 */
+const actionHandlers = new Map<ActionKey, ActionFn>(protocolModules.flatMap((m) => [...m.actions]));
 
 /**
  * server 注入的宿主能力。client 只认识这两条，fan-in / handle 分配全在 server（见 host/server.ts）。
@@ -576,6 +583,9 @@ export class WaylandClient implements Client {
                 focus: (surfaceId) => {
                     for (const h of focusHooks) h(surfaceId, this.ctx);
                 },
+                textInput: (text, preedit) => {
+                    for (const h of textInputHooks) h(text, preedit, this.ctx);
+                },
             },
             state: { windows: this.windows, cursor: this.cursor, seat: this.seat },
             client: {
@@ -587,6 +597,7 @@ export class WaylandClient implements Client {
                 surfaceBounds: () => this.host.surfaceBounds(),
             },
             scene: this.render,
+            hitTest: (winId, p) => this.hitTest(winId, p),
         };
     }
 
@@ -634,6 +645,21 @@ export class WaylandClient implements Client {
                 return false;
             },
         };
+    }
+
+    /**
+     * 桌面命令派发：`server.notify` → handle 反查（server）→ 这里 → 协议模块的 `actions`。
+     * host 只做路由，组包 / serial / 状态维护都在协议文件里。
+     *
+     * `args` 是去掉 handle 之后的部分，类型由 `key` 推导——调用方写错参数编译期报错。
+     */
+    runAction<K extends ActionKey>(key: K, winId: WaylandWinId, args: ActionArgs<K>): void {
+        const handler = actionHandlers.get(key);
+        if (handler === undefined) {
+            console.warn(`no action handler for ${key}`);
+            return;
+        }
+        handler({ winId, args } as unknown as ActionMsg<ActionKey>, this.ctx);
     }
 
     private handleClientMessage(data: Buffer, fds: number[] = []) {
@@ -717,21 +743,6 @@ export class WaylandClient implements Client {
         this.toSend = [];
     }
 
-    public offerTo() {
-        const dd = this.obj2.dataDevices || new Set();
-        if (!this.obj2.dataDevices) {
-            console.error("No data devices to offer to");
-        }
-        for (const ddId of dd) {
-            const dataOfferId = this.allocateObjectId() as WaylandObjectId3<"wl_data_offer">;
-            this.objects.set(dataOfferId, { protocol: WaylandProtocols.wl_data_offer, data: {} });
-
-            this.sendMessageImm(ddId, "wl_data_device.data_offer", { id: dataOfferId });
-            this.sendMessageImm(dataOfferId, "wl_data_offer.offer", { mime_type: "text/plain;charset=utf-8" });
-            this.sendMessageImm(dataOfferId, "wl_data_offer.offer", { mime_type: "text/plain" });
-            this.sendMessageImm(ddId, "wl_data_device.selection", { id: dataOfferId });
-        }
-    }
     private sendMessageImm<i extends WaylandInterfaces, T extends keyof WaylandEventObj & `${i}.${string}`>(
         objectId: WaylandObjectId2<i>,
         op: T,
@@ -848,28 +859,6 @@ export class WaylandClient implements Client {
     getWindows() {
         return this.windows.wins;
     }
-    private configureWin(winid: WaylandWinId, win: WindowRecord) {
-        const s: number[] = [];
-        if (win.actived) s.push(getEnumValue("xdg_toplevel.state", "activated"));
-        this.sendMessageImm(winid, "xdg_toplevel.configure", {
-            width: win.box.width,
-            height: win.box.height,
-            states: new Uint32Array(s),
-        });
-        const xdgSurfaceId = this.dataManager.xdgSurface.getXdgSurfaceByToplevel(winid);
-        if (xdgSurfaceId === undefined) return;
-        this.sendMessageImm(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
-    }
-    private getPointers() {
-        return Array.from(this.seat.all())
-            .map((s) => s.pointer)
-            .filter((p) => p !== undefined);
-    }
-    private getKeyboards() {
-        return Array.from(this.seat.all())
-            .map((s) => s.keyboard)
-            .filter((k) => k !== undefined);
-    }
     /** xdg_surface（窗口元素）id；窗口不存在时 undefined */
     private windowXdgSurface(winId: WaylandWinId): WaylandObjectId2<"xdg_surface"> | undefined {
         return this.dataManager.xdgSurface.getXdgSurfaceByToplevel(winId);
@@ -909,88 +898,12 @@ export class WaylandClient implements Client {
         return this.getObject(rootSurface).data.canvas;
     }
 
-    setWindowBox(winId: WaylandWinId, box: { width: number; height: number }): void {
-        const win = this.windows.get(winId);
-        if (win === undefined) return;
-        win.box = box;
-    }
-
-    /** 返回 false 表示本来就是激活态，未重复下发 configure */
-    focusWindow(winId: WaylandWinId): boolean {
-        const win = this.windows.get(winId);
-        if (win === undefined) return false;
-        if (win.actived) return false;
-        win.actived = true;
-        win.minimized = false;
-        this.configureWin(winId, win);
-        return true;
-    }
-
-    blurWindow(winId: WaylandWinId): void {
-        const win = this.windows.get(winId);
-        if (win === undefined || !win.actived) return;
-        win.actived = false;
-        this.configureWin(winId, win);
-    }
-
-    setWindowSize(winId: WaylandWinId, w: number, h: number): void {
-        const win = this.windows.get(winId);
-        if (win === undefined) return;
-        win.box.width = w;
-        win.box.height = h;
-        this.configureWin(winId, win);
-    }
-
-    /** 不给 size 时沿用盒子尺寸 */
-    maximizeWindow(winId: WaylandWinId, width?: number, height?: number): void {
-        const win = this.windows.get(winId);
-        if (win === undefined) return;
-        const xdgSurfaceId = this.windowXdgSurface(winId);
-        if (xdgSurfaceId === undefined) return;
-        win.actived = true;
-        win.maximized = true;
-        win.minimized = false;
-        win.box.width = width ?? win.box.width;
-        win.box.height = height ?? win.box.height;
-
-        this.sendMessageImm(winId, "xdg_toplevel.configure", {
-            width: win.box.width,
-            height: win.box.height,
-            states: new Uint32Array([
-                getEnumValue("xdg_toplevel.state", "activated"),
-                getEnumValue("xdg_toplevel.state", "maximized"),
-            ]),
-        });
-        this.sendMessageImm(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
-    }
-
-    unmaximizeWindow(winId: WaylandWinId, width?: number, height?: number): void {
-        const win = this.windows.get(winId);
-        if (win === undefined) return;
-        win.maximized = false;
-        win.box.width = width ?? win.box.width;
-        win.box.height = height ?? win.box.height;
-        this.configureWin(winId, win);
-    }
-
-    minimizeWindow(winId: WaylandWinId): void {
-        const win = this.windows.get(winId);
-        if (win === undefined) return;
-        win.actived = false;
-        win.minimized = true;
-        this.configureWin(winId, win);
-    }
-
-    closeWindow(winId: WaylandWinId): void {
-        if (this.windows.get(winId) === undefined) return;
-        this.sendMessageImm(winId, "xdg_toplevel.close", {});
-    }
-
     /**
-     * 指针按窗口几何路由：命中则切换焦点并返回 surface 局部坐标。
-     * 留在 host/client.ts（它本质是「指针按窗口几何路由」，属 host 职责），见 PLAN §3.2。
+     * 指针命中检测（`ctx.hitTest` 的实现）：xdg 几何 + popup 树 + subsurface + input region。
+     * 只做几何；焦点转移与 enter/leave 的协议动作在 `protocols/core/wayland.ts` 的 `input.pointer`。
+     * 没命中任何 surface 时返回 undefined —— 此时**不发 leave**（见下方 todo）。
      */
-    private updatePointerFocus(winId: WaylandWinId, p: { x: number; y: number }): { x: number; y: number } | undefined {
+    hitTest(winId: WaylandWinId, p: { x: number; y: number }): HitTestResult | undefined {
         const xdgSurfaceId = this.windowXdgSurface(winId);
         if (xdgSurfaceId === undefined) return undefined;
         const { x, y } = p;
@@ -1070,114 +983,12 @@ export class WaylandClient implements Client {
         }
 
         if (inSurface) {
-            const { id: s, x: nx, y: ny } = inSurface;
-            const prevFocus = this.seat.focus();
-            const prevFocusType = this.seat.focusType();
-            if (prevFocus !== s) {
-                if (prevFocus && this.objects.has(prevFocus)) {
-                    for (const p of this.getPointers())
-                        this.sendMessageImm(p, "wl_pointer.leave", {
-                            serial: 0,
-                            surface: prevFocus,
-                        });
-                    if (prevFocusType === "main" && reasonSurfaceType === "main") this.keyboard.blurSurface(prevFocus); // todo popup
-                }
-                for (const p of this.getPointers()) {
-                    this.sendMessageImm(p, "wl_pointer.enter", {
-                        serial: 0,
-                        surface: s,
-                        surface_x: nx,
-                        surface_y: ny,
-                    });
-                    this.sendMessageImm(p, "wl_pointer.frame", {});
-                }
-                if ((prevFocusType === "main" || !prevFocusType) && reasonSurfaceType === "main")
-                    this.keyboard.focusSurface(s);
-                this.seat.setFocus(s, reasonSurfaceType);
-            }
-            return { x: nx, y: ny };
+            return { surface: inSurface.id, x: inSurface.x, y: inSurface.y, role: reasonSurfaceType ?? "main" };
         }
         // todo 指针不在任何surface上时应发送wl_pointer.leave并清除指针焦点
         //  现在焦点悬挂：客户端收不到leave（hover状态卡住），重新进来也不发enter、客户端不重发光标
         //  还需给桌面新增sendPointerLeave()入口（移出窗口时调用，幂等），覆盖移出所有窗口、跨客户端窗口
         return undefined;
-    }
-
-    /** 输入注入：ev.x/y 相对该窗口的 xdg_surface 元素左上角 */
-    sendPointerToWindow(winId: WaylandWinId, ev: PointerCommand): void {
-        // px py已经相对主xdg surface了
-        const pos = this.updatePointerFocus(winId, { x: ev.x, y: ev.y });
-        if (!pos) return;
-        const { x: nx, y: ny } = pos;
-        if (ev.type === "move") {
-            for (const p of this.getPointers()) {
-                this.sendMessageImm(p, "wl_pointer.motion", {
-                    time: Date.now(),
-                    surface_x: nx,
-                    surface_y: ny,
-                });
-                this.sendMessageImm(p, "wl_pointer.frame", {});
-            }
-        }
-        if (ev.type === "down") {
-            for (const pointer of this.getPointers()) {
-                this.sendMessageImm(pointer, "wl_pointer.button", {
-                    serial: 0,
-                    time: Date.now(),
-                    button:
-                        ev.button === 0
-                            ? InputEventCodes.BTN_LEFT
-                            : ev.button === 1
-                              ? InputEventCodes.BTN_MIDDLE
-                              : ev.button === 2
-                                ? InputEventCodes.BTN_RIGHT
-                                : InputEventCodes.BTN_LEFT,
-                    state: getEnumValue("wl_pointer.button_state", "pressed"),
-                });
-                this.sendMessageImm(pointer, "wl_pointer.frame", {});
-            }
-        }
-        if (ev.type === "up") {
-            for (const pointer of this.getPointers()) {
-                this.sendMessageImm(pointer, "wl_pointer.button", {
-                    serial: 0,
-                    time: Date.now(),
-                    button:
-                        ev.button === 0
-                            ? InputEventCodes.BTN_LEFT
-                            : ev.button === 1
-                              ? InputEventCodes.BTN_MIDDLE
-                              : ev.button === 2
-                                ? InputEventCodes.BTN_RIGHT
-                                : InputEventCodes.BTN_LEFT,
-                    state: getEnumValue("wl_pointer.button_state", "released"),
-                });
-                this.sendMessageImm(pointer, "wl_pointer.frame", {});
-            }
-        }
-    }
-
-    /** 滚轮注入（客户端级；server 经 handle 反查到 client 后下发） */
-    sendScroll(ev: ScrollCommand): void {
-        // todo region
-        const { deltaX, deltaY } = ev;
-        if (deltaX !== 0) {
-            for (const pointer of this.getPointers())
-                this.sendMessageImm(pointer, "wl_pointer.axis", {
-                    time: Date.now(),
-                    axis: getEnumValue("wl_pointer.axis", "horizontal_scroll"),
-                    value: deltaX,
-                });
-        }
-        if (deltaY !== 0) {
-            for (const pointer of this.getPointers())
-                this.sendMessageImm(pointer, "wl_pointer.axis", {
-                    time: Date.now(),
-                    axis: getEnumValue("wl_pointer.axis", "vertical_scroll"),
-                    value: deltaY,
-                });
-        }
-        for (const pointer of this.getPointers()) this.sendMessageImm(pointer, "wl_pointer.frame", {});
     }
 
     async ping() {
@@ -1191,127 +1002,6 @@ export class WaylandClient implements Client {
         }
         await Promise.all(ps);
     }
-    keyboard = {
-        // todo Surface管理
-        focusSurface: (id: WaylandObjectId2<"wl_surface">) => {
-            for (const k of this.getKeyboards()) {
-                this.sendMessageImm(k, "wl_keyboard.enter", { serial: 0, surface: id, keys: new Uint32Array([]) });
-                this.sendMessageImm(k, "wl_keyboard.modifiers", {
-                    serial: 0,
-                    mods_depressed: 0,
-                    mods_latched: 0,
-                    mods_locked: 0,
-                    group: 0,
-                });
-            }
-            this.ctx.notify.focus(id);
-        },
-        blurSurface: (id: WaylandObjectId2<"wl_surface">) => {
-            for (const k of this.getKeyboards())
-                this.sendMessageImm(k, "wl_keyboard.leave", { serial: 0, surface: id });
-            this.ctx.notify.focus(undefined);
-        },
-        sendKey: (key: number, state: "pressed" | "released") => {
-            const s = this.seat.nextSerial();
-            for (const k of this.getKeyboards())
-                this.sendMessageImm(k, "wl_keyboard.key", {
-                    serial: s,
-                    time: Date.now(),
-                    key: key,
-                    state: getEnumValue("wl_keyboard.key_state", state), // todo repeat
-                });
-
-            const isPressed = state === "pressed";
-            const modKeyToBit: { [k: number]: number } = {
-                [InputEventCodes.KEY_LEFTSHIFT]: 0, // Shift -> bit 0
-                [InputEventCodes.KEY_RIGHTSHIFT]: 0,
-                [InputEventCodes.KEY_CAPSLOCK]: 1, // CapsLock -> bit 1
-                [InputEventCodes.KEY_LEFTCTRL]: 2, // Ctrl -> bit 2
-                [InputEventCodes.KEY_RIGHTCTRL]: 2,
-                [InputEventCodes.KEY_LEFTALT]: 3, // Alt -> bit 3
-                [InputEventCodes.KEY_RIGHTALT]: 3,
-                [InputEventCodes.KEY_LEFTMETA]: 4, // Meta/Super -> bit 4
-                [InputEventCodes.KEY_RIGHTMETA]: 4,
-            };
-
-            const bit = modKeyToBit[key];
-            if (bit !== undefined) {
-                if (isPressed) this.seat.addModifier(bit);
-                else this.seat.removeModifier(bit);
-
-                const mods_depressed = this.seat.modifierMask();
-                const mods_latched = 0; // todo not tracking latched in this implementation
-                const mods_locked = 0; // todo not tracking locked separately here
-
-                for (const k of this.getKeyboards()) {
-                    this.sendMessageImm(k, "wl_keyboard.modifiers", {
-                        serial: s,
-                        mods_depressed,
-                        mods_latched,
-                        mods_locked,
-                        group: 0,
-                    });
-                }
-            }
-        },
-        sendText: (text: string, preedit: boolean) => {
-            // 输入法文本统一走该路径；v1/v3是竞争协议，仲裁后只发给持有对象（后激活者胜出）
-            const owner = this.obj2.textInputOwner;
-            if (owner?.protocol === "v3") {
-                const t = this.obj2.textInputV3.m.get(owner.id);
-                // 未enter或未enable的对象按协议忽略
-                if (t?.entered && t.current.enabled) {
-                    if (preedit) {
-                        // 光标置于preedit末尾（cursor_*为字节偏移）
-                        const cursor = new TextEncoder().encode(text).length;
-                        this.sendMessageImm(owner.id, "zwp_text_input_v3.preedit_string", {
-                            text,
-                            cursor_begin: cursor,
-                            cursor_end: cursor,
-                        });
-                    } else {
-                        this.sendMessageImm(owner.id, "zwp_text_input_v3.commit_string", { text });
-                        this.sendMessageImm(owner.id, "zwp_text_input_v3.preedit_string", {
-                            text: "",
-                            cursor_begin: 0,
-                            cursor_end: 0,
-                        });
-                    }
-                    // 双缓冲事件在done时生效，serial为客户端commit计数
-                    this.sendMessageImm(owner.id, "zwp_text_input_v3.done", { serial: t.commitCount });
-                }
-                return;
-            }
-            const input1 = this.obj2.textInputV1;
-            console.log(text, preedit, input1);
-            if (input1 && owner?.protocol === "v1") {
-                const id = Array.from(input1.m).find((i) => i[0] === owner.id && i[1].focus === true);
-                if (!id) return;
-                if (preedit) {
-                    this.sendMessageImm(id[0], "zwp_text_input_v1.preedit_cursor", {
-                        index: text.length,
-                    });
-                    this.sendMessageImm(id[0], "zwp_text_input_v1.preedit_string", {
-                        text: text,
-                        commit: text,
-                        serial: id[1].serial,
-                    });
-                } else {
-                    this.sendMessageImm(id[0], "zwp_text_input_v1.commit_string", {
-                        serial: id[1].serial,
-                        text: text,
-                    });
-                    this.sendMessageImm(id[0], "zwp_text_input_v1.preedit_string", {
-                        text: "",
-                        commit: "",
-                        serial: id[1].serial,
-                    });
-                }
-            }
-        },
-    };
-
-    /** text-input-v3焦点跟随键盘焦点 */
 
     paste: (text: string) => void = (text: string) => {
         if (!this.obj2.pendingPaste) {

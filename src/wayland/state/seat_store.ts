@@ -5,8 +5,9 @@ export type { FocusType, SeatRecord };
 /**
  * 输入设备侧状态（原散在 `obj2.seats/serial/focusSurface/focusSurfaceType/modifiers`）。
  *
- * 只放数据与原子操作；发 wl_pointer.enter/leave、wl_keyboard.* 这些**协议动作仍留在调用方**——
- * 它们依赖 objects/多路 send，搬进来反而要注入一整套上下文。
+ * 只放数据与原子操作；**协议动作（发 wl_pointer.enter/leave、wl_keyboard.*）在协议文件里**
+ * ——`protocols/core/wayland.ts` 的 `actions` 段经 `ctx.state.seat` 取这里的数据，
+ * 组包与下发用 `ctx.sendNow`，store 不必注入一整套上下文。
  *
  * 配套的 text-input v1/v3 仲裁状态暂留 `obj2`：它牵扯两个未来模块的边界划分
  * （各协议私有状态 vs 共享仲裁点）。
@@ -30,6 +31,20 @@ export class SeatStore {
     /** getPointers / getKeyboards 遍历用 */
     all(): IterableIterator<SeatRecord> {
         return this.#seats.values();
+    }
+
+    /** 已创建的 wl_pointer；事件按 seat 广播时用 */
+    pointers(): WaylandObjectId2<"wl_pointer">[] {
+        return Array.from(this.#seats.values())
+            .map((s) => s.pointer)
+            .filter((p): p is WaylandObjectId2<"wl_pointer"> => p !== undefined);
+    }
+
+    /** 已创建的 wl_keyboard，同上 */
+    keyboards(): WaylandObjectId2<"wl_keyboard">[] {
+        return Array.from(this.#seats.values())
+            .map((s) => s.keyboard)
+            .filter((k): k is WaylandObjectId2<"wl_keyboard"> => k !== undefined);
     }
 
     /** 分配一个键盘事件 serial */

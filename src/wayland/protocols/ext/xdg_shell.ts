@@ -1,4 +1,10 @@
-import { defineModule, type WaylandObjectId2 } from "../../module";
+import {
+    defineModule,
+    type ModuleCtx,
+    type WaylandObjectId2,
+    type WaylandWinId,
+    type WindowRecord,
+} from "../../module";
 import { getEnumValue, waylandObjectId } from "../../utils/wayland-proto";
 import { getRectKeyPoint } from "../../utils/xdg";
 
@@ -22,6 +28,23 @@ declare module "../../module" {
             parent_size: { parent_width: number; parent_height: number };
         };
     }
+}
+
+/**
+ * 窗口几何下发：先发 `xdg_toplevel.configure`（states 按记录算），
+ * 再发配套的 `xdg_surface.configure`（xdg_surface 要求一一对应）。
+ */
+function configureWin(ctx: ModuleCtx, winId: WaylandWinId, win: WindowRecord): void {
+    const s: number[] = [];
+    if (win.actived) s.push(getEnumValue("xdg_toplevel.state", "activated"));
+    ctx.sendNow(winId, "xdg_toplevel.configure", {
+        width: win.box.width,
+        height: win.box.height,
+        states: new Uint32Array(s),
+    });
+    const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId);
+    if (xdgSurfaceId === undefined) return;
+    ctx.sendNow(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
 }
 
 export const xdgShellModule = defineModule({
@@ -228,6 +251,76 @@ export const xdgShellModule = defineModule({
             ctx.state.windows.remove(x.id);
             ctx.domain.xdgSurface.toplevelDestroyed(x.id);
             ctx.state.windows.notifyClosed(x.id);
+        },
+    },
+    actions: {
+        /** 窗口命令：改 `WindowRecord` + 发 configure。语义事件（window.changed 等）仍由 WindowsStore fan-in */
+        "window.focus": (msg, ctx) => {
+            const win = ctx.state.windows.get(msg.winId);
+            if (win === undefined || win.actived) return;
+            win.actived = true;
+            win.minimized = false;
+            configureWin(ctx, msg.winId, win);
+        },
+        "window.blur": (msg, ctx) => {
+            const win = ctx.state.windows.get(msg.winId);
+            if (win === undefined || !win.actived) return;
+            win.actived = false;
+            configureWin(ctx, msg.winId, win);
+        },
+        "window.close": (msg, ctx) => {
+            if (ctx.state.windows.get(msg.winId) === undefined) return;
+            ctx.sendNow(msg.winId, "xdg_toplevel.close", {});
+        },
+        /** 只记录桌面配置的盒子，不发 configure */
+        "window.setBox": (msg, ctx) => {
+            const win = ctx.state.windows.get(msg.winId);
+            if (win === undefined) return;
+            win.box = msg.args[0];
+        },
+        "window.setSize": (msg, ctx) => {
+            const win = ctx.state.windows.get(msg.winId);
+            if (win === undefined) return;
+            win.box.width = msg.args[0].width;
+            win.box.height = msg.args[0].height;
+            configureWin(ctx, msg.winId, win);
+        },
+        "window.maximize": (msg, ctx) => {
+            const win = ctx.state.windows.get(msg.winId);
+            if (win === undefined) return;
+            if (ctx.domain.xdgSurface.getXdgSurfaceByToplevel(msg.winId) === undefined) return;
+            win.actived = true;
+            win.maximized = true;
+            win.minimized = false;
+            win.box.width = msg.args[0]?.width ?? win.box.width;
+            win.box.height = msg.args[0]?.height ?? win.box.height;
+
+            ctx.sendNow(msg.winId, "xdg_toplevel.configure", {
+                width: win.box.width,
+                height: win.box.height,
+                states: new Uint32Array([
+                    getEnumValue("xdg_toplevel.state", "activated"),
+                    getEnumValue("xdg_toplevel.state", "maximized"),
+                ]),
+            });
+            const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(msg.winId);
+            if (xdgSurfaceId === undefined) return;
+            ctx.sendNow(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
+        },
+        "window.unmaximize": (msg, ctx) => {
+            const win = ctx.state.windows.get(msg.winId);
+            if (win === undefined) return;
+            win.maximized = false;
+            win.box.width = msg.args[0]?.width ?? win.box.width;
+            win.box.height = msg.args[0]?.height ?? win.box.height;
+            configureWin(ctx, msg.winId, win);
+        },
+        "window.minimize": (msg, ctx) => {
+            const win = ctx.state.windows.get(msg.winId);
+            if (win === undefined) return;
+            win.actived = false;
+            win.minimized = true;
+            configureWin(ctx, msg.winId, win);
         },
     },
 });

@@ -7,6 +7,35 @@ import { defineModule } from "../../module";
  */
 export const textInputV1Module = defineModule({
     name: "text-input-unstable-v1",
+    hooks: {
+        /** `input.text` 经 core 转发到这里；只在本协议是仲裁持有者时发（后激活者胜出） */
+        onTextInput: (text, preedit, ctx) => {
+            const owner = ctx.client.state.textInputOwner;
+            if (owner?.protocol !== "v1") return;
+            const input1 = ctx.client.state.textInputV1;
+            if (!input1) return;
+            const id = Array.from(input1.m).find((i) => i[0] === owner.id && i[1].focus === true);
+            if (!id) return;
+            if (preedit) {
+                ctx.sendNow(id[0], "zwp_text_input_v1.preedit_cursor", { index: text.length });
+                ctx.sendNow(id[0], "zwp_text_input_v1.preedit_string", {
+                    text: text,
+                    commit: text,
+                    serial: id[1].serial,
+                });
+            } else {
+                ctx.sendNow(id[0], "zwp_text_input_v1.commit_string", {
+                    serial: id[1].serial,
+                    text: text,
+                });
+                ctx.sendNow(id[0], "zwp_text_input_v1.preedit_string", {
+                    text: "",
+                    commit: "",
+                    serial: id[1].serial,
+                });
+            }
+        },
+    },
     requests: {
         "zwp_text_input_manager_v1.create_text_input": (x, ctx) => {
             const textInputId = x.args.id;

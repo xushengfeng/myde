@@ -59,6 +59,7 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
   "cursor.changed" | "clipboard.copy" | "clipboard.pasteRequested" | "client.opened" | "client.closed", …)`
 - **查询**：`server.windows.list() / get() / preview()`、`server.cursor.get(clientId)`、`await server.request(…)`
 - **命令**：`server.notify("window.focus" | … | "input.pointer" | …, handle, …)`
+  → `host/server.ts` 按 handle 反查 `(client, winId)` → 协议模块的 `actions` 表，组包在协议文件里
 - **应答**：`server.respond("surfaceBounds.request", () => ({ width, height }))`
 
 桌面不接触 Wayland 对象 id：所有命令按全局 `WinHandle` 下发，由 `host/server.ts` 反查
@@ -139,11 +140,15 @@ export const exampleModule = defineModule({
     requests: { // 书写态用对象字面量：键写错编译期报错
         "my_iface.do_thing"(x, ctx) { /* x.args 按生成类型精确推导，x.id 已带 brand */ },
     },
+    actions: { // 可选：桌面命令的出口（`server.notify` → 这里），键来自 api.ts 的 ServerNotifyMap
+        "input.key"(msg, ctx) { /* msg.winId 是 handle 反查后的 xdg_toplevel，msg.args 已去掉 handle */ },
+    },
     hooks: { // 可选：core → 本模块的反向通知
         onCommit: (surfaceId, sizeChanged, ctx) => {},
         onFrame: (surfaceId, canvas, pending, ctx) => canvas,
         onDestroy: (surfaceId, ctx) => {},
         onFocus: (surfaceId, ctx) => {},
+        onTextInput: (text, preedit, ctx) => {}, // input.text 的仲裁：各 text_input 模块自判是否持有
     },
 });
 ```
@@ -153,18 +158,24 @@ export const exampleModule = defineModule({
 1. `protocols/index.ts` 的模块清单数组加一行
 2. 本文件顶部的「支持的协议」更新
 3. （可选）需要新 core 能力时才动 `module.ts` 的 `CoreApi` —— 须先与开发者确认
-4. 补一个 fake-ctx 单测（仿 `protocols/core/region.test.ts`、`protocols/modules.test.ts`）
+4. 补一个 fake-ctx 单测（仿 `protocols/modules.test.ts`）
 
 ### 4. 不变量
 
-- **协议模块之间零 `import`**：只能 import `module.ts`、`utils/*`、`protocols/wayland-types`（生成物）。
-  `assertModuleConflicts()` 在 `WaylandServer` 构造时校验请求键冲突。
+- **协议模块之间零 `import`**：只能 import `module.ts`、`api.ts`、`utils/*`、`protocols/wayland-types`（生成物）。
+  `assertModuleConflicts()` 在 `WaylandServer` 构造时校验请求键与桌面命令键冲突。
+- **桌面命令进 `actions`**：`server.notify` 的命令由 `host/server.ts` 反查 handle 后派发
+  （`client.runAction`），组包、serial、遍历 seat、状态维护全在协议文件里，host 不写协议事件。
+  例外只有 `clipboard.paste`（写 fd，不发协议消息，server 直达 `client.paste`）。
+  命令里**只改 `WindowRecord` / 只发 Wayland 事件**，语义事件（`window.changed` 等）仍由 Store fan-in。
 - **`ctx` 是 handler 唯一的依赖来源**：handler 不碰 `this`（`WaylandClient`）。新增能力先进
-  `module.ts` 的契约，再在 `host/client.ts` 的 `buildCtx()` 里接实现。
+  `module.ts` 的契约，再在 `host/client.ts` 的 `buildCtx()` 里接实现。目前唯一的几何能力是
+  `ctx.hitTest`（纯几何，留 host），焦点转移与 enter/leave 在 core 的 `input.pointer` 里。
 - **反向通信只有钩子**：扩展不被 core import，只能声明 `hooks`，由 `host/client.ts` 聚合、
   `ctx.notify.*` 触发。`onCommit`（buffer 已应用、像素尚未合成）与 `onFrame`（已合成、渲染之前）
-  分阶段，**不能合并**。
+  分阶段，**不能合并**；`onTextInput` 是 `input.text` 的仲裁通道（core 不认识 `zwp_*` 事件）。
 - **语义事实进 Store**：跨协议 / 要给桌面看的状态放 `state/`（`windows_store` / `cursor_store` /
   `seat_store`），单写入点；桌面侧的 `window.*` / `cursor.*` 事件就是从这里 fan-in 出去的。
+  Store 只放数据，协议动作（发 `wl_keyboard.*` / `wl_pointer.*`）在 `protocols/core/wayland.ts`。
 - **模块级副作用要加环境守卫**：`utils/shared_texture.ts` 会注册 electron 接收端并建 unix socket，
   纯 node 环境没有 electron。

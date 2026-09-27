@@ -44,6 +44,32 @@ export const textInputV3Module = defineModule({
             }
             v3Focus(ti, surfaceId, ctx);
         },
+        /** `input.text` 经 core 转发到这里；只在本协议是仲裁持有者时发（后激活者胜出） */
+        onTextInput: (text, preedit, ctx) => {
+            const owner = ctx.client.state.textInputOwner;
+            if (owner?.protocol !== "v3") return;
+            const t = ctx.client.state.textInputV3.m.get(owner.id);
+            // 未enter或未enable的对象按协议忽略
+            if (!t?.entered || !t.current.enabled) return;
+            if (preedit) {
+                // 光标置于preedit末尾（cursor_*为字节偏移）
+                const cursor = new TextEncoder().encode(text).length;
+                ctx.sendNow(owner.id, "zwp_text_input_v3.preedit_string", {
+                    text,
+                    cursor_begin: cursor,
+                    cursor_end: cursor,
+                });
+            } else {
+                ctx.sendNow(owner.id, "zwp_text_input_v3.commit_string", { text });
+                ctx.sendNow(owner.id, "zwp_text_input_v3.preedit_string", {
+                    text: "",
+                    cursor_begin: 0,
+                    cursor_end: 0,
+                });
+            }
+            // 双缓冲事件在done时生效，serial为客户端commit计数
+            ctx.sendNow(owner.id, "zwp_text_input_v3.done", { serial: t.commitCount });
+        },
     },
     requests: {
         "zwp_text_input_manager_v3.get_text_input": (x, ctx) => {

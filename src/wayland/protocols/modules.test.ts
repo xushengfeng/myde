@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { ModuleCtx } from "../module";
+import { InputEventCodes } from "../../input_codes/types";
+import type { ModuleCtx, WaylandObjectId2, WaylandWinId } from "../module";
+import { waylandCoreModule } from "./core/wayland";
 import { cursorShapeModule } from "./ext/cursor_shape";
 import { assertModuleConflicts, protocolModules } from "./index";
 
@@ -29,6 +31,84 @@ describe("协议模块注册", () => {
             .map((m) => m.name)
             .sort();
         expect(withHooks).toEqual(["viewporter", "xdg-shell"]);
+    });
+});
+
+describe("桌面命令（actions）", () => {
+    it("每个命令只有一个声明方，且按协议归属", () => {
+        const owner = new Map<string, string>();
+        for (const m of protocolModules) {
+            for (const key of m.actions.keys()) {
+                expect(owner.has(key), `命令 ${key} 同时由 ${owner.get(key)} 与 ${m.name} 声明`).toBe(false);
+                owner.set(key, m.name);
+            }
+        }
+        // 输入与剪贴板属 seat/data-device，即 core
+        expect(owner.get("input.pointer")).toBe("wayland");
+        expect(owner.get("input.scroll")).toBe("wayland");
+        expect(owner.get("input.key")).toBe("wayland");
+        expect(owner.get("input.text")).toBe("wayland");
+        expect(owner.get("clipboard.offer")).toBe("wayland");
+        // 窗口命令属 xdg-shell
+        for (const key of [
+            "window.focus",
+            "window.blur",
+            "window.close",
+            "window.setBox",
+            "window.setSize",
+            "window.maximize",
+            "window.unmaximize",
+            "window.minimize",
+        ]) {
+            expect(owner.get(key), `命令 ${key} 没有声明方`).toBe("xdg-shell");
+        }
+    });
+
+    it("input.key 组 wl_keyboard.key，修饰键才补发 wl_keyboard.modifiers", () => {
+        const action = waylandCoreModule.actions.get("input.key");
+        expect(action, "core 未声明 input.key").toBeDefined();
+
+        const sent: { id: number; event: string; args: Record<string, unknown> }[] = [];
+        const mods = new Set<number>();
+        const ctx = {
+            state: {
+                seat: {
+                    keyboards: () => [7 as WaylandObjectId2<"wl_keyboard">],
+                    nextSerial: () => 5,
+                    addModifier: (b: number) => mods.add(b),
+                    removeModifier: (b: number) => mods.delete(b),
+                    modifierMask: () => {
+                        let mask = 0;
+                        for (const b of mods) mask |= 1 << b;
+                        return mask;
+                    },
+                },
+            },
+            sendNow: (id: number, event: string, args: Record<string, unknown>) => sent.push({ id, event, args }),
+        } as unknown as ModuleCtx;
+
+        // 普通按键：只有 wl_keyboard.key
+        action?.({ winId: 1 as WaylandWinId, args: [30, "pressed"] }, ctx);
+        expect(sent.map((s) => s.event)).toEqual(["wl_keyboard.key"]);
+        expect(sent[0].id).toBe(7);
+        expect(sent[0].args).toMatchObject({ serial: 5, key: 30 });
+
+        // 修饰键：key 之后补发 modifiers，掩码来自 seat
+        sent.length = 0;
+        action?.({ winId: 1 as WaylandWinId, args: [InputEventCodes.KEY_LEFTSHIFT, "pressed"] }, ctx);
+        expect(sent.map((s) => s.event)).toEqual(["wl_keyboard.key", "wl_keyboard.modifiers"]);
+        expect(sent[1].args).toMatchObject({ serial: 5, mods_depressed: 1 << 0 });
+    });
+
+    it("input.text 只是转发，仲裁由各 text_input 模块的 onTextInput 自判", () => {
+        const action = waylandCoreModule.actions.get("input.text");
+        const calls: [string, boolean][] = [];
+        const ctx = {
+            notify: { textInput: (text: string, preedit: boolean) => calls.push([text, preedit]) },
+        } as unknown as ModuleCtx;
+
+        action?.({ winId: 1 as WaylandWinId, args: ["hi", true] }, ctx);
+        expect(calls).toEqual([["hi", true]]);
     });
 });
 

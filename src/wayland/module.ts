@@ -2,12 +2,14 @@
  * 协议模块与系统之间的全部契约。
  *
  * 零实现、零副作用；依赖只允许指向叶子类型模块（protocols/wayland-types、
- * utils/wayland-binary、render_tools），**不得 import 任何实现文件**，
- * 否则协议模块之间会重新形成环。
+ * utils/wayland-binary、render_tools、api），**不得 import 任何实现文件**，
+ * 否则协议模块之间会重新形成环。api.ts 也是纯类型，与本文件的互相 import
+ * 只在类型层，编译期即被擦除。
  *
  * `WaylandDataRegistry` 本身是空的：各协议状态由对应文件的 `declare module`
  * 声明合并进来（`protocols/core/region.ts` 是样板）。
  */
+import type { ServerNotifyMap } from "./api";
 import type { wlSurfaceData } from "./host/client";
 import type { WaylandEnumObj, WaylandEventObj, WaylandInterfaces, WaylandRequestObj } from "./protocols/wayland-types";
 import type { renderTools } from "./render_tools";
@@ -69,6 +71,31 @@ export type RequestMsg<K extends RequestKey = RequestKey> = {
     args: WaylandRequestObj[K];
 };
 
+// ───────────────────────── 桌面命令（api.ts → 协议模块） ─────────────────────────
+
+/**
+ * `requests` 是 client→server，`actions` 是它的镜像：**桌面主动驱动**的命令
+ * （`server.notify(...)`）由协议模块承接，组包、serial、遍历设备、状态维护都在
+ * 协议文件里，host 只负责 handle 反查与派发。
+ */
+export type ActionKey = keyof ServerNotifyMap;
+
+/** 命令表去掉首参 handle —— handle 是桌面身份，host 反查后换成 `winId` */
+export type ActionArgs<K extends ActionKey> = ServerNotifyMap[K] extends [unknown, ...infer R] ? R : never;
+
+export interface ActionMsg<K extends ActionKey = ActionKey> {
+    /** handle 反查到的窗口对象（xdg_toplevel id）；`clipboard.*` 等客户端级 action 可忽略 */
+    winId: WaylandWinId;
+    args: ActionArgs<K>;
+}
+
+export type ActionHandlers = {
+    [K in ActionKey]?: (msg: ActionMsg<K>, ctx: ModuleCtx) => void;
+};
+
+/** 装配态用的单一签名（各键 handler 的联合签名会把参数收成交集，先折平） */
+export type ActionFn = (msg: ActionMsg<ActionKey>, ctx: ModuleCtx) => void;
+
 /** 书写态用对象字面量：键名写错编译期报错，args 按键精确推导 */
 export type RequestHandlers = {
     [K in RequestKey]?: (msg: RequestMsg<K>, ctx: ModuleCtx) => void | Promise<void>;
@@ -93,7 +120,9 @@ export interface ProtocolModuleDef {
     name: string;
     globals?: readonly ModuleGlobal[];
     requests?: RequestHandlers;
-    hooks?: Partial<SurfaceHooks & SeatHooks>;
+    /** 桌面命令的出口（`server.notify` → 本表），见 `ActionKey` */
+    actions?: ActionHandlers;
+    hooks?: Partial<SurfaceHooks & SeatHooks & TextInputHooks>;
 }
 
 /** 装配后的运行态：Map 是 host 的分发优化，不暴露给书写者 */
@@ -101,19 +130,22 @@ export interface ProtocolModule {
     name: string;
     globals: readonly ModuleGlobal[];
     requests: ReadonlyMap<RequestKey, NonNullable<RequestHandlers[RequestKey]>>;
-    hooks: Partial<SurfaceHooks & SeatHooks>;
+    actions: ReadonlyMap<ActionKey, ActionFn>;
+    hooks: Partial<SurfaceHooks & SeatHooks & TextInputHooks>;
 }
 
 /**
- * 把书写态编译成运行态。分发循环仍是 `requests.get(key)`，O(1) 不变。
- * 装配期还会校验同一 `接口.请求` 被两个模块声明（现在 Map.set 会静默覆盖）。
+ * 把书写态编译成运行态。分发循环仍是 `requests.get(key)` / `actions.get(key)`，O(1) 不变。
+ * 装配期还会校验同一 `接口.请求` 或同一命令被两个模块声明（现在 Map.set 会静默覆盖）。
  */
 export function defineModule(def: ProtocolModuleDef): ProtocolModule {
     const entries = Object.entries(def.requests ?? {}) as [RequestKey, NonNullable<RequestHandlers[RequestKey]>][];
+    const actions = Object.entries(def.actions ?? {}) as [ActionKey, ActionFn][];
     return {
         name: def.name,
         globals: def.globals ?? [],
         requests: new Map(entries),
+        actions: new Map(actions),
         hooks: def.hooks ?? {},
     };
 }
@@ -288,6 +320,14 @@ export interface SeatHooks {
     onFocus?(surfaceId: SurfaceId | undefined, ctx: ModuleCtx): void;
 }
 
+export interface TextInputHooks {
+    /**
+     * 桌面注入文本（`input.text`）。仲裁状态在 `ClientState.textInputOwner`，
+     * 各 text_input 模块自判是否持有，非持有者直接 return —— core 不认识 zwp_* 事件。
+     */
+    onTextInput?(text: string, preedit: boolean, ctx: ModuleCtx): void;
+}
+
 // ───────────── 客户端级状态与事件 ─────────────
 
 export type TextInputV3State = {
@@ -381,6 +421,10 @@ export interface SeatApi {
     addSeat(id: WaylandObjectId2<"wl_seat">): void;
     get(id: WaylandObjectId2<"wl_seat">): SeatRecord | undefined;
     all(): IterableIterator<SeatRecord>;
+    /** 已创建的 wl_pointer（多 seat 时一次拿全，事件要广播给每个） */
+    pointers(): WaylandObjectId2<"wl_pointer">[];
+    /** 已创建的 wl_keyboard，同上 */
+    keyboards(): WaylandObjectId2<"wl_keyboard">[];
     nextSerial(): number;
     addModifier(bit: number): void;
     removeModifier(bit: number): void;
@@ -388,6 +432,18 @@ export interface SeatApi {
     focus(): SurfaceId | null;
     focusType(): FocusType;
     setFocus(surface: SurfaceId | null, type: FocusType): void;
+}
+
+/**
+ * `ctx.hitTest` 的结果：命中哪个 surface、局部坐标，以及命中的 xdg 角色
+ * （决定键盘焦点跟不跟 —— popup 不抢键盘焦点）。
+ */
+export interface HitTestResult {
+    surface: SurfaceId;
+    /** 相对该 surface 的坐标 */
+    x: number;
+    y: number;
+    role: "main" | "popup";
 }
 
 /** client 级字段：clipboard、text-input 仲裁、appid 等 */
@@ -455,9 +511,17 @@ export interface ModuleCtx {
         frame(surfaceId: SurfaceId, canvas: OffscreenCanvas, pending: WaylandSurfaceData): OffscreenCanvas;
         destroy(surfaceId: SurfaceId): void;
         focus(surfaceId: SurfaceId | undefined): void;
+        /** 桌面注入文本，各 text_input 模块按仲裁结果自判（`TextInputHooks.onTextInput`） */
+        textInput(text: string, preedit: boolean): void;
     };
     /** 客户端自身 */
     client: ClientApi;
     /** 场景投影（可能瘦身为 SceneCmd 分发，像素走 ImageKV） */
     scene: renderTools;
+    /**
+     * host 能力：指针按窗口几何命中检测（xdg 几何 + subsurface + input region）。
+     * 属纯几何，故留在 host；焦点转移与 enter/leave 的协议动作在 core 模块。
+     * `p` 相对窗口元素左上角；没命中任何 surface 时 undefined。
+     */
+    hitTest(winId: WaylandWinId, p: { x: number; y: number }): HitTestResult | undefined;
 }

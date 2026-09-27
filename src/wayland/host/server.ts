@@ -17,19 +17,8 @@ const usocket = require("myde-unix-socket") as typeof import("myde-unix-socket")
 
 import type { UServer, USocket } from "myde-unix-socket";
 import { EventEmitter } from "../../event-emitter/event-emitter";
-import type {
-    Client,
-    CursorState,
-    PointerCommand,
-    ScrollCommand,
-    ServerEvents,
-    ServerNotifyMap,
-    ServerRequests,
-    Size,
-    WindowInfo,
-    WinHandle,
-} from "../api";
-import type { WaylandWinId } from "../module";
+import type { Client, CursorState, ServerEvents, ServerNotifyMap, ServerRequests, WindowInfo, WinHandle } from "../api";
+import type { ActionArgs, WaylandWinId } from "../module";
 import { assertModuleConflicts } from "../protocols/index";
 import type { renderTools } from "../render_tools";
 import type { WaylandName } from "../utils/wayland-binary";
@@ -48,6 +37,14 @@ interface WindowEntry {
 
 function waylandName(name: number): WaylandName {
     return name as WaylandName;
+}
+
+/**
+ * 命令去掉首参 handle（反查完就没用了），回到 `ActionArgs<K>`。
+ * 元组从 `ServerNotifyMap[K]` 里截断推不出来，这是 host 里唯一的一处断言。
+ */
+function stripHandle<K extends keyof ServerNotifyMap>(args: ServerNotifyMap[K]): ActionArgs<K> {
+    return (args as unknown as [unknown, ...unknown[]]).slice(1) as ActionArgs<K>;
 }
 
 class WaylandServer {
@@ -192,13 +189,13 @@ class WaylandServer {
 
     /** 内部按 handle 反查 `(client, winId)`，桌面不接触 Wayland 对象 id */
     notify<K extends keyof ServerNotifyMap>(key: K, ...args: ServerNotifyMap[K]): void {
-        this.dispatchNotify(key as keyof ServerNotifyMap, args as unknown[]);
+        this.dispatchNotify(key, args);
     }
 
-    private dispatchNotify(key: keyof ServerNotifyMap, args: unknown[]): void {
+    private dispatchNotify<K extends keyof ServerNotifyMap>(key: K, args: ServerNotifyMap[K]): void {
         if (key === "clipboard.paste") {
             // 剪贴板是 client 级的，直接用事件带下来的 clientId
-            const [clientId, text] = args as [string, string];
+            const [clientId, text] = args as unknown as [string, string];
             this.rawClients.get(clientId)?.paste(text);
             return;
         }
@@ -208,54 +205,9 @@ class WaylandServer {
             console.warn(`notify ${String(key)}: unknown window handle`, handle);
             return;
         }
+        // host 只做 handle 反查与派发，命令语义在协议模块的 `actions` 里
         const { client, winId } = entry;
-        switch (key) {
-            case "window.focus":
-                client.focusWindow(winId);
-                break;
-            case "window.blur":
-                client.blurWindow(winId);
-                break;
-            case "window.close":
-                client.closeWindow(winId);
-                break;
-            case "window.setBox":
-                client.setWindowBox(winId, args[1] as Size);
-                break;
-            case "window.setSize": {
-                const size = args[1] as Size;
-                client.setWindowSize(winId, size.width, size.height);
-                break;
-            }
-            case "window.maximize": {
-                const size = args[1] as Size | undefined;
-                client.maximizeWindow(winId, size?.width, size?.height);
-                break;
-            }
-            case "window.unmaximize": {
-                const size = args[1] as Size | undefined;
-                client.unmaximizeWindow(winId, size?.width, size?.height);
-                break;
-            }
-            case "window.minimize":
-                client.minimizeWindow(winId);
-                break;
-            case "input.pointer":
-                client.sendPointerToWindow(winId, args[1] as PointerCommand);
-                break;
-            case "input.scroll":
-                client.sendScroll(args[1] as ScrollCommand);
-                break;
-            case "input.key":
-                client.keyboard.sendKey(args[1] as number, args[2] as "pressed" | "released");
-                break;
-            case "input.text":
-                client.keyboard.sendText(args[1] as string, args[2] as boolean);
-                break;
-            case "clipboard.offer":
-                client.offerTo();
-                break;
-        }
+        client.runAction(key, winId, stripHandle(args));
     }
 
     // ───────────────────────── 窗口表与快照 ─────────────────────────
