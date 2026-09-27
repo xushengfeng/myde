@@ -11,7 +11,7 @@
     - wl_shm 部分
     - wl_buffer
     - wl_surface 部分
-    - wl_seat 还没有 touch
+    - wl_seat 还没有 touch；registry **一次广播两把**（`seat0`/`seat1`，见 `host/server.ts` 的 `initWaylandProtocols`）
     - wl_pointer 部分
     - wl_keyboard 还没有 repeat
     - wl_output 只是硬编码，还没有添加硬件处理
@@ -207,6 +207,8 @@ export const exampleModule = defineModule({
   Store 只放数据，协议动作（发 `wl_keyboard.*` / `wl_pointer.*`）在 `protocols/core/wayland.ts`。
 - **焦点 per-seat，键盘焦点由桌面驱动**：`SeatRecord` 的 `pointerFocus` / `keyboardFocus` 各 seat
   一份（多光标 = 多 seat；`input.*` 的 `seat` 参数是**选择器不是广播位**，缺省 `"seat0"`）。
+  seat 是 registry **一次性广播两把**（`seat0`/`seat1`）的——Firefox/GTK 不认运行中新增的 seat，
+  而 `wl_seat.onBind` 按**广播顺序**算 seat 名（客户端只 bind 第二把也得叫 `seat1`）。
   指针焦点由 core 的 `input.pointer` → `updatePointerFocus` 维护，**只发该 seat 的 pointer、不碰键盘**
   （hover 要不要切键盘焦点是桌面政策）。键盘焦点只有一个写入口 `ctx.core.focusKeyboard`：同值去重 →
   `leave`(旧) → `enter`(新) + `modifiers` → 写槽 → `ctx.notify.focus(seat, surface)` 扇出；调用方是

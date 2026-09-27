@@ -1,6 +1,7 @@
 import { InputEventCodes } from "../../../input_codes/types";
 import type { PointerCommand, ScrollCommand } from "../../api";
 import {
+    type BindMsg,
     defineModule,
     type HitTestResult,
     type ModuleCtx,
@@ -284,6 +285,18 @@ function resolveSeat(ctx: ModuleCtx, name?: string): SeatRecord | undefined {
 }
 
 /**
+ * 这个 `wl_seat` global 是 registry 广播的**第几个** → seat 名（`seat0`/`seat1`…）。
+ * 按**广播顺序**算而不是 bind 顺序：客户端只 bind 第二把时它也得叫 seat1，
+ * 否则 `input.*` 的 seat 选择器会把事件喂错人。
+ */
+function seatNameOf(ctx: ModuleCtx, msg: BindMsg): string {
+    const index = [...ctx.core.registry.globals()]
+        .filter((g) => g.protocol.name === msg.protocol.name)
+        .findIndex((g) => g.name === msg.name);
+    return `seat${index < 0 ? 0 : index}`;
+}
+
+/**
  * 键盘焦点的单写入点（`CoreApi.focusKeyboard` 的实现）：**同值直接去重**；变化才发
  * `leave`(旧) → `enter`(新) + `modifiers`、写 `seat.keyboardFocus`，最后 `ctx.notify.focus`
  * 扇出给派生物（text-input 的 enter/leave、selection 归属都挂在这条通知上）。
@@ -494,9 +507,9 @@ export const waylandCoreModule = defineModule({
             version: 1,
             onBind: (msg, ctx) => {
                 const id = msg.id as WaylandObjectId2<"wl_seat">;
-                // 本批仍只广播一个 seat（B 批起注册 seat0/seat1 两个 global，名字按 msg.name 分配）
-                ctx.domain.seat.addSeat(id, "seat0");
-                ctx.send(id, "wl_seat.name", { name: "seat0" });
+                const seatName = seatNameOf(ctx, msg);
+                ctx.domain.seat.addSeat(id, seatName);
+                ctx.send(id, "wl_seat.name", { name: seatName });
                 ctx.send(id, "wl_seat.capabilities", {
                     capabilities: getEnumValue("wl_seat.capability", ["pointer", "keyboard"]),
                 });

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { InputEventCodes } from "../../input_codes/types";
+import { initWaylandProtocols } from "../host/server";
 import type { ModuleCtx, SeatRecord, SurfaceId, WaylandObjectId2, WaylandWinId } from "../module";
+import { waylandProtocolsNameMap } from "../utils/wayland-proto";
 import { waylandCoreModule } from "./core/wayland";
 import { cursorShapeModule } from "./ext/cursor_shape";
 import { assertModuleConflicts, protocolModules } from "./index";
@@ -31,6 +33,44 @@ describe("协议模块注册", () => {
             .map((m) => m.name)
             .sort();
         expect(withHooks).toEqual(["text-input-unstable-v3", "viewporter", "xdg-shell"]);
+    });
+
+    it("registry 一次广播两把 wl_seat，onBind 按广播序命名 seat0/seat1", () => {
+        initWaylandProtocols();
+        const wlSeatNames = [...waylandProtocolsNameMap]
+            .filter(([, proto]) => proto.name === "wl_seat")
+            .map(([name]) => name);
+        // seat 必须在客户端启动时就已在 registry（Firefox/GTK 不认运行中新增的），所以要一次性广播齐
+        expect(wlSeatNames).toHaveLength(2);
+
+        const seatProto = waylandProtocolsNameMap.get(wlSeatNames[0]);
+        const globals = waylandCoreModule.globals.find((g) => g.name === "wl_seat");
+        expect(globals?.onBind, "core 未声明 wl_seat 的 onBind").toBeDefined();
+
+        const added: string[] = [];
+        const announced: string[] = [];
+        const ctx = {
+            core: {
+                registry: {
+                    globals: () =>
+                        [...waylandProtocolsNameMap]
+                            .filter(([, proto]) => proto.name === "wl_seat")
+                            .map(([name, protocol]) => ({ name, protocol })),
+                },
+            },
+            domain: { seat: { addSeat: (_id: number, name: string) => added.push(name) } },
+            send: (_id: number, event: string, args: Record<string, unknown>) => {
+                if (event === "wl_seat.name") announced.push(String(args.name));
+            },
+        } as unknown as ModuleCtx;
+
+        // 只 bind 第二把的客户端也得叫 seat1（否则 input.* 的 seat 选择器会喂错人）
+        globals?.onBind?.(
+            { name: wlSeatNames[1], id: 42 as unknown as WaylandObjectId2<"wl_seat">, protocol: seatProto } as never,
+            ctx,
+        );
+        expect(added).toEqual(["seat1"]);
+        expect(announced).toEqual(["seat1"]);
     });
 });
 

@@ -363,7 +363,8 @@ class WaylandServer {
 
 /** 接口名 → 该模块声明的 global（绑定时初始化），由 protocolModules 聚合 */
 
-function initWaylandProtocols() {
+/** 导出仅供测试：`waylandProtocolsNameMap` 是模块级单例，重复调用幂等（名字从 1 重新分配） */
+export function initWaylandProtocols() {
     let name = 1;
     for (const [_, proto] of Object.entries(WaylandProtocols)) {
         if (proto.name === "wl_display" || proto.name === "wl_registry" || proto.name === "wl_callback") {
@@ -372,5 +373,12 @@ function initWaylandProtocols() {
         if (proto.version === 0) continue;
         waylandProtocolsNameMap.set(waylandName(name), proto);
         name++;
+        // 多 seat：**必须一次性广播齐**——Firefox/GTK 不认运行中新增的 seat（Chromium 则忽略第二个），
+        // 所以从客户端连上起就注册两把。名字（seat0/seat1）由 `wl_seat.onBind` 按
+        // 「本协议广播的第几个 global」算，客户端 bind 哪个都能对上号。
+        if (proto.name === "wl_seat") {
+            waylandProtocolsNameMap.set(waylandName(name), proto);
+            name++;
+        }
     }
 }
