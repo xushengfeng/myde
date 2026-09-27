@@ -187,12 +187,15 @@ export const exampleModule = defineModule({
   例外只有 `clipboard.paste`（写 fd，不发协议消息，server 直达 `client.paste`）。
   命令里**只改 `WindowRecord` / 只发 Wayland 事件**，语义事件（`window.changed` 等）仍由 Store fan-in。
 - **`ctx` 是 handler 唯一的依赖来源**：handler 不碰 `this`（`WaylandClient`）。新增能力先进
-  `module.ts` 的契约，再接到 `ctx`：连接级的口（`objects`/`send*`/`hitTest`/`scene`/`registry`）由
+  `module.ts` 的契约，再接到 `ctx`：连接级的口（`objects`/`send*`/`scene`/`registry`）由
   `host/client.ts` 的 `buildCtx()` 接实现，core 能力与协议域状态由各模块的 `core` / `domain`
-  initializer 提供、`buildCtx` 只按清单装配（见上一条）。目前唯一的几何能力是
-  `ctx.hitTest`（纯几何，留 host），焦点转移与 enter/leave 在 core 的 `input.pointer` 里。
-- **反向通信只有钩子**：扩展不被 core import，只能声明 `hooks`，由 `host/client.ts` 聚合、
-  `ctx.notify.*` 触发。`onCommit`（buffer 已应用、像素尚未合成）与 `onFrame`（已合成、渲染之前）
+  initializer 提供、`buildCtx` 只按清单装配（见上一条）。指针几何命中归 xdg 域
+  （`ctx.domain.xdgSurface.hitTest`，由 core 的 `input.pointer` 调用），焦点转移与
+  enter/leave 的协议动作留在 core。
+- **协议间双向通信都走 `ctx`，协议文件之间零 import**：ext 调 `ctx.core`、core 调
+  `ctx.domain.<ext>` 的**查询方法**都是普通同步调用（现役仅一条：core `input.pointer` →
+  `ctx.domain.xdgSurface.hitTest`）。`hooks` 是 core → 扩展的**通知/扇出**通道：扩展注册回调，
+  由 `host/client.ts` 聚合、`ctx.notify.*` 触发。`onCommit`（buffer 已应用、像素尚未合成）与 `onFrame`（已合成、渲染之前）
   分阶段，**不能合并**；`onTextInput` 是 `input.text` 的仲裁通道（core 不认识 `zwp_*` 事件）。
 - **语义事实进域状态，谁拥有谁持有（单写入点）**：窗口记录与它的 `window.*` fan-in 在
   `protocols/ext/windows_store.ts`（`ctx.domain.windows`）、输入设备记录在

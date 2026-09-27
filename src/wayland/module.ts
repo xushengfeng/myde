@@ -289,12 +289,18 @@ export interface XdgSurfaceApi {
     toplevelDestroyed(toplevelId: XdgToplevelId): void;
     /** 窗口几何：`winGeo` 优先，未声明时退化为 surface 尺寸（host 的 `windowRect`/`windowInBounds` 在用） */
     getReRect(id: XdgSurfaceId): { w: number; h: number };
-    /** 直接子 xdg_surface 里 role 为 popup 的那些（id + 偏移 + 尺寸），host 的 `hitTest` 在用 */
+    /** 直接子 xdg_surface 里 role 为 popup 的那些（id + 偏移 + 尺寸），本模块的 `hitTest` 在用 */
     getChildenDeepOnlyPopup(parent: XdgSurfaceId): {
         id: XdgSurfaceId;
         offset: { x: number; y: number };
         size: { w: number; h: number };
     }[];
+    /**
+     * 指针命中检测（纯几何）：xdg 几何 + popup 树 + subsurface + input region。
+     * `p` 相对窗口元素左上角（几何原点）；没命中任何 surface 时 undefined —— 此时**不发 leave**。
+     * core 的 `input.pointer` 在调；焦点转移与 enter/leave 的协议动作留在 core。
+     */
+    hitTest(winId: WaylandWinId, p: { x: number; y: number }): HitTestResult | undefined;
 }
 
 export interface RegistryApi {
@@ -326,7 +332,11 @@ export interface WaylandDomainRegistry {}
 
 // ───────────────────────── 反向通知：core → 扩展 ─────────────────────────
 
-/** core 不 import 扩展，扩展注册回调；这是唯一的反向通道 */
+/**
+ * core → 扩展的**通知**通道：扩展注册回调，`host/client.ts` 聚合成 `ctx.notify.*` 扇出。
+ * 双向通信里这是通知（无返回、扇出）那一半；查询直接同步调 `ctx.domain.*` 的域方法。
+ * core 不 import 扩展。
+ */
 export interface SurfaceHooks {
     /**
      * buffer 已应用、像素尚未合成。`sizeChanged` 为本次 commit 是否改变了 surface 尺寸
@@ -469,7 +479,7 @@ export interface SeatApi {
 }
 
 /**
- * `ctx.hitTest` 的结果：命中哪个 surface、局部坐标，以及命中的 xdg 角色
+ * `XdgSurfaceApi.hitTest` 的结果：命中哪个 surface、局部坐标，以及命中的 xdg 角色
  * （决定键盘焦点跟不跟 —— popup 不抢键盘焦点）。
  */
 export interface HitTestResult {
@@ -535,10 +545,4 @@ export interface ModuleCtx {
     client: ClientApi;
     /** 场景投影（可能瘦身为 SceneCmd 分发，像素走 ImageKV） */
     scene: renderTools;
-    /**
-     * host 能力：指针按窗口几何命中检测（xdg 几何 + subsurface + input region）。
-     * 属纯几何，故留在 host；焦点转移与 enter/leave 的协议动作在 core 模块。
-     * `p` 相对窗口元素左上角；没命中任何 surface 时 undefined。
-     */
-    hitTest(winId: WaylandWinId, p: { x: number; y: number }): HitTestResult | undefined;
 }

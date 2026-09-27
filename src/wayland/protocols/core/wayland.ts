@@ -285,7 +285,7 @@ function keyboardBlur(ctx: ModuleCtx, surface: SurfaceId): void {
 
 /**
  * 指针焦点转移：命中 surface 变了才发 leave/enter，键盘焦点按角色跟不跟（popup 不抢键盘）。
- * 与几何命中检测分开——`ctx.hitTest` 是纯几何（host），这里只剩协议动作。
+ * 与几何命中检测分开——`ctx.domain.xdgSurface.hitTest` 是纯几何（xdg 域），这里只剩协议动作。
  */
 function updatePointerFocus(ctx: ModuleCtx, hit: HitTestResult): void {
     const prevFocus = ctx.domain.seat.focus();
@@ -913,10 +913,10 @@ export const waylandCoreModule = defineModule({
         },
     },
     actions: {
-        /** 指针路由：几何命中（host）→ 焦点转移 → 事件下发；没命中时不发（见 client.ts 的 leave todo） */
+        /** 指针路由：几何命中（`ctx.domain.xdgSurface.hitTest`）→ 焦点转移 → 事件下发；没命中时不发（见 hitTest 的 leave todo） */
         "input.pointer": (msg, ctx) => {
             const ev = msg.args[0];
-            const hit = ctx.hitTest(msg.winId, { x: ev.x, y: ev.y });
+            const hit = ctx.domain.xdgSurface.hitTest(msg.winId, { x: ev.x, y: ev.y });
             if (!hit) return;
             updatePointerFocus(ctx, hit);
             sendPointer(ctx, ev, hit);

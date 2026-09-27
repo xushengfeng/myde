@@ -827,7 +827,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): boolea
         if (!rect) continue;
         const nx = p.x - rect.left;
         const ny = p.y - rect.top;
-        // todo 指针离开窗口时下发 wl_pointer.leave（待 server 提供），见 client.ts hitTest 的未命中分支
+        // todo 指针离开窗口时下发 wl_pointer.leave（待 server 提供），见 xdg 域 hitTest 的未命中分支
         if (nx < 0 || nx >= info.rect.w || ny < 0 || ny >= info.rect.h) continue;
         handled.add(info.clientId);
         hit = true;

@@ -8,7 +8,6 @@ import type {
     DataOf,
     DomainInit,
     ErrorCode,
-    HitTestResult,
     ModuleCtx,
     RequestMsg,
     WaylandClientEventMap,
@@ -261,7 +260,6 @@ export class WaylandClient implements Client {
                 surfaceBounds: () => this.host.surfaceBounds(),
             },
             scene: this.render,
-            hitTest: (winId, p) => this.hitTest(winId, p),
         };
 
         // 装配：先跑完全部 `core`（两趟跑，不依赖模块清单顺序），再跑 `domain`——
@@ -574,100 +572,6 @@ export class WaylandClient implements Client {
         if (xdgSurfaceId === undefined) return undefined;
         const rootSurface = this.ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
         return this.getObject(rootSurface).data.canvas;
-    }
-
-    /**
-     * 指针命中检测（`ctx.hitTest` 的实现）：xdg 几何 + popup 树 + subsurface + input region。
-     * 只做几何；焦点转移与 enter/leave 的协议动作在 `protocols/core/wayland.ts` 的 `input.pointer`。
-     * 没命中任何 surface 时返回 undefined —— 此时**不发 leave**（见下方 todo）。
-     */
-    hitTest(winId: WaylandWinId, p: { x: number; y: number }): HitTestResult | undefined {
-        const xdgSurfaceId = this.windowXdgSurface(winId);
-        if (xdgSurfaceId === undefined) return undefined;
-        const { x, y } = p;
-        // 获取在哪个xdgsurface上，并区分surface还是popup
-        let inXdgSurface: WaylandObjectId2<"xdg_surface"> | undefined;
-        /** 相对于主xdgsurface坐标，适用于popup */
-        const xdgSurfaceOffset = { x: 0, y: 0 };
-        let reasonSurfaceType: "main" | "popup" | null = null;
-        const xdgM = this.ctx.domain.xdgSurface;
-        for (const { id: p, offset, size } of xdgM.getChildenDeepOnlyPopup(xdgSurfaceId).toReversed()) {
-            const offsetX = offset.x;
-            const offsetY = offset.y;
-            const offsetX1 = offset.x + size.w;
-            const offsetY1 = offset.y + size.h;
-            if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
-                console.log(`pointer in popup surface ${p}`);
-                inXdgSurface = p;
-                xdgSurfaceOffset.x = offset.x;
-                xdgSurfaceOffset.y = offset.y;
-                reasonSurfaceType = "popup";
-                break;
-            }
-        }
-        if (!inXdgSurface) {
-            if (0 < x && x < xdgM.getReRect(xdgSurfaceId).w && 0 < y && y < xdgM.getReRect(xdgSurfaceId).h) {
-                inXdgSurface = xdgSurfaceId;
-                xdgSurfaceOffset.x = 0;
-                xdgSurfaceOffset.y = 0;
-                reasonSurfaceType = "main";
-            } else {
-                return undefined;
-            }
-        }
-        // 获取与xdgsurface相关的所有surface，比如子表面
-        const surfaces: {
-            id: WaylandObjectId2<"wl_surface">;
-            /** 相对于主surface坐标 */
-            offsetRect: { x: number; y: number; w: number; h: number };
-        }[] = [];
-        const mainSurfaceId = xdgM.getXdgSurface(inXdgSurface).surface;
-        // 主 surface 尺寸（xdg 域的 getMainSurfaceRect）：手边已有 surface id，直接问 core 的 surface 域
-        const rel = this.ctx.core.surface.getWlSurface(mainSurfaceId).size;
-        const { winGeo: selfOffset = { x: 0, y: 0 } } = xdgM.getXdgSurface(inXdgSurface);
-        surfaces.push({ id: mainSurfaceId, offsetRect: { x: 0, y: 0, w: rel.w, h: rel.h } });
-        surfaces.push(...this.ctx.core.subsurface.getChildrenDeep(mainSurfaceId));
-
-        let inSurface: { id: WaylandObjectId2<"wl_surface">; x: number; y: number } | undefined;
-        let canSend = false;
-        for (const { id: s, offsetRect } of surfaces.toReversed()) {
-            const offsetX = offsetRect.x - selfOffset.x + xdgSurfaceOffset.x;
-            const offsetY = offsetRect.y - selfOffset.y + xdgSurfaceOffset.y;
-            const offsetX1 = offsetRect.x + offsetRect.w - selfOffset.x + xdgSurfaceOffset.x;
-            const offsetY1 = offsetRect.y + offsetRect.h - selfOffset.y + xdgSurfaceOffset.y;
-            if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
-                const nx = x - offsetX;
-                const ny = y - offsetY;
-
-                const surfaceInputRegion = this.getObject<"wl_surface">(s).data.current.inputRegion;
-                if (surfaceInputRegion) {
-                    for (const r of surfaceInputRegion) {
-                        if (nx >= r.x && nx < r.x + r.width && ny >= r.y && ny < r.y + r.height) {
-                            if (r.type === "+") {
-                                canSend = true;
-                            } else {
-                                canSend = false;
-                                break;
-                            }
-                        }
-                    }
-                } else canSend = true;
-
-                if (canSend) {
-                    console.log(`pointer in surface ${s}`);
-                    inSurface = { id: s, x: nx, y: ny };
-                    break;
-                }
-            }
-        }
-
-        if (inSurface) {
-            return { surface: inSurface.id, x: inSurface.x, y: inSurface.y, role: reasonSurfaceType ?? "main" };
-        }
-        // todo 指针不在任何surface上时应发送wl_pointer.leave并清除指针焦点
-        //  现在焦点悬挂：客户端收不到leave（hover状态卡住），重新进来也不发enter、客户端不重发光标
-        //  还需给桌面新增sendPointerLeave()入口（移出窗口时调用，幂等），覆盖移出所有窗口、跨客户端窗口
-        return undefined;
     }
 
     async ping() {

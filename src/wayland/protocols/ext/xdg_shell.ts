@@ -1,6 +1,9 @@
 import {
     defineModule,
+    type HitTestResult,
     type ModuleCtx,
+    type ObjectApi,
+    type SubSurfaceApi,
     type WaylandObjectId2,
     type WaylandWinId,
     type WindowRecord,
@@ -85,10 +88,15 @@ export class xdgSurfaceData {
     xdg_toplevel = new Map<WaylandObjectId2<"xdg_toplevel">, WaylandObjectId2<"xdg_surface">>();
     private render: renderTools;
     private idScope: (id: unknown) => string;
-    constructor(wl: wlSurfaceData) {
-        this.wl_surface = wl;
-        this.render = wl.render;
-        this.idScope = wl.idScope;
+    /** core 的 subsurface 树与对象表：`hitTest` 的正向依赖（ext → core 允许） */
+    private subsurface: SubSurfaceApi;
+    private objects: ObjectApi;
+    constructor(ctx: ModuleCtx) {
+        this.wl_surface = ctx.core.surface;
+        this.render = this.wl_surface.render;
+        this.idScope = this.wl_surface.idScope;
+        this.subsurface = ctx.core.subsurface;
+        this.objects = ctx.objects;
     }
 
     addXdgSurface(id: WaylandObjectId2<"xdg_surface">, wlSurface: WaylandObjectId2<"wl_surface">) {
@@ -207,13 +215,107 @@ export class xdgSurfaceData {
         );
         return children;
     }
+
+    /**
+     * 指针命中检测（`ctx.domain.xdgSurface.hitTest` 的实现，纯几何）：
+     * xdg 几何 + popup 树 + subsurface + input region。
+     * 只做几何；焦点转移与 enter/leave 的协议动作在 `protocols/core/wayland.ts` 的 `input.pointer`。
+     * 没命中任何 surface 时返回 undefined —— 此时**不发 leave**（见 core 的 todo）。
+     */
+    hitTest(winId: WaylandWinId, p: { x: number; y: number }): HitTestResult | undefined {
+        const xdgSurfaceId = this.getXdgSurfaceByToplevel(winId);
+        if (xdgSurfaceId === undefined) return undefined;
+        const { x, y } = p;
+        // 获取在哪个xdgsurface上，并区分surface还是popup
+        let inXdgSurface: WaylandObjectId2<"xdg_surface"> | undefined;
+        /** 相对于主xdgsurface坐标，适用于popup */
+        const xdgSurfaceOffset = { x: 0, y: 0 };
+        let reasonSurfaceType: "main" | "popup" | null = null;
+        for (const { id: p, offset, size } of this.getChildenDeepOnlyPopup(xdgSurfaceId).toReversed()) {
+            const offsetX = offset.x;
+            const offsetY = offset.y;
+            const offsetX1 = offset.x + size.w;
+            const offsetY1 = offset.y + size.h;
+            if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
+                console.log(`pointer in popup surface ${p}`);
+                inXdgSurface = p;
+                xdgSurfaceOffset.x = offset.x;
+                xdgSurfaceOffset.y = offset.y;
+                reasonSurfaceType = "popup";
+                break;
+            }
+        }
+        if (!inXdgSurface) {
+            if (0 < x && x < this.getReRect(xdgSurfaceId).w && 0 < y && y < this.getReRect(xdgSurfaceId).h) {
+                inXdgSurface = xdgSurfaceId;
+                xdgSurfaceOffset.x = 0;
+                xdgSurfaceOffset.y = 0;
+                reasonSurfaceType = "main";
+            } else {
+                return undefined;
+            }
+        }
+        // 获取与xdgsurface相关的所有surface，比如子表面
+        const surfaces: {
+            id: WaylandObjectId2<"wl_surface">;
+            /** 相对于主surface坐标 */
+            offsetRect: { x: number; y: number; w: number; h: number };
+        }[] = [];
+        const mainSurfaceId = this.getXdgSurface(inXdgSurface).surface;
+        // 主 surface 尺寸：自家 `wl_surface` 域（原 host 的 getMainSurfaceRect 等价内联）
+        const rel = this.wl_surface.getWlSurface(mainSurfaceId).size;
+        const { winGeo: selfOffset = { x: 0, y: 0 } } = this.getXdgSurface(inXdgSurface);
+        surfaces.push({ id: mainSurfaceId, offsetRect: { x: 0, y: 0, w: rel.w, h: rel.h } });
+        surfaces.push(...this.subsurface.getChildrenDeep(mainSurfaceId));
+
+        let inSurface: { id: WaylandObjectId2<"wl_surface">; x: number; y: number } | undefined;
+        let canSend = false;
+        for (const { id: s, offsetRect } of surfaces.toReversed()) {
+            const offsetX = offsetRect.x - selfOffset.x + xdgSurfaceOffset.x;
+            const offsetY = offsetRect.y - selfOffset.y + xdgSurfaceOffset.y;
+            const offsetX1 = offsetRect.x + offsetRect.w - selfOffset.x + xdgSurfaceOffset.x;
+            const offsetY1 = offsetRect.y + offsetRect.h - selfOffset.y + xdgSurfaceOffset.y;
+            if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
+                const nx = x - offsetX;
+                const ny = y - offsetY;
+
+                const surfaceInputRegion = this.objects.get<"wl_surface">(s).data.current.inputRegion;
+                if (surfaceInputRegion) {
+                    for (const r of surfaceInputRegion) {
+                        if (nx >= r.x && nx < r.x + r.width && ny >= r.y && ny < r.y + r.height) {
+                            if (r.type === "+") {
+                                canSend = true;
+                            } else {
+                                canSend = false;
+                                break;
+                            }
+                        }
+                    }
+                } else canSend = true;
+
+                if (canSend) {
+                    console.log(`pointer in surface ${s}`);
+                    inSurface = { id: s, x: nx, y: ny };
+                    break;
+                }
+            }
+        }
+
+        if (inSurface) {
+            return { surface: inSurface.id, x: inSurface.x, y: inSurface.y, role: reasonSurfaceType ?? "main" };
+        }
+        // todo 指针不在任何surface上时应发送wl_pointer.leave并清除指针焦点
+        //  现在焦点悬挂：客户端收不到leave（hover状态卡住），重新进来也不发enter、客户端不重发光标
+        //  还需给桌面新增sendPointerLeave()入口（移出窗口时调用，幂等），覆盖移出所有窗口、跨客户端窗口
+        return undefined;
+    }
 }
 
 export const xdgShellModule = defineModule({
     name: "xdg-shell",
     /** `ctx.domain.xdgSurface` 的实例；构造时吃 core 提供的 `ctx.core.surface`（装配先跑完 core 两趟） */
     domain: {
-        xdgSurface: (ctx) => new xdgSurfaceData(ctx.core.surface),
+        xdgSurface: (ctx) => new xdgSurfaceData(ctx),
         xdg: () => ({ wmBase: new Set(), appid: undefined }),
         /**
          * 窗口记录 + `window.*` 的 fan-in 单写入点（原 `state/windows_store.ts`）。
