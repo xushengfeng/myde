@@ -511,8 +511,12 @@ export interface ModuleCtx {
     core: CoreApi;
     /** 协议域状态；key 见 `WaylandDomainRegistry`，各协议 `declare module` 合并出字段 */
     domain: WaylandDomainRegistry;
-    /** 语义状态单写入点 */
-    state: { windows: WindowsApi; cursor: CursorApi; seat: SeatApi };
+    /**
+     * 光标的单写入点。留 host 是因为它的两个出口一个在 renderTools（`ctx.scene`）、
+     * 一个在 `ClientHost.cursorChanged`（不在 ctx），而它同时被 core 与 cursor_shape 两个协议读写。
+     * 窗口与 seat 的记录各自归拥有它的协议（`ctx.domain.windows` / `ctx.domain.seat`）。
+     */
+    cursor: CursorApi;
     /**
      * core → 扩展的反向通知（唯一通道，扩展以 `hooks` 声明、core 只负责触发）。
      * core 不 import 扩展，所以这里聚合自 `protocolModules`。

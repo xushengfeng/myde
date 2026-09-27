@@ -1,4 +1,4 @@
-import type { FocusType, SeatRecord, SurfaceId, WaylandObjectId2 } from "../module";
+import type { FocusType, SeatRecord, SurfaceId, WaylandObjectId2 } from "../../module";
 
 export type { FocusType, SeatRecord };
 
@@ -6,7 +6,7 @@ export type { FocusType, SeatRecord };
  * 输入设备侧状态（原散在 host 的 `ClientState`（`obj2`）里：seats/serial/focusSurface/focusSurfaceType/modifiers）。
  *
  * 只放数据与原子操作；**协议动作（发 wl_pointer.enter/leave、wl_keyboard.*）在协议文件里**
- * ——`protocols/core/wayland.ts` 的 `actions` 段经 `ctx.state.seat` 取这里的数据，
+ * ——`protocols/core/wayland.ts` 的 `actions` 段经 `ctx.domain.seat` 取这里的数据，
  * 组包与下发用 `ctx.sendNow`，store 不必注入一整套上下文。
  *
  * 配套的 text-input v1/v3 仲裁状态在 core 的域槽里（`ctx.domain.textInput.owner`，

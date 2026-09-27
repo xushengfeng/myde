@@ -4,6 +4,7 @@ import { defineModule, type HitTestResult, type ModuleCtx, type SurfaceId, type 
 import type { renderTools } from "../../render_tools";
 import type { WaylandName, WaylandObjectId, WaylandProtocol } from "../../utils/wayland-binary";
 import { getEnumValue, tryX, waylandObjectId } from "../../utils/wayland-proto";
+import { SeatStore } from "./seat_store";
 
 const fs = require("node:fs") as typeof import("node:fs");
 
@@ -66,6 +67,8 @@ declare module "../../module" {
          * 读写方是各 text_input 模块，触发通道是 core 的 `input.text` action（见 `TextInputHooks.onTextInput`）。
          */
         textInput: { owner: TextInputOwner | null };
+        /** 输入设备状态（`SeatStore` 在本文件旁边的 `seat_store.ts`）：只有 core 读写，host 不碰 */
+        seat: SeatApi;
     }
 }
 
@@ -262,7 +265,7 @@ const MOD_KEY_TO_BIT: { [k: number]: number } = {
 
 /** 键盘焦点：enter 时按协议补一份 modifiers，并通知 text-input 等扩展 */
 function keyboardFocus(ctx: ModuleCtx, surface: SurfaceId): void {
-    for (const k of ctx.state.seat.keyboards()) {
+    for (const k of ctx.domain.seat.keyboards()) {
         ctx.sendNow(k, "wl_keyboard.enter", { serial: 0, surface: surface, keys: new Uint32Array([]) });
         ctx.sendNow(k, "wl_keyboard.modifiers", {
             serial: 0,
@@ -276,7 +279,7 @@ function keyboardFocus(ctx: ModuleCtx, surface: SurfaceId): void {
 }
 
 function keyboardBlur(ctx: ModuleCtx, surface: SurfaceId): void {
-    for (const k of ctx.state.seat.keyboards()) ctx.sendNow(k, "wl_keyboard.leave", { serial: 0, surface: surface });
+    for (const k of ctx.domain.seat.keyboards()) ctx.sendNow(k, "wl_keyboard.leave", { serial: 0, surface: surface });
     ctx.notify.focus(undefined);
 }
 
@@ -285,15 +288,15 @@ function keyboardBlur(ctx: ModuleCtx, surface: SurfaceId): void {
  * 与几何命中检测分开——`ctx.hitTest` 是纯几何（host），这里只剩协议动作。
  */
 function updatePointerFocus(ctx: ModuleCtx, hit: HitTestResult): void {
-    const prevFocus = ctx.state.seat.focus();
-    const prevFocusType = ctx.state.seat.focusType();
+    const prevFocus = ctx.domain.seat.focus();
+    const prevFocusType = ctx.domain.seat.focusType();
     if (prevFocus === hit.surface) return;
     if (prevFocus && ctx.objects.has(prevFocus)) {
-        for (const p of ctx.state.seat.pointers())
+        for (const p of ctx.domain.seat.pointers())
             ctx.sendNow(p, "wl_pointer.leave", { serial: 0, surface: prevFocus });
         if (prevFocusType === "main" && hit.role === "main") keyboardBlur(ctx, prevFocus); // todo popup
     }
-    for (const p of ctx.state.seat.pointers()) {
+    for (const p of ctx.domain.seat.pointers()) {
         ctx.sendNow(p, "wl_pointer.enter", {
             serial: 0,
             surface: hit.surface,
@@ -303,14 +306,14 @@ function updatePointerFocus(ctx: ModuleCtx, hit: HitTestResult): void {
         ctx.sendNow(p, "wl_pointer.frame", {});
     }
     if ((prevFocusType === "main" || !prevFocusType) && hit.role === "main") keyboardFocus(ctx, hit.surface);
-    ctx.state.seat.setFocus(hit.surface, hit.role);
+    ctx.domain.seat.setFocus(hit.surface, hit.role);
 }
 
 /** 指针事件注入：坐标已由 hitTest 归一到 surface 局部 */
 function sendPointer(ctx: ModuleCtx, ev: PointerCommand, hit: HitTestResult): void {
     const { x: nx, y: ny } = hit;
     if (ev.type === "move") {
-        for (const p of ctx.state.seat.pointers()) {
+        for (const p of ctx.domain.seat.pointers()) {
             ctx.sendNow(p, "wl_pointer.motion", { time: Date.now(), surface_x: nx, surface_y: ny });
             ctx.sendNow(p, "wl_pointer.frame", {});
         }
@@ -324,7 +327,7 @@ function sendPointer(ctx: ModuleCtx, ev: PointerCommand, hit: HitTestResult): vo
               : ev.button === 2
                 ? InputEventCodes.BTN_RIGHT
                 : InputEventCodes.BTN_LEFT;
-    for (const pointer of ctx.state.seat.pointers()) {
+    for (const pointer of ctx.domain.seat.pointers()) {
         ctx.sendNow(pointer, "wl_pointer.button", {
             serial: 0,
             time: Date.now(),
@@ -337,8 +340,8 @@ function sendPointer(ctx: ModuleCtx, ev: PointerCommand, hit: HitTestResult): vo
 
 /** 按键注入；修饰键变化时按掩码补发 `wl_keyboard.modifiers`（todo repeat） */
 function sendKey(ctx: ModuleCtx, key: number, state: "pressed" | "released"): void {
-    const s = ctx.state.seat.nextSerial();
-    for (const k of ctx.state.seat.keyboards())
+    const s = ctx.domain.seat.nextSerial();
+    for (const k of ctx.domain.seat.keyboards())
         ctx.sendNow(k, "wl_keyboard.key", {
             serial: s,
             time: Date.now(),
@@ -348,7 +351,7 @@ function sendKey(ctx: ModuleCtx, key: number, state: "pressed" | "released"): vo
 
     const bit = MOD_KEY_TO_BIT[key];
     if (bit === undefined) return;
-    const seat = ctx.state.seat;
+    const seat = ctx.domain.seat;
     if (state === "pressed") seat.addModifier(bit);
     else seat.removeModifier(bit);
 
@@ -367,7 +370,7 @@ function sendKey(ctx: ModuleCtx, key: number, state: "pressed" | "released"): vo
 function sendScroll(ctx: ModuleCtx, ev: ScrollCommand): void {
     const { deltaX, deltaY } = ev;
     if (deltaX !== 0) {
-        for (const pointer of ctx.state.seat.pointers())
+        for (const pointer of ctx.domain.seat.pointers())
             ctx.sendNow(pointer, "wl_pointer.axis", {
                 time: Date.now(),
                 axis: getEnumValue("wl_pointer.axis", "horizontal_scroll"),
@@ -375,14 +378,14 @@ function sendScroll(ctx: ModuleCtx, ev: ScrollCommand): void {
             });
     }
     if (deltaY !== 0) {
-        for (const pointer of ctx.state.seat.pointers())
+        for (const pointer of ctx.domain.seat.pointers())
             ctx.sendNow(pointer, "wl_pointer.axis", {
                 time: Date.now(),
                 axis: getEnumValue("wl_pointer.axis", "vertical_scroll"),
                 value: deltaY,
             });
     }
-    for (const pointer of ctx.state.seat.pointers()) ctx.sendNow(pointer, "wl_pointer.frame", {});
+    for (const pointer of ctx.domain.seat.pointers()) ctx.sendNow(pointer, "wl_pointer.frame", {});
 }
 
 /** 把剪贴板内容 offer 给该客户端的每个 data_device */
@@ -408,6 +411,8 @@ export const waylandCoreModule = defineModule({
     domain: {
         dataDevice: () => ({ devices: undefined, pendingPaste: undefined }),
         textInput: () => ({ owner: null }),
+        /** 输入设备记录（原 `state/seat_store.ts`，host 已不持有）：只有 core 读写 */
+        seat: () => new SeatStore(),
     },
     globals: [
         {
@@ -424,7 +429,7 @@ export const waylandCoreModule = defineModule({
             version: 1,
             onBind: (msg, ctx) => {
                 const id = msg.id as WaylandObjectId2<"wl_seat">;
-                ctx.state.seat.addSeat(id);
+                ctx.domain.seat.addSeat(id);
                 ctx.send(id, "wl_seat.name", { name: "seat0" });
                 ctx.send(id, "wl_seat.capabilities", {
                     capabilities: getEnumValue("wl_seat.capability", ["pointer", "keyboard"]),
@@ -794,7 +799,7 @@ export const waylandCoreModule = defineModule({
                 ctx.core.surface.renderWlSurface(surfaceId, fcanvas);
 
                 // 只有当前光标surface才推送光标，隐藏后commit不应重新显示
-                ctx.state.cursor.updateFrame(surfaceId, fcanvas);
+                ctx.cursor.updateFrame(surfaceId, fcanvas);
             }
 
             requestAnimationFrame(() => {
@@ -814,7 +819,7 @@ export const waylandCoreModule = defineModule({
         "wl_surface.destroy": (x, ctx) => {
             const surfaceId = x.id;
             // 光标surface销毁后隐藏光标
-            ctx.state.cursor.hide(surfaceId);
+            ctx.cursor.hide(surfaceId);
             ctx.notify.destroy(surfaceId);
             ctx.core.surface.destroyWlSurface(surfaceId);
             // todo 相关的如subsurface、xdgsurface等
@@ -830,7 +835,7 @@ export const waylandCoreModule = defineModule({
         },
         "wl_seat.get_pointer": (x, ctx) => {
             const pointerId = x.args.id;
-            const seat = ctx.state.seat.get(x.id);
+            const seat = ctx.domain.seat.get(x.id);
             if (!seat) {
                 console.warn(`Seat ${x.id} not found for get_pointer`);
                 return;
@@ -839,7 +844,7 @@ export const waylandCoreModule = defineModule({
         },
         "wl_seat.get_keyboard": (x, ctx) => {
             const keyboardId = x.args.id;
-            const seat = ctx.state.seat.get(x.id);
+            const seat = ctx.domain.seat.get(x.id);
             if (!seat) {
                 console.warn(`Seat ${x.id} not found for get_keyboard`);
                 return;
@@ -865,7 +870,7 @@ export const waylandCoreModule = defineModule({
             const surfaceId = x.args.surface;
             if (!surfaceId) {
                 // surface为null时隐藏光标
-                ctx.state.cursor.hide();
+                ctx.cursor.hide();
                 return;
             }
             // 校验 surface 存在（无效 id 走 postError）
@@ -875,7 +880,7 @@ export const waylandCoreModule = defineModule({
                 ctx.postError("wl_pointer", x.id, "role", "Surface already has another role");
                 return;
             }
-            ctx.state.cursor.setSurface(
+            ctx.cursor.setSurface(
                 surfaceId,
                 { x: x.args.hotspot_x, y: x.args.hotspot_y },
                 ctx.core.surface.getWlSurface(surfaceId).frame,

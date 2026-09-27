@@ -66,7 +66,7 @@ export interface WindowInfo {
 // ───────────────────────── 光标状态 ─────────────────────────
 
 /**
- * 光标的语义状态（`state/cursor_store.ts` 是唯一写入点）。
+ * 光标的语义状态（`host/cursor_store.ts` 是唯一写入点，经 `ctx.cursor` 供协议读写）。
  * `shape` 是 wp_cursor_shape 的纯枚举名，可序列化；`image` 是 surface 图像，
  * 图像是一等数据（cursor 协议传的是 surface，不能藏在 DOM 实现里），故内联画布。
  */

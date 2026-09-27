@@ -19,14 +19,12 @@ import type {
 import { protocolModules } from "../protocols/index";
 import { type WaylandEventObj, WaylandEventOpcode, type WaylandInterfaces } from "../protocols/wayland-types";
 import type { renderTools } from "../render_tools";
-import { CursorStore } from "../state/cursor_store";
-import { SeatStore } from "../state/seat_store";
-import { WindowsStore } from "../state/windows_store";
 import type { WaylandObjectId, WaylandOp, WaylandProtocol } from "../utils/wayland-binary";
 import { WaylandArgType } from "../utils/wayland-binary";
 import { WaylandDecoder } from "../utils/wayland-decoder";
 import { WaylandEncoder } from "../utils/wayland-encoder";
 import { getEnumValue, WaylandProtocols, waylandObjectId, waylandProtocolsNameMap } from "../utils/wayland-proto";
+import { CursorStore } from "./cursor_store";
 
 const fs = require("node:fs") as typeof import("node:fs");
 
@@ -99,14 +97,10 @@ export class WaylandClient implements Client {
     private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
     private nextObjectId: number = 0xff000000;
     private render: renderTools;
-    /** 光标的唯一写入点（见 state/cursor_store.ts） */
+    /** 光标的唯一写入点（见 host/cursor_store.ts）：唯一由 host 持有的语义状态 */
     private cursor: CursorStore;
     /** 协议模块看到的 host 能力面 —— module.ts 契约的真实实现 */
     public readonly ctx: ModuleCtx;
-    /** 输入设备侧状态（见 state/seat_store.ts） */
-    private seat: SeatStore;
-    /** 窗口记录与窗口事件的唯一持有者（见 state/windows_store.ts） */
-    private windows: WindowsStore;
     // 事件存储
     private events: { [K in keyof WaylandClientEventMap]?: WaylandClientEventMap[K][] } = {};
 
@@ -131,18 +125,7 @@ export class WaylandClient implements Client {
         this.host = host;
         this.render = render;
         this.cursor = new CursorStore(render, (state) => host.cursorChanged(state));
-        this.seat = new SeatStore();
-        // 窗口事件的 client 级出口：server 订阅后 fan-in 成 window.*
-        this.windows = new WindowsStore({
-            created: (wid, renderId) => this.emit("windowCreated", wid, renderId),
-            closed: (wid) => this.emit("windowClosed", wid),
-            resized: (wid, width, height) => this.emit("windowResized", wid, width, height),
-            startMove: (wid) => this.emit("windowStartMove", wid),
-            maximized: (wid) => this.emit("windowMaximized", wid),
-            unmaximized: (wid) => this.emit("windowUnMaximized", wid),
-            titleChanged: (wid, title) => this.emit("title", wid, title),
-        });
-        // 域状态（surface / subsurface / xdgSurface）由协议模块在装配时自己 new，host 不持有
+        // 域状态（surface / subsurface / xdgSurface / seat / windows）由协议模块在装配时自己 new，host 不持有
         this.ctx = this.buildCtx();
         socket.on("data", (data, fds) => {
             this.handleClientMessage(data, fds);
@@ -269,7 +252,7 @@ export class WaylandClient implements Client {
                     for (const h of textInputHooks) h(text, preedit, this.ctx);
                 },
             },
-            state: { windows: this.windows, cursor: this.cursor, seat: this.seat },
+            cursor: this.cursor,
             client: {
                 id: this.id,
                 displayId: this.displayId,
@@ -552,7 +535,7 @@ export class WaylandClient implements Client {
         return this.cursor.state;
     }
     getWindows() {
-        return this.windows.wins;
+        return this.ctx.domain.windows.wins;
     }
     /** xdg_surface（窗口元素）id；窗口不存在时 undefined */
     private windowXdgSurface(winId: WaylandWinId): WaylandObjectId2<"xdg_surface"> | undefined {
@@ -583,7 +566,7 @@ export class WaylandClient implements Client {
     }
 
     windowTitle(winId: WaylandWinId): string {
-        return this.windows.get(winId)?.title ?? "";
+        return this.ctx.domain.windows.get(winId)?.title ?? "";
     }
 
     windowPreview(winId: WaylandWinId): OffscreenCanvas | undefined {
@@ -736,7 +719,7 @@ export class WaylandClient implements Client {
                 fs.closeSync(obj.data.fd);
             }
         }
-        for (const _win of this.windows.wins.values()) {
+        for (const _win of this.ctx.domain.windows.wins.values()) {
             // todo close win
         }
         this.socket.end();

@@ -30,7 +30,7 @@ export const cursorShapeModule = defineModule({
                 return;
             }
             // 语义光标替换之前的surface光标（与wl_pointer.set_cursor混用，后到者生效）
-            ctx.state.cursor.setShape(shape);
+            ctx.cursor.setShape(shape);
         },
     },
 });

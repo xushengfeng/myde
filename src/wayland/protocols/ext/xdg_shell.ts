@@ -9,6 +9,7 @@ import type { renderTools } from "../../render_tools";
 import { getEnumValue, waylandObjectId } from "../../utils/wayland-proto";
 import { getRectKeyPoint } from "../../utils/xdg";
 import type { wlSurfaceData } from "../core/wayland";
+import { WindowsStore } from "./windows_store";
 
 /**
  * xdg-shell
@@ -40,6 +41,8 @@ declare module "../../module" {
             /** 首个 `set_app_id`：语义是 **client 级**，server 把它广播给该客户端的所有窗口 */
             appid?: string;
         };
+        /** 窗口记录（`WindowsStore` 在本文件旁边的 `windows_store.ts`），`window.*` 的 fan-in 单写入点 */
+        windows: WindowsApi;
     }
 }
 
@@ -212,6 +215,21 @@ export const xdgShellModule = defineModule({
     domain: {
         xdgSurface: (ctx) => new xdgSurfaceData(ctx.core.surface),
         xdg: () => ({ wmBase: new Set(), appid: undefined }),
+        /**
+         * 窗口记录 + `window.*` 的 fan-in 单写入点（原 `state/windows_store.ts`）。
+         * 回调方向不是 `actions`（那是桌面→wayland 的命令入口），是 `ctx.client.emit`——
+         * `host/server.ts` 订阅后 fan-in 成 `window.*`。原 host 里那段 7 行适配层移到这里。
+         */
+        windows: (ctx) =>
+            new WindowsStore({
+                created: (wid, renderId) => ctx.client.emit("windowCreated", wid, renderId),
+                closed: (wid) => ctx.client.emit("windowClosed", wid),
+                resized: (wid, width, height) => ctx.client.emit("windowResized", wid, width, height),
+                startMove: (wid) => ctx.client.emit("windowStartMove", wid),
+                maximized: (wid) => ctx.client.emit("windowMaximized", wid),
+                unmaximized: (wid) => ctx.client.emit("windowUnMaximized", wid),
+                titleChanged: (wid, title) => ctx.client.emit("title", wid, title),
+            }),
     },
     /** 原先是 core `wl_registry.bind` 里的硬编码分支（带 TODO），现在走通用的 onBind */
     globals: [
@@ -317,13 +335,13 @@ export const xdgShellModule = defineModule({
             });
             ctx.send(x.id, "xdg_surface.configure", { serial: 1 });
             ctx.domain.xdgSurface.setAsToplevel(xid, toplevelId);
-            ctx.state.windows.created(toplevelId, ctx.core.surface.idScope(xid));
+            ctx.domain.windows.created(toplevelId, ctx.core.surface.idScope(xid));
         },
         "xdg_surface.set_window_geometry": (x, ctx) => {
             const thisXdgSurface = ctx.domain.xdgSurface.getXdgSurface(x.id);
             ctx.domain.xdgSurface.setXdgSurfaceSize(x.id, x.args.x, x.args.y, x.args.width, x.args.height);
             if (thisXdgSurface.xdg_role) {
-                ctx.state.windows.resized(
+                ctx.domain.windows.resized(
                     thisXdgSurface.xdg_role as WaylandObjectId2<"xdg_toplevel">, // todo check
                     x.args.width,
                     x.args.height,
@@ -409,60 +427,60 @@ export const xdgShellModule = defineModule({
             }
         },
         "xdg_toplevel.set_title": (x, ctx) => {
-            ctx.state.windows.setTitle(x.id, x.args.title);
+            ctx.domain.windows.setTitle(x.id, x.args.title);
         },
         "xdg_toplevel.move": (x, ctx) => {
-            ctx.state.windows.startMove(x.id);
+            ctx.domain.windows.startMove(x.id);
         },
         "xdg_toplevel.set_maximized": (x, ctx) => {
-            ctx.state.windows.setMaximized(x.id, true);
+            ctx.domain.windows.setMaximized(x.id, true);
         },
         "xdg_toplevel.unset_maximized": (x, ctx) => {
-            ctx.state.windows.setMaximized(x.id, false);
+            ctx.domain.windows.setMaximized(x.id, false);
         },
         "xdg_toplevel.destroy": (x, ctx) => {
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(x.id);
             if (xdgSurfaceId === undefined) return;
             // 顺序对桌面可见：记录删除 → onToplevelRemove → windowClosed
-            ctx.state.windows.remove(x.id);
+            ctx.domain.windows.remove(x.id);
             ctx.domain.xdgSurface.toplevelDestroyed(x.id);
-            ctx.state.windows.notifyClosed(x.id);
+            ctx.domain.windows.notifyClosed(x.id);
         },
     },
     actions: {
         /** 窗口命令：改 `WindowRecord` + 发 configure。语义事件（window.changed 等）仍由 WindowsStore fan-in */
         "window.focus": (msg, ctx) => {
-            const win = ctx.state.windows.get(msg.winId);
+            const win = ctx.domain.windows.get(msg.winId);
             if (win === undefined || win.actived) return;
             win.actived = true;
             win.minimized = false;
             configureWin(ctx, msg.winId, win);
         },
         "window.blur": (msg, ctx) => {
-            const win = ctx.state.windows.get(msg.winId);
+            const win = ctx.domain.windows.get(msg.winId);
             if (win === undefined || !win.actived) return;
             win.actived = false;
             configureWin(ctx, msg.winId, win);
         },
         "window.close": (msg, ctx) => {
-            if (ctx.state.windows.get(msg.winId) === undefined) return;
+            if (ctx.domain.windows.get(msg.winId) === undefined) return;
             ctx.sendNow(msg.winId, "xdg_toplevel.close", {});
         },
         /** 只记录桌面配置的盒子，不发 configure */
         "window.setBox": (msg, ctx) => {
-            const win = ctx.state.windows.get(msg.winId);
+            const win = ctx.domain.windows.get(msg.winId);
             if (win === undefined) return;
             win.box = msg.args[0];
         },
         "window.setSize": (msg, ctx) => {
-            const win = ctx.state.windows.get(msg.winId);
+            const win = ctx.domain.windows.get(msg.winId);
             if (win === undefined) return;
             win.box.width = msg.args[0].width;
             win.box.height = msg.args[0].height;
             configureWin(ctx, msg.winId, win);
         },
         "window.maximize": (msg, ctx) => {
-            const win = ctx.state.windows.get(msg.winId);
+            const win = ctx.domain.windows.get(msg.winId);
             if (win === undefined) return;
             if (ctx.domain.xdgSurface.getXdgSurfaceByToplevel(msg.winId) === undefined) return;
             win.actived = true;
@@ -484,7 +502,7 @@ export const xdgShellModule = defineModule({
             ctx.sendNow(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
         },
         "window.unmaximize": (msg, ctx) => {
-            const win = ctx.state.windows.get(msg.winId);
+            const win = ctx.domain.windows.get(msg.winId);
             if (win === undefined) return;
             win.maximized = false;
             win.box.width = msg.args[0]?.width ?? win.box.width;
@@ -492,7 +510,7 @@ export const xdgShellModule = defineModule({
             configureWin(ctx, msg.winId, win);
         },
         "window.minimize": (msg, ctx) => {
-            const win = ctx.state.windows.get(msg.winId);
+            const win = ctx.domain.windows.get(msg.winId);
             if (win === undefined) return;
             win.actived = false;
             win.minimized = true;

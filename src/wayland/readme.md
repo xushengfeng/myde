@@ -194,8 +194,11 @@ export const exampleModule = defineModule({
 - **反向通信只有钩子**：扩展不被 core import，只能声明 `hooks`，由 `host/client.ts` 聚合、
   `ctx.notify.*` 触发。`onCommit`（buffer 已应用、像素尚未合成）与 `onFrame`（已合成、渲染之前）
   分阶段，**不能合并**；`onTextInput` 是 `input.text` 的仲裁通道（core 不认识 `zwp_*` 事件）。
-- **语义事实进 Store**：跨协议 / 要给桌面看的状态放 `state/`（`windows_store` / `cursor_store` /
-  `seat_store`），单写入点；桌面侧的 `window.*` / `cursor.*` 事件就是从这里 fan-in 出去的。
+- **语义事实进域状态，谁拥有谁持有（单写入点）**：窗口记录与它的 `window.*` fan-in 在
+  `protocols/ext/windows_store.ts`（`ctx.domain.windows`）、输入设备记录在
+  `protocols/core/seat_store.ts`（`ctx.domain.seat`），两者由各自模块的 `domain` initializer `new`；
+  光标留 `host/cursor_store.ts`（`ctx.cursor`）——它被 core 与 cursor_shape 两个协议读写，
+  且出口 `ClientHost.cursorChanged` 不在 `ctx`。原 `state/` 目录已删除。
   Store 只放数据，协议动作（发 `wl_keyboard.*` / `wl_pointer.*`）在 `protocols/core/wayland.ts`。
 - **模块级副作用要加环境守卫**：`utils/shared_texture.ts` 会注册 electron 接收端并建 unix socket，
   纯 node 环境没有 electron。

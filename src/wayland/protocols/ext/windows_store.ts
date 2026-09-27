@@ -1,10 +1,10 @@
-import type { FocusType, SeatRecord, WaylandWinId, WindowRecord } from "../module";
+import type { FocusType, SeatRecord, WaylandWinId, WindowRecord } from "../../module";
 
 export type { FocusType, SeatRecord, WindowRecord };
 
 /**
- * 对外出口。实现方是 `host/client.ts` 构造 `WindowsStore` 时注入的薄适配层，
- * 它把 Store 调用转成 client 级事件；`host/server.ts` 订阅这些事件做 fan-in，
+ * 对外出口。实现方是 `protocols/ext/xdg_shell.ts` 的 `domain.windows` initializer
+ * ——它把 Store 调用转成 `ctx.client.emit`；`host/server.ts` 订阅这些事件做 fan-in，
  * 分配全局 `WinHandle` 后以 `window.*`（见 api.ts）转发给桌面。
  *
  * Store 与协议 handler 都不认识 server，改对外形状只动上面那一层接线。

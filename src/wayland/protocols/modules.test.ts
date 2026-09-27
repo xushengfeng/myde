@@ -71,7 +71,7 @@ describe("桌面命令（actions）", () => {
         const sent: { id: number; event: string; args: Record<string, unknown> }[] = [];
         const mods = new Set<number>();
         const ctx = {
-            state: {
+            domain: {
                 seat: {
                     keyboards: () => [7 as WaylandObjectId2<"wl_keyboard">],
                     nextSerial: () => 5,
@@ -117,7 +117,7 @@ describe("cursor-shape 模块", () => {
         const shapeCalls: string[] = [];
         const errors: unknown[] = [];
         const ctx = {
-            state: { cursor: { setShape: (s: string) => shapeCalls.push(s) } },
+            cursor: { setShape: (s: string) => shapeCalls.push(s) },
             postError: (...a: unknown[]) => errors.push(a),
         } as unknown as ModuleCtx;
 
@@ -132,7 +132,7 @@ describe("cursor-shape 模块", () => {
         const shapeCalls: string[] = [];
         const errors: unknown[] = [];
         const ctx = {
-            state: { cursor: { setShape: (s: string) => shapeCalls.push(s) } },
+            cursor: { setShape: (s: string) => shapeCalls.push(s) },
             postError: (...a: unknown[]) => errors.push(a[2]),
         } as unknown as ModuleCtx;
 
