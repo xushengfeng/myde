@@ -5,8 +5,10 @@ import {
     type WaylandWinId,
     type WindowRecord,
 } from "../../module";
+import type { renderTools } from "../../render_tools";
 import { getEnumValue, waylandObjectId } from "../../utils/wayland-proto";
 import { getRectKeyPoint } from "../../utils/xdg";
+import type { wlSurfaceData } from "../core/wayland";
 
 /**
  * xdg-shell
@@ -45,6 +47,152 @@ function configureWin(ctx: ModuleCtx, winId: WaylandWinId, win: WindowRecord): v
     const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId);
     if (xdgSurfaceId === undefined) return;
     ctx.sendNow(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
+}
+
+// ───────────── 域状态：xdg_surface 的 role、父子关系、几何 ─────────────
+// xdg 自己造、自己用，经 `ctx.domain.xdgSurface` 暴露；对 wl_surface 只持有
+// `wlSurfaceData` 实例（core 构造后由 host 注入），运行时反向依赖仍为零。
+
+export class xdgSurfaceData {
+    wl_surface: wlSurfaceData;
+
+    xdg_surface: Record<
+        WaylandObjectId2<"xdg_surface">,
+        {
+            surface: WaylandObjectId2<"wl_surface">;
+            winGeo?: { x: number; y: number; w: number; h: number };
+            offset: { x: number; y: number }; // 一般popup的才有
+            xdg_role?: WaylandObjectId2<"xdg_toplevel" | "xdg_popup">;
+            parent: WaylandObjectId2<"xdg_surface"> | undefined;
+            children: WaylandObjectId2<"xdg_surface">[];
+        }
+    > = {};
+    xdg_popup = new Map<WaylandObjectId2<"xdg_popup">, WaylandObjectId2<"xdg_surface">>();
+    xdg_toplevel = new Map<WaylandObjectId2<"xdg_toplevel">, WaylandObjectId2<"xdg_surface">>();
+    private render: renderTools;
+    private idScope: (id: unknown) => string;
+    constructor(wl: wlSurfaceData) {
+        this.wl_surface = wl;
+        this.render = wl.render;
+        this.idScope = wl.idScope;
+    }
+
+    addXdgSurface(id: WaylandObjectId2<"xdg_surface">, wlSurface: WaylandObjectId2<"wl_surface">) {
+        this.xdg_surface[id] = { surface: wlSurface, parent: undefined, children: [], offset: { x: 0, y: 0 } };
+
+        this.render.createXdgSurfaceEle(this.idScope(id), this.idScope(wlSurface));
+    }
+    getXdgSurface(id: WaylandObjectId2<"xdg_surface">) {
+        return this.xdg_surface[id];
+    }
+    setXdgSurfaceSize(id: WaylandObjectId2<"xdg_surface">, x: number, y: number, w: number, h: number) {
+        this.xdg_surface[id].winGeo = { x, y, w, h };
+
+        this.render.setXdgSurfaceGeo(this.idScope(id), w, h, x, y);
+    }
+    getXdgSurfaceByToplevel(id: WaylandObjectId2<"xdg_toplevel">) {
+        return this.xdg_toplevel.get(id);
+    }
+    getXdgSurfaceByPopup(id: WaylandObjectId2<"xdg_popup">) {
+        return this.xdg_popup.get(id);
+    }
+    setRelation(parent: WaylandObjectId2<"xdg_surface">, child: WaylandObjectId2<"xdg_surface">) {
+        this.xdg_surface[child].parent = parent;
+        this.xdg_surface[parent].children.push(child);
+    }
+    rmRelation(parent: WaylandObjectId2<"xdg_surface">, child: WaylandObjectId2<"xdg_surface">) {
+        this.xdg_surface[child].parent = undefined;
+        this.xdg_surface[parent].children = this.xdg_surface[parent].children.filter((c) => c !== child);
+    }
+    getMainSurfaceRect(id: WaylandObjectId2<"xdg_surface">) {
+        const xdgSurface = this.getXdgSurface(id);
+        const mainWlSurface = this.wl_surface.getWlSurface(xdgSurface.surface);
+        const size = mainWlSurface.size;
+        // todo subsurface 需要考虑吗
+        return { w: size.w, h: size.h };
+    }
+    /** 获取xdgsurface窗口大小 */
+    getReRect(id: WaylandObjectId2<"xdg_surface">) {
+        const xdgSurface = this.getXdgSurface(id);
+        const mainWlSurface = this.wl_surface.getWlSurface(xdgSurface.surface);
+        const size = xdgSurface.winGeo ?? mainWlSurface.size;
+        // todo subsurface
+        return { w: size.w, h: size.h };
+    }
+    setAsToplevel(id: WaylandObjectId2<"xdg_surface">, toplevelId: WaylandObjectId2<"xdg_toplevel">) {
+        this.wl_surface.setWlSurfaceRole(this.getXdgSurface(id).surface, "toplevel");
+        this.xdg_toplevel.set(toplevelId, id);
+        this.xdg_surface[id].xdg_role = toplevelId;
+
+        this.render.asToplevel(this.idScope(id));
+    }
+    setAsPopup(
+        id: WaylandObjectId2<"xdg_surface">,
+        popupId: WaylandObjectId2<"xdg_popup">,
+        parent: WaylandObjectId2<"xdg_surface">,
+    ) {
+        this.wl_surface.setWlSurfaceRole(this.getXdgSurface(id).surface, "popup");
+        this.xdg_popup.set(popupId, id);
+        this.xdg_surface[id].xdg_role = popupId;
+        this.setRelation(parent, id);
+
+        this.render.addPopupToXdgSurface(this.idScope(id), this.idScope(parent));
+    }
+    setOffset(id: WaylandObjectId2<"xdg_surface">, x: number, y: number) {
+        this.getXdgSurface(id).offset.x = x;
+        this.getXdgSurface(id).offset.y = y;
+
+        this.render.setPopupPosi(this.idScope(id), x, y);
+    }
+    xdgSurfaceDestroyed(xdgSurfaceId: WaylandObjectId2<"xdg_surface">, type: "toplevel" | "popup") {
+        delete this.xdg_surface[xdgSurfaceId];
+
+        this.render.destroyXdgSurfaceEle(this.idScope(xdgSurfaceId), type);
+    }
+    popupDestroyed(popupId: WaylandObjectId2<"xdg_popup">) {
+        const id = this.xdg_popup.get(popupId);
+        if (id === undefined) {
+            return;
+        }
+        const xdgSurface = this.getXdgSurface(id);
+        const parent = xdgSurface.parent;
+        if (parent) {
+            this.rmRelation(parent, id);
+        }
+        this.xdgSurfaceDestroyed(id, "popup");
+        this.xdg_popup.delete(popupId);
+    }
+    toplevelDestroyed(toplevelId: WaylandObjectId2<"xdg_toplevel">) {
+        const id = this.xdg_toplevel.get(toplevelId);
+        if (id === undefined) {
+            return;
+        }
+        const xdgSurface = this.getXdgSurface(id);
+        const parent = xdgSurface.parent;
+        if (parent) {
+            this.rmRelation(parent, id);
+        }
+        this.xdgSurfaceDestroyed(id, "toplevel");
+        this.xdg_toplevel.delete(toplevelId);
+    }
+    getChildenDeepOnlyPopup(parent: WaylandObjectId2<"xdg_surface">) {
+        const children: {
+            id: WaylandObjectId2<"xdg_surface">;
+            offset: { x: number; y: number };
+            size: { w: number; h: number };
+        }[] = [];
+        // todo tree walk
+        children.push(
+            ...this.xdg_surface[parent].children
+                .filter((c) => this.wl_surface.getWlSurface(this.getXdgSurface(c).surface).role === "popup")
+                .map((i) => ({
+                    id: i,
+                    offset: this.getXdgSurface(i).offset, // todo 合并父偏移
+                    size: this.getReRect(i),
+                })),
+        );
+        return children;
+    }
 }
 
 export const xdgShellModule = defineModule({

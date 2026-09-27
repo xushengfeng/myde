@@ -162,14 +162,21 @@ export const exampleModule = defineModule({
 
 ### 4. 不变量
 
-- **协议模块之间零 `import`**：只能 import `module.ts`、`api.ts`、`utils/*`、`protocols/wayland-types`（生成物）。
-  `assertModuleConflicts()` 在 `WaylandServer` 构造时校验请求键与桌面命令键冲突。
+- **协议模块之间零运行时 `import`**：只能 import `module.ts`、`api.ts`、`utils/*`、`render_tools`、
+  `protocols/wayland-types`（生成物）。`import type` 允许跨协议引类型（编译期擦除、不产生运行时依赖），
+  运行时的跨协议关系只能靠 `ctx` 注入或 `hooks`。`assertModuleConflicts()` 在 `WaylandServer`
+  构造时校验请求键与桌面命令键冲突。
+- **域状态类住协议文件**：`wlSurfaceData` / `wlSubSurfaceData` 在 `protocols/core/wayland.ts`，
+  `xdgSurfaceData` 在 `protocols/ext/xdg_shell.ts`；`module.ts` 用 `import type` 取它们作为 `CoreApi` /
+  `ctx.domain` 的形状，host 负责 `new` 并注入（后续改为模块自带 `core`/`domain` initializer 自造）。
 - **桌面命令进 `actions`**：`server.notify` 的命令由 `host/server.ts` 反查 handle 后派发
   （`client.runAction`），组包、serial、遍历 seat、状态维护全在协议文件里，host 不写协议事件。
   例外只有 `clipboard.paste`（写 fd，不发协议消息，server 直达 `client.paste`）。
   命令里**只改 `WindowRecord` / 只发 Wayland 事件**，语义事件（`window.changed` 等）仍由 Store fan-in。
 - **`ctx` 是 handler 唯一的依赖来源**：handler 不碰 `this`（`WaylandClient`）。新增能力先进
-  `module.ts` 的契约，再在 `host/client.ts` 的 `buildCtx()` 里接实现。目前唯一的几何能力是
+  `module.ts` 的契约，再接到 `ctx`：连接级的口（`objects`/`send*`/`hitTest`/`scene`/`registry`）由
+  `host/client.ts` 的 `buildCtx()` 接实现，协议域状态的载体是协议文件里的类（现状 host `new`，
+  后续改为模块 initializer 自己造，见上一条）。目前唯一的几何能力是
   `ctx.hitTest`（纯几何，留 host），焦点转移与 enter/leave 在 core 的 `input.pointer` 里。
 - **反向通信只有钩子**：扩展不被 core import，只能声明 `hooks`，由 `host/client.ts` 聚合、
   `ctx.notify.*` 触发。`onCommit`（buffer 已应用、像素尚未合成）与 `onFrame`（已合成、渲染之前）

@@ -10,7 +10,7 @@
  * 声明合并进来（`protocols/core/region.ts` 是样板）。
  */
 import type { ServerNotifyMap } from "./api";
-import type { wlSurfaceData } from "./host/client";
+import type { wlSurfaceData } from "./protocols/core/wayland";
 import type { WaylandEnumObj, WaylandEventObj, WaylandInterfaces, WaylandRequestObj } from "./protocols/wayland-types";
 import type { renderTools } from "./render_tools";
 import type { WaylandName, WaylandObjectId, WaylandOp, WaylandProtocol } from "./utils/wayland-binary";

@@ -1,6 +1,7 @@
 import { InputEventCodes } from "../../../input_codes/types";
 import type { PointerCommand, ScrollCommand } from "../../api";
 import { defineModule, type HitTestResult, type ModuleCtx, type SurfaceId, type WaylandObjectId2 } from "../../module";
+import type { renderTools } from "../../render_tools";
 import type { WaylandName, WaylandProtocol } from "../../utils/wayland-binary";
 import { getEnumValue, tryX, waylandObjectId } from "../../utils/wayland-proto";
 
@@ -53,6 +54,182 @@ declare module "../../module" {
         wl_region: {
             rects: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
         };
+    }
+}
+
+// ───────────── 域状态：wl_surface / wl_subsurface 的 role、父子关系 ─────────────
+// core 自己造、自己用，经 `ctx.core.surface` / `ctx.core.subsurface` 暴露；
+// 扩展（xdg）通过 `SurfaceId` 读写，不需要 import 这里（运行时零跨协议依赖）。
+
+class WaylandSurfaceRoleError extends Error {}
+
+export class wlSurfaceData {
+    private wl_surface: Record<
+        WaylandObjectId2<"wl_surface">,
+        {
+            role: "subsurface" | "toplevel" | "popup" | "cursor" | undefined;
+            size: { w: number; h: number };
+            // 最近一次合成输出的画布，可能与surface画布共用，取用时需要复制
+            frame?: OffscreenCanvas;
+        }
+    > = {};
+
+    render: renderTools;
+    idScope: (id: unknown) => string;
+
+    constructor(render: renderTools) {
+        this.render = render;
+        this.idScope = render.idScope();
+    }
+
+    addWlSurface(id: WaylandObjectId2<"wl_surface">) {
+        this.wl_surface[id] = { role: undefined, size: { w: 0, h: 0 } };
+        this.render.bindCanvas(this.idScope(id));
+    }
+    getWlSurface(id: WaylandObjectId2<"wl_surface">) {
+        return this.wl_surface[id];
+    }
+    renderWlSurface(id: WaylandObjectId2<"wl_surface">, canvas: OffscreenCanvas) {
+        this.wl_surface[id].frame = canvas;
+        this.render.renderCanvas(canvas, this.idScope(id));
+    }
+    destroyWlSurface(id: WaylandObjectId2<"wl_surface">) {
+        delete this.wl_surface[id];
+        this.render.destroyCanvas(this.idScope(id));
+    }
+
+    setWlSurfaceRole(id: WaylandObjectId2<"wl_surface">, role: "subsurface" | "toplevel" | "popup" | "cursor") {
+        const oldRole = this.wl_surface[id].role;
+        if (oldRole !== undefined && oldRole !== role) {
+            throw new WaylandSurfaceRoleError();
+        }
+        this.wl_surface[id].role = role;
+    }
+    updateWlSurfaceSize(id: WaylandObjectId2<"wl_surface">, w: number, h: number) {
+        this.wl_surface[id].size = { w, h };
+    }
+    setWlSurfaceOffset(id: WaylandObjectId2<"wl_surface">, x: number, y: number) {
+        this.render.setBufferOffset(this.idScope(id), x, y);
+    }
+}
+
+export class wlSubSurfaceData {
+    wl_surface: wlSurfaceData;
+    wl_subsurface: Record<
+        WaylandObjectId2<"wl_subsurface">,
+        {
+            parent: WaylandObjectId2<"wl_surface">;
+            child: WaylandObjectId2<"wl_surface">;
+            posi: { x: number; y: number };
+        }
+    > = {};
+    parentChildren = new Map<WaylandObjectId2<"wl_surface">, WaylandObjectId2<"wl_subsurface">[]>();
+    private surface2subsurface = new Map<WaylandObjectId2<"wl_surface">, WaylandObjectId2<"wl_subsurface">>();
+    private render: renderTools;
+    private idScope: (id: unknown) => string;
+    constructor(wl: wlSurfaceData) {
+        this.wl_surface = wl;
+        this.render = wl.render;
+        this.idScope = wl.idScope;
+    }
+
+    setWlSubSurface(
+        subRelationId: WaylandObjectId2<"wl_subsurface">,
+        parent: WaylandObjectId2<"wl_surface">,
+        child: WaylandObjectId2<"wl_surface">,
+    ) {
+        const [roleerror] = tryX(() => {
+            this.wl_surface.setWlSurfaceRole(child, "subsurface");
+        });
+        if (roleerror instanceof WaylandSurfaceRoleError) {
+            return "bad_surface";
+        }
+        if (parent === child) {
+            return "bad_parent";
+        }
+        for (const c of this.getChildrenDeep(child)) {
+            if (c.id === parent) {
+                return "bad_parent";
+            }
+        }
+        const oldRelationId = this.getSubSurfaceBySurface(child);
+        if (oldRelationId) {
+            // 已经有父子关系了，先删除旧关系
+            const oldRelation = this.wl_subsurface[oldRelationId];
+            // biome-ignore lint/style/noNonNullAssertion: 关系与parentchildren应该是同步的
+            const oldTree = this.parentChildren.get(oldRelation.parent)!;
+            this.parentChildren.set(
+                oldRelation.parent,
+                oldTree.filter((c) => c !== oldRelationId),
+            );
+        }
+
+        this.wl_subsurface[subRelationId] = { parent, child, posi: { x: 0, y: 0 } };
+        const parentData = this.parentChildren.get(parent) ?? [];
+        parentData.push(subRelationId);
+        this.parentChildren.set(parent, parentData);
+        this.surface2subsurface.set(child, subRelationId);
+
+        this.render.setCanvasAnchor(this.idScope(child), this.idScope(parent));
+
+        return true;
+    }
+    private getSubSurfaceBySurface(child: WaylandObjectId2<"wl_surface">) {
+        return this.surface2subsurface.get(child);
+    }
+    getParentChildren(parent: WaylandObjectId2<"wl_surface">) {
+        const subs = Array.from(this.parentChildren.get(parent) ?? []);
+        return subs.map((s) => this.wl_subsurface[s].child);
+    }
+    getParentChildrenWithRect(parent: WaylandObjectId2<"wl_surface">) {
+        const subs = Array.from(this.parentChildren.get(parent) ?? []);
+        return subs.map((s) => ({
+            id: this.wl_subsurface[s].child,
+            offsetRect: {
+                x: this.wl_subsurface[s].posi.x,
+                y: this.wl_subsurface[s].posi.y,
+                w: this.wl_surface.getWlSurface(this.wl_subsurface[s].child).size.w,
+                h: this.wl_surface.getWlSurface(this.wl_subsurface[s].child).size.h,
+            },
+        }));
+    }
+    setPosition(id: WaylandObjectId2<"wl_subsurface">, x: number, y: number) {
+        const sub = this.wl_subsurface[id];
+        sub.posi.x = x;
+        sub.posi.y = y;
+
+        this.render.setCanvasOffset(this.idScope(sub.child), x, y);
+    }
+    getSubSurface(id: WaylandObjectId2<"wl_subsurface">) {
+        return {
+            parent: this.wl_subsurface[id].parent,
+            surface: this.wl_subsurface[id].child,
+            posi: this.wl_subsurface[id].posi,
+        };
+    }
+    getChildrenDeep(parent: WaylandObjectId2<"wl_surface">) {
+        const surfaces: {
+            id: WaylandObjectId2<"wl_surface">;
+            offsetRect: { x: number; y: number; w: number; h: number };
+        }[] = [];
+
+        // todo 遍历树，offset相加
+        surfaces.push(...this.getParentChildrenWithRect(parent));
+        return surfaces;
+    }
+    destroySubSurface(id: WaylandObjectId2<"wl_subsurface">) {
+        const relation = this.wl_subsurface[id];
+        const parent = relation.parent;
+        const child = relation.child;
+        const parentData = this.parentChildren.get(parent);
+        if (parentData) {
+            this.parentChildren.set(
+                parent,
+                parentData.filter((c) => c !== id),
+            );
+        }
+        this.surface2subsurface.delete(child);
+        delete this.wl_subsurface[id];
     }
 }
 
