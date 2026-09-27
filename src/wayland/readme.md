@@ -64,6 +64,45 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
 桌面不接触 Wayland 对象 id：所有命令按全局 `WinHandle` 下发，由 `host/server.ts` 反查
 `(client, winId)`。`server.clients` 只留给连接生命周期与调试。用法见 `desktop/readme.md` 的「Wayland 服务器」。
 
+## 测试
+
+`src/wayland/test/` 是端到端测试：起真 Electron 客户端连本服务端，注入输入/命令，再从客户端回传的日志断言。
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `dma-buf.test.ts` | dmabuf 单帧渲染，`preview()` 像素采样 |
+| `window.test.ts` | 窗口创建、内容显示、resize、maximize、cursor、关闭 |
+| `keyboard.test.ts` | `input.key` 的键码映射与按键序列（按键事件按顺序对账） |
+| `pointer.test.ts` | `input.pointer`（move / down / up 三键落点与坐标）、`input.scroll` 滚轮方向、`cursor.changed` |
+| `text_input.test.ts` | `input.text` → `zwp_text_input_v3` 的 `commit_string` 落进编辑框 |
+| `clipboard.test.ts` | 双向剪贴板：`clipboard.offer` → `pasteRequested` → `paste` 回填；客户端 `set_selection` → `clipboard.copy` |
+
+```bash
+npx vitest run src/wayland/test/pointer.test.ts
+```
+
+写法上的四个硬约束（踩过一遍，违反基本跑不起来）：
+
+1. **必须串行**：都用默认 socket 名 `my-wayland-server-0`，后启动的 `setupSocket` 会 unlink 掉前一个的 socket，
+   见 `vitest.config.ts` 的 `fileParallelism: false`。
+2. **`testRunnerApp` 的回调是 `script.toString()` 拼进桌面脚本里求值的**：访问不到本文件的模块作用域，
+   计划与常量要写在**回调体内**，再用 `runner.sendData()` 带出来给外层断言（回调里要的工具函数同理，
+   比如 `mapKeyCode` 只能在回调外校验回调内写死的键码）。
+3. **客户端日志是双层 JSON**：renderer 的 `console.log` 先被 `test/electron_app/start.js` 的 console-message
+   包成 `{"data": …}`，再被 `main.ts` 包成 `{"applog": …}`，且一个 chunk 可能含多行。
+   统一用 `src/test_runner/applog.ts` 的 `collectAppLogs()` / `logOfType()` 解析，**别按下标取日志行**。
+4. **等首帧再注入**：`window.created` 只说明 xdg_toplevel 建好了，页面脚本未必已挂上监听，
+   固定 `sleep` 早晚会在慢机器上翻车。`server.windows.preview(handle)` 初始是 1×1 的占位画布，
+   `width > 1` 才代表客户端提交了首帧（页面就绪），四个输入测试都是这么等的。
+
+客户端与几何坐标的换算（`pointer.test.ts` 的做法）：`ev.x/y` 相对**窗口几何原点**，几何里还含着 CSD 标题栏，
+所以「页面坐标 = 注入坐标 − (几何宽−视口宽, 几何高−视口高)」，两个尺寸都在运行时现取，不写死。
+`wl_pointer.axis` 与 DOM wheel 的数值单位也不同（本环境 120 → 1440），只断言方向与所在轴。
+
+剪贴板的顺序坑（`clipboard.test.ts`）：客户端自己持有剪贴板时，粘贴直接吃本地缓存、不会向合成器发
+`wl_data_offer.receive`，所以「桌面回填」的用例必须排在客户端复制**之前**；复制的文案用 `input.text` 打进去，
+空选择走的读取分支不会 emit `clipboard.copy`。
+
 ## 新增协议指南
 
 ### 1. 生成类型
