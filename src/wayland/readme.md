@@ -47,7 +47,7 @@
     - zwp_text_input_v3 部分（delete_surrounding_text 未实现）
     - zwp_text_input_manager_v3
 
-v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧计，后激活者胜出（zwp_text_input_v1.activate / zwp_text_input_v3.enable 抢占），文本只发给持有对象，v3 的 enter/leave 跟随键盘焦点。
+v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧计，后激活者胜出（zwp_text_input_v1.activate / zwp_text_input_v3.enable 抢占），文本只发给持有对象，v3 的 enter/leave 跟随**该把 seat** 的键盘焦点（`get_text_input` 的 seat 参数记在 `TextInputV3Data.seat`，跨 seat 的输入直接忽略）。
 
 ## 对外 API（桌面侧）
 
@@ -59,7 +59,9 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
   "cursor.changed" | "clipboard.copy" | "clipboard.pasteRequested" | "client.opened" | "client.closed", …)`
 - **查询**：`server.windows.list() / get() / preview()`、`server.cursor.get(clientId)`、`await server.request(…)`
 - **命令**：`server.notify("window.focus" | … | "input.pointer" | …, handle, …)`
-  → `host/server.ts` 按 handle 反查 `(client, winId)` → 协议模块的 `actions` 表，组包在协议文件里
+  → `host/server.ts` 按 handle 反查 `(client, winId)` → 协议模块的 `actions` 表，组包在协议文件里。
+  `input.pointer|scroll|key|text` 末尾可带 `seat`（缺省 `"seat0"`，选择器语义、不广播）：
+  桌面喂第二把光标（如远程协作者）时传 `"seat1"`。
 - **应答**：`server.respond("surfaceBounds.request", () => ({ width, height }))`
 
 桌面不接触 Wayland 对象 id：所有命令按全局 `WinHandle` 下发，由 `host/server.ts` 反查
@@ -143,9 +145,9 @@ export const exampleModule = defineModule({
     actions: { // 可选：桌面命令的出口（`server.notify` → 这里），键来自 api.ts 的 ServerNotifyMap
         "input.key"(msg, ctx) { /* msg.winId 是 handle 反查后的 xdg_toplevel，msg.args 已去掉 handle */ },
     },
-    core: (ctx) => {  // 可选：只有 core 模块用，提供 Omit<CoreApi,"registry">（surface / subsurface）
+    core: (ctx) => {  // 可选：只有 core 模块用，提供 Omit<CoreApi,"registry">（surface / subsurface / focusKeyboard）
         const surface = new wlSurfaceData(ctx.scene);
-        return { surface, subsurface: new wlSubSurfaceData(surface) };
+        return { surface, subsurface: new wlSubSurfaceData(surface), focusKeyboard: (s, seat) => {} };
     },
     domain: {  // 可选：本模块的域状态实例；key 先在本文件 declare module 进 WaylandDomainRegistry
         xdgSurface: (ctx) => new xdgSurfaceData(ctx.core.surface),
@@ -154,8 +156,8 @@ export const exampleModule = defineModule({
         onCommit: (surfaceId, sizeChanged, ctx) => {},
         onFrame: (surfaceId, canvas, pending, ctx) => canvas,
         onDestroy: (surfaceId, ctx) => {},
-        onFocus: (surfaceId, ctx) => {},
-        onTextInput: (text, preedit, ctx) => {}, // input.text 的仲裁：各 text_input 模块自判是否持有
+        onFocus: (seat, surfaceId, ctx) => {},   // 某把 seat 的键盘焦点变化（surfaceId undefined = 失焦）
+        onTextInput: (seat, text, preedit, ctx) => {}, // input.text 的仲裁：各 text_input 模块自判是否持有
     },
 });
 ```
@@ -183,7 +185,7 @@ export const exampleModule = defineModule({
   `protocols/ext/xdg_shell.ts`（经 `domain.xdgSurface` 提供）；`module.ts` 用 `import type`
   取它们作为 `CoreApi` / `WaylandDomainRegistry` 的形状。host 只跑装配清单，不 `new` 任何域状态。
 - **桌面命令进 `actions`**：`server.notify` 的命令由 `host/server.ts` 反查 handle 后派发
-  （`client.runAction`），组包、serial、遍历 seat、状态维护全在协议文件里，host 不写协议事件。
+  （`client.runAction`），组包、serial、**按 seat 分发**、状态维护全在协议文件里，host 不写协议事件。
   例外只有 `clipboard.paste`（写 fd，不发协议消息，server 直达 `client.paste`）。
   命令里**只改 `WindowRecord` / 只发 Wayland 事件**，语义事件（`window.changed` 等）仍由 Store fan-in。
 - **`ctx` 是 handler 唯一的依赖来源**：handler 不碰 `this`（`WaylandClient`）。新增能力先进
@@ -203,5 +205,13 @@ export const exampleModule = defineModule({
   光标留 `host/cursor_store.ts`（`ctx.cursor`）——它被 core 与 cursor_shape 两个协议读写，
   且出口 `ClientHost.cursorChanged` 不在 `ctx`。原 `state/` 目录已删除。
   Store 只放数据，协议动作（发 `wl_keyboard.*` / `wl_pointer.*`）在 `protocols/core/wayland.ts`。
+- **焦点 per-seat，键盘焦点由桌面驱动**：`SeatRecord` 的 `pointerFocus` / `keyboardFocus` 各 seat
+  一份（多光标 = 多 seat；`input.*` 的 `seat` 参数是**选择器不是广播位**，缺省 `"seat0"`）。
+  指针焦点由 core 的 `input.pointer` → `updatePointerFocus` 维护，**只发该 seat 的 pointer、不碰键盘**
+  （hover 要不要切键盘焦点是桌面政策）。键盘焦点只有一个写入口 `ctx.core.focusKeyboard`：同值去重 →
+  `leave`(旧) → `enter`(新) + `modifiers` → 写槽 → `ctx.notify.focus(seat, surface)` 扇出；调用方是
+  桌面 `window.focus` / `window.blur`（blur 只清**自己拥有**的焦点，所以全量 focus+blur 循环与顺序无关）。
+  xdg 的 `actived` 是另一条独立的轴，规范对 `configure(activated)` 与 `wl_keyboard.enter` 的顺序无要求。
+  `wl_surface.destroy` 只**静默清**焦点槽（不能向已销毁对象发事件），text-input 经 `onDestroy` 收敛。
 - **模块级副作用要加环境守卫**：`utils/shared_texture.ts` 会注册 electron 接收端并建 unix socket，
   纯 node 环境没有 electron。

@@ -1,6 +1,13 @@
 import { InputEventCodes } from "../../../input_codes/types";
 import type { PointerCommand, ScrollCommand } from "../../api";
-import { defineModule, type HitTestResult, type ModuleCtx, type SurfaceId, type WaylandObjectId2 } from "../../module";
+import {
+    defineModule,
+    type HitTestResult,
+    type ModuleCtx,
+    type SeatRecord,
+    type SurfaceId,
+    type WaylandObjectId2,
+} from "../../module";
 import type { renderTools } from "../../render_tools";
 import type { WaylandName, WaylandObjectId, WaylandProtocol } from "../../utils/wayland-binary";
 import { getEnumValue, tryX, waylandObjectId } from "../../utils/wayland-proto";
@@ -50,6 +57,9 @@ declare module "../../module" {
     }
 }
 
+/** seat 名 → 该 seat 的 data_device 集合（selection 按 seat 路由，跟随键盘焦点） */
+type DataDevices = Map<string, Set<WaylandObjectId2<"wl_data_device">>>;
+
 declare module "../../module" {
     interface WaylandDataRegistry {
         wl_region: {
@@ -59,7 +69,7 @@ declare module "../../module" {
     interface WaylandDomainRegistry {
         /** wl_data_* 的连接态（原 `ClientState.dataDevices` / `pendingPaste`）；host 的 `paste()` 也从这里读 */
         dataDevice: {
-            devices?: Set<WaylandObjectId2<"wl_data_device">>;
+            devices?: DataDevices;
             pendingPaste?: { offerId: WaylandObjectId; fd: number; mime: string; timeout: NodeJS.Timeout };
         };
         /**
@@ -263,60 +273,80 @@ const MOD_KEY_TO_BIT: { [k: number]: number } = {
     [InputEventCodes.KEY_RIGHTMETA]: 4,
 };
 
-/** 键盘焦点：enter 时按协议补一份 modifiers，并通知 text-input 等扩展 */
-function keyboardFocus(ctx: ModuleCtx, surface: SurfaceId): void {
-    for (const k of ctx.domain.seat.keyboards()) {
-        ctx.sendNow(k, "wl_keyboard.enter", { serial: 0, surface: surface, keys: new Uint32Array([]) });
-        ctx.sendNow(k, "wl_keyboard.modifiers", {
+/**
+ * 解析 `input.*` 的 `seat` 参数：**选择器语义**，缺省 `"seat0"`（本机光标），不是广播位——
+ * 一个 seat = 一个人的一套设备，同一事件发给多个 seat 会被客户端当成 N 把同步光标（点击双发）。
+ */
+function resolveSeat(ctx: ModuleCtx, name?: string): SeatRecord | undefined {
+    const seat = ctx.domain.seat.byName(name ?? "seat0");
+    if (seat === undefined) console.warn(`Unknown seat: ${String(name)}`);
+    return seat;
+}
+
+/**
+ * 键盘焦点的单写入点（`CoreApi.focusKeyboard` 的实现）：**同值直接去重**；变化才发
+ * `leave`(旧) → `enter`(新) + `modifiers`、写 `seat.keyboardFocus`，最后 `ctx.notify.focus`
+ * 扇出给派生物（text-input 的 enter/leave、selection 归属都挂在这条通知上）。
+ *
+ * 与 xdg 的 `actived` 是两条独立的轴：规范对 `configure(activated)` 与 `wl_keyboard.enter`
+ * 的顺序没有要求，所以这里不碰 actived，谁先变都以最终态为准。
+ *
+ * 旧 surface 若已被客户端销毁就不发 leave（协议上不能引用死对象）——那条路径在 `wl_surface.destroy`。
+ */
+function focusKeyboard(ctx: ModuleCtx, surface: SurfaceId | null, seatName?: string): void {
+    const seat = ctx.domain.seat.byName(seatName ?? "seat0");
+    if (seat === undefined) return;
+    const prev = seat.keyboardFocus;
+    if (prev === surface) return;
+    if (prev !== null && seat.keyboard && ctx.objects.has(prev))
+        ctx.sendNow(seat.keyboard, "wl_keyboard.leave", { serial: 0, surface: prev });
+    if (surface !== null && seat.keyboard) {
+        ctx.sendNow(seat.keyboard, "wl_keyboard.enter", { serial: 0, surface: surface, keys: new Uint32Array([]) });
+        ctx.sendNow(seat.keyboard, "wl_keyboard.modifiers", {
             serial: 0,
-            mods_depressed: 0,
+            mods_depressed: ctx.domain.seat.modifierMask(seat),
             mods_latched: 0,
             mods_locked: 0,
             group: 0,
         });
     }
-    ctx.notify.focus(surface);
-}
-
-function keyboardBlur(ctx: ModuleCtx, surface: SurfaceId): void {
-    for (const k of ctx.domain.seat.keyboards()) ctx.sendNow(k, "wl_keyboard.leave", { serial: 0, surface: surface });
-    ctx.notify.focus(undefined);
+    seat.keyboardFocus = surface;
+    ctx.notify.focus(seat.name, surface ?? undefined);
+    // selection 跟随键盘焦点：失焦即撤掉本 seat 上发给该客户端的宣告（重新聚焦由桌面 `clipboard.offer` 推）
+    if (surface === null) clearSelection(ctx, seat.name);
 }
 
 /**
- * 指针焦点转移：命中 surface 变了才发 leave/enter，键盘焦点按角色跟不跟（popup 不抢键盘）。
+ * 指针焦点转移——**只管指针**：hover 是否要改键盘焦点是桌面政策（想 focus-follows-mouse 的桌面
+ * 自己在 hover 时调 `window.focus`），wayland 内部不再自作主张。
+ * 命中 surface 变了才发 leave/enter，且只发给**这一把 seat** 的 pointer。
  * 与几何命中检测分开——`ctx.domain.xdgSurface.hitTest` 是纯几何（xdg 域），这里只剩协议动作。
  */
-function updatePointerFocus(ctx: ModuleCtx, hit: HitTestResult): void {
-    const prevFocus = ctx.domain.seat.focus();
-    const prevFocusType = ctx.domain.seat.focusType();
+function updatePointerFocus(ctx: ModuleCtx, seat: SeatRecord, hit: HitTestResult): void {
+    const prevFocus = seat.pointerFocus;
     if (prevFocus === hit.surface) return;
-    if (prevFocus && ctx.objects.has(prevFocus)) {
-        for (const p of ctx.domain.seat.pointers())
-            ctx.sendNow(p, "wl_pointer.leave", { serial: 0, surface: prevFocus });
-        if (prevFocusType === "main" && hit.role === "main") keyboardBlur(ctx, prevFocus); // todo popup
-    }
-    for (const p of ctx.domain.seat.pointers()) {
-        ctx.sendNow(p, "wl_pointer.enter", {
+    if (prevFocus && ctx.objects.has(prevFocus) && seat.pointer)
+        ctx.sendNow(seat.pointer, "wl_pointer.leave", { serial: 0, surface: prevFocus });
+    if (seat.pointer) {
+        ctx.sendNow(seat.pointer, "wl_pointer.enter", {
             serial: 0,
             surface: hit.surface,
             surface_x: hit.x,
             surface_y: hit.y,
         });
-        ctx.sendNow(p, "wl_pointer.frame", {});
+        ctx.sendNow(seat.pointer, "wl_pointer.frame", {});
     }
-    if ((prevFocusType === "main" || !prevFocusType) && hit.role === "main") keyboardFocus(ctx, hit.surface);
-    ctx.domain.seat.setFocus(hit.surface, hit.role);
+    seat.pointerFocus = hit.surface;
 }
 
-/** 指针事件注入：坐标已由 hitTest 归一到 surface 局部 */
-function sendPointer(ctx: ModuleCtx, ev: PointerCommand, hit: HitTestResult): void {
+/** 指针事件注入（只发这一把 seat 的 pointer）：坐标已由 hitTest 归一到 surface 局部 */
+function sendPointer(ctx: ModuleCtx, seat: SeatRecord, ev: PointerCommand, hit: HitTestResult): void {
+    const pointer = seat.pointer;
+    if (pointer === undefined) return;
     const { x: nx, y: ny } = hit;
     if (ev.type === "move") {
-        for (const p of ctx.domain.seat.pointers()) {
-            ctx.sendNow(p, "wl_pointer.motion", { time: Date.now(), surface_x: nx, surface_y: ny });
-            ctx.sendNow(p, "wl_pointer.frame", {});
-        }
+        ctx.sendNow(pointer, "wl_pointer.motion", { time: Date.now(), surface_x: nx, surface_y: ny });
+        ctx.sendNow(pointer, "wl_pointer.frame", {});
         return;
     }
     const button =
@@ -327,72 +357,102 @@ function sendPointer(ctx: ModuleCtx, ev: PointerCommand, hit: HitTestResult): vo
               : ev.button === 2
                 ? InputEventCodes.BTN_RIGHT
                 : InputEventCodes.BTN_LEFT;
-    for (const pointer of ctx.domain.seat.pointers()) {
-        ctx.sendNow(pointer, "wl_pointer.button", {
-            serial: 0,
-            time: Date.now(),
-            button,
-            state: getEnumValue("wl_pointer.button_state", ev.type === "down" ? "pressed" : "released"),
-        });
-        ctx.sendNow(pointer, "wl_pointer.frame", {});
-    }
+    ctx.sendNow(pointer, "wl_pointer.button", {
+        serial: 0,
+        time: Date.now(),
+        button,
+        state: getEnumValue("wl_pointer.button_state", ev.type === "down" ? "pressed" : "released"),
+    });
+    ctx.sendNow(pointer, "wl_pointer.frame", {});
 }
 
-/** 按键注入；修饰键变化时按掩码补发 `wl_keyboard.modifiers`（todo repeat） */
-function sendKey(ctx: ModuleCtx, key: number, state: "pressed" | "released"): void {
+/**
+ * 按键注入：**该 seat 没有键盘焦点就不发**（否则客户端会收到不属于任何聚焦窗口的按键）。
+ * 修饰键按该 seat 的掩码补发 `wl_keyboard.modifiers`（两把键盘各记各的；todo repeat）。
+ */
+function sendKey(ctx: ModuleCtx, seat: SeatRecord, key: number, state: "pressed" | "released"): void {
+    const k = seat.keyboard;
+    if (seat.keyboardFocus === null || k === undefined) return;
     const s = ctx.domain.seat.nextSerial();
-    for (const k of ctx.domain.seat.keyboards())
-        ctx.sendNow(k, "wl_keyboard.key", {
-            serial: s,
-            time: Date.now(),
-            key: key,
-            state: getEnumValue("wl_keyboard.key_state", state),
-        });
+    ctx.sendNow(k, "wl_keyboard.key", {
+        serial: s,
+        time: Date.now(),
+        key: key,
+        state: getEnumValue("wl_keyboard.key_state", state),
+    });
 
     const bit = MOD_KEY_TO_BIT[key];
     if (bit === undefined) return;
-    const seat = ctx.domain.seat;
-    if (state === "pressed") seat.addModifier(bit);
-    else seat.removeModifier(bit);
+    const store = ctx.domain.seat;
+    if (state === "pressed") store.addModifier(seat, bit);
+    else store.removeModifier(seat, bit);
 
-    for (const k of seat.keyboards()) {
-        ctx.sendNow(k, "wl_keyboard.modifiers", {
-            serial: s,
-            mods_depressed: seat.modifierMask(),
-            mods_latched: 0, // todo not tracking latched in this implementation
-            mods_locked: 0, // todo not tracking locked separately here
-            group: 0,
-        });
-    }
+    ctx.sendNow(k, "wl_keyboard.modifiers", {
+        serial: s,
+        mods_depressed: store.modifierMask(seat),
+        mods_latched: 0, // todo not tracking latched in this implementation
+        mods_locked: 0, // todo not tracking locked separately here
+        group: 0,
+    });
 }
 
-/** 滚轮注入（todo region） */
-function sendScroll(ctx: ModuleCtx, ev: ScrollCommand): void {
+/**
+ * 滚轮注入（只发这一把 seat 的 pointer；没有指针焦点说明指针不在任何窗口上，丢弃）。
+ * todo region
+ */
+function sendScroll(ctx: ModuleCtx, seat: SeatRecord, ev: ScrollCommand): void {
+    const pointer = seat.pointer;
+    if (pointer === undefined || seat.pointerFocus === null) return;
     const { deltaX, deltaY } = ev;
     if (deltaX !== 0) {
-        for (const pointer of ctx.domain.seat.pointers())
-            ctx.sendNow(pointer, "wl_pointer.axis", {
-                time: Date.now(),
-                axis: getEnumValue("wl_pointer.axis", "horizontal_scroll"),
-                value: deltaX,
-            });
+        ctx.sendNow(pointer, "wl_pointer.axis", {
+            time: Date.now(),
+            axis: getEnumValue("wl_pointer.axis", "horizontal_scroll"),
+            value: deltaX,
+        });
     }
     if (deltaY !== 0) {
-        for (const pointer of ctx.domain.seat.pointers())
-            ctx.sendNow(pointer, "wl_pointer.axis", {
-                time: Date.now(),
-                axis: getEnumValue("wl_pointer.axis", "vertical_scroll"),
-                value: deltaY,
-            });
+        ctx.sendNow(pointer, "wl_pointer.axis", {
+            time: Date.now(),
+            axis: getEnumValue("wl_pointer.axis", "vertical_scroll"),
+            value: deltaY,
+        });
     }
-    for (const pointer of ctx.domain.seat.pointers()) ctx.sendNow(pointer, "wl_pointer.frame", {});
+    ctx.sendNow(pointer, "wl_pointer.frame", {});
 }
 
-/** 把剪贴板内容 offer 给该客户端的每个 data_device */
-function offerTo(ctx: ModuleCtx): void {
-    const dd = ctx.domain.dataDevice.devices;
-    if (!dd) console.error("No data devices to offer to");
-    for (const ddId of dd ?? []) {
+/** 撤掉某把 seat 上发给该客户端的 selection（`id` 可空：0 即「无选择」） */
+function clearSelection(ctx: ModuleCtx, seatName: string): void {
+    const set = ctx.domain.dataDevice.devices?.get(seatName);
+    if (set === undefined) return;
+    for (const ddId of set)
+        ctx.sendNow(ddId, "wl_data_device.selection", {
+            id: 0 as unknown as WaylandObjectId2<"wl_data_offer">,
+        });
+}
+
+/**
+ * offer 剪贴板给本客户端——**跟随键盘焦点**：不指定 seat 时只发给「本客户端正持有键盘焦点」的
+ * 那些 seat 的 data_device（selection 归聚焦者所有，见 wayland.xml 对 selection 的说明）。
+ * 若一个都还没聚焦（桌面 `clipboard.offer` 调得比 `window.focus` 早），退回发给全部 data_device，
+ * 与旧的「全发」行为等价。
+ */
+function offerTo(ctx: ModuleCtx, seatName?: string): void {
+    const devices = ctx.domain.dataDevice.devices;
+    if (!devices) {
+        console.error("No data devices to offer to");
+        return;
+    }
+    let ddIds: WaylandObjectId2<"wl_data_device">[];
+    if (seatName !== undefined) {
+        ddIds = [...(devices.get(seatName) ?? [])];
+    } else {
+        const focused = [...ctx.domain.seat.all()].flatMap((s) => [...(devices.get(s.name) ?? [])]);
+        // 一个 seat 都没聚焦（桌面 `clipboard.offer` 调得比 `window.focus` 早）→ 退回全发，等价旧行为
+        ddIds = focused.length > 0 ? focused : [...devices.values()].flatMap((s) => [...s]);
+    }
+
+    for (const ddId of ddIds) {
         const dataOfferId = ctx.objects.create("wl_data_offer");
         ctx.sendNow(ddId, "wl_data_device.data_offer", { id: dataOfferId });
         ctx.sendNow(dataOfferId, "wl_data_offer.offer", { mime_type: "text/plain;charset=utf-8" });
@@ -406,7 +466,12 @@ export const waylandCoreModule = defineModule({
     /** core 能力的唯一提供者：surface / subsurface 域状态在自己文件里 new，host 不再认识它们 */
     core: (ctx) => {
         const surface = new wlSurfaceData(ctx.scene);
-        return { surface, subsurface: new wlSubSurfaceData(surface) };
+        return {
+            surface,
+            subsurface: new wlSubSurfaceData(surface),
+            /** 键盘焦点单写入点（去重 + 发包 + 扇出），见 `CoreApi.focusKeyboard` */
+            focusKeyboard: (surfaceId, seatName) => focusKeyboard(ctx, surfaceId, seatName),
+        };
     },
     domain: {
         dataDevice: () => ({ devices: undefined, pendingPaste: undefined }),
@@ -429,7 +494,8 @@ export const waylandCoreModule = defineModule({
             version: 1,
             onBind: (msg, ctx) => {
                 const id = msg.id as WaylandObjectId2<"wl_seat">;
-                ctx.domain.seat.addSeat(id);
+                // 本批仍只广播一个 seat（B 批起注册 seat0/seat1 两个 global，名字按 msg.name 分配）
+                ctx.domain.seat.addSeat(id, "seat0");
                 ctx.send(id, "wl_seat.name", { name: "seat0" });
                 ctx.send(id, "wl_seat.capabilities", {
                     capabilities: getEnumValue("wl_seat.capability", ["pointer", "keyboard"]),
@@ -528,9 +594,16 @@ export const waylandCoreModule = defineModule({
         },
         "wl_data_device_manager.get_data_device": (x, ctx) => {
             const ddId = x.args.id;
-            const dataDevices = ctx.domain.dataDevice.devices || new Set();
-            dataDevices.add(ddId);
-            ctx.domain.dataDevice.devices = dataDevices;
+            // 按所属 seat 归组：selection 归该 seat 的键盘焦点所有（跟随键盘焦点）
+            const seatName = ctx.domain.seat.get(x.args.seat)?.name ?? "seat0";
+            const devices: DataDevices = ctx.domain.dataDevice.devices ?? new Map();
+            let set = devices.get(seatName);
+            if (set === undefined) {
+                set = new Set();
+                devices.set(seatName, set);
+            }
+            set.add(ddId);
+            ctx.domain.dataDevice.devices = devices;
         },
         "wl_data_source.offer": (x, ctx) => {
             const src = ctx.objects.get(x.id);
@@ -821,6 +894,16 @@ export const waylandCoreModule = defineModule({
             // 光标surface销毁后隐藏光标
             ctx.cursor.hide(surfaceId);
             ctx.notify.destroy(surfaceId);
+            // 焦点悬挂修复：该 surface 若持有某把 seat 的焦点就**静默清槽**——
+            // 不能向已销毁的对象发 leave（客户端已释放该 id，引用死对象会把连接打死）；
+            // text-input 之类经 `notify.destroy` 收敛自己的状态，不走 focus 通知。
+            for (const seat of ctx.domain.seat.all()) {
+                if (seat.pointerFocus === surfaceId) seat.pointerFocus = null;
+                if (seat.keyboardFocus === surfaceId) {
+                    seat.keyboardFocus = null;
+                    clearSelection(ctx, seat.name);
+                }
+            }
             ctx.core.surface.destroyWlSurface(surfaceId);
             // todo 相关的如subsurface、xdgsurface等
         },
@@ -916,15 +999,27 @@ export const waylandCoreModule = defineModule({
         /** 指针路由：几何命中（`ctx.domain.xdgSurface.hitTest`）→ 焦点转移 → 事件下发；没命中时不发（见 hitTest 的 leave todo） */
         "input.pointer": (msg, ctx) => {
             const ev = msg.args[0];
+            const seat = resolveSeat(ctx, msg.args[1]);
+            if (seat === undefined) return;
             const hit = ctx.domain.xdgSurface.hitTest(msg.winId, { x: ev.x, y: ev.y });
             if (!hit) return;
-            updatePointerFocus(ctx, hit);
-            sendPointer(ctx, ev, hit);
+            updatePointerFocus(ctx, seat, hit);
+            sendPointer(ctx, seat, ev, hit);
         },
-        "input.scroll": (msg, ctx) => sendScroll(ctx, msg.args[0]),
-        "input.key": (msg, ctx) => sendKey(ctx, msg.args[0], msg.args[1]),
+        "input.scroll": (msg, ctx) => {
+            const seat = resolveSeat(ctx, msg.args[1]);
+            if (seat !== undefined) sendScroll(ctx, seat, msg.args[0]);
+        },
+        "input.key": (msg, ctx) => {
+            const seat = resolveSeat(ctx, msg.args[2]);
+            if (seat !== undefined) sendKey(ctx, seat, msg.args[0], msg.args[1]);
+        },
         /** 仲裁交给各 text_input 模块（core 不认识 zwp_* 事件） */
-        "input.text": (msg, ctx) => ctx.notify.textInput(msg.args[0], msg.args[1]),
+        "input.text": (msg, ctx) => {
+            const seat = resolveSeat(ctx, msg.args[2]);
+            if (seat !== undefined) ctx.notify.textInput(seat.name, msg.args[0], msg.args[1]);
+        },
+        /** offer 跟随键盘焦点（见 `offerTo`）；剪贴板内容仍由桌面经 `clipboard.paste` 回填 */
         "clipboard.offer": (_msg, ctx) => offerTo(ctx),
     },
 });

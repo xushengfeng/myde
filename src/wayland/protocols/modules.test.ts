@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { InputEventCodes } from "../../input_codes/types";
-import type { ModuleCtx, WaylandObjectId2, WaylandWinId } from "../module";
+import type { ModuleCtx, SeatRecord, SurfaceId, WaylandObjectId2, WaylandWinId } from "../module";
 import { waylandCoreModule } from "./core/wayland";
 import { cursorShapeModule } from "./ext/cursor_shape";
 import { assertModuleConflicts, protocolModules } from "./index";
@@ -30,7 +30,7 @@ describe("协议模块注册", () => {
             .filter((m) => m.hooks.onFrame || m.hooks.onCommit || m.hooks.onDestroy)
             .map((m) => m.name)
             .sort();
-        expect(withHooks).toEqual(["viewporter", "xdg-shell"]);
+        expect(withHooks).toEqual(["text-input-unstable-v3", "viewporter", "xdg-shell"]);
     });
 });
 
@@ -70,16 +70,23 @@ describe("桌面命令（actions）", () => {
 
         const sent: { id: number; event: string; args: Record<string, unknown> }[] = [];
         const mods = new Set<number>();
+        // per-seat：焦点、键盘、修饰键都挂在 SeatRecord 上
+        const seat = {
+            name: "seat0",
+            keyboard: 7 as WaylandObjectId2<"wl_keyboard">,
+            keyboardFocus: 100 as unknown as SurfaceId,
+            mods,
+        } as unknown as SeatRecord;
         const ctx = {
             domain: {
                 seat: {
-                    keyboards: () => [7 as WaylandObjectId2<"wl_keyboard">],
+                    byName: (name: string) => (name === "seat0" ? seat : undefined),
                     nextSerial: () => 5,
-                    addModifier: (b: number) => mods.add(b),
-                    removeModifier: (b: number) => mods.delete(b),
-                    modifierMask: () => {
+                    addModifier: (s: SeatRecord, b: number) => s.mods.add(b),
+                    removeModifier: (s: SeatRecord, b: number) => s.mods.delete(b),
+                    modifierMask: (s: SeatRecord) => {
                         let mask = 0;
-                        for (const b of mods) mask |= 1 << b;
+                        for (const b of s.mods) mask |= 1 << b;
                         return mask;
                     },
                 },
@@ -93,22 +100,34 @@ describe("桌面命令（actions）", () => {
         expect(sent[0].id).toBe(7);
         expect(sent[0].args).toMatchObject({ serial: 5, key: 30 });
 
-        // 修饰键：key 之后补发 modifiers，掩码来自 seat
+        // 修饰键：key 之后补发 modifiers，掩码来自该 seat
         sent.length = 0;
         action?.({ winId: 1 as WaylandWinId, args: [InputEventCodes.KEY_LEFTSHIFT, "pressed"] }, ctx);
         expect(sent.map((s) => s.event)).toEqual(["wl_keyboard.key", "wl_keyboard.modifiers"]);
         expect(sent[1].args).toMatchObject({ serial: 5, mods_depressed: 1 << 0 });
+
+        // 该 seat 没有键盘焦点：一条都不发（客户端不该收到不属于聚焦窗口的按键）
+        sent.length = 0;
+        seat.keyboardFocus = null;
+        action?.({ winId: 1 as WaylandWinId, args: [30, "pressed"] }, ctx);
+        expect(sent).toEqual([]);
     });
 
-    it("input.text 只是转发，仲裁由各 text_input 模块的 onTextInput 自判", () => {
+    it("input.text 只是转发（带 seat），仲裁由各 text_input 模块的 onTextInput 自判", () => {
         const action = waylandCoreModule.actions.get("input.text");
-        const calls: [string, boolean][] = [];
+        const calls: [string, string, boolean][] = [];
         const ctx = {
-            notify: { textInput: (text: string, preedit: boolean) => calls.push([text, preedit]) },
+            domain: { seat: { byName: (name: string) => (name.startsWith("seat") ? { name } : undefined) } },
+            notify: { textInput: (seat: string, text: string, preedit: boolean) => calls.push([seat, text, preedit]) },
         } as unknown as ModuleCtx;
 
+        // 不传 seat → 缺省 seat0
         action?.({ winId: 1 as WaylandWinId, args: ["hi", true] }, ctx);
-        expect(calls).toEqual([["hi", true]]);
+        expect(calls).toEqual([["seat0", "hi", true]]);
+
+        // 显式另一把 seat → 透传
+        action?.({ winId: 1 as WaylandWinId, args: ["hi", false, "seat1"] }, ctx);
+        expect(calls[1]).toEqual(["seat1", "hi", false]);
     });
 });
 

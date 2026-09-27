@@ -455,7 +455,16 @@ server.notify("window.unmaximize", handle, { width, height });
 server.notify("window.minimize", handle);
 ```
 
+`window.focus` / `window.blur` 是**键盘焦点的唯一入口**——`wl_keyboard.enter/leave`、text-input 的
+enter/leave、剪贴板 selection 归属都跟它走。指针 hover **不**自动切键盘焦点，要不要 focus-follows-mouse
+完全由桌面自己决定（想跟随就在 hover 时调 `window.focus`）。重复 focus/blur 会被内部去重，
+与「目标 focus + 其余 blur」的全量循环配合时与遍历顺序无关。
+
 ### 输入事件
+
+四个 `input.*` 末尾都可以带可选的 `seat`（缺省 `"seat0"`）：多光标 / 多 seat 时按**人**选择，
+是选择器**不是广播**——同一事件发给多个 seat 会被客户端当成几把同步光标（点击双发、文本双打）。
+第二个光标（如远程协作者）就 `server.notify("input.pointer", handle, ev, "seat1")`。
 
 ```typescript
 // x、y 相对该窗口的 xdg_surface 元素左上角（几何原点）
@@ -468,6 +477,9 @@ server.notify("input.key", handle, keyCode, "pressed" | "released");
 //（两者是竞争协议，单客户端内后激活者胜出：v1 activate / v3 enable 抢占，文本只发给持有对象）
 server.notify("input.text", handle, text, preedit);
 ```
+
+发送门槛（没到门槛就静默丢弃，不报错）：`input.key` 只在**该 seat 有键盘焦点**时下发、
+`input.scroll` 只在该 seat 有指针焦点时下发——所以**先 `window.focus` 再注入按键**。
 
 键盘与剪贴板是**连接级**的：同一客户端有多个窗口时按 `clientId` 去重后再发，否则会重复收键。
 剪贴板回填也按 `clientId`（事件里带下来的那个），不走 handle：

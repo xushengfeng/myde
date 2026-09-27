@@ -221,6 +221,8 @@ export class WaylandClient implements Client {
                 surface: undefined!,
                 // biome-ignore lint/style/noNonNullAssertion: 同上
                 subsurface: undefined!,
+                // biome-ignore lint/style/noNonNullAssertion: 同上（键盘焦点单写入点在 core 模块）
+                focusKeyboard: undefined!,
                 registry: {
                     globals: () =>
                         (function* () {
@@ -244,11 +246,11 @@ export class WaylandClient implements Client {
                 destroy: (surfaceId) => {
                     for (const h of destroyHooks) h(surfaceId, this.ctx);
                 },
-                focus: (surfaceId) => {
-                    for (const h of focusHooks) h(surfaceId, this.ctx);
+                focus: (seat, surfaceId) => {
+                    for (const h of focusHooks) h(seat, surfaceId, this.ctx);
                 },
-                textInput: (text, preedit) => {
-                    for (const h of textInputHooks) h(text, preedit, this.ctx);
+                textInput: (seat, text, preedit) => {
+                    for (const h of textInputHooks) h(seat, text, preedit, this.ctx);
                 },
             },
             cursor: this.cursor,

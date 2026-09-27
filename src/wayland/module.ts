@@ -320,6 +320,15 @@ export interface CoreApi {
     surface: wlSurfaceData;
     subsurface: SubSurfaceApi;
     registry: RegistryApi;
+    /**
+     * 键盘焦点转移（**每 seat 一份**，由桌面 `window.focus`/`window.blur` 驱动，hover 不参与）：
+     * 同值直接去重返回；变化才发 `leave`(旧) → `enter`(新) + `modifiers`、写 `seat.keyboardFocus`、
+     * 最后 `ctx.notify.focus(seat, surface)` 扇出给 text-input / selection 等派生物。
+     *
+     * `seat` 缺省 `"seat0"`。两轴独立：xdg 的 `actived` 由 `window.focus` 自己去重维护，
+     * 规范对 `configure(activated)` 与 `wl_keyboard.enter` 的顺序没有要求。
+     */
+    focusKeyboard(surface: SurfaceId | null, seat?: string): void;
 }
 
 /**
@@ -360,16 +369,22 @@ export interface SurfaceHooks {
 }
 
 export interface SeatHooks {
-    /** 现 server.ts:2385/:2390（键盘焦点驱动 text-input enter/leave） */
-    onFocus?(surfaceId: SurfaceId | undefined, ctx: ModuleCtx): void;
+    /**
+     * 某把 seat 的键盘焦点变化（`focusKeyboard` 触发）。`surfaceId === undefined` 表示该 seat 失焦。
+     * seat 名来自 `wl_seat.name`（`"seat0"`/`"seat1"`…），text-input 之类按它过滤自己的对象。
+     */
+    onFocus?(seat: string, surfaceId: SurfaceId | undefined, ctx: ModuleCtx): void;
 }
 
 export interface TextInputHooks {
     /**
      * 桌面注入文本（`input.text`）。仲裁状态在 `ctx.domain.textInput.owner`（core 的域），
      * 各 text_input 模块自判是否持有，非持有者直接 return —— core 不认识 zwp_* 事件。
+     *
+     * `seat` 是发起输入的那把 seat（选择器语义，缺省 `"seat0"`）：持有者若绑定在别的 seat 上，
+     * 说明是另一个人在打字，直接忽略。
      */
-    onTextInput?(text: string, preedit: boolean, ctx: ModuleCtx): void;
+    onTextInput?(seat: string, text: string, preedit: boolean, ctx: ModuleCtx): void;
 }
 
 // ───────────── text-input 状态类型与客户端级事件出口 ─────────────
@@ -387,6 +402,8 @@ export type TextInputV3State = {
 };
 
 export type TextInputV3Data = {
+    /** 该对象绑在哪把 seat 上（`get_text_input(id, seat)` 的 seat 参数；焦点与按键按它过滤） */
+    seat: string;
     /** 是否收到enter，即文本输入焦点在本对象上 */
     entered: boolean;
     /** 客户端commit计数，作为done事件的serial */
@@ -453,34 +470,38 @@ export interface CursorApi {
     isCursorSurface(id: SurfaceId): boolean;
 }
 
-/** 焦点来源：主 surface 还是 popup —— 决定键盘焦点要不要跟着切 */
-export type FocusType = "main" | "popup" | null;
-
 export interface SeatRecord {
+    /** seat 名（registry 广播的第几个 `wl_seat` global：`seat0`/`seat1`…）；`input.*` 的 `seat` 参数按它选择 */
+    name: string;
     pointer?: WaylandObjectId2<"wl_pointer">;
     keyboard?: WaylandObjectId2<"wl_keyboard">;
+    /** 指针焦点：该 seat 的 `wl_pointer` 已 enter 的 surface（leave/enter 的比较基线） */
+    pointerFocus: SurfaceId | null;
+    /**
+     * 键盘焦点：该 seat 的 `wl_keyboard` 已 enter 的 surface。
+     * **由桌面 `window.focus`/`window.blur` 驱动**（hover 政策归桌面，wayland 内部不自作主张）；
+     * 与 xdg 的 `actived` 是两条独立的轴，规范对两者顺序无要求。
+     */
+    keyboardFocus: SurfaceId | null;
+    /** 该 seat 的修饰键位（`mods_depressed` 的掩码原料），两把键盘各记各的 */
+    mods: Set<number>;
 }
 
 export interface SeatApi {
-    addSeat(id: WaylandObjectId2<"wl_seat">): void;
+    addSeat(id: WaylandObjectId2<"wl_seat">, name: string): void;
     get(id: WaylandObjectId2<"wl_seat">): SeatRecord | undefined;
+    /** 按 seat 名取：`input.*` 的 `seat` 参数就按它解析（缺省 `"seat0"`） */
+    byName(name: string): SeatRecord | undefined;
     all(): IterableIterator<SeatRecord>;
-    /** 已创建的 wl_pointer（多 seat 时一次拿全，事件要广播给每个） */
-    pointers(): WaylandObjectId2<"wl_pointer">[];
-    /** 已创建的 wl_keyboard，同上 */
-    keyboards(): WaylandObjectId2<"wl_keyboard">[];
     nextSerial(): number;
-    addModifier(bit: number): void;
-    removeModifier(bit: number): void;
-    modifierMask(): number;
-    focus(): SurfaceId | null;
-    focusType(): FocusType;
-    setFocus(surface: SurfaceId | null, type: FocusType): void;
+    addModifier(seat: SeatRecord, bit: number): void;
+    removeModifier(seat: SeatRecord, bit: number): void;
+    modifierMask(seat: SeatRecord): number;
 }
 
 /**
  * `XdgSurfaceApi.hitTest` 的结果：命中哪个 surface、局部坐标，以及命中的 xdg 角色
- * （决定键盘焦点跟不跟 —— popup 不抢键盘焦点）。
+ * （信息字段：上层据此区分主 surface 与 popup）。
  */
 export interface HitTestResult {
     surface: SurfaceId;
@@ -537,9 +558,10 @@ export interface ModuleCtx {
         /** 像素已合成、渲染之前；返回（可能被替换的）画布 */
         frame(surfaceId: SurfaceId, canvas: OffscreenCanvas, pending: WaylandSurfaceData): OffscreenCanvas;
         destroy(surfaceId: SurfaceId): void;
-        focus(surfaceId: SurfaceId | undefined): void;
+        /** 某把 seat 的键盘焦点变化（`SeatHooks.onFocus` 扇出） */
+        focus(seat: string, surfaceId: SurfaceId | undefined): void;
         /** 桌面注入文本，各 text_input 模块按仲裁结果自判（`TextInputHooks.onTextInput`） */
-        textInput(text: string, preedit: boolean): void;
+        textInput(seat: string, text: string, preedit: boolean): void;
     };
     /** 客户端自身 */
     client: ClientApi;

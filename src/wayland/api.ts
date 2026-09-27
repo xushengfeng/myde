@@ -158,10 +158,14 @@ export type ServerNotifyMap = {
     "window.maximize": [handle: WinHandle, size?: Size];
     "window.unmaximize": [handle: WinHandle, size?: Size];
     "window.minimize": [handle: WinHandle];
-    "input.pointer": [handle: WinHandle, ev: PointerCommand];
-    "input.scroll": [handle: WinHandle, ev: ScrollCommand];
-    "input.key": [handle: WinHandle, key: number, state: "pressed" | "released"];
-    "input.text": [handle: WinHandle, text: string, preedit: boolean];
+    /**
+     * `seat` 是**选择器不是广播位**：缺省 `"seat0"`（本机光标），显式传 `"seat1"` 才驱动第二把。
+     * 一个 seat = 一个人的一套设备，同一事件发给多个 seat 会被客户端当成 N 把同步光标。
+     */
+    "input.pointer": [handle: WinHandle, ev: PointerCommand, seat?: string];
+    "input.scroll": [handle: WinHandle, ev: ScrollCommand, seat?: string];
+    "input.key": [handle: WinHandle, key: number, state: "pressed" | "released", seat?: string];
+    "input.text": [handle: WinHandle, text: string, preedit: boolean, seat?: string];
     /** 把剪贴板内容 offer 给该客户端，通常在获得焦点时调用 */
     "clipboard.offer": [handle: WinHandle];
     /** 剪贴板回填，clientId 来自 `clipboard.pasteRequested` 事件（剪贴板是 client 级而非窗口级） */

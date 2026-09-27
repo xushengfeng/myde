@@ -1,6 +1,6 @@
-import type { FocusType, SeatRecord, WaylandWinId, WindowRecord } from "../../module";
+import type { SeatRecord, WaylandWinId, WindowRecord } from "../../module";
 
-export type { FocusType, SeatRecord, WindowRecord };
+export type { SeatRecord, WindowRecord };
 
 /**
  * 对外出口。实现方是 `protocols/ext/xdg_shell.ts` 的 `domain.windows` initializer

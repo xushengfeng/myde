@@ -22,8 +22,12 @@ export const textInputV1Module = defineModule({
         textInputV1: () => ({ focus: null, m: new Map() }),
     },
     hooks: {
-        /** `input.text` 经 core 转发到这里；只在本协议是仲裁持有者时发（后激活者胜出） */
-        onTextInput: (text, preedit, ctx) => {
+        /**
+         * `input.text` 经 core 转发到这里；只在本协议是仲裁持有者时发（后激活者胜出）。
+         * v1 的 text_input 不绑 seat（`create_text_input` 没有 seat 参数），故忽略 `seat`——
+         * 这也是仲裁槽只能是 client 级的原因之一。
+         */
+        onTextInput: (_seat, text, preedit, ctx) => {
             const owner = ctx.domain.textInput.owner;
             if (owner?.protocol !== "v1") return;
             const input1 = ctx.domain.textInputV1;

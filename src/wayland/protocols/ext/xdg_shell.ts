@@ -4,6 +4,7 @@ import {
     type ModuleCtx,
     type ObjectApi,
     type SubSurfaceApi,
+    type SurfaceId,
     type WaylandObjectId2,
     type WaylandWinId,
     type WindowRecord,
@@ -53,6 +54,19 @@ declare module "../../module" {
  * 窗口几何下发：先发 `xdg_toplevel.configure`（states 按记录算），
  * 再发配套的 `xdg_surface.configure`（xdg_surface 要求一一对应）。
  */
+/**
+ * 键盘焦点挂在哪把 seat 上：`window.focus`/`window.blur` 没有 seat 参数，暂恒为 seat0
+ * （B 批广播 seat1 之后这里要跟着桌面语义重新决策）。
+ */
+const FOCUS_SEAT = "seat0";
+
+/** 该 toplevel 的主 wl_surface —— 键盘焦点落在它上面；已解体的窗口返回 null */
+function mainSurface(ctx: ModuleCtx, winId: WaylandWinId): SurfaceId | null {
+    const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId);
+    if (xdgSurfaceId === undefined) return null;
+    return ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
+}
+
 function configureWin(ctx: ModuleCtx, winId: WaylandWinId, win: WindowRecord): void {
     const s: number[] = [];
     if (win.actived) s.push(getEnumValue("xdg_toplevel.state", "activated"));
@@ -550,19 +564,36 @@ export const xdgShellModule = defineModule({
         },
     },
     actions: {
-        /** 窗口命令：改 `WindowRecord` + 发 configure。语义事件（window.changed 等）仍由 WindowsStore fan-in */
+        /**
+         * 窗口命令：**两轴各自去重、互不派生**（规范对 `configure(activated)` 与
+         * `wl_keyboard.enter` 的顺序没有要求）——
+         * C 轴是 xdg 的 `actived` + configure；seat 轴交 `ctx.core.focusKeyboard`。
+         * 键盘焦点由桌面驱动：hover 政策归桌面（想 focus-follows-mouse 就在 hover 时调本命令）。
+         */
         "window.focus": (msg, ctx) => {
             const win = ctx.domain.windows.get(msg.winId);
-            if (win === undefined || win.actived) return;
-            win.actived = true;
-            win.minimized = false;
-            configureWin(ctx, msg.winId, win);
+            if (win === undefined) return;
+            if (!win.actived) {
+                win.actived = true;
+                win.minimized = false;
+                configureWin(ctx, msg.winId, win);
+            }
+            // 主 surface 已解体的窗口只处理 actived，**不能**把焦点清空（会误伤真正在聚焦的那个）
+            const surface = mainSurface(ctx, msg.winId);
+            if (surface !== null) ctx.core.focusKeyboard(surface, FOCUS_SEAT);
         },
         "window.blur": (msg, ctx) => {
             const win = ctx.domain.windows.get(msg.winId);
-            if (win === undefined || !win.actived) return;
-            win.actived = false;
-            configureWin(ctx, msg.winId, win);
+            if (win === undefined) return;
+            if (win.actived) {
+                win.actived = false;
+                configureWin(ctx, msg.winId, win);
+            }
+            // 只清**自己拥有**的键盘焦点：桌面 `focusWin` 是「目标 focus + 其余 blur」的全量循环，
+            // 这样写与遍历顺序无关，终态一定是目标窗口持有焦点（重复 blur 也被 focusKeyboard 去重）
+            const surface = mainSurface(ctx, msg.winId);
+            if (surface !== null && ctx.domain.seat.byName(FOCUS_SEAT)?.keyboardFocus === surface)
+                ctx.core.focusKeyboard(null, FOCUS_SEAT);
         },
         "window.close": (msg, ctx) => {
             if (ctx.domain.windows.get(msg.winId) === undefined) return;
