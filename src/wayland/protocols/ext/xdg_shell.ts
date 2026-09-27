@@ -33,6 +33,13 @@ declare module "../../module" {
     /** `ctx.domain.xdgSurface` 这个 key 归本模块所有（提供者见下方 `domain`） */
     interface WaylandDomainRegistry {
         xdgSurface: XdgSurfaceApi;
+        /** 连接级 xdg 状态（原 `ClientState.xdg_wm_base` / `appid`） */
+        xdg: {
+            /** 已绑定的 `xdg_wm_base` 对象；host 的 `ping()` 遍历它 */
+            wmBase: Set<WaylandObjectId2<"xdg_wm_base">>;
+            /** 首个 `set_app_id`：语义是 **client 级**，server 把它广播给该客户端的所有窗口 */
+            appid?: string;
+        };
     }
 }
 
@@ -204,7 +211,20 @@ export const xdgShellModule = defineModule({
     /** `ctx.domain.xdgSurface` 的实例；构造时吃 core 提供的 `ctx.core.surface`（装配先跑完 core 两趟） */
     domain: {
         xdgSurface: (ctx) => new xdgSurfaceData(ctx.core.surface),
+        xdg: () => ({ wmBase: new Set(), appid: undefined }),
     },
+    /** 原先是 core `wl_registry.bind` 里的硬编码分支（带 TODO），现在走通用的 onBind */
+    globals: [
+        {
+            name: "xdg_wm_base",
+            version: 1,
+            onBind: (msg, ctx) => {
+                const id = msg.id as WaylandObjectId2<"xdg_wm_base">;
+                ctx.domain.xdg.wmBase.add(id);
+                ctx.objects.setData(id, { pingSerials: new Map() });
+            },
+        },
+    ],
     hooks: {
         /**
          * 由 wl_surface.commit 触发。
@@ -247,7 +267,7 @@ export const xdgShellModule = defineModule({
             thisObj.data.pingSerials.delete(x.args.serial);
         },
         "xdg_wm_base.destroy": (x, ctx) => {
-            ctx.client.state.xdg_wm_base.delete(x.id);
+            ctx.domain.xdg.wmBase.delete(x.id);
         },
         "xdg_positioner.set_size": (x, ctx) => {
             const pData = ctx.objects.get(x.id).data;
@@ -383,8 +403,8 @@ export const xdgShellModule = defineModule({
             ctx.send(x.id, "xdg_popup.popup_done", {});
         },
         "xdg_toplevel.set_app_id": (x, ctx) => {
-            if (!ctx.client.state.appid) {
-                ctx.client.state.appid = x.args.app_id;
+            if (!ctx.domain.xdg.appid) {
+                ctx.domain.xdg.appid = x.args.app_id;
                 ctx.client.emit("appid", x.args.app_id);
             }
         },

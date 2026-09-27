@@ -1,4 +1,11 @@
-import { type ClientState, defineModule, type ModuleCtx, type SurfaceId, type TextInputV3Data } from "../../module";
+import {
+    defineModule,
+    type ModuleCtx,
+    type SurfaceId,
+    type TextInputV3Data,
+    type WaylandDomainRegistry,
+    type WaylandObjectId2,
+} from "../../module";
 import { newTextInputV3State } from "../../utils/text_input";
 import { getEnumName } from "../../utils/wayland-proto";
 
@@ -9,8 +16,18 @@ import { getEnumName } from "../../utils/wayland-proto";
  *
  * 由 server.ts 的 newOp() 迁出；handler 只认 ctx，不接触 WaylandClient。
  */
+declare module "../../module" {
+    interface WaylandDomainRegistry {
+        /** 本协议的连接态（原 `ClientState.textInputV3`）；焦点跟随键盘焦点 */
+        textInputV3: {
+            focus: SurfaceId | null;
+            m: Map<WaylandObjectId2<"zwp_text_input_v3">, TextInputV3Data>;
+        };
+    }
+}
+
 /** 键盘焦点跟随：enter 发给所有 text_input 对象（协议要求），leave 后状态失效 */
-function v3Focus(ti: ClientState["textInputV3"], surface: SurfaceId, ctx: ModuleCtx): void {
+function v3Focus(ti: WaylandDomainRegistry["textInputV3"], surface: SurfaceId, ctx: ModuleCtx): void {
     if (ti.focus === surface) return;
     if (ti.focus !== null) v3Blur(ti, ti.focus, ctx);
     ti.focus = surface;
@@ -20,7 +37,7 @@ function v3Focus(ti: ClientState["textInputV3"], surface: SurfaceId, ctx: Module
     }
 }
 
-function v3Blur(ti: ClientState["textInputV3"], surface: SurfaceId, ctx: ModuleCtx): void {
+function v3Blur(ti: WaylandDomainRegistry["textInputV3"], surface: SurfaceId, ctx: ModuleCtx): void {
     if (ti.focus !== surface) return;
     for (const [id, t] of ti.m) {
         if (!t.entered) continue;
@@ -34,10 +51,13 @@ function v3Blur(ti: ClientState["textInputV3"], surface: SurfaceId, ctx: ModuleC
 
 export const textInputV3Module = defineModule({
     name: "text-input-unstable-v3",
+    domain: {
+        textInputV3: () => ({ focus: null, m: new Map() }),
+    },
     hooks: {
         /** 键盘焦点变化由 core 触发；v3 的 enter/leave 跟随键盘焦点（v1 不跟） */
         onFocus: (surfaceId, ctx) => {
-            const ti = ctx.client.state.textInputV3;
+            const ti = ctx.domain.textInputV3;
             if (surfaceId === undefined) {
                 if (ti.focus !== null) v3Blur(ti, ti.focus, ctx);
                 return;
@@ -46,9 +66,9 @@ export const textInputV3Module = defineModule({
         },
         /** `input.text` 经 core 转发到这里；只在本协议是仲裁持有者时发（后激活者胜出） */
         onTextInput: (text, preedit, ctx) => {
-            const owner = ctx.client.state.textInputOwner;
+            const owner = ctx.domain.textInput.owner;
             if (owner?.protocol !== "v3") return;
-            const t = ctx.client.state.textInputV3.m.get(owner.id);
+            const t = ctx.domain.textInputV3.m.get(owner.id);
             // 未enter或未enable的对象按协议忽略
             if (!t?.entered || !t.current.enabled) return;
             if (preedit) {
@@ -81,58 +101,58 @@ export const textInputV3Module = defineModule({
                 current: newTextInputV3State(),
                 pending: newTextInputV3State(),
             };
-            ctx.client.state.textInputV3.m.set(textInputId, data);
+            ctx.domain.textInputV3.m.set(textInputId, data);
             // 对象创建晚于焦点变化时补发enter
-            const focus = ctx.client.state.textInputV3.focus;
+            const focus = ctx.domain.textInputV3.focus;
             if (focus !== null) {
                 data.entered = true;
                 ctx.sendNow(textInputId, "zwp_text_input_v3.enter", { surface: focus });
             }
         },
         "zwp_text_input_v3.destroy": (x, ctx) => {
-            ctx.client.state.textInputV3.m.delete(x.id);
-            if (ctx.client.state.textInputOwner?.id === x.id) ctx.client.state.textInputOwner = null;
+            ctx.domain.textInputV3.m.delete(x.id);
+            if (ctx.domain.textInput.owner?.id === x.id) ctx.domain.textInput.owner = null;
         },
         "zwp_text_input_v3.enable": (x, ctx) => {
-            const t = ctx.client.state.textInputV3.m.get(x.id);
+            const t = ctx.domain.textInputV3.m.get(x.id);
             if (!t) return;
             // enable会重置所有状态，客户端需重新提交
             t.pending = newTextInputV3State();
             t.pending.enabled = true;
             // v1/v3竞争仲裁：后激活者胜出
-            ctx.client.state.textInputOwner = { protocol: "v3", id: x.id };
+            ctx.domain.textInput.owner = { protocol: "v3", id: x.id };
         },
         "zwp_text_input_v3.disable": (x, ctx) => {
-            const t = ctx.client.state.textInputV3.m.get(x.id);
+            const t = ctx.domain.textInputV3.m.get(x.id);
             if (!t) return;
             // disable同样使状态失效
             t.pending = newTextInputV3State();
-            if (ctx.client.state.textInputOwner?.id === x.id) ctx.client.state.textInputOwner = null;
+            if (ctx.domain.textInput.owner?.id === x.id) ctx.domain.textInput.owner = null;
         },
         "zwp_text_input_v3.set_surrounding_text": (x, ctx) => {
-            const t = ctx.client.state.textInputV3.m.get(x.id);
+            const t = ctx.domain.textInputV3.m.get(x.id);
             if (!t) return;
             t.pending.surroundingText = { text: x.args.text, cursor: x.args.cursor, anchor: x.args.anchor };
         },
         "zwp_text_input_v3.set_text_change_cause": (x, ctx) => {
-            const t = ctx.client.state.textInputV3.m.get(x.id);
+            const t = ctx.domain.textInputV3.m.get(x.id);
             if (!t) return;
             const cause = getEnumName("zwp_text_input_v3.change_cause", x.args.cause);
             t.pending.textChangeCause = cause === "other" ? "other" : "input_method";
         },
         "zwp_text_input_v3.set_content_type": (x, ctx) => {
-            const t = ctx.client.state.textInputV3.m.get(x.id);
+            const t = ctx.domain.textInputV3.m.get(x.id);
             if (!t) return;
             t.pending.contentHint = x.args.hint;
             t.pending.contentPurpose = x.args.purpose;
         },
         "zwp_text_input_v3.set_cursor_rectangle": (x, ctx) => {
-            const t = ctx.client.state.textInputV3.m.get(x.id);
+            const t = ctx.domain.textInputV3.m.get(x.id);
             if (!t) return;
             t.pending.cursorRect = { x: x.args.x, y: x.args.y, width: x.args.width, height: x.args.height };
         },
         "zwp_text_input_v3.commit": (x, ctx) => {
-            const t = ctx.client.state.textInputV3.m.get(x.id);
+            const t = ctx.domain.textInputV3.m.get(x.id);
             if (!t) return;
             t.current = { ...t.pending };
             // change_cause只作用于本次commit，应用后重置

@@ -5,7 +5,6 @@ import type {
     ActionFn,
     ActionKey,
     ActionMsg,
-    ClientState,
     DataOf,
     DomainInit,
     ErrorCode,
@@ -108,8 +107,6 @@ export class WaylandClient implements Client {
     private seat: SeatStore;
     /** 窗口记录与窗口事件的唯一持有者（见 state/windows_store.ts） */
     private windows: WindowsStore;
-    /** 客户端级状态；形状定义在 module.ts 的 ClientState */
-    private obj2: ClientState;
     // 事件存储
     private events: { [K in keyof WaylandClientEventMap]?: WaylandClientEventMap[K][] } = {};
 
@@ -132,12 +129,6 @@ export class WaylandClient implements Client {
         this.pid = socket.pid;
         this.objects = new Map();
         this.host = host;
-        this.obj2 = {
-            textInputV3: { focus: null, m: new Map() },
-            textInputOwner: null,
-            appid: undefined,
-            xdg_wm_base: new Set(),
-        };
         this.render = render;
         this.cursor = new CursorStore(render, (state) => host.cursorChanged(state));
         this.seat = new SeatStore();
@@ -283,7 +274,6 @@ export class WaylandClient implements Client {
                 id: this.id,
                 displayId: this.displayId,
                 protoVersions: this.protoVersions,
-                state: this.obj2,
                 emit: this.emit.bind(this),
                 surfaceBounds: () => this.host.surfaceBounds(),
             },
@@ -555,7 +545,7 @@ export class WaylandClient implements Client {
     }
 
     getAppid() {
-        return this.obj2.appid;
+        return this.ctx.domain.xdg.appid;
     }
     /** 当前光标状态（server 的 `cursor.get(clientId)` 走这条） */
     cursorState(): CursorState {
@@ -699,7 +689,7 @@ export class WaylandClient implements Client {
 
     async ping() {
         const ps: Promise<void>[] = [];
-        for (const id of this.obj2.xdg_wm_base) {
+        for (const id of this.ctx.domain.xdg.wmBase) {
             const p = Promise.withResolvers<void>();
             ps.push(p.promise);
             const serial = Math.floor(Math.random() * 1000000);
@@ -710,11 +700,11 @@ export class WaylandClient implements Client {
     }
 
     paste: (text: string) => void = (text: string) => {
-        if (!this.obj2.pendingPaste) {
+        if (!this.ctx.domain.dataDevice.pendingPaste) {
             console.warn("No pending paste request");
             return;
         }
-        const p = this.obj2.pendingPaste;
+        const p = this.ctx.domain.dataDevice.pendingPaste;
         try {
             // write text into fd
             try {
@@ -737,7 +727,7 @@ export class WaylandClient implements Client {
             } catch {
                 // ignore
             }
-            this.obj2.pendingPaste = undefined;
+            this.ctx.domain.dataDevice.pendingPaste = undefined;
         }
     };
     close() {

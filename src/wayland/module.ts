@@ -356,13 +356,13 @@ export interface SeatHooks {
 
 export interface TextInputHooks {
     /**
-     * 桌面注入文本（`input.text`）。仲裁状态在 `ClientState.textInputOwner`，
+     * 桌面注入文本（`input.text`）。仲裁状态在 `ctx.domain.textInput.owner`（core 的域），
      * 各 text_input 模块自判是否持有，非持有者直接 return —— core 不认识 zwp_* 事件。
      */
     onTextInput?(text: string, preedit: boolean, ctx: ModuleCtx): void;
 }
 
-// ───────────── 客户端级状态与事件 ─────────────
+// ───────────── text-input 状态类型与客户端级事件出口 ─────────────
 
 export type TextInputV3State = {
     /** 是否启用文本输入 */
@@ -480,33 +480,12 @@ export interface HitTestResult {
     role: "main" | "popup";
 }
 
-/** client 级字段：clipboard、text-input 仲裁、appid 等 */
-export interface ClientState {
-    textInputV1?: {
-        focus: WaylandObjectId | null;
-        m: Map<WaylandObjectId2<"zwp_text_input_v1">, { focus: boolean; serial: number }>;
-    };
-    dataDevices?: Set<WaylandObjectId2<"wl_data_device">>;
-    pendingPaste?: { offerId: WaylandObjectId; fd: number; mime: string; timeout: NodeJS.Timeout };
-    /** text-input-v3，焦点跟随键盘焦点 */
-    textInputV3: {
-        focus: SurfaceId | null;
-        m: Map<WaylandObjectId2<"zwp_text_input_v3">, TextInputV3Data>;
-    };
-    /** v1/v3 竞争仲裁的持有对象，null 表示无激活的 text_input */
-    textInputOwner: TextInputOwner | null;
-    xdg_wm_base: Set<WaylandObjectId2<"xdg_wm_base">>;
-    appid: string | undefined;
-}
-
 export interface ClientApi {
     /** 连接 id，仅日志用 */
     id: string;
     displayId: WaylandObjectId2<"wl_display">;
     /** 协议版本继承表（bind 时按父对象版本补） */
     protoVersions: Map<string, number>;
-    /** 客户端级状态 */
-    state: ClientState;
     /** client 级事件；server 订阅后 fan-in 成 server 级事件（见 api.ts） */
     emit<K extends keyof WaylandClientEventMap>(event: K, ...args: Parameters<WaylandClientEventMap[K]>): void;
     /**

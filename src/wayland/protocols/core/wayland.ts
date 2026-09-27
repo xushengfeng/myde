@@ -2,7 +2,7 @@ import { InputEventCodes } from "../../../input_codes/types";
 import type { PointerCommand, ScrollCommand } from "../../api";
 import { defineModule, type HitTestResult, type ModuleCtx, type SurfaceId, type WaylandObjectId2 } from "../../module";
 import type { renderTools } from "../../render_tools";
-import type { WaylandName, WaylandProtocol } from "../../utils/wayland-binary";
+import type { WaylandName, WaylandObjectId, WaylandProtocol } from "../../utils/wayland-binary";
 import { getEnumValue, tryX, waylandObjectId } from "../../utils/wayland-proto";
 
 const fs = require("node:fs") as typeof import("node:fs");
@@ -54,6 +54,18 @@ declare module "../../module" {
         wl_region: {
             rects: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
         };
+    }
+    interface WaylandDomainRegistry {
+        /** wl_data_* 的连接态（原 `ClientState.dataDevices` / `pendingPaste`）；host 的 `paste()` 也从这里读 */
+        dataDevice: {
+            devices?: Set<WaylandObjectId2<"wl_data_device">>;
+            pendingPaste?: { offerId: WaylandObjectId; fd: number; mime: string; timeout: NodeJS.Timeout };
+        };
+        /**
+         * text-input v1/v3 的仲裁槽（后 activate/enable 者持有）：core 只当中立槽位，不解释 zwp_* 事件——
+         * 读写方是各 text_input 模块，触发通道是 core 的 `input.text` action（见 `TextInputHooks.onTextInput`）。
+         */
+        textInput: { owner: TextInputOwner | null };
     }
 }
 
@@ -375,7 +387,7 @@ function sendScroll(ctx: ModuleCtx, ev: ScrollCommand): void {
 
 /** 把剪贴板内容 offer 给该客户端的每个 data_device */
 function offerTo(ctx: ModuleCtx): void {
-    const dd = ctx.client.state.dataDevices;
+    const dd = ctx.domain.dataDevice.devices;
     if (!dd) console.error("No data devices to offer to");
     for (const ddId of dd ?? []) {
         const dataOfferId = ctx.objects.create("wl_data_offer");
@@ -392,6 +404,10 @@ export const waylandCoreModule = defineModule({
     core: (ctx) => {
         const surface = new wlSurfaceData(ctx.scene);
         return { surface, subsurface: new wlSubSurfaceData(surface) };
+    },
+    domain: {
+        dataDevice: () => ({ devices: undefined, pendingPaste: undefined }),
+        textInput: () => ({ owner: null }),
     },
     globals: [
         {
@@ -473,14 +489,8 @@ export const waylandCoreModule = defineModule({
             ctx.client.protoVersions.set(proto.name, (x.args as unknown as { _version?: number })._version ?? 0);
             console.log(`Client ${ctx.client.id} bound ${proto.name} to id ${x.args.id}`);
 
+            // 各 global 的模块级副作用走本模块声明的 globals[].onBind（如 xdg_wm_base 见 ext/xdg_shell.ts）
             ctx.core.registry.globalOf(proto.name)?.onBind?.({ name, id: x.args.id, protocol: proto }, ctx);
-
-            // TODO：xdg_shell 模块声明该 global 后，此分支随之删除
-            if (proto.name === "xdg_wm_base") {
-                const id = x.args.id as WaylandObjectId2<"xdg_wm_base">;
-                ctx.client.state.xdg_wm_base.add(id);
-                ctx.objects.setData(id, { pingSerials: new Map() });
-            }
         },
         "wl_compositor.create_surface": (x, ctx) => {
             const surfaceId = x.args.id;
@@ -513,9 +523,9 @@ export const waylandCoreModule = defineModule({
         },
         "wl_data_device_manager.get_data_device": (x, ctx) => {
             const ddId = x.args.id;
-            const dataDevices = ctx.client.state.dataDevices || new Set();
+            const dataDevices = ctx.domain.dataDevice.devices || new Set();
             dataDevices.add(ddId);
-            ctx.client.state.dataDevices = dataDevices;
+            ctx.domain.dataDevice.devices = dataDevices;
         },
         "wl_data_source.offer": (x, ctx) => {
             const src = ctx.objects.get(x.id);
@@ -529,29 +539,29 @@ export const waylandCoreModule = defineModule({
             const fd = x.args.fd;
 
             // fallback: compositor-local paste flow – keep pendingPaste and emit paste for external handler
-            if (ctx.client.state.pendingPaste) {
+            if (ctx.domain.dataDevice.pendingPaste) {
                 console.warn("Existing pending paste request - rejecting previous");
                 try {
-                    fs.closeSync(ctx.client.state.pendingPaste.fd);
+                    fs.closeSync(ctx.domain.dataDevice.pendingPaste.fd);
                 } catch {
                     // ignore
                 }
-                clearTimeout(ctx.client.state.pendingPaste.timeout);
-                ctx.client.state.pendingPaste = undefined;
+                clearTimeout(ctx.domain.dataDevice.pendingPaste.timeout);
+                ctx.domain.dataDevice.pendingPaste = undefined;
             }
 
             const timeout = setTimeout(() => {
-                if (!ctx.client.state.pendingPaste) return;
+                if (!ctx.domain.dataDevice.pendingPaste) return;
                 console.warn("paste request timed out");
                 try {
-                    fs.closeSync(ctx.client.state.pendingPaste.fd);
+                    fs.closeSync(ctx.domain.dataDevice.pendingPaste.fd);
                 } catch {
                     // ignore
                 }
-                ctx.client.state.pendingPaste = undefined;
+                ctx.domain.dataDevice.pendingPaste = undefined;
             }, 10000);
 
-            ctx.client.state.pendingPaste = { offerId, fd, mime, timeout };
+            ctx.domain.dataDevice.pendingPaste = { offerId, fd, mime, timeout };
             ctx.client.emit("paste");
         },
         "wl_data_device.set_selection": (x, ctx) => {
