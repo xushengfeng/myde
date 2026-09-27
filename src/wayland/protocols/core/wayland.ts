@@ -1,6 +1,6 @@
 import { defineModule, type WaylandObjectId2 } from "../../module";
 import type { WaylandName, WaylandProtocol } from "../../utils/wayland-binary";
-import { getEnumValue, waylandObjectId } from "../../utils/wayland-proto";
+import { getEnumValue, tryX, waylandObjectId } from "../../utils/wayland-proto";
 
 const fs = require("node:fs") as typeof import("node:fs");
 
@@ -523,7 +523,8 @@ export const waylandCoreModule = defineModule({
             }
             // 校验 surface 存在（无效 id 走 postError）
             ctx.objects.get(surfaceId);
-            if (!ctx.core.surface.setRole(surfaceId, "cursor")) {
+            const [_, e] = tryX(() => ctx.core.surface.setWlSurfaceRole(surfaceId, "cursor"));
+            if (e) {
                 ctx.postError("wl_pointer", x.id, "role", "Surface already has another role");
                 return;
             }

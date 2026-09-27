@@ -8,6 +8,7 @@
  * `WaylandDataRegistry` 本身是空的：各协议状态由对应文件的 `declare module`
  * 声明合并进来（`protocols/core/region.ts` 是样板）。
  */
+import type { wlSurfaceData } from "./host/client";
 import type { WaylandEnumObj, WaylandEventObj, WaylandInterfaces, WaylandRequestObj } from "./protocols/wayland-types";
 import type { renderTools } from "./render_tools";
 import type { WaylandName, WaylandObjectId, WaylandOp, WaylandProtocol } from "./utils/wayland-binary";
@@ -250,10 +251,9 @@ export interface RegistryApi {
 /**
  * 扩展可以依赖的 core 能力全集。
  * 这是「协议模块不互相 import」那条原则的落地手段：xdg_shell 之类只认这里，
- * 不认识 wlSurfaceData 这些具体类。
  */
 export interface CoreApi {
-    surface: WlSurfaceApi;
+    surface: wlSurfaceData;
     subsurface: SubSurfaceApi;
     registry: RegistryApi;
 }

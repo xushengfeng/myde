@@ -42,7 +42,7 @@ type WaylandObjectX<T extends WaylandInterfaces> = {
 
 class WaylandSurfaceRoleError extends Error {}
 
-class wlSurfaceData {
+export class wlSurfaceData {
     private wl_surface: Record<
         WaylandObjectId2<"wl_surface">,
         {
@@ -543,27 +543,7 @@ export class WaylandClient implements Client {
             sendNow: (target, event, args) => this.sendMessageImm(target, event, args),
             postError: (iface, id, code, message) => this.postError(iface, id, code, message),
             core: {
-                surface: {
-                    addWlSurface: (id) => this.wlSurface.addWlSurface(id),
-                    getWlSurface: (id) => this.wlSurface.getWlSurface(id),
-                    getRole: (id) => this.wlSurface.getWlSurface(id).role,
-                    setRole: (id, role) => {
-                        try {
-                            this.wlSurface.setWlSurfaceRole(id, role);
-                            return true;
-                        } catch (e) {
-                            if (e instanceof WaylandSurfaceRoleError) return false;
-                            throw e;
-                        }
-                    },
-                    getSize: (id) => this.wlSurface.getWlSurface(id).size,
-                    getFrame: (id) => this.wlSurface.getWlSurface(id).frame,
-                    updateWlSurfaceSize: (id, w, h) => this.wlSurface.updateWlSurfaceSize(id, w, h),
-                    setWlSurfaceOffset: (id, x, y) => this.wlSurface.setWlSurfaceOffset(id, x, y),
-                    renderWlSurface: (id, canvas) => this.wlSurface.renderWlSurface(id, canvas),
-                    destroyWlSurface: (id) => this.wlSurface.destroyWlSurface(id),
-                    idScope: (id) => this.wlSurface.idScope(id),
-                },
+                surface: this.wlSurface,
                 subsurface: {
                     setWlSubSurface: (sub, parent, child) =>
                         this.dataManager.wlSubSurface.setWlSubSurface(sub, parent, child),
