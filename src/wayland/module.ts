@@ -247,18 +247,6 @@ export interface RegistryApi {
     globalOf(interfaceName: string): ModuleGlobal | undefined;
 }
 
-export interface BufferApi {
-    /** 解析 wl_buffer 的 shm/dmabuf 载荷；对象不存在时返回 undefined */
-    get(id: BufferId): WaylandDataRegistry["wl_buffer"] | undefined;
-}
-
-export interface WlSeatApi {
-    /** 当前键盘焦点 surface（现 obj2.focusSurface），null 表示无焦点 */
-    focus(): SurfaceId | null;
-    /** 分配 serial（现 obj2.serial，server.ts:2393-2394） */
-    nextSerial(): number;
-}
-
 /**
  * 扩展可以依赖的 core 能力全集。
  * 这是「协议模块不互相 import」那条原则的落地手段：xdg_shell 之类只认这里，
