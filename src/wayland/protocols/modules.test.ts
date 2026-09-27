@@ -18,9 +18,7 @@ describe("协议模块注册", () => {
 
     it("core 与扩展都已注册", () => {
         const names = protocolModules.map((m) => m.name).sort();
-        expect(names).toContain("wl_surface");
-        expect(names).toContain("wl_registry");
-        expect(names).toContain("viewporter");
+        expect(names).toContain("wayland");
         expect(names).toContain("cursor-shape");
         expect(names).toContain("linux-dmabuf-v1");
     });

@@ -1,15 +1,5 @@
 import type { ProtocolModule } from "../module";
-import { compositorModule } from "./core/compositor";
-import { dataDeviceModule } from "./core/data_device";
-import { displayModule } from "./core/display";
-import { outputModule } from "./core/output";
-import { pointerModule } from "./core/pointer";
-import { regionModule } from "./core/region";
-import { registryModule } from "./core/registry";
-import { seatModule } from "./core/seat";
-import { shmModule } from "./core/shm";
-import { subsurfaceModule } from "./core/subsurface";
-import { surfaceModule } from "./core/surface";
+import { waylandCoreModule } from "./core/wayland";
 import { cursorShapeModule } from "./ext/cursor_shape";
 import { dmabufModule } from "./ext/dmabuf";
 import { textInputV1Module } from "./ext/text_input_v1";
@@ -24,23 +14,13 @@ import { xdgShellModule } from "./ext/xdg_shell";
  * 装配时会校验同一 `接口.请求` 被两个模块声明——现在 `Map.set` 会静默覆盖。
  */
 export const protocolModules: readonly ProtocolModule[] = [
-    displayModule,
-    regionModule,
-    compositorModule,
-    shmModule,
-    surfaceModule,
-    seatModule,
-    pointerModule,
-    registryModule,
-    outputModule,
+    waylandCoreModule,
     viewporterModule,
     cursorShapeModule,
     dmabufModule,
     xdgShellModule,
     textInputV1Module,
     textInputV3Module,
-    subsurfaceModule,
-    dataDeviceModule,
 ];
 
 /** 启动时校验请求键冲突，重复即抛 */
