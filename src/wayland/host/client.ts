@@ -579,8 +579,6 @@ export class WaylandClient implements Client {
                     byName: (name) => waylandProtocolsNameMap.get(name),
                     globalOf: (iface) => globalsByInterface.get(iface),
                 },
-                buffer: { get: (id) => this.getObjectOption(id)?.data },
-                seat: { focus: () => this.seat.focus(), nextSerial: () => this.seat.nextSerial() },
             },
             domain: { xdgSurface: this.dataManager.xdgSurface },
             notify: {

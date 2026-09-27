@@ -268,8 +268,6 @@ export interface CoreApi {
     surface: WlSurfaceApi;
     subsurface: SubSurfaceApi;
     registry: RegistryApi;
-    buffer: BufferApi;
-    seat: WlSeatApi;
 }
 
 // ───────────────────────── 反向通知：core → 扩展 ─────────────────────────
