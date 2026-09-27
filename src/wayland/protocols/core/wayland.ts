@@ -388,6 +388,11 @@ function offerTo(ctx: ModuleCtx): void {
 
 export const waylandCoreModule = defineModule({
     name: "wayland",
+    /** core 能力的唯一提供者：surface / subsurface 域状态在自己文件里 new，host 不再认识它们 */
+    core: (ctx) => {
+        const surface = new wlSurfaceData(ctx.scene);
+        return { surface, subsurface: new wlSubSurfaceData(surface) };
+    },
     globals: [
         {
             name: "wl_shm",

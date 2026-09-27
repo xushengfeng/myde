@@ -30,6 +30,10 @@ declare module "../../module" {
             parent_size: { parent_width: number; parent_height: number };
         };
     }
+    /** `ctx.domain.xdgSurface` 这个 key 归本模块所有（提供者见下方 `domain`） */
+    interface WaylandDomainRegistry {
+        xdgSurface: XdgSurfaceApi;
+    }
 }
 
 /**
@@ -197,6 +201,10 @@ export class xdgSurfaceData {
 
 export const xdgShellModule = defineModule({
     name: "xdg-shell",
+    /** `ctx.domain.xdgSurface` 的实例；构造时吃 core 提供的 `ctx.core.surface`（装配先跑完 core 两趟） */
+    domain: {
+        xdgSurface: (ctx) => new xdgSurfaceData(ctx.core.surface),
+    },
     hooks: {
         /**
          * 由 wl_surface.commit 触发。

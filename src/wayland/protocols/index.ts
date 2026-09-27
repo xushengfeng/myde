@@ -45,4 +45,15 @@ export function assertModuleConflicts(): void {
             actions.set(key, mod.name);
         }
     }
+    /** 域状态 key（`ctx.domain.*`）是装配期静默覆盖的第三类，一并查 */
+    const domains = new Map<string, string>();
+    for (const mod of protocolModules) {
+        for (const key of Object.keys(mod.domain)) {
+            const prev = domains.get(key);
+            if (prev) {
+                throw new Error(`域状态 ${key} 同时由 ${prev} 与 ${mod.name} 声明`);
+            }
+            domains.set(key, mod.name);
+        }
+    }
 }

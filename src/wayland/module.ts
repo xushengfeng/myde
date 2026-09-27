@@ -114,6 +114,11 @@ export interface ModuleGlobal {
     onBind?: (msg: BindMsg, ctx: ModuleCtx) => void;
 }
 
+/** 某个域状态的提供函数；`K` 是 `WaylandDomainRegistry` 的 key（由协议自己 `declare module` 声明） */
+export type DomainInit<K extends keyof WaylandDomainRegistry> = (ctx: ModuleCtx) => WaylandDomainRegistry[K];
+/** 模块声明的域状态提供者表：只允许填自己声明的 key，跨模块重复由 `assertModuleConflicts()` 拦 */
+export type DomainInits = { [K in keyof WaylandDomainRegistry]?: DomainInit<K> };
+
 /** 协议文件导出的书写态 */
 export interface ProtocolModuleDef {
     /** 与生成物 protocols.json 对应，如 "xdg_shell" */
@@ -123,6 +128,13 @@ export interface ProtocolModuleDef {
     /** 桌面命令的出口（`server.notify` → 本表），见 `ActionKey` */
     actions?: ActionHandlers;
     hooks?: Partial<SurfaceHooks & SeatHooks & TextInputHooks>;
+    /**
+     * core 能力的提供者（`registry` 除外——那是 host 对全部 `globals` 的跨模块聚合）。
+     * 域状态实例在自己文件里 `new`，装配知识只写在这里，host 不 import 任何协议的构造。
+     */
+    core?: (ctx: ModuleCtx) => Omit<CoreApi, "registry">;
+    /** 协议域状态的提供者；key 必须是本模块声明进 `WaylandDomainRegistry` 的字段 */
+    domain?: DomainInits;
 }
 
 /** 装配后的运行态：Map 是 host 的分发优化，不暴露给书写者 */
@@ -132,6 +144,10 @@ export interface ProtocolModule {
     requests: ReadonlyMap<RequestKey, NonNullable<RequestHandlers[RequestKey]>>;
     actions: ReadonlyMap<ActionKey, ActionFn>;
     hooks: Partial<SurfaceHooks & SeatHooks & TextInputHooks>;
+    /** 见 `ProtocolModuleDef.core`；没有提供 core 能力的模块为 undefined */
+    core?: (ctx: ModuleCtx) => Omit<CoreApi, "registry">;
+    /** 见 `ProtocolModuleDef.domain` */
+    domain: DomainInits;
 }
 
 /**
@@ -147,6 +163,8 @@ export function defineModule(def: ProtocolModuleDef): ProtocolModule {
         requests: new Map(entries),
         actions: new Map(actions),
         hooks: def.hooks ?? {},
+        core: def.core,
+        domain: def.domain ?? {},
     };
 }
 
@@ -269,6 +287,14 @@ export interface XdgSurfaceApi {
     setOffset(id: XdgSurfaceId, x: number, y: number): void;
     popupDestroyed(popupId: XdgPopupId): void;
     toplevelDestroyed(toplevelId: XdgToplevelId): void;
+    /** 窗口几何：`winGeo` 优先，未声明时退化为 surface 尺寸（host 的 `windowRect`/`windowInBounds` 在用） */
+    getReRect(id: XdgSurfaceId): { w: number; h: number };
+    /** 直接子 xdg_surface 里 role 为 popup 的那些（id + 偏移 + 尺寸），host 的 `hitTest` 在用 */
+    getChildenDeepOnlyPopup(parent: XdgSurfaceId): {
+        id: XdgSurfaceId;
+        offset: { x: number; y: number };
+        size: { w: number; h: number };
+    }[];
 }
 
 export interface RegistryApi {
@@ -289,6 +315,14 @@ export interface CoreApi {
     subsurface: SubSurfaceApi;
     registry: RegistryApi;
 }
+
+/**
+ * 协议域状态注册表：与 `WaylandDataRegistry` 同构，空接口由各协议 `declare module` 合并。
+ * key 即 `ctx.domain` 的字段名，值是该域对外的接口（`XdgSurfaceApi` 之类）；
+ * 实例由声明方模块的 `domain` initializer `new`，host 只按清单跑一遍。
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: 各协议靠 declare module 向这个空 interface 合并域状态 key，改成 type 会让声明合并全部失效
+export interface WaylandDomainRegistry {}
 
 // ───────────────────────── 反向通知：core → 扩展 ─────────────────────────
 
@@ -494,10 +528,10 @@ export interface ModuleCtx {
     send: EventApi["send"];
     sendNow: EventApi["sendNow"];
     postError: EventApi["postError"];
-    /** core 面：扩展唯一可依赖的东西 */
+    /** core 面：扩展唯一可依赖的东西（`registry` 之外由 core 模块的 `core` initializer 提供） */
     core: CoreApi;
-    /** 过渡：xdg 域服务，xdgSurfaceData 迁入 xdg 模块后删除 */
-    domain: { xdgSurface: XdgSurfaceApi };
+    /** 协议域状态；key 见 `WaylandDomainRegistry`，各协议 `declare module` 合并出字段 */
+    domain: WaylandDomainRegistry;
     /** 语义状态单写入点 */
     state: { windows: WindowsApi; cursor: CursorApi; seat: SeatApi };
     /**

@@ -143,6 +143,13 @@ export const exampleModule = defineModule({
     actions: { // 可选：桌面命令的出口（`server.notify` → 这里），键来自 api.ts 的 ServerNotifyMap
         "input.key"(msg, ctx) { /* msg.winId 是 handle 反查后的 xdg_toplevel，msg.args 已去掉 handle */ },
     },
+    core: (ctx) => {  // 可选：只有 core 模块用，提供 Omit<CoreApi,"registry">（surface / subsurface）
+        const surface = new wlSurfaceData(ctx.scene);
+        return { surface, subsurface: new wlSubSurfaceData(surface) };
+    },
+    domain: {  // 可选：本模块的域状态实例；key 先在本文件 declare module 进 WaylandDomainRegistry
+        xdgSurface: (ctx) => new xdgSurfaceData(ctx.core.surface),
+    },
     hooks: { // 可选：core → 本模块的反向通知
         onCommit: (surfaceId, sizeChanged, ctx) => {},
         onFrame: (surfaceId, canvas, pending, ctx) => canvas,
@@ -153,30 +160,36 @@ export const exampleModule = defineModule({
 });
 ```
 
+`core` / `domain` 的 initializer 由 `buildCtx()` 跑两趟执行（先全部 `core`，再 `domain`，
+所以 `domain` 构造函数里能读 `ctx.core`），host 不 import 任何域状态的构造函数。
+
 ### 3. 登记
 
 1. `protocols/index.ts` 的模块清单数组加一行
 2. 本文件顶部的「支持的协议」更新
 3. （可选）需要新 core 能力时才动 `module.ts` 的 `CoreApi` —— 须先与开发者确认
-4. 补一个 fake-ctx 单测（仿 `protocols/modules.test.ts`）
+4. （可选）带自己的域状态时，在本文件 `declare module` 进 `WaylandDomainRegistry` 并给出 `domain` initializer；
+   跨模块重复 key 由 `assertModuleConflicts()` 拦
+5. 补一个 fake-ctx 单测（仿 `protocols/modules.test.ts`）
 
 ### 4. 不变量
 
 - **协议模块之间零运行时 `import`**：只能 import `module.ts`、`api.ts`、`utils/*`、`render_tools`、
   `protocols/wayland-types`（生成物）。`import type` 允许跨协议引类型（编译期擦除、不产生运行时依赖），
   运行时的跨协议关系只能靠 `ctx` 注入或 `hooks`。`assertModuleConflicts()` 在 `WaylandServer`
-  构造时校验请求键与桌面命令键冲突。
-- **域状态类住协议文件**：`wlSurfaceData` / `wlSubSurfaceData` 在 `protocols/core/wayland.ts`，
-  `xdgSurfaceData` 在 `protocols/ext/xdg_shell.ts`；`module.ts` 用 `import type` 取它们作为 `CoreApi` /
-  `ctx.domain` 的形状，host 负责 `new` 并注入（后续改为模块自带 `core`/`domain` initializer 自造）。
+  构造时校验三类冲突：请求键、桌面命令键、域状态 key。
+- **域状态类住协议文件，实例由协议自己造**：`wlSurfaceData` / `wlSubSurfaceData` 在
+  `protocols/core/wayland.ts`（经 `core` initializer 提供），`xdgSurfaceData` 在
+  `protocols/ext/xdg_shell.ts`（经 `domain.xdgSurface` 提供）；`module.ts` 用 `import type`
+  取它们作为 `CoreApi` / `WaylandDomainRegistry` 的形状。host 只跑装配清单，不 `new` 任何域状态。
 - **桌面命令进 `actions`**：`server.notify` 的命令由 `host/server.ts` 反查 handle 后派发
   （`client.runAction`），组包、serial、遍历 seat、状态维护全在协议文件里，host 不写协议事件。
   例外只有 `clipboard.paste`（写 fd，不发协议消息，server 直达 `client.paste`）。
   命令里**只改 `WindowRecord` / 只发 Wayland 事件**，语义事件（`window.changed` 等）仍由 Store fan-in。
 - **`ctx` 是 handler 唯一的依赖来源**：handler 不碰 `this`（`WaylandClient`）。新增能力先进
   `module.ts` 的契约，再接到 `ctx`：连接级的口（`objects`/`send*`/`hitTest`/`scene`/`registry`）由
-  `host/client.ts` 的 `buildCtx()` 接实现，协议域状态的载体是协议文件里的类（现状 host `new`，
-  后续改为模块 initializer 自己造，见上一条）。目前唯一的几何能力是
+  `host/client.ts` 的 `buildCtx()` 接实现，core 能力与协议域状态由各模块的 `core` / `domain`
+  initializer 提供、`buildCtx` 只按清单装配（见上一条）。目前唯一的几何能力是
   `ctx.hitTest`（纯几何，留 host），焦点转移与 enter/leave 在 core 的 `input.pointer` 里。
 - **反向通信只有钩子**：扩展不被 core import，只能声明 `hooks`，由 `host/client.ts` 聚合、
   `ctx.notify.*` 触发。`onCommit`（buffer 已应用、像素尚未合成）与 `onFrame`（已合成、渲染之前）

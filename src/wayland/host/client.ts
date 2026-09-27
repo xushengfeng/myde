@@ -7,16 +7,16 @@ import type {
     ActionMsg,
     ClientState,
     DataOf,
+    DomainInit,
     ErrorCode,
     HitTestResult,
     ModuleCtx,
     RequestMsg,
     WaylandClientEventMap,
+    WaylandDomainRegistry,
     WaylandObjectId2,
     WaylandWinId,
 } from "../module";
-import { wlSubSurfaceData, wlSurfaceData } from "../protocols/core/wayland";
-import { xdgSurfaceData } from "../protocols/ext/xdg_shell";
 import { protocolModules } from "../protocols/index";
 import { type WaylandEventObj, WaylandEventOpcode, type WaylandInterfaces } from "../protocols/wayland-types";
 import type { renderTools } from "../render_tools";
@@ -30,6 +30,19 @@ import { WaylandEncoder } from "../utils/wayland-encoder";
 import { getEnumValue, WaylandProtocols, waylandObjectId, waylandProtocolsNameMap } from "../utils/wayland-proto";
 
 const fs = require("node:fs") as typeof import("node:fs");
+
+/**
+ * 逐 key 写 `ctx.domain`：`domain` 是 `{[K]?: (ctx) => V[K]}` 映射类型，
+ * 只有把 `K` 保持成泛型参数 TS 才允许写入（写进 union key 会报错），断言收在这一处。
+ */
+function initDomain<K extends keyof WaylandDomainRegistry>(
+    domain: WaylandDomainRegistry,
+    key: K,
+    init: DomainInit<K>,
+    ctx: ModuleCtx,
+): void {
+    domain[key] = init(ctx);
+}
 
 /**
  * 单个 wayland 连接：对象表、解码分发、ModuleCtx 构造，以及窗口/输入的执行面。
@@ -97,11 +110,6 @@ export class WaylandClient implements Client {
     private windows: WindowsStore;
     /** 客户端级状态；形状定义在 module.ts 的 ClientState */
     private obj2: ClientState;
-    private wlSurface: wlSurfaceData;
-    private dataManager: {
-        wlSubSurface: wlSubSurfaceData;
-        xdgSurface: xdgSurfaceData;
-    };
     // 事件存储
     private events: { [K in keyof WaylandClientEventMap]?: WaylandClientEventMap[K][] } = {};
 
@@ -143,11 +151,7 @@ export class WaylandClient implements Client {
             unmaximized: (wid) => this.emit("windowUnMaximized", wid),
             titleChanged: (wid, title) => this.emit("title", wid, title),
         });
-        this.wlSurface = new wlSurfaceData(render);
-        this.dataManager = {
-            wlSubSurface: new wlSubSurfaceData(this.wlSurface),
-            xdgSurface: new xdgSurfaceData(this.wlSurface),
-        };
+        // 域状态（surface / subsurface / xdgSurface）由协议模块在装配时自己 new，host 不持有
         this.ctx = this.buildCtx();
         socket.on("data", (data, fds) => {
             this.handleClientMessage(data, fds);
@@ -212,7 +216,7 @@ export class WaylandClient implements Client {
 
     /** 把 module.ts 的空契约接上真实实现；协议模块只认这里，不接触 WaylandClient 本身 */
     private buildCtx(): ModuleCtx {
-        return {
+        const ctx: ModuleCtx = {
             objects: {
                 get: (id) => this.getObject(id),
                 getOption: (id) => this.getObjectOption(id),
@@ -237,15 +241,13 @@ export class WaylandClient implements Client {
             /** 立即写 socket */
             sendNow: (target, event, args) => this.sendMessageImm(target, event, args),
             postError: (iface, id, code, message) => this.postError(iface, id, code, message),
+            // host 只能先给 `registry`（跨模块 `globals` 聚合）；surface/subsurface 是占位，
+            // 由下面的装配循环按 `mod.core` 回填（`undefined!` = 装配前不存在，装配后即为完整对象）
             core: {
-                surface: this.wlSurface,
-                subsurface: {
-                    setWlSubSurface: (sub, parent, child) =>
-                        this.dataManager.wlSubSurface.setWlSubSurface(sub, parent, child),
-                    setPosition: (id, x, y) => this.dataManager.wlSubSurface.setPosition(id, x, y),
-                    destroySubSurface: (id) => this.dataManager.wlSubSurface.destroySubSurface(id),
-                    getChildrenDeep: (parent) => this.dataManager.wlSubSurface.getChildrenDeep(parent),
-                },
+                // biome-ignore lint/style/noNonNullAssertion: 占位，buildCtx 结尾的装配循环按 mod.core 回填
+                surface: undefined!,
+                // biome-ignore lint/style/noNonNullAssertion: 同上
+                subsurface: undefined!,
                 registry: {
                     globals: () =>
                         (function* () {
@@ -255,7 +257,8 @@ export class WaylandClient implements Client {
                     globalOf: (iface) => globalsByInterface.get(iface),
                 },
             },
-            domain: { xdgSurface: this.dataManager.xdgSurface },
+            /** 协议域状态，装配循环按 `protocolModules` 顺序回填 */
+            domain: {} as WaylandDomainRegistry,
             notify: {
                 commit: (surfaceId, sizeChanged) => {
                     for (const h of commitHooks) h(surfaceId, sizeChanged, this.ctx);
@@ -287,6 +290,20 @@ export class WaylandClient implements Client {
             scene: this.render,
             hitTest: (winId, p) => this.hitTest(winId, p),
         };
+
+        // 装配：先跑完全部 `core`（两趟跑，不依赖模块清单顺序），再跑 `domain`——
+        // 域状态的 `new` 都在协议文件里，host 只有这份执行清单。
+        for (const mod of protocolModules) {
+            const coreSlice = mod.core?.(ctx);
+            if (coreSlice) Object.assign(ctx.core, coreSlice);
+        }
+        for (const mod of protocolModules) {
+            for (const key of Object.keys(mod.domain) as (keyof WaylandDomainRegistry)[]) {
+                const init = mod.domain[key];
+                if (init) initDomain(ctx.domain, key, init, ctx);
+            }
+        }
+        return ctx;
     }
 
     private getObject<T extends WaylandInterfaces>(id: WaylandObjectId2<T>): WaylandObjectX<T> {
@@ -549,7 +566,7 @@ export class WaylandClient implements Client {
     }
     /** xdg_surface（窗口元素）id；窗口不存在时 undefined */
     private windowXdgSurface(winId: WaylandWinId): WaylandObjectId2<"xdg_surface"> | undefined {
-        return this.dataManager.xdgSurface.getXdgSurfaceByToplevel(winId);
+        return this.ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId);
     }
 
     /**
@@ -559,9 +576,9 @@ export class WaylandClient implements Client {
     windowRect(winId: WaylandWinId): Rect | undefined {
         const xdgSurfaceId = this.windowXdgSurface(winId);
         if (xdgSurfaceId === undefined) return undefined;
-        const geo = this.dataManager.xdgSurface.getXdgSurface(xdgSurfaceId).winGeo;
+        const geo = this.ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).winGeo;
         if (geo) return { x: geo.x, y: geo.y, w: geo.w, h: geo.h };
-        const size = this.dataManager.xdgSurface.getReRect(xdgSurfaceId);
+        const size = this.ctx.domain.xdgSurface.getReRect(xdgSurfaceId);
         return { x: 0, y: 0, w: size.w, h: size.h };
     }
 
@@ -569,7 +586,7 @@ export class WaylandClient implements Client {
     windowInBounds(winId: WaylandWinId, p: { x: number; y: number }): boolean {
         const xdgSurfaceId = this.windowXdgSurface(winId);
         if (xdgSurfaceId === undefined) return false;
-        const rel = this.dataManager.xdgSurface.getReRect(xdgSurfaceId);
+        const rel = this.ctx.domain.xdgSurface.getReRect(xdgSurfaceId);
         // todo popup
         if (p.x < 0 || p.x >= rel.w || p.y < 0 || p.y >= rel.h) return false;
         return true; // todo
@@ -582,7 +599,7 @@ export class WaylandClient implements Client {
     windowPreview(winId: WaylandWinId): OffscreenCanvas | undefined {
         const xdgSurfaceId = this.windowXdgSurface(winId);
         if (xdgSurfaceId === undefined) return undefined;
-        const rootSurface = this.dataManager.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
+        const rootSurface = this.ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
         return this.getObject(rootSurface).data.canvas;
     }
 
@@ -600,7 +617,7 @@ export class WaylandClient implements Client {
         /** 相对于主xdgsurface坐标，适用于popup */
         const xdgSurfaceOffset = { x: 0, y: 0 };
         let reasonSurfaceType: "main" | "popup" | null = null;
-        const xdgM = this.dataManager.xdgSurface;
+        const xdgM = this.ctx.domain.xdgSurface;
         for (const { id: p, offset, size } of xdgM.getChildenDeepOnlyPopup(xdgSurfaceId).toReversed()) {
             const offsetX = offset.x;
             const offsetY = offset.y;
@@ -632,10 +649,11 @@ export class WaylandClient implements Client {
             offsetRect: { x: number; y: number; w: number; h: number };
         }[] = [];
         const mainSurfaceId = xdgM.getXdgSurface(inXdgSurface).surface;
-        const rel = xdgM.getMainSurfaceRect(inXdgSurface);
+        // 主 surface 尺寸（xdg 域的 getMainSurfaceRect）：手边已有 surface id，直接问 core 的 surface 域
+        const rel = this.ctx.core.surface.getWlSurface(mainSurfaceId).size;
         const { winGeo: selfOffset = { x: 0, y: 0 } } = xdgM.getXdgSurface(inXdgSurface);
         surfaces.push({ id: mainSurfaceId, offsetRect: { x: 0, y: 0, w: rel.w, h: rel.h } });
-        surfaces.push(...this.dataManager.wlSubSurface.getChildrenDeep(mainSurfaceId));
+        surfaces.push(...this.ctx.core.subsurface.getChildrenDeep(mainSurfaceId));
 
         let inSurface: { id: WaylandObjectId2<"wl_surface">; x: number; y: number } | undefined;
         let canSend = false;
