@@ -110,7 +110,6 @@ export interface BindMsg {
 
 export interface ModuleGlobal {
     name: string;
-    version: number;
     onBind?: (msg: BindMsg, ctx: ModuleCtx) => void;
 }
 

@@ -351,7 +351,6 @@ export const xdgShellModule = defineModule({
     globals: [
         {
             name: "xdg_wm_base",
-            version: 1,
             onBind: (msg, ctx) => {
                 const id = msg.id as WaylandObjectId2<"xdg_wm_base">;
                 ctx.domain.xdg.wmBase.add(id);

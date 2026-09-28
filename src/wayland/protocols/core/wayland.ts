@@ -495,7 +495,6 @@ export const waylandCoreModule = defineModule({
     globals: [
         {
             name: "wl_shm",
-            version: 1,
             onBind: (msg, ctx) => {
                 const id = msg.id as WaylandObjectId2<"wl_shm">;
                 ctx.send(id, "wl_shm.format", { format: getEnumValue("wl_shm.format", "argb8888") });
@@ -504,7 +503,6 @@ export const waylandCoreModule = defineModule({
         },
         {
             name: "wl_seat",
-            version: 1,
             onBind: (msg, ctx) => {
                 const id = msg.id as WaylandObjectId2<"wl_seat">;
                 const seatName = seatNameOf(ctx, msg);
@@ -517,7 +515,6 @@ export const waylandCoreModule = defineModule({
         },
         {
             name: "wl_output",
-            version: 1,
             onBind: (msg, ctx) => {
                 const id = msg.id as WaylandObjectId2<"wl_output">;
                 ctx.send(id, "wl_output.name", { name: "output0" });
