@@ -4,8 +4,8 @@
     "description": "my desktop",
     "main": "./out/main/main.js",
     "scripts": {
-        "pack": "npm run build:input && npm run build && electron-builder --dir -c electron-builder.config.js",
-        "dist": "npm run build:input && npm run build && electron-builder -p never -c electron-builder.config.js",
+        "pack": "npm run build && electron-builder --dir -c electron-builder.config.js",
+        "dist": "npm run build && electron-builder -p never -c electron-builder.config.js",
         "dev": "electron-vite --ignoreConfigWarning dev",
         "build": "electron-vite --ignoreConfigWarning build",
         "build:remote-connect": "cd src/remote_connect && pnpm build",
