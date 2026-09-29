@@ -1,4 +1,4 @@
-const { execSync } = require("node:child_process") as typeof import("node:child_process");
+const { exec } = require("node:child_process") as typeof import("node:child_process");
 
 import { EventEmitter } from "../event-emitter/event-emitter";
 
@@ -21,6 +21,18 @@ export interface AudioStream {
     mediaClass?: string;
     volume?: number;
     isMuted?: boolean;
+}
+
+function execSync(x: string): Promise<string> {
+    const { promise, resolve, reject } = Promise.withResolvers<string>();
+    exec(x, { encoding: "utf-8" }, (err, stdo, _stde) => {
+        if (err) {
+            reject(err);
+        } else {
+            resolve(stdo);
+        }
+    });
+    return promise;
 }
 
 export class volumeControl {
@@ -98,7 +110,7 @@ export class volumeControl {
 
     private async refreshDevices() {
         try {
-            const output = execSync("wpctl status", { encoding: "utf-8" });
+            const output = await execSync("wpctl status");
             this.parseDevices(output);
         } catch (_error) {
             // Ignore errors
@@ -107,7 +119,7 @@ export class volumeControl {
 
     private async refreshStreams() {
         try {
-            const output = execSync("wpctl status", { encoding: "utf-8" });
+            const output = await execSync("wpctl status");
             this.parseStreams(output);
         } catch (_error) {
             // Ignore errors
@@ -190,7 +202,7 @@ export class volumeControl {
         }
     }
 
-    private parseStreams(output: string) {
+    private async parseStreams(output: string) {
         const lines = output.split("\n");
         let inStreamsSection = false;
 
@@ -214,7 +226,7 @@ export class volumeControl {
                     const name = mainMatch[2].trim();
 
                     // Get detailed info via wpctl inspect
-                    const streamInfo = this.getStreamInfo(id);
+                    const streamInfo = await this.getStreamInfo(id);
 
                     const stream: AudioStream = {
                         id,
@@ -231,11 +243,11 @@ export class volumeControl {
         }
     }
 
-    private getStreamInfo(
+    private async getStreamInfo(
         streamId: number,
-    ): { pid?: number; type?: "input" | "output"; applicationName?: string; mediaClass?: string } | null {
+    ): Promise<{ pid?: number; type?: "input" | "output"; applicationName?: string; mediaClass?: string } | null> {
         try {
-            const output = execSync(`wpctl inspect ${streamId}`, { encoding: "utf-8" });
+            const output = await execSync(`wpctl inspect ${streamId}`);
 
             let pid: number | undefined;
             let type: "input" | "output" = "output";
@@ -294,9 +306,9 @@ export class volumeControl {
         return this.streams.get(id);
     }
 
-    getDeviceVolume(id: number): number | null {
+    async getDeviceVolume(id: number): Promise<number | null> {
         try {
-            const output = execSync(`wpctl get-volume ${id}`, { encoding: "utf-8" });
+            const output = await execSync(`wpctl get-volume ${id}`);
             const match = output.match(/Volume:\s+([\d.]+)/);
             if (match) {
                 const volume = parseFloat(match[1]);
@@ -308,11 +320,11 @@ export class volumeControl {
         return null;
     }
 
-    setDeviceVolume(id: number, volume: number): boolean {
+    async setDeviceVolume(id: number, volume: number): Promise<boolean> {
         try {
             // Clamp volume between 0 and 1.5 (150%)
             const clampedVolume = Math.max(0, Math.min(1.5, volume));
-            execSync(`wpctl set-volume ${id} ${clampedVolume}`, { encoding: "utf-8" });
+            await execSync(`wpctl set-volume ${id} ${clampedVolume}`);
 
             // Update local cache
             const device = this.devices.get(id);
@@ -326,9 +338,9 @@ export class volumeControl {
         }
     }
 
-    getDeviceMute(id: number): boolean | null {
+    async getDeviceMute(id: number): Promise<boolean | null> {
         try {
-            const output = execSync(`wpctl get-volume ${id}`, { encoding: "utf-8" });
+            const output = await execSync(`wpctl get-volume ${id}`);
             const isMuted = output.includes("MUTED");
             return isMuted;
         } catch (_error) {
@@ -336,10 +348,10 @@ export class volumeControl {
         }
     }
 
-    setDeviceMute(id: number, mute: boolean | "toggle"): boolean {
+    async setDeviceMute(id: number, mute: boolean | "toggle"): Promise<boolean> {
         try {
             const muteValue = mute === "toggle" ? "toggle" : mute ? "1" : "0";
-            execSync(`wpctl set-mute ${id} ${muteValue}`, { encoding: "utf-8" });
+            await execSync(`wpctl set-mute ${id} ${muteValue}`);
 
             // Update local cache
             const device = this.devices.get(id);
@@ -353,9 +365,9 @@ export class volumeControl {
         }
     }
 
-    setDefaultDevice(id: number): boolean {
+    async setDefaultDevice(id: number): Promise<boolean> {
         try {
-            execSync(`wpctl set-default ${id}`, { encoding: "utf-8" });
+            await execSync(`wpctl set-default ${id}`);
 
             // Update local cache
             for (const [deviceId, device] of this.devices) {
@@ -369,9 +381,9 @@ export class volumeControl {
     }
 
     // Stream control methods
-    getStreamVolume(streamId: number): number | null {
+    async getStreamVolume(streamId: number): Promise<number | null> {
         try {
-            const output = execSync(`wpctl get-volume ${streamId}`, { encoding: "utf-8" });
+            const output = await execSync(`wpctl get-volume ${streamId}`);
             const match = output.match(/Volume:\s+([\d.]+)/);
             if (match) {
                 const volume = parseFloat(match[1]);
@@ -383,10 +395,10 @@ export class volumeControl {
         return null;
     }
 
-    setStreamVolume(streamId: number, volume: number): boolean {
+    async setStreamVolume(streamId: number, volume: number): Promise<boolean> {
         try {
             const clampedVolume = Math.max(0, Math.min(1.5, volume));
-            execSync(`wpctl set-volume ${streamId} ${clampedVolume}`, { encoding: "utf-8" });
+            await execSync(`wpctl set-volume ${streamId} ${clampedVolume}`);
 
             // Update local cache
             const stream = this.streams.get(streamId);
@@ -400,9 +412,9 @@ export class volumeControl {
         }
     }
 
-    getStreamMute(streamId: number): boolean | null {
+    async getStreamMute(streamId: number): Promise<boolean | null> {
         try {
-            const output = execSync(`wpctl get-volume ${streamId}`, { encoding: "utf-8" });
+            const output = await execSync(`wpctl get-volume ${streamId}`);
             const isMuted = output.includes("MUTED");
             return isMuted;
         } catch (_error) {
@@ -410,10 +422,10 @@ export class volumeControl {
         }
     }
 
-    setStreamMute(streamId: number, mute: boolean | "toggle"): boolean {
+    async setStreamMute(streamId: number, mute: boolean | "toggle"): Promise<boolean> {
         try {
             const muteValue = mute === "toggle" ? "toggle" : mute ? "1" : "0";
-            execSync(`wpctl set-mute ${streamId} ${muteValue}`, { encoding: "utf-8" });
+            await execSync(`wpctl set-mute ${streamId} ${muteValue}`);
 
             // Update local cache
             const stream = this.streams.get(streamId);
