@@ -255,9 +255,13 @@ class Tools {
         });
         gear.moveTo("hide", 0);
         // todo 回收
+        // 只响应合成 click：原生 click 由下方「输入聚合层」吞掉（其注册早于本监听），永远到不了元素处理器；
+        // 这里再显式忽略一次作为契约，避免日后代码重排回到「合成 click 打开弹窗 → 原生 click 立刻关闭」的
+        // 点击无反应（点击不开弹窗的工具如 apps 不受影响，evdev 来源本来就没有原生事件）
         window.addEventListener(
             "click",
             (e) => {
+                if (e.isTrusted) return;
                 const target = e.target as HTMLElement;
                 if (tipel.gv === true && !tipel.el.contains(target)) {
                     if (launchEl?.contains(target)) e.stopImmediatePropagation();
@@ -2316,6 +2320,97 @@ tools.registerTool(
     });
 })();
 
+// ── 输入聚合层 ────────────────────────────────────────────────────────────────────────────────────
+// DOM 原生事件与 input api（evdev）聚合为统一输入事件流，传入 MSysApi.inputSim 模拟 DOM 事件，
+// UI 组件与 wayland 窗口转发照旧消费模拟出的 DOM 事件
+// 聚合：window capture 捕获真实 DOM 事件 + input api 设备事件，都归一化为 UniInputEvent
+// 来源只以 source 标记保留类型数据（现实难以同源双触发，不做去重）；合成事件（!isTrusted）不回流防环
+// 分发：统一 dispatchInput() → inputSim.emit()，evdev 判定/换算工具见 input_evdev.ts
+// 注册必须早于所有 UI 监听（紧接着的 plant 循环就会注册 Tools 的 window capture click）：被吞掉的原生事件
+// 只对注册在它之后的监听不可见；排在它之前的监听仍会先收到原生事件，而原生 click 不受 preventDefault 影响
+// （它不是兼容鼠标事件）且派发在合成 click 之后，于是同一次物理点击会被处理两遍
+const inputSim = MSysApi.inputSim;
+const inputApi = MSysApi.input;
+
+/** 分发：统一传入新 api（当前行为为模拟 DOM 事件） */
+function dispatchInput(e: UniInputEvent) {
+    inputSim.emit(e);
+}
+
+// 聚合层指针位置（视口坐标）：DOM 事件直接取坐标，evdev 相对设备做位移积分
+const inputPointerPos = { x: Math.floor(window.innerWidth / 2), y: Math.floor(window.innerHeight / 2) };
+
+// 统一重新模拟的真实事件（click/auxclick/contextmenu 等由 inputSim 从 down/up 合成，原生的直接吞掉；
+// hover 类（pointerover/out/enter/leave）不在其中，放行原生事件保持 hover 行为；
+// keydown 原生默认行为也被屏蔽，文本输入由 inputSim 在未被 preventDefault 时补齐）
+const SWALLOWED_EVENTS = [
+    "pointerdown",
+    "pointerup",
+    "pointermove",
+    "mousedown",
+    "mouseup",
+    "mousemove",
+    "wheel",
+    "click",
+    "auxclick",
+    "dblclick",
+    "contextmenu",
+    "keydown",
+    "keyup",
+];
+
+function domInputEvent(e: Event) {
+    if (!e.isTrusted) return; // 合成事件不回流
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    if (e instanceof KeyboardEvent) {
+        dispatchInput({
+            kind: "key",
+            type: e.type === "keydown" ? "down" : "up",
+            code: MInputMap.mapKeyCode(e.code),
+            webCode: e.code,
+            key: e.key,
+            repeat: e.repeat,
+            source: "dom",
+            target: e.target,
+        });
+        return;
+    }
+    if (e instanceof WheelEvent) {
+        dispatchInput({
+            kind: "pointer",
+            type: "wheel",
+            x: e.clientX,
+            y: e.clientY,
+            deltaX: e.deltaX,
+            deltaY: e.deltaY,
+            deltaMode: e.deltaMode,
+            source: "dom",
+            target: e.target,
+        });
+        return;
+    }
+    if (e instanceof PointerEvent && (e.type === "pointerdown" || e.type === "pointerup" || e.type === "pointermove")) {
+        inputPointerPos.x = e.clientX;
+        inputPointerPos.y = e.clientY;
+        dispatchInput({
+            kind: "pointer",
+            type: e.type === "pointerdown" ? "down" : e.type === "pointerup" ? "up" : "move",
+            x: e.clientX,
+            y: e.clientY,
+            button: e.button,
+            pointerType: e.pointerType === "touch" || e.pointerType === "pen" ? e.pointerType : "mouse",
+            pointerId: e.pointerId,
+            source: "dom",
+            target: e.target,
+        });
+    }
+}
+
+for (const type of SWALLOWED_EVENTS) {
+    window.addEventListener(type, domInputEvent, true);
+}
+
 const wino = { t: 0, l: 0, r: 0, b: 0 };
 for (const p of planteData) {
     const plantEl = view().style({ position: "absolute" }).addInto(toolsEl);
@@ -2431,94 +2526,7 @@ server.server.on("cursor.changed", (_clientId, state) => {
     else if (state.canvas) cursor.setImage(state.canvas, state.hotspot.x, state.hotspot.y);
 });
 
-// ── 输入聚合层 ────────────────────────────────────────────────────────────────────────────────────
-// DOM 原生事件与 input api（evdev）聚合为统一输入事件流，传入 MSysApi.inputSim 模拟 DOM 事件，
-// UI 组件与 wayland 窗口转发照旧消费模拟出的 DOM 事件
-// 聚合：window capture 捕获真实 DOM 事件 + input api 设备事件，都归一化为 UniInputEvent
-// 来源只以 source 标记保留类型数据（现实难以同源双触发，不做去重）；合成事件（!isTrusted）不回流防环
-// 分发：统一 dispatchInput() → inputSim.emit()，evdev 判定/换算工具见 input_evdev.ts
-const inputSim = MSysApi.inputSim;
-const inputApi = MSysApi.input;
-
-/** 分发：统一传入新 api（当前行为为模拟 DOM 事件） */
-function dispatchInput(e: UniInputEvent) {
-    inputSim.emit(e);
-}
-
-// 聚合层指针位置（视口坐标）：DOM 事件直接取坐标，evdev 相对设备做位移积分
-const inputPointerPos = { x: Math.floor(window.innerWidth / 2), y: Math.floor(window.innerHeight / 2) };
-
-// 统一重新模拟的真实事件（click/auxclick/contextmenu 等由 inputSim 从 down/up 合成，原生的直接吞掉；
-// hover 类（pointerover/out/enter/leave）不在其中，放行原生事件保持 hover 行为；
-// keydown 原生默认行为也被屏蔽，文本输入由 inputSim 在未被 preventDefault 时补齐）
-const SWALLOWED_EVENTS = [
-    "pointerdown",
-    "pointerup",
-    "pointermove",
-    "mousedown",
-    "mouseup",
-    "mousemove",
-    "wheel",
-    "click",
-    "auxclick",
-    "dblclick",
-    "contextmenu",
-    "keydown",
-    "keyup",
-];
-
-function domInputEvent(e: Event) {
-    if (!e.isTrusted) return; // 合成事件不回流
-    e.stopImmediatePropagation();
-    e.preventDefault();
-    if (e instanceof KeyboardEvent) {
-        dispatchInput({
-            kind: "key",
-            type: e.type === "keydown" ? "down" : "up",
-            code: MInputMap.mapKeyCode(e.code),
-            webCode: e.code,
-            key: e.key,
-            repeat: e.repeat,
-            source: "dom",
-            target: e.target,
-        });
-        return;
-    }
-    if (e instanceof WheelEvent) {
-        dispatchInput({
-            kind: "pointer",
-            type: "wheel",
-            x: e.clientX,
-            y: e.clientY,
-            deltaX: e.deltaX,
-            deltaY: e.deltaY,
-            deltaMode: e.deltaMode,
-            source: "dom",
-            target: e.target,
-        });
-        return;
-    }
-    if (e instanceof PointerEvent && (e.type === "pointerdown" || e.type === "pointerup" || e.type === "pointermove")) {
-        inputPointerPos.x = e.clientX;
-        inputPointerPos.y = e.clientY;
-        dispatchInput({
-            kind: "pointer",
-            type: e.type === "pointerdown" ? "down" : e.type === "pointerup" ? "up" : "move",
-            x: e.clientX,
-            y: e.clientY,
-            button: e.button,
-            pointerType: e.pointerType === "touch" || e.pointerType === "pen" ? e.pointerType : "mouse",
-            pointerId: e.pointerId,
-            source: "dom",
-            target: e.target,
-        });
-    }
-}
-
-for (const type of SWALLOWED_EVENTS) {
-    window.addEventListener(type, domInputEvent, true);
-}
-
+// ── 输入聚合层：evdev（input api）设备接入 ────────────────────────────────────────────────────────
 /** 单个 input api（evdev）设备 → 统一输入事件（帧合并后 emit） */
 function useEvdevDevice(
     input: InputManager,
