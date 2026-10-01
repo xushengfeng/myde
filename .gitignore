@@ -6,6 +6,7 @@ script/xcb/x.xkb
 test/offical/wayland
 dist
 build
+/resources
 **/test/**.pcap
 .VSCodeCounter
 tsconfig*.tsbuildinfo

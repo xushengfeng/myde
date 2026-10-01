@@ -54,7 +54,9 @@ pnpm i
 
 ### 运行在主机上
 
-如果不想以窗口模式运行，需要使用[myde-wrap](https://github.com/xushengfeng/myde-wrap/tree/5b0d9d1)项目，用`cargo build`编译后即可通过`./myde-wrap myde`运行，`myde`可以从release获取。
+如果不想以窗口模式运行，需要使用[myde-wrap](https://github.com/xushengfeng/myde-wrap/tree/983fbc7f0157bc8e3af1a1a522230605c273a3b6)项目，用`cargo build`编译后即可通过`./myde-wrap myde`运行，`myde`可以从release获取。
+
+release 的安装包已内置编译好的 `myde-wrap`；本地执行 `npm run build:myde-wrap` 编译后，`npm run pack`/`npm run dist` 打包时也会自动带上（没有编译过则不打包）。
 
 ## 开发指南
 

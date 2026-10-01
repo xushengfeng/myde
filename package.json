@@ -8,6 +8,7 @@
         "dist": "npm run build && electron-builder -p never -c electron-builder.config.js",
         "dev": "electron-vite --ignoreConfigWarning dev",
         "build": "electron-vite --ignoreConfigWarning build",
+        "build:myde-wrap": "bash script/myde_wrap/build.sh",
         "build:remote-connect": "cd src/remote_connect && pnpm build",
         "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
         "biome": "biome check .",
