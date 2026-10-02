@@ -209,12 +209,12 @@ export class MockVolumeManager {
                 return manager.getStream(id);
             },
 
-            getDeviceVolume(id: number) {
+            async getDeviceVolume(id: number) {
                 const device = manager.getDevice(id);
                 return device?.volume ?? null;
             },
 
-            setDeviceVolume(id: number, volume: number) {
+            async setDeviceVolume(id: number, volume: number) {
                 const device = manager.getDevice(id);
                 if (device) {
                     device.setVolume(volume);
@@ -224,12 +224,12 @@ export class MockVolumeManager {
                 return false;
             },
 
-            getDeviceMute(id: number) {
+            async getDeviceMute(id: number) {
                 const device = manager.getDevice(id);
                 return device?.isMuted ?? null;
             },
 
-            setDeviceMute(id: number, mute: boolean | "toggle") {
+            async setDeviceMute(id: number, mute: boolean | "toggle") {
                 const device = manager.getDevice(id);
                 if (device) {
                     const newMuted = mute === "toggle" ? !device.isMuted : mute;
@@ -240,19 +240,19 @@ export class MockVolumeManager {
                 return false;
             },
 
-            setDefaultDevice(id: number) {
+            async setDefaultDevice(id: number) {
                 for (const [deviceId, device] of manager.devices) {
                     device.setDefault(deviceId === id);
                 }
                 return true;
             },
 
-            getStreamVolume(streamId: number) {
+            async getStreamVolume(streamId: number) {
                 const stream = manager.getStream(streamId);
                 return stream?.volume ?? null;
             },
 
-            setStreamVolume(streamId: number, volume: number) {
+            async setStreamVolume(streamId: number, volume: number) {
                 const stream = manager.getStream(streamId);
                 if (stream) {
                     stream.setVolume(volume);
@@ -262,12 +262,12 @@ export class MockVolumeManager {
                 return false;
             },
 
-            getStreamMute(streamId: number) {
+            async getStreamMute(streamId: number) {
                 const stream = manager.getStream(streamId);
                 return stream?.isMuted ?? null;
             },
 
-            setStreamMute(streamId: number, mute: boolean | "toggle") {
+            async setStreamMute(streamId: number, mute: boolean | "toggle") {
                 const stream = manager.getStream(streamId);
                 if (stream) {
                     const newMuted = mute === "toggle" ? !stream.isMuted : mute;
