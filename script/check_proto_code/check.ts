@@ -10,6 +10,7 @@
  *  - 未实现的请求：协议有、代码没有 handler（析构请求单列，host 会自动删对象）
  *  - 未发送的事件：协议有、代码里没有任何发送点（多为可选事件，只提示）
  *  - 代码里不存在的键：写了但协议里没有，基本是拼写错误（视为错误）
+ *    —— `actions: { … }` 里的桌面命令键不算请求，自动排除
  *
  * 用法：npx tsx script/check_proto_code/check.ts
  */
@@ -76,6 +77,37 @@ function stripComments(src: string): string {
         .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
 }
 
+/**
+ * 找出 `actions: { … }`（桌面命令表）的源码区间。里面的 `"a.b":` 是命令键而非请求 handler。
+ * 平衡括号扫描，跳过字符串字面量，避免内容里的花括号提前配对。
+ */
+function actionsRanges(src: string): [number, number][] {
+    const ranges: [number, number][] = [];
+    for (const m of src.matchAll(/\bactions\s*:\s*\{/g)) {
+        const open = m.index + m[0].length - 1;
+        let depth = 0;
+        for (let i = open; i < src.length; i++) {
+            const c = src[i];
+            if (c === '"' || c === "'" || c === "`") {
+                // 跳过字符串（不处理转义，够用：键名里不会出现配对花括号）
+                const end = src.indexOf(c, i + 1);
+                if (end === -1) break;
+                i = end;
+                continue;
+            }
+            if (c === "{") depth++;
+            else if (c === "}") {
+                depth--;
+                if (depth === 0) {
+                    ranges.push([open, i + 1]);
+                    break;
+                }
+            }
+        }
+    }
+    return ranges;
+}
+
 /** `"a.b"` 后面紧跟 `:`（属性）或 `(`（方法简写）→ 请求 handler 键；排除 `case "a.b":` */
 const REQUEST_KEY_RE = /(?<!case )"([a-z][\w]*)\.([a-z][\w]*)"\s*[:(]/g;
 /** `ctx.send/sendNow(目标, "a.b"` / `sendMessageImm(目标, "a.b"` → 事件发送点 */
@@ -103,8 +135,12 @@ for (const file of files) {
     const src = stripComments(fs.readFileSync(file, "utf8"));
     // 请求 handler 只可能出现在协议模块里（defineModule），host 的桌面命令键不算
     if (file.startsWith(protoDir)) {
+        // `actions:` 里的键是桌面命令（input.key、window.close…），不是协议请求
+        const actions = actionsRanges(src);
         for (const m of src.matchAll(REQUEST_KEY_RE)) {
-            const line = src.slice(0, m.index).split("\n").length;
+            const at = m.index;
+            if (actions.some(([s, e]) => at >= s && at < e)) continue;
+            const line = src.slice(0, at).split("\n").length;
             record(foundRequests, `${m[1]}.${m[2]}`, file, line);
         }
     }
