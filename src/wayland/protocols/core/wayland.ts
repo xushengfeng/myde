@@ -14,7 +14,8 @@ import type { WaylandName, WaylandObjectId, WaylandProtocol } from "../../utils/
 import { getEnumValue, tryX, waylandObjectId } from "../../utils/wayland-proto";
 
 const fs = require("node:fs") as typeof import("node:fs");
-const { convertDmabufToRgba, getElectronPixelFormat } = require("myde-drm") as typeof import("myde-drm");
+const { convertDmabufToRgba, convertDmabufToTexture, getElectronPixelFormat } =
+    require("myde-drm") as typeof import("myde-drm");
 
 import { buildXkb } from "myde-xcb";
 import { newFd } from "../../utils/fd";
@@ -869,11 +870,12 @@ export const waylandCoreModule = defineModule({
                     const modifierX = bufferObj.planes[0];
                     const modifier = (BigInt(modifierX.modifier_hi >>> 0) << 32n) | BigInt(modifierX.modifier_lo >>> 0);
                     const pixelFormat = getElectronPixelFormat(bufferObj.format);
+                    let imageFromGpu: VideoFrame | undefined;
                     let converted: ImageData | undefined;
 
                     if (!pixelFormat) {
                         try {
-                            const rgba = convertDmabufToRgba({
+                            const gpu = convertDmabufToTexture({
                                 width: bufferObj.width,
                                 height: bufferObj.height,
                                 format: bufferObj.format,
@@ -884,17 +886,69 @@ export const waylandCoreModule = defineModule({
                                     stride: p.stride,
                                 })),
                             });
-                            converted = new ImageData(
-                                new Uint8ClampedArray(rgba.buffer as ArrayBuffer, rgba.byteOffset, rgba.byteLength),
-                                bufferObj.width,
-                                bufferObj.height,
-                            );
+                            if (gpu) {
+                                try {
+                                    const t = await importSharedTexture({
+                                        textureInfo: {
+                                            handle: {
+                                                nativePixmap: {
+                                                    planes: gpu.planes.map((p) => ({
+                                                        stride: p.stride,
+                                                        offset: p.offset ?? 0,
+                                                        size: p.size ?? p.stride * bufferObj.height,
+                                                        fd: p.fd,
+                                                    })),
+                                                    modifier: gpu.modifier.toString(),
+                                                    supportsZeroCopyWebGpuImport: true,
+                                                },
+                                            },
+                                            codedSize: { height: bufferObj.height, width: bufferObj.width },
+                                            pixelFormat: gpu.pixelFormat,
+                                        },
+                                    });
+                                    imageFromGpu = t.getVideoFrame();
+                                    t.release();
+                                } finally {
+                                    gpu.close();
+                                }
+                            }
                         } catch (error) {
-                            console.error(`dmabuf format 0x${bufferObj.format.toString(16)} conversion failed:`, error);
+                            console.error(
+                                `dmabuf format 0x${bufferObj.format.toString(16)} GPU conversion failed:`,
+                                error,
+                            );
+                        }
+
+                        if (!imageFromGpu) {
+                            try {
+                                const rgba = convertDmabufToRgba({
+                                    width: bufferObj.width,
+                                    height: bufferObj.height,
+                                    format: bufferObj.format,
+                                    modifier,
+                                    planes: bufferObj.planes.map((p) => ({
+                                        fd: p.fd,
+                                        offset: p.offset,
+                                        stride: p.stride,
+                                    })),
+                                });
+                                converted = new ImageData(
+                                    new Uint8ClampedArray(rgba.buffer as ArrayBuffer, rgba.byteOffset, rgba.byteLength),
+                                    bufferObj.width,
+                                    bufferObj.height,
+                                );
+                            } catch (error) {
+                                console.error(
+                                    `dmabuf format 0x${bufferObj.format.toString(16)} conversion failed:`,
+                                    error,
+                                );
+                            }
                         }
                     }
 
-                    if (converted) {
+                    if (imageFromGpu) {
+                        image = imageFromGpu;
+                    } else if (converted) {
                         image = converted;
                     } else {
                         const t = await importSharedTexture({
