@@ -21,8 +21,8 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
       myde-drm:
-        specifier: link:../myde-drm
-        version: link:../myde-drm
+        specifier: ^0.1.0
+        version: 0.1.0
       myde-input:
         specifier: ^1.0.1
         version: 1.0.1
@@ -1613,6 +1613,11 @@ packages:
 
   myde-dbus@0.4.0:
     resolution: {integrity: sha512-P+Aw60YIR+GjK+EbS7Kwzpczs7eA4zq8ApMi/ttNoov6uNEy8spcBIkuzj9GyG17DueRAF9ZBlUTpcnpw7IF0A==}
+
+  myde-drm@0.1.0:
+    resolution: {integrity: sha512-AE0dbh+lbM6ZE0aCMoNRM+IVeBvmYqWwq0PPnzHfOexM0nvVJd5FQnozRiILB7A3ChLGhydu+r4RgJKopnHP8w==}
+    engines: {node: '>=20'}
+    os: [linux]
 
   myde-input@1.0.1:
     resolution: {integrity: sha512-GcbIYTuu7sNfUWZRzK2k3X8E4h0B7mW6skd0P7O/O80LuqBdkunsGGCWBBB2uYPWIvsrjWP2p5q9QuWXiV+Rmw==}
@@ -3634,6 +3639,8 @@ snapshots:
       msgpackr-extract: 3.0.4
 
   myde-dbus@0.4.0: {}
+
+  myde-drm@0.1.0: {}
 
   myde-input@1.0.1:
     dependencies:

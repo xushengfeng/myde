@@ -11,6 +11,7 @@ minimumReleaseAgeExclude:
   - myde-remote-connect@0.0.5
   - myde-ui@0.0.4 || 0.0.5 || 0.0.7
   - myde-input@1.0.1
+  - myde-drm@0.0.0-stage || 0.1.0
 
 onlyBuiltDependencies:
   - '@biomejs/biome'
