@@ -31,7 +31,7 @@
     - xdg_positioner 部分
 
 - linux-dmabuf-v1
-    - zwp_linux_dmabuf_v1 部分，format和modifier不支持
+    - zwp_linux_dmabuf_v1 部分，只支持 LINEAR modifier；32 位 RGB(A)、NV12、NV16、P010
     - zwp_linux_buffer_params_v1 部分
     - zwp_linux_dmabuf_feedback_v1
 

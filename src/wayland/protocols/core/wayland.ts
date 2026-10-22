@@ -14,9 +14,9 @@ import type { WaylandName, WaylandObjectId, WaylandProtocol } from "../../utils/
 import { getEnumValue, tryX, waylandObjectId } from "../../utils/wayland-proto";
 
 const fs = require("node:fs") as typeof import("node:fs");
+const { convertDmabufToRgba, getElectronPixelFormat } = require("myde-drm") as typeof import("myde-drm");
 
 import { buildXkb } from "myde-xcb";
-import { DRM_FORMAT } from "../../utils/dma-buf";
 import { newFd } from "../../utils/fd";
 import { importSharedTexture } from "../../utils/shared_texture";
 
@@ -867,42 +867,58 @@ export const waylandCoreModule = defineModule({
                     image.data.set(rgba);
                 } else {
                     const modifierX = bufferObj.planes[0];
-                    const modifier = (modifierX.modifier_hi << 32) | modifierX.modifier_lo;
+                    const modifier = (BigInt(modifierX.modifier_hi >>> 0) << 32n) | BigInt(modifierX.modifier_lo >>> 0);
+                    const pixelFormat = getElectronPixelFormat(bufferObj.format);
+                    let converted: ImageData | undefined;
 
-                    const format =
-                        bufferObj.format === DRM_FORMAT.DRM_FORMAT_ARGB8888
-                            ? "bgra"
-                            : bufferObj.format === DRM_FORMAT.DRM_FORMAT_ABGR8888
-                              ? "rgba"
-                              : bufferObj.format === DRM_FORMAT.DRM_FORMAT_NV12
-                                ? "nv12"
-                                : bufferObj.format === DRM_FORMAT.DRM_FORMAT_NV16
-                                  ? "nv16"
-                                  : bufferObj.format === DRM_FORMAT.DRM_FORMAT_P010
-                                    ? "p010le"
-                                    : "bgra";
+                    if (!pixelFormat) {
+                        try {
+                            const rgba = convertDmabufToRgba({
+                                width: bufferObj.width,
+                                height: bufferObj.height,
+                                format: bufferObj.format,
+                                modifier,
+                                planes: bufferObj.planes.map((p) => ({
+                                    fd: p.fd,
+                                    offset: p.offset,
+                                    stride: p.stride,
+                                })),
+                            });
+                            converted = new ImageData(
+                                new Uint8ClampedArray(rgba.buffer as ArrayBuffer, rgba.byteOffset, rgba.byteLength),
+                                bufferObj.width,
+                                bufferObj.height,
+                            );
+                        } catch (error) {
+                            console.error(`dmabuf format 0x${bufferObj.format.toString(16)} conversion failed:`, error);
+                        }
+                    }
 
-                    const t = await importSharedTexture({
-                        textureInfo: {
-                            handle: {
-                                nativePixmap: {
-                                    planes: bufferObj.planes.map((p) => ({
-                                        stride: p.stride,
-                                        offset: p.offset,
-                                        size: p.stride * bufferObj.height,
-                                        fd: p.fd,
-                                    })),
-                                    modifier: modifier.toString(),
-                                    supportsZeroCopyWebGpuImport: true,
+                    if (converted) {
+                        image = converted;
+                    } else {
+                        const t = await importSharedTexture({
+                            textureInfo: {
+                                handle: {
+                                    nativePixmap: {
+                                        planes: bufferObj.planes.map((p) => ({
+                                            stride: p.stride,
+                                            offset: p.offset,
+                                            size: p.stride * bufferObj.height,
+                                            fd: p.fd,
+                                        })),
+                                        modifier: modifier.toString(),
+                                        supportsZeroCopyWebGpuImport: true,
+                                    },
                                 },
+                                codedSize: { height: bufferObj.height, width: bufferObj.width },
+                                pixelFormat: pixelFormat ?? "bgra",
                             },
-                            codedSize: { height: bufferObj.height, width: bufferObj.width },
-                            pixelFormat: format,
-                        },
-                    });
+                        });
 
-                    image = t.getVideoFrame();
-                    t.release();
+                        image = t.getVideoFrame();
+                        t.release();
+                    }
                 }
                 let width = 0,
                     height = 0;

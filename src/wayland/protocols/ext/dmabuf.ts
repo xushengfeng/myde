@@ -41,13 +41,20 @@ export const dmabufModule = defineModule({
         "zwp_linux_dmabuf_v1.get_default_feedback": (x, ctx) => {
             const feedbackId = x.args.id;
 
-            const formatTable = createFormatTableBuffer([
-                { format: DRM_FORMAT.DRM_FORMAT_ARGB8888, modifier: 0n },
-                { format: DRM_FORMAT.DRM_FORMAT_ABGR8888, modifier: 0n },
-                { format: DRM_FORMAT.DRM_FORMAT_NV12, modifier: 0n },
-                { format: DRM_FORMAT.DRM_FORMAT_NV16, modifier: 0n },
-                { format: DRM_FORMAT.DRM_FORMAT_P010, modifier: 0n },
-            ]);
+            const formats = [
+                DRM_FORMAT.DRM_FORMAT_ARGB8888,
+                DRM_FORMAT.DRM_FORMAT_ABGR8888,
+                DRM_FORMAT.DRM_FORMAT_XRGB8888,
+                DRM_FORMAT.DRM_FORMAT_XBGR8888,
+                DRM_FORMAT.DRM_FORMAT_RGBX8888,
+                DRM_FORMAT.DRM_FORMAT_BGRX8888,
+                DRM_FORMAT.DRM_FORMAT_RGBA8888,
+                DRM_FORMAT.DRM_FORMAT_BGRA8888,
+                DRM_FORMAT.DRM_FORMAT_NV12,
+                DRM_FORMAT.DRM_FORMAT_NV16,
+                DRM_FORMAT.DRM_FORMAT_P010,
+            ];
+            const formatTable = createFormatTableBuffer(formats.map((format) => ({ format, modifier: 0n })));
             const { fd } = newFd(new Uint8Array(formatTable.buffer));
             ctx.send(feedbackId, "zwp_linux_dmabuf_feedback_v1.format_table", {
                 fd: fd,
@@ -64,7 +71,7 @@ export const dmabufModule = defineModule({
                 device: a,
             });
             ctx.send(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_formats", {
-                indices: new Uint16Array([0, 1, 2, 3, 4]),
+                indices: new Uint16Array(formats.map((_, index) => index)),
             });
             ctx.send(feedbackId, "zwp_linux_dmabuf_feedback_v1.tranche_flags", {
                 flags: getEnumValue("zwp_linux_dmabuf_feedback_v1.tranche_flags", []),
