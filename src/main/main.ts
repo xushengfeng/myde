@@ -169,17 +169,12 @@ server.on("connection", (socket) => {
         const fds = pendingFds.splice(0, planes.length);
         try {
             for (const [pidx, p] of planes.entries()) p.fd = fds[pidx];
-            console.log(
-                `[shared-texture] 导入 id=${j.id} ${j.options.textureInfo.codedSize.width}x${j.options.textureInfo.codedSize.height} planes=${planes.length} stride=${planes[0]?.stride ?? 0} fds=${fds.join(",")}`,
-            );
             const texture = sharedTexture.importSharedTexture(j.options);
-            console.log(`[shared-texture] 导入完成 id=${j.id}`);
             if (mainWin && !mainWin.isDestroyed()) {
                 sharedTexture.sendSharedTexture(
                     { importedSharedTexture: texture, frame: mainWin.webContents.mainFrame },
                     j.id,
                 );
-                console.log(`[shared-texture] 已发送 id=${j.id}`);
             }
         } catch (e) {
             console.error(`[shared-texture] 导入失败 id=${j.id}:`, e);
