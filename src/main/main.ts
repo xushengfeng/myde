@@ -75,7 +75,12 @@ async function createWin() {
         roundedCorners: !runAsDesktop,
     });
     mainWin = main_window;
-
+    main_window.on("closed", () => sharedLog("main window closed"));
+    main_window.on("unresponsive", () => sharedLog("main window unresponsive"));
+    main_window.webContents.on("render-process-gone", (_e, details) =>
+        sharedLog(`render-process-gone ${JSON.stringify(details)}`),
+    );
+    main_window.webContents.on("destroyed", () => sharedLog("webContents destroyed"));
     if (process.env.desktop === ":test") {
         rendererPath(main_window.webContents, "test.html", {
             query: { userData: app.getPath("userData"), env: JSON.stringify(process.env) },
@@ -150,6 +155,10 @@ const sharedLog = (msg: string) => {
 };
 process.on("uncaughtException", (e: Error) => sharedLog(`uncaughtException ${String(e.stack ?? e)}`));
 process.on("unhandledRejection", (e) => sharedLog(`unhandledRejection ${String(e)}`));
+app.on("before-quit", () => sharedLog("before-quit"));
+app.on("will-quit", () => sharedLog("will-quit"));
+app.on("window-all-closed", () => sharedLog("window-all-closed"));
+app.on("child-process-gone", (_e, details) => sharedLog(`child-process-gone ${JSON.stringify(details)}`));
 
 const server = new mus.UServer();
 server.listen(ipcPath);
