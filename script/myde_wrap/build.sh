@@ -23,7 +23,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 root_dir="$(cd -- "$script_dir/../.." && pwd)"
 
 # myde-wrap 当前固定版本（更新时同步改 .github/workflows/build.yml 与 README）
-default_ref="983fbc7f0157bc8e3af1a1a522230605c273a3b6"
+default_ref="44c604138429c2ace27ed0af1a304d07b2fbddeb"
 
 repo="${MYDE_WRAP_REPO:-https://github.com/xushengfeng/myde-wrap.git}"
 ref="${MYDE_WRAP_REF:-$default_ref}"

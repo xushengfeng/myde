@@ -7,7 +7,7 @@ on:
 
 env:
     # myde-wrap 固定版本（完整 commit hash），与 script/myde_wrap/build.sh 的默认值一致
-    MYDE_WRAP_REF: 983fbc7f0157bc8e3af1a1a522230605c273a3b6
+    MYDE_WRAP_REF: 44c604138429c2ace27ed0af1a304d07b2fbddeb
 
 jobs:
     release:
