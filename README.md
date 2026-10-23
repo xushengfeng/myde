@@ -58,7 +58,12 @@ pnpm i
 
 release 的安装包已内置编译好的 `myde-wrap`；本地执行 `npm run build:myde-wrap` 编译后，`npm run pack`/`npm run dist` 打包时也会自动带上（没有编译过则不打包）。
 
-桌面在主机上运行时由 `myde` 自己直接读取 `/dev/input/event*`（evdev）。需要保证启动用户有读取权限：把用户加入 `input` 组（`sudo usermod -aG input $USER` 后重新登录），或给输入设备添加 `uaccess` udev 规则。否则画面正常但键盘鼠标无响应（`myde-wrap` 启动时会给出提示）。
+桌面在主机上运行时由 `myde` 自己直接读取 `/dev/input/event*`（evdev）。需要保证启动用户有读取权限，否则画面正常但键盘鼠标无响应：
+
+- 推荐：`./script/input_access.sh`（或 `pnpm input:access`）。会给输入设备加 `uaccess` 规则并立即生效，只授权当前活动会话的用户；`script/input_access.sh status` 查看，`remove` 撤销。
+- 或者把用户加入 `input` 组：`sudo usermod -aG input $USER`，重新登录后生效（权限是持久的，跨会话有效）。
+
+`myde-wrap` 启动时如果检测不到可读的输入设备也会给出提示。
 
 ## 开发指南
 

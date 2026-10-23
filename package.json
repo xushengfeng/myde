@@ -9,6 +9,7 @@
         "dev": "electron-vite --ignoreConfigWarning dev",
         "build": "electron-vite --ignoreConfigWarning build",
         "build:myde-wrap": "bash script/myde_wrap/build.sh",
+        "input:access": "bash script/input_access.sh",
         "build:remote-connect": "cd src/remote_connect && pnpm build",
         "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
         "biome": "biome check .",
