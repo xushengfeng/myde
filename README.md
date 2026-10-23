@@ -58,12 +58,12 @@ pnpm i
 
 release 的安装包已内置编译好的 `myde-wrap`；本地执行 `npm run build:myde-wrap` 编译后，`npm run pack`/`npm run dist` 打包时也会自动带上（没有编译过则不打包）。
 
-桌面在主机上运行时由 `myde` 自己直接读取 `/dev/input/event*`（evdev）。需要保证启动用户有读取权限，否则画面正常但键盘鼠标无响应：
+桌面在主机上运行时由 `myde` 自己读 evdev（`myde-input`）。默认（`deviceAccess: "auto"`）先直接读 `/dev/input/event*`——有权限时最省事，也不影响 TTY；读不到再通过 **systemd-logind** `TakeDevice` 取 fd，不需要 `input` 组或 root，VT 切换时会自动暂停/恢复。注意 logind 要求调用者成为会话控制器（`TakeControl`），会关闭该 VT 的键盘：想保留 TTY 里 Ctrl+C 结束程序的开发方式，请用 `direct`/`auto` 并配置权限：
 
-- 推荐：`./script/input_access.sh`（或 `pnpm input:access`）。会给输入设备加 `uaccess` 规则并立即生效，只授权当前活动会话的用户；`script/input_access.sh status` 查看，`remove` 撤销。
-- 或者把用户加入 `input` 组：`sudo usermod -aG input $USER`，重新登录后生效（权限是持久的，跨会话有效）。
+- `./script/input_access.sh`（或 `pnpm input:access`）：给输入设备加 `uaccess` 规则并立即生效，只授权当前活动会话的用户；`status` 查看、`remove` 撤销。
+- 或把用户加入 `input` 组：`sudo usermod -aG input $USER`，重新登录后生效（持久、跨会话）。
 
-`myde-wrap` 启动时如果检测不到可读的输入设备也会给出提示。
+启动日志会打印实际的设备访问方式（`logind` / `direct`）。`myde-wrap` 启动时如果既没有 logind、也读不到输入设备也会提示。
 
 ## 开发指南
 

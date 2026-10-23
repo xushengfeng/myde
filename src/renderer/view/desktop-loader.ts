@@ -87,11 +87,22 @@ async function loadDesktop(p: string) {
         console.warn("[input_method] 初始化失败:", e);
     }
     if (InputManagerCtor) {
-        myde.MSysApi.input = new InputManagerCtor();
+        // 设备优先通过 logind 打开（不需要 input 组/root），失败回退直接读 evdev；
+        // 用 script/input_access.sh 或 input 组可让 direct 回退也可用
+        myde.MSysApi.input = new InputManagerCtor({ deviceAccess: "auto" });
         try {
             const inputResult = await myde.MSysApi.input.init();
             if (!inputResult.ok) {
                 console.warn("[input] 初始化失败:", inputResult.error.message);
+            } else {
+                const mode = myde.MSysApi.input.getAccessMode();
+                const accessError = myde.MSysApi.input.getAccessError();
+                console.log(`[input] 设备访问方式: ${mode}${accessError ? `（logind: ${accessError}）` : ""}`);
+                if (mode === "direct") {
+                    console.warn(
+                        "[input] 未使用 logind，直接读取设备需要权限：运行 ./script/input_access.sh 或把用户加入 input 组",
+                    );
+                }
             }
         } catch (e) {
             console.warn("[input] 初始化异常:", e);

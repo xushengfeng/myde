@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # 给输入设备加 uaccess 规则，让“当前活动会话的用户”能读 /dev/input/event*。
 #
-# myde 在主机（DRM）模式下由桌面自己读 evdev（myde-input），而系统默认只把
-# 输入设备给 root:input，所以不加授权时画面正常但键盘鼠标无响应。
+# myde 优先通过 systemd-logind 打开输入设备（TakeDevice），从 TTY/登录会话
+# 启动时不需要本脚本。只有回退到直接读 evdev（非 systemd、没有 seat 的会话，
+# 或 logind 不可用）时才需要授权：系统默认只把输入设备给 root:input。
 # 这条规则把设备标成 uaccess，由 systemd-logind 给活动会话的用户加 ACL，
 # 不需要把用户永久加入 input 组，也不需要 root 常驻。
 #

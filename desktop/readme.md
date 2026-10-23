@@ -123,7 +123,7 @@ mpris，获取正在播放的媒体相关信息，并控制播放暂停等
 
 原生输入设备读取（evdev），支持键盘、鼠标、触控板、数位板、触屏、游戏手柄。由 `myde-input` 模块提供（Rust 子进程读取，不占用渲染进程线程）。
 
-加载器已完成 `init()`，用 `input.isInitialized()` 判断是否可用（无 `/dev/input` 权限或子进程缺失时为 false，此时应使用 DOM 事件回退）。
+加载器已完成 `init()`，用 `input.isInitialized()` 判断是否可用（子进程缺失时为 false，此时应使用 DOM 事件回退）。`deviceAccess: "auto"`（默认）先直接读 `/dev/input/event*`（有权限时最省事、不影响 TTY），失败再走 systemd-logind `TakeDevice`（不需要权限，但会 `TakeControl` 接管 VT 并关闭该 VT 的键盘，TTY 的 Ctrl+C 不再送到启动它的 shell）；实际方式用 `input.getAccessMode()`（`"logind"` / `"direct"`）查看，构造时可用 `new InputManager({ deviceAccess: "auto" | "logind" | "direct" })` 指定。
 
 ```typescript
 const { input } = MSysApi;
@@ -154,7 +154,7 @@ if (input.isInitialized()) {
 }
 ```
 
-设备信息 (`DeviceInfo`)：`path`、`name`、`type`、`phys`、`vendor`/`product`/`version`、`capabilities`（`eventTypes`/`keyCodes`/`relAxes`/`absAxes`、`hasKeyboard`/`hasMouse`/`hasTouchpad`/`hasTouchscreen`、`maxTouchSlots`）、`touchInfo`（触屏物理轴信息）、`absInfo`（所有绝对轴量程 `Partial<Record<轴码, AxisInfo>>`，只有部分轴存在，绝对定位设备坐标校准用，归一化为小数见 `MInputMap.absRatio`/`absPosMapping`）、`errors`（如权限不足）
+设备信息 (`DeviceInfo`)：`path`、`name`、`type`、`phys`、`vendor`/`product`/`version`、`capabilities`（`eventTypes`/`keyCodes`/`relAxes`/`absAxes`、`hasKeyboard`/`hasMouse`/`hasTouchpad`/`hasTouchscreen`、`maxTouchSlots`）、`touchInfo`（触屏物理轴信息）、`absInfo`（所有绝对轴量程 `Partial<Record<轴码, AxisInfo>>`，只有部分轴存在，绝对定位设备坐标校准用，归一化为小数见 `MInputMap.absRatio`/`absPosMapping`）、`access`（该设备的打开方式 `"logind"` / `"direct"`）、`errors`（如权限不足）
 
 设备类型 (`info.type`)：
 
@@ -181,12 +181,13 @@ if (input.isInitialized()) {
 方法：
 
 - `input.getDevices()` / `input.getDevice(path)` / `input.isInitialized()` / `input.destroy()`
+- `input.getAccessMode()`（实际：`"logind"` / `"direct"`）/ `input.getAccessError()`（回退 direct 时 logind 的失败原因）
 - `dev.startReading()` / `dev.stopReading()` / `dev.isReading()`
 - 方法返回 `Result`：`{ ok: true, value }` 或 `{ ok: false, error: { code, message, detail? } }`，不会抛出异常
 
 按键码为 Linux evdev 键码（如 30=KEY_A、272=BTN_LEFT），浏览器 `e.code` 可用 `MInputMap.mapKeyCode` 转换
 
-权限要求：用户需要在 `input` 组中才能读取 `/dev/input/event*`，否则设备列表为空或 `errors` 提示 Permission denied
+权限要求：logind 模式下只需从登录会话（TTY/显示管理器）启动；回退到 direct 时用户需要能读 `/dev/input/event*`（`input` 组或 `uaccess` 规则，`script/input_access.sh` 可一键配置），否则设备列表为空或 `errors` 提示 Permission denied。VT 切走时 logind 会让读取暂停，切回后用新的 fd 继续。
 
 ### inputSim
 

@@ -2664,9 +2664,12 @@ function useEvdevInput(input: InputManager, emit: (e: UniInputEvent) => void, po
 }
 
 // evdev 原生输入：判定/换算工具见 input_evdev.ts
-if (inputApi?.isInitialized()) {
+// 只在 desktop（DRM/myde-wrap）模式用：此时没有宿主桌面转发指针/键盘事件，
+// 桌面自己读设备。window 模式下 Chromium 已经从宿主合成器拿到 DOM 输入，
+// 再用 evdev 会两路叠加（鼠标位移/按键各走一遍）。
+if (MSysApi.display.getType() === "desktop" && inputApi?.isInitialized()) {
     useEvdevInput(inputApi, dispatchInput, inputPointerPos);
-    console.log("[input] use dom + evdev native input");
+    console.log(`[input] use evdev native input (${inputApi.getAccessMode()})`);
 } else {
     console.log("[input] use dom input");
 }
