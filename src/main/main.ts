@@ -186,11 +186,20 @@ server.on("connection", (socket) => {
             const texture = sharedTexture.importSharedTexture(j.options);
             sharedLog(`imported id=${j.id}`);
             if (mainWin && !mainWin.isDestroyed()) {
-                sharedTexture.sendSharedTexture(
-                    { importedSharedTexture: texture, frame: mainWin.webContents.mainFrame },
-                    j.id,
-                );
-                sharedLog(`sent id=${j.id}`);
+                // sendSharedTexture 有 1000ms 超时；必须处理 rejection，
+                // 否则会变成主进程的 unhandledRejection
+                sharedTexture
+                    .sendSharedTexture(
+                        { importedSharedTexture: texture, frame: mainWin.webContents.mainFrame },
+                        j.id,
+                    )
+                    .then(() => sharedLog(`sent id=${j.id}`))
+                    .catch((e: unknown) => {
+                        sharedLog(`send error id=${j.id}: ${String((e as Error)?.stack ?? e)}`);
+                        try {
+                            texture.release?.();
+                        } catch {}
+                    });
             } else {
                 sharedLog(`no mainWin/destroyed id=${j.id}`);
             }
