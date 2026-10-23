@@ -153,6 +153,21 @@ const sharedLog = (msg: string) => {
         require("node:fs").appendFileSync(sharedLogPath, `${new Date().toISOString()} ${msg}\n`);
     } catch {}
 };
+// 在模块顶层（普通 async context）创建定时器，所有连接的解析都从这里驱动。
+// 不能在 native TSFN 回调里 setImmediate/setInterval：拿到的 async context
+// 可能为空，CheckImmediate 里 v8::Function::Call 会以 null context 崩溃。
+const sharedDrains = new Set<() => void>();
+const sharedTimer = setInterval(() => {
+    for (const drain of sharedDrains) {
+        try {
+            drain();
+        } catch (e) {
+            sharedLog(`drain error ${String(e)}`);
+        }
+    }
+}, 4);
+sharedTimer.unref?.();
+
 process.on("uncaughtException", (e: Error) => sharedLog(`uncaughtException ${String(e.stack ?? e)}`));
 process.on("unhandledRejection", (e) => sharedLog(`unhandledRejection ${String(e)}`));
 app.on("before-quit", () => sharedLog("before-quit"));
@@ -263,14 +278,9 @@ server.on("connection", (socket) => {
         if (fds?.length) pendingFds.push(...fds);
         buffered = buffered.length === 0 ? data : Buffer.concat([buffered, data]);
     });
-    // 从 TSFN 回调里 setImmediate 会继承一个空 async context（CheckImmediate 里
-    // V8 context 为 null 直接崩）。用普通上下文里创建的定时器轮询队列。
-    const timer = setInterval(() => {
-        if (buffered.length >= 4) drain();
-    }, 4);
-    timer.unref?.();
+    sharedDrains.add(drain);
     socket.on("close", () => {
-        clearInterval(timer);
+        sharedDrains.delete(drain);
         closeFds();
     });
     socket.on("end", closeFds);
