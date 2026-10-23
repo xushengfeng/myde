@@ -10,6 +10,14 @@ const sharedTextureCbMap = new Map<number, (cb: ReturnType<typeof sharedTexture.
 export async function importSharedTexture(
     options: Parameters<typeof sharedTexture.importSharedTexture>[0],
 ): Promise<ReturnType<typeof sharedTexture.importSharedTexture>> {
+    // Renderer 内直接导入：subtle API 返回同一份 ImportedSharedTexture，
+    // 有 getVideoFrame/release，不需要把 fd 送到主进程再传回来。
+    const subtle = sharedTexture.subtle;
+    if (subtle?.importSharedTexture) {
+        return subtle.importSharedTexture(options.textureInfo) as unknown as ReturnType<
+            typeof sharedTexture.importSharedTexture
+        >;
+    }
     const id = sharedTextureCounter++;
     const { promise, resolve } = Promise.withResolvers<ReturnType<typeof sharedTexture.importSharedTexture>>();
     sharedTextureCbMap.set(id, resolve);

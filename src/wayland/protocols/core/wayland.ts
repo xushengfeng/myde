@@ -894,6 +894,40 @@ export const waylandCoreModule = defineModule({
                 } else {
                     const modifierX = bufferObj.planes[0];
                     const modifier = (BigInt(modifierX.modifier_hi >>> 0) << 32n) | BigInt(modifierX.modifier_lo >>> 0);
+                    // myde-wrap 目前只提供 wl_shm，没有 zwp_linux_dmabuf_v1；
+                    // Electron 的 GPU 在它下面创建 shared image 会失败（甚至崩 GPU/主进程）。
+                    // 桌面模式先走 CPU 拷贝保证可用；窗口模式（KDE 等）仍走 GPU。
+                    const desktopDisplay =
+                        globalThis.location !== undefined &&
+                        new URLSearchParams(globalThis.location.search).get("displayType") === "desktop";
+                    const forceCpu = desktopDisplay || process.env.MYDE_FORCE_CPU_DMABUF === "1";
+                    if (forceCpu) {
+                        // 诊断/回退：完全不经过主进程 shared texture import，CPU 拷贝
+                        try {
+                            const rgba = convertDmabufToRgba({
+                                width: bufferObj.width,
+                                height: bufferObj.height,
+                                format: bufferObj.format,
+                                modifier,
+                                planes: bufferObj.planes.map((p) => ({
+                                    fd: p.fd,
+                                    offset: p.offset,
+                                    stride: p.stride,
+                                })),
+                            });
+                            image = new ImageData(
+                                new Uint8ClampedArray(rgba.buffer as ArrayBuffer, rgba.byteOffset, rgba.byteLength),
+                                bufferObj.width,
+                                bufferObj.height,
+                            );
+                        } catch (error) {
+                            console.error(
+                                `dmabuf format 0x${bufferObj.format.toString(16)} CPU conversion failed:`,
+                                error,
+                            );
+                            image = new ImageData(new Uint8ClampedArray(4), 1, 1);
+                        }
+                    } else {
                     const pixelFormat = getElectronPixelFormat(bufferObj.format);
                     let imageFromGpu: VideoFrame | undefined;
                     let converted: ImageData | undefined;
@@ -997,6 +1031,7 @@ export const waylandCoreModule = defineModule({
 
                         image = t.getVideoFrame();
                         t.release();
+                    }
                     }
                 }
                 let width = 0,
