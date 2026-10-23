@@ -27,8 +27,26 @@ type DesktopEntry = {
 // 桌面应用列表缓存
 let entriesCache: DesktopEntry[] | null = null;
 let entriesCacheLans: string[] = [];
+// 同一时刻可能有多个调用方请求列表，共享同一次加载，避免重复扫描
+let entriesPending: Promise<DesktopEntry[]> | null = null;
+let entriesPendingLans: string[] = [];
 let watchers: FSWatcher[] = [];
 let isWatching = false;
+
+/** 限制并发的异步映射，避免一次性打开过多文件 */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+    const results: R[] = new Array(items.length);
+    let next = 0;
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while (true) {
+            const index = next++;
+            if (index >= items.length) return;
+            results[index] = await fn(items[index]);
+        }
+    });
+    await Promise.all(workers);
+    return results;
+}
 
 async function _getDesktopEntry(appId: string, dirs: string[], lans: string[] = []) {
     const desktopFile = `${appId}.desktop`;
@@ -62,7 +80,7 @@ async function _getDesktopEntry(appId: string, dirs: string[], lans: string[] = 
 }
 
 async function _loadDesktopEntries(lans: string[] = []): Promise<DesktopEntry[]> {
-    const entries: DesktopEntry[] = [];
+    const jobs: { appId: string; dir: string }[] = [];
     for (const dir of appPaths) {
         let files: string[] = [];
         try {
@@ -71,12 +89,11 @@ async function _loadDesktopEntries(lans: string[] = []): Promise<DesktopEntry[]>
             continue;
         }
         for (const file of files) {
-            const appid = file.replace(/\.desktop$/, "");
-            const e = await _getDesktopEntry(appid, [dir], lans);
-            if (e) entries.push(e);
+            jobs.push({ appId: file.replace(/\.desktop$/, ""), dir });
         }
     }
-    return entries;
+    const entries = await mapLimit(jobs, 32, ({ appId, dir }) => _getDesktopEntry(appId, [dir], lans));
+    return entries.filter((e): e is DesktopEntry => e !== undefined);
 }
 
 function startWatching() {
@@ -113,14 +130,31 @@ async function getDesktopEntries(lans: string[] = []): Promise<DesktopEntry[]> {
         return entriesCache;
     }
 
-    entriesCache = await _loadDesktopEntries(lans);
-    entriesCacheLans = lans;
-    return entriesCache;
+    // 已有相同参数的加载正在进行，直接复用，避免重复读取所有 desktop 文件
+    if (entriesPending && JSON.stringify(entriesPendingLans) === JSON.stringify(lans)) {
+        return entriesPending;
+    }
+
+    entriesPendingLans = lans;
+    const pending = _loadDesktopEntries(lans).then((entries) => {
+        entriesCache = entries;
+        entriesCacheLans = lans;
+        return entries;
+    });
+    entriesPending = pending;
+    try {
+        return await pending;
+    } finally {
+        if (entriesPending === pending) {
+            entriesPending = null;
+        }
+    }
 }
 
 // 强制刷新缓存
 async function refreshDesktopEntries(lans: string[] = []): Promise<DesktopEntry[]> {
     entriesCache = null;
+    entriesPending = null;
     return getDesktopEntries(lans);
 }
 
@@ -137,17 +171,36 @@ export type DesktopIconConfig = {
 
 const iconSizeCache = new Map<string, string[]>();
 const iconBlobCache = new Map<string, string>();
+// 同一个图标（同尺寸/主题）可能被多个调用方同时请求，共享一次查找
+const iconPendingCache = new Map<string, Promise<string | undefined>>();
+const iconMissCache = new Set<string>();
 
-async function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<string | undefined> {
-    if (!_icon) return undefined;
+function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<string | undefined> {
+    if (!_icon) return Promise.resolve(undefined);
 
     const cacheKey = `${_icon}:${op?.size || 48}:${op?.scale || 1}:${op?.theme || ""}:${op?.themeBasePath || ""}`;
 
     // 检查缓存
-    if (iconBlobCache.has(cacheKey)) {
-        return iconBlobCache.get(cacheKey);
+    const cached = iconBlobCache.get(cacheKey);
+    if (cached !== undefined) {
+        return Promise.resolve(cached);
+    }
+    if (iconMissCache.has(cacheKey)) {
+        return Promise.resolve(undefined);
+    }
+    const pending = iconPendingCache.get(cacheKey);
+    if (pending) {
+        return pending;
     }
 
+    const task = _getDesktopIcon(_icon, op, cacheKey).finally(() => {
+        iconPendingCache.delete(cacheKey);
+    });
+    iconPendingCache.set(cacheKey, task);
+    return task;
+}
+
+async function _getDesktopIcon(_icon: string, op: DesktopIconConfig | undefined, cacheKey: string) {
     let iconPath: string | undefined;
 
     // 如果 icon 是绝对路径或文件存在则直接使用
@@ -303,7 +356,10 @@ async function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<st
         }
     }
 
-    if (!iconPath) return undefined;
+    if (!iconPath) {
+        iconMissCache.add(cacheKey);
+        return undefined;
+    }
 
     // 读取文件并创建 blob URL
     try {
@@ -315,6 +371,7 @@ async function getDesktopIcon(_icon: string, op?: DesktopIconConfig): Promise<st
         iconBlobCache.set(cacheKey, blobUrl);
         return blobUrl;
     } catch {
+        iconMissCache.add(cacheKey);
         return undefined;
     }
 }

@@ -790,15 +790,13 @@ function jump2Win(winid: MWinId) {
 }
 
 function appLauncher(iconPath: () => Promise<string>, name: string, exec: string) {
-    const p = appIcon(iconPath, name);
-    p.on("click", () => {
-        console.log("exec", exec);
-        server.runApp(exec);
-    });
+    const p = appIconEl(exec);
+    loadAppIcon(p, iconPath, name);
     return p;
 }
 
-function appIcon(iconPath: () => Promise<string>, name: string) {
+/** 只创建应用图标容器，图标由调用方在需要时再加载 */
+function appIconEl(exec?: string) {
     const p = view().style({
         width: "48px",
         height: "48px",
@@ -808,17 +806,83 @@ function appIcon(iconPath: () => Promise<string>, name: string) {
         background: "#ffffff",
         flexShrink: 0,
     });
-    iconPath().then((iconPath) => {
-        if (iconPath)
-            image(iconPath, name)
+    if (exec !== undefined) {
+        p.on("click", () => {
+            console.log("exec", exec);
+            server.runApp(exec);
+        });
+    }
+    return p;
+}
+
+const rasterizedIconCache = new Map<string, Promise<string>>();
+
+/**
+ * 把 SVG 图标提前画成位图。
+ * 直接使用 SVG 时，每次滚动进视口或缩放都要重新光栅化，复杂图标会明显掉帧。
+ */
+function rasterizeIcon(url: string, size: number): Promise<string> {
+    const dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+    const pixel = Math.max(1, Math.round(size * dpr));
+    const cacheKey = `${url}:${pixel}`;
+    const cached = rasterizedIconCache.get(cacheKey);
+    if (cached) return cached;
+
+    const task = (async () => {
+        try {
+            const blob = await (await fetch(url)).blob();
+            if (blob.type !== "image/svg+xml" && !url.startsWith("data:image/svg+xml")) {
+                return url;
+            }
+            const img = new Image();
+            img.decoding = "async";
+            img.src = url;
+            await img.decode();
+
+            const canvas = document.createElement("canvas");
+            canvas.width = pixel;
+            canvas.height = pixel;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return url;
+
+            // 与原 object-fit: cover 一致，保持比例并裁掉多余部分
+            const iw = img.naturalWidth || pixel;
+            const ih = img.naturalHeight || pixel;
+            const scale = Math.max(pixel / iw, pixel / ih);
+            const w = iw * scale;
+            const h = ih * scale;
+            ctx.drawImage(img, (pixel - w) / 2, (pixel - h) / 2, w, h);
+
+            // toDataURL 同步完成，比 canvas.toBlob（隐藏/后台窗口下可能等约 1s）稳定得多
+            return canvas.toDataURL("image/png");
+        } catch {
+            return url;
+        }
+    })();
+    rasterizedIconCache.set(cacheKey, task);
+    return task;
+}
+
+function loadAppIcon(
+    p: ReturnType<typeof appIconEl>,
+    iconPath: () => Promise<string>,
+    name: string,
+    op?: { rasterSize?: number },
+) {
+    return iconPath()
+        .then(async (iconPath) => {
+            if (!iconPath) return;
+            const src = op?.rasterSize === undefined ? iconPath : await rasterizeIcon(iconPath, op.rasterSize);
+            image(src, name)
+                .attr({ loading: "lazy", decoding: "async", draggable: false })
                 .style({
                     width: "100%",
                     height: "100%",
                     objectFit: "cover",
                 })
                 .addInto(p);
-    });
-    return p;
+        })
+        .catch(() => {});
 }
 
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): boolean {
@@ -1753,7 +1817,13 @@ tools.registerTool("showAllView", () => {
     return showAllViewBtn;
 });
 
-tools.registerTool("startMenuFullScreen", ({ tipEl, showTip }) => {
+type DesktopApp = Awaited<ReturnType<typeof MSysApi.getDesktopEntries>>[number];
+
+/** 开始菜单：按需构建应用格子，图标只在实际可见时加载 */
+function createStartMenu(
+    tipEl: HTMLElement,
+    showTip: (op?: { state?: "show" | "hide" | "toggle"; anchorEl?: HTMLElement }) => void,
+) {
     const iconConfig: DesktopIconConfig = {
         theme: setting.get("icon.theme"),
     };
@@ -1763,43 +1833,124 @@ tools.registerTool("startMenuFullScreen", ({ tipEl, showTip }) => {
             height: "80vh",
             padding: "20px",
             borderRadius: "20px",
-            overflowY: "scroll",
+            // 内容滚动交给菜单自身，避免整个桌面参与滚动和重排
+            overflowY: "auto",
+            alignContent: "flex-start",
+            background: "rgba(245, 245, 245, 0.96)",
+            boxShadow: "0 8px 32px #00000033",
+            contain: "layout paint style",
         })
-        .addInto(mainEl);
-    MSysApi.getDesktopEntries().then(async (apps) => {
-        for (const app of apps) {
-            await scheduler.yield();
-            const appEl = view("y")
-                .style({
-                    width: "80px",
-                    height: "80px",
-                    alignItems: "center",
-                    justifyContent: "flex-start",
-                })
-                .addInto(menu);
-            const iconView = view().addInto(appEl);
-            iconView.add(
-                appLauncher(
-                    async () => (await MSysApi.getDesktopIcon(app.icon, iconConfig)) || "",
-                    app.name,
-                    app.exec,
-                ).style({
-                    width: "40px",
-                    height: "40px",
-                }),
-            );
-            appEl.add(
-                txt(app.nameLocal).style({
-                    fontSize: "12px",
-                    maxWidth: "80%",
-                    overflow: "hidden",
-                    textAlign: "center",
-                }),
-            );
+        .addInto(tipEl);
+    const loadingEl = txt("正在加载应用…").style({ padding: "8px", opacity: "0.6" }).addInto(menu);
+
+    // 图标查找是异步文件 IO，限制并发避免一次可见几十个图标时产生 IO 峰值
+    const iconQueue: (() => Promise<void>)[] = [];
+    let iconRunning = 0;
+    function enqueueIcon(task: () => Promise<void>) {
+        iconQueue.push(task);
+        const next = () => {
+            while (iconRunning < 6 && iconQueue.length > 0) {
+                const job = iconQueue.shift();
+                if (!job) break;
+                iconRunning++;
+                job()
+                    .catch(() => {})
+                    .finally(() => {
+                        iconRunning--;
+                        next();
+                    });
+            }
+        };
+        next();
+    }
+
+    const iconLoaders = new WeakMap<HTMLElement, () => Promise<void>>();
+    let observer: IntersectionObserver | undefined;
+    if (typeof IntersectionObserver !== "undefined") {
+        observer = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    if (!entry.isIntersecting) continue;
+                    const target = entry.target as HTMLElement;
+                    const load = iconLoaders.get(target);
+                    if (!load) continue;
+                    iconLoaders.delete(target);
+                    observer?.unobserve(target);
+                    enqueueIcon(load);
+                }
+            },
+            // 菜单隐藏时不会触发；打开后只加载视口附近的行
+            { root: menu.el, rootMargin: "120px 0px" },
+        );
+    }
+
+    function createAppTile(app: DesktopApp) {
+        const appEl = view("y")
+            .style({
+                width: "80px",
+                height: "80px",
+                alignItems: "center",
+                justifyContent: "flex-start",
+                flexShrink: 0,
+                // 屏幕外的格子跳过布局和绘制，长列表滚动更轻
+                contentVisibility: "auto",
+                containIntrinsicSize: "80px 80px",
+            })
+            .attr({ title: app.nameLocal || app.name });
+        const iconView = view().addInto(appEl);
+        const iconEl = appIconEl(app.exec).style({
+            width: "40px",
+            height: "40px",
+        });
+        iconView.add(iconEl);
+        appEl.add(
+            txt(app.nameLocal).style({
+                fontSize: "12px",
+                maxWidth: "80%",
+                overflow: "hidden",
+                textAlign: "center",
+            }),
+        );
+
+        const load = () =>
+            loadAppIcon(iconEl, async () => (await MSysApi.getDesktopIcon(app.icon, iconConfig)) || "", app.name, {
+                rasterSize: 40,
+            });
+        if (observer) {
+            iconLoaders.set(appEl.el, load);
+            observer.observe(appEl.el);
+        } else {
+            enqueueIcon(load);
         }
-    });
-    tipEl.innerHTML = "";
-    menu.addInto(tipEl);
+        return appEl;
+    }
+
+    // 元数据在空闲时预取，但不创建 DOM / 不读图标
+    const entriesPromise = MSysApi.getDesktopEntries().catch(() => [] as DesktopApp[]);
+    let buildPromise: Promise<void> | null = null;
+    function build() {
+        if (buildPromise) return buildPromise;
+        buildPromise = (async () => {
+            const apps = await entriesPromise;
+            loadingEl.remove();
+            if (apps.length === 0) {
+                txt("未找到应用").style({ padding: "8px", opacity: "0.6" }).addInto(menu);
+                return;
+            }
+            // 分批插入：先让首屏尽快出现，其余在空闲帧继续，避免一次长任务卡住点击
+            const batchSize = 40;
+            for (let i = 0; i < apps.length; i += batchSize) {
+                const batch: ReturnType<typeof createAppTile>[] = [];
+                for (const app of apps.slice(i, i + batchSize)) {
+                    batch.push(createAppTile(app));
+                }
+                menu.add(batch);
+                if (i + batchSize < apps.length) await scheduler.yield();
+            }
+        })();
+        return buildPromise;
+    }
+
     const startMenuBtn = view()
         .style({
             width: "48px",
@@ -1807,10 +1958,15 @@ tools.registerTool("startMenuFullScreen", ({ tipEl, showTip }) => {
             borderRadius: "12px",
             background: "#00aaff",
         })
-        .on("click", async () => {
+        .on("click", () => {
+            build();
             showTip({ state: "toggle" });
         });
     return startMenuBtn;
+}
+
+tools.registerTool("startMenuFullScreen", ({ tipEl, showTip }) => createStartMenu(tipEl, showTip), {
+    selfBackground: true,
 });
 
 tools.registerTool("clock", () => {
@@ -1910,7 +2066,8 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
         try {
             const desk = await MSysApi.getDesktopEntry(appid);
             const iconPath = async () => (await MSysApi.getDesktopIcon(desk?.icon || "", iconConfig)) || "";
-            const appEl = appIcon(iconPath, desk?.name || appid);
+            const appEl = appIconEl();
+            loadAppIcon(appEl, iconPath, desk?.name || appid);
             appsEl.add(appEl);
             nowApps.set(appid, appEl);
             appEl.on("click", () => {
