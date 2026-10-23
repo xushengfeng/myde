@@ -138,9 +138,23 @@ app.on("will-quit", () => {
 
 const ipcPath = path.join("/tmp", "myde.sock");
 
+// 临时诊断日志：主进程 shared texture 回调链路。崩溃后文件保留，便于定位。
+const sharedLogPath = "/tmp/myde-shared.log";
+try {
+    require("node:fs").writeFileSync(sharedLogPath, `${new Date().toISOString()} start\n`);
+} catch {}
+const sharedLog = (msg: string) => {
+    try {
+        require("node:fs").appendFileSync(sharedLogPath, `${new Date().toISOString()} ${msg}\n`);
+    } catch {}
+};
+process.on("uncaughtException", (e: Error) => sharedLog(`uncaughtException ${String(e.stack ?? e)}`));
+process.on("unhandledRejection", (e) => sharedLog(`unhandledRejection ${String(e)}`));
+
 const server = new mus.UServer();
 server.listen(ipcPath);
 server.on("connection", (socket) => {
+    sharedLog("connection");
     // 消息格式：[4字节大端长度][JSON]，fd 走 SCM_RIGHTS。Unix stream 会把多次
     // write 合并进一次 read，所以必须按长度分帧，不能把每个 data 事件当一条消息。
     let buffered: Buffer = Buffer.alloc(0);
@@ -170,13 +184,18 @@ server.on("connection", (socket) => {
         try {
             for (const [pidx, p] of planes.entries()) p.fd = fds[pidx];
             const texture = sharedTexture.importSharedTexture(j.options);
+            sharedLog(`imported id=${j.id}`);
             if (mainWin && !mainWin.isDestroyed()) {
                 sharedTexture.sendSharedTexture(
                     { importedSharedTexture: texture, frame: mainWin.webContents.mainFrame },
                     j.id,
                 );
+                sharedLog(`sent id=${j.id}`);
+            } else {
+                sharedLog(`no mainWin/destroyed id=${j.id}`);
             }
         } catch (e) {
+            sharedLog(`import error id=${j.id}: ${String(e?.stack ?? e)}`);
             console.error(`[shared-texture] 导入失败 id=${j.id}:`, e);
         } finally {
             // importSharedTexture 会复制 fd，收到的那份用完要关掉，否则
@@ -206,14 +225,19 @@ server.on("connection", (socket) => {
             const payload = buffered.subarray(4, 4 + len);
             buffered = buffered.subarray(4 + len);
             try {
-                handleMessage(JSON.parse(payload.toString()));
+                const j = JSON.parse(payload.toString());
+                sharedLog(`frame id=${j.id} planes=${j.options?.textureInfo?.handle?.nativePixmap?.planes?.length ?? 0} pending=${pendingFds.length}`);
+                handleMessage(j);
             } catch (e) {
                 // 不能把异常抛回 native 回调（会直接崩掉进程）
                 console.error("[shared-texture] 无效消息:", e);
             }
         }
     };
+    let dataCount = 0;
     socket.on("data", (data, fds) => {
+        if (dataCount < 100) sharedLog(`data len=${data?.length ?? -1} fds=${fds?.length ?? 0} pending=${pendingFds.length}`);
+        dataCount++;
         if (fds?.length) pendingFds.push(...fds);
         buffered = buffered.length === 0 ? data : Buffer.concat([buffered, data]);
         // 真正解析/导入放到普通事件循环里做：native TSFN 回调里只收数据并返回，
