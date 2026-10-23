@@ -2669,7 +2669,7 @@ function useEvdevInput(input: InputManager, emit: (e: UniInputEvent) => void, po
 // 再用 evdev 会两路叠加（鼠标位移/按键各走一遍）。
 if (MSysApi.display.getType() === "desktop" && inputApi?.isInitialized()) {
     useEvdevInput(inputApi, dispatchInput, inputPointerPos);
-    console.log(`[input] use evdev native input (${inputApi.getAccessMode()})`);
+    console.log(`[input] use evdev native input (${inputApi.getAccessMode?.() ?? "unknown"})`);
 } else {
     console.log("[input] use dom input");
 }

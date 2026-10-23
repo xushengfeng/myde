@@ -95,8 +95,9 @@ async function loadDesktop(p: string) {
             if (!inputResult.ok) {
                 console.warn("[input] 初始化失败:", inputResult.error.message);
             } else {
-                const mode = myde.MSysApi.input.getAccessMode();
-                const accessError = myde.MSysApi.input.getAccessError();
+                // 兼容没有该 API 的旧版 myde-input
+                const mode = myde.MSysApi.input.getAccessMode?.() ?? "unknown";
+                const accessError = myde.MSysApi.input.getAccessError?.();
                 console.log(`[input] 设备访问方式: ${mode}${accessError ? `（logind: ${accessError}）` : ""}`);
                 if (mode === "direct") {
                     console.warn(
