@@ -162,7 +162,7 @@ server.on("connection", (socket) => {
         options: Parameters<typeof sharedTexture.importSharedTexture>[0];
     }) => {
         const planes = j.options.textureInfo.handle.nativePixmap?.planes ?? [];
-        if (planes.length === 0 || pendingFds.length < planes.length) {
+        if (planes.length > 0 && pendingFds.length < planes.length) {
             console.error(`[shared-texture] 消息 id=${j.id} 缺少 fd（需要 ${planes.length}，有 ${pendingFds.length}）`);
             return;
         }
