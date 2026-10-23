@@ -7,6 +7,7 @@
 // 合成事件没有浏览器默认行为，这里补齐常用默认行为：
 // - 左键抬起合成 click 并补齐聚焦（最近的 input/textarea/select/[tabindex]）
 // - 按键派发后未被 preventDefault 时补齐文本输入（插入/Backspace/Delete）
+// - 滚轮派发后未被 preventDefault 时滚动最近的可滚动祖先（原生滚轮能滚原生 overflow 容器）
 //
 // DOM 操作通过可注入的宿主接口 InputSimHost 访问，默认实现 domInputSimHost 操作真实 DOM，
 // 纯 node 环境可 new inputSim(host) 注入自定义宿主
@@ -234,9 +235,12 @@ export function domInputSimHost(): InputSimHost {
             const t = target as Element;
             const event = makeDomEvent(e);
             t.dispatchEvent(event);
-            // 合成事件没有默认行为，键入文本等常用默认行为在未被 preventDefault 时补齐
+            // 合成事件没有默认行为，键入文本、滚轮等常用默认行为在未被 preventDefault 时补齐
             if (e.kind === "key" && e.type === "down" && !event.defaultPrevented) {
                 applyTextDefault(t, e.key);
+            }
+            if (e.kind === "wheel" && !event.defaultPrevented && t instanceof Element) {
+                applyWheelDefault(t, e.deltaX, e.deltaY, e.deltaMode);
             }
             return event;
         },
@@ -325,6 +329,46 @@ function applyTextDefault(target: Element, key: string) {
         else if (key === "Backspace") document.execCommand("delete");
         else if (key === "Delete") document.execCommand("forwardDelete");
     }
+}
+
+// 滚轮默认行为：从命中元素向上找能滚的祖先并滚动，把剩余量交给下一层（类似原生滚动链）。
+// 合成 WheelEvent 不会触发浏览器默认滚动，原生 overflow:auto/scroll 的 UI 需要这里兜底。
+function applyWheelDefault(target: Element, deltaX: number, deltaY: number, deltaMode: number) {
+    if (deltaX === 0 && deltaY === 0) return;
+    // 行/页模式换算成像素，与常见桌面浏览器的滚轮步长一致
+    const unit = deltaMode === 1 ? 40 : deltaMode === 2 ? window.innerHeight : 1;
+    let restX = deltaX * unit;
+    let restY = deltaY * unit;
+
+    let el: Element | null = target;
+    while (el) {
+        const style = getComputedStyle(el);
+        const canX = isScrollable(style.overflowX) && el.scrollWidth > el.clientWidth;
+        const canY = isScrollable(style.overflowY) && el.scrollHeight > el.clientHeight;
+        if (canX || canY) {
+            const beforeLeft = el.scrollLeft;
+            const beforeTop = el.scrollTop;
+            // 直接赋值而不用 scrollBy：避免受 CSS scroll-behavior: smooth 影响而不同步
+            if (canX) el.scrollLeft = beforeLeft + restX;
+            if (canY) el.scrollTop = beforeTop + restY;
+            restX -= el.scrollLeft - beforeLeft;
+            restY -= el.scrollTop - beforeTop;
+            if (Math.abs(restX) < 1 && Math.abs(restY) < 1) return;
+        }
+        el = el.parentElement;
+    }
+
+    // 根滚动元素（html）不一定在 parentElement 链上按预期表现，单独兜底
+    const root = document.scrollingElement;
+    if (root) {
+        const beforeTop = root.scrollTop;
+        root.scrollTop = beforeTop + restY;
+        root.scrollLeft += restX;
+    }
+}
+
+function isScrollable(overflow: string) {
+    return overflow === "auto" || overflow === "scroll" || overflow === "overlay";
 }
 
 function insertText(el: HTMLInputElement | HTMLTextAreaElement, text: string) {

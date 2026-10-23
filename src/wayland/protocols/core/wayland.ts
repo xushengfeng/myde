@@ -476,26 +476,51 @@ function sendKey(ctx: ModuleCtx, seat: SeatRecord, key: number, state: "pressed"
 
 /**
  * 滚轮注入（只发这一把 seat 的 pointer；没有指针焦点说明指针不在任何窗口上，丢弃）。
- * todo region
+ *
+ * 除 `axis` 外还要发与客户端版本对应的离散步进（v8+ 用 `axis_value120`，v5-7 用 `axis_discrete`）：
+ * 部分客户端只认离散步进，单发连续值 `axis` 会导致滚轮完全无效。
+ * `ScrollCommand` 的 delta 按 DOM 像素处理，直接用作 value120 与客户端约 1:1（120 ≈ 一格）。
  */
 function sendScroll(ctx: ModuleCtx, seat: SeatRecord, ev: ScrollCommand): void {
     const pointer = seat.pointer;
     if (pointer === undefined || seat.pointerFocus === null) return;
     const { deltaX, deltaY } = ev;
-    if (deltaX !== 0) {
-        ctx.sendNow(pointer, "wl_pointer.axis", {
-            time: Date.now(),
-            axis: getEnumValue("wl_pointer.axis", "horizontal_scroll"),
-            value: deltaX,
+    if (deltaX === 0 && deltaY === 0) return;
+    const pointerVersion = ctx.client.protoVersions.get("wl_pointer") ?? 0;
+    if (pointerVersion >= 5) {
+        ctx.sendNow(pointer, "wl_pointer.axis_source", {
+            axis_source: getEnumValue("wl_pointer.axis_source", "wheel"),
         });
     }
-    if (deltaY !== 0) {
+    const sendAxis = (axis: "horizontal_scroll" | "vertical_scroll", value: number) => {
+        const axisValue = getEnumValue("wl_pointer.axis", axis);
+        // axis_discrete 必须紧跟在同一 frame 的 axis 之前
+        if (pointerVersion >= 5 && pointerVersion < 8) {
+            const discrete = Math.round(value / 120);
+            if (discrete !== 0) {
+                ctx.sendNow(pointer, "wl_pointer.axis_discrete", {
+                    axis: axisValue,
+                    discrete,
+                });
+            }
+        }
         ctx.sendNow(pointer, "wl_pointer.axis", {
             time: Date.now(),
-            axis: getEnumValue("wl_pointer.axis", "vertical_scroll"),
-            value: deltaY,
+            axis: axisValue,
+            value,
         });
-    }
+        if (pointerVersion >= 8) {
+            const value120 = Math.round(value);
+            if (value120 !== 0) {
+                ctx.sendNow(pointer, "wl_pointer.axis_value120", {
+                    axis: axisValue,
+                    value120,
+                });
+            }
+        }
+    };
+    if (deltaX !== 0) sendAxis("horizontal_scroll", deltaX);
+    if (deltaY !== 0) sendAxis("vertical_scroll", deltaY);
     ctx.sendNow(pointer, "wl_pointer.frame", {});
 }
 
