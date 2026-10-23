@@ -894,13 +894,24 @@ export const waylandCoreModule = defineModule({
                 } else {
                     const modifierX = bufferObj.planes[0];
                     const modifier = (BigInt(modifierX.modifier_hi >>> 0) << 32n) | BigInt(modifierX.modifier_lo >>> 0);
-                    // myde-wrap 目前只提供 wl_shm，没有 zwp_linux_dmabuf_v1；
-                    // Electron 的 GPU 在它下面创建 shared image 会失败（甚至崩 GPU/主进程）。
-                    // 桌面模式先走 CPU 拷贝保证可用；窗口模式（KDE 等）仍走 GPU。
-                    const desktopDisplay =
-                        globalThis.location !== undefined &&
-                        new URLSearchParams(globalThis.location.search).get("displayType") === "desktop";
-                    const forceCpu = desktopDisplay || process.env.MYDE_FORCE_CPU_DMABUF === "1";
+                    // myde-wrap 支持 dmabuf 时走 GPU shared texture；旧版 wrap（只有 wl_shm）
+                    // 下 Electron GPU 创建 shared image 会失败甚至崩溃，桌面模式退回 CPU 拷贝。
+                    // 主进程把 env 通过 URL 的 env 参数传进来（renderer 的 process.env 不可靠）。
+                    let desktopDisplay = false;
+                    let rendererEnv: Record<string, string | undefined> = {};
+                    try {
+                        if (globalThis.location !== undefined) {
+                            const params = new URLSearchParams(globalThis.location.search);
+                            desktopDisplay = params.get("displayType") === "desktop";
+                            const rawEnv = params.get("env");
+                            if (rawEnv) rendererEnv = JSON.parse(rawEnv);
+                        }
+                    } catch {
+                        // 纯 node 环境或 env 解析失败：按窗口模式处理
+                    }
+                    const forceCpu =
+                        rendererEnv.MYDE_FORCE_CPU_DMABUF === "1" ||
+                        (desktopDisplay && rendererEnv.MYDE_WRAP_DMABUF !== "1");
                     if (forceCpu) {
                         // 诊断/回退：完全不经过主进程 shared texture import，CPU 拷贝
                         try {
@@ -928,59 +939,13 @@ export const waylandCoreModule = defineModule({
                             image = new ImageData(new Uint8ClampedArray(4), 1, 1);
                         }
                     } else {
-                    const pixelFormat = getElectronPixelFormat(bufferObj.format);
-                    let imageFromGpu: VideoFrame | undefined;
-                    let converted: ImageData | undefined;
+                        const pixelFormat = getElectronPixelFormat(bufferObj.format);
+                        let imageFromGpu: VideoFrame | undefined;
+                        let converted: ImageData | undefined;
 
-                    if (!pixelFormat) {
-                        try {
-                            const gpu = convertDmabufToTexture({
-                                width: bufferObj.width,
-                                height: bufferObj.height,
-                                format: bufferObj.format,
-                                modifier,
-                                planes: bufferObj.planes.map((p) => ({
-                                    fd: p.fd,
-                                    offset: p.offset,
-                                    stride: p.stride,
-                                })),
-                            });
-                            if (gpu) {
-                                try {
-                                    const t = await importSharedTexture({
-                                        textureInfo: {
-                                            handle: {
-                                                nativePixmap: {
-                                                    planes: gpu.planes.map((p) => ({
-                                                        stride: p.stride,
-                                                        offset: p.offset ?? 0,
-                                                        size: p.size ?? p.stride * bufferObj.height,
-                                                        fd: p.fd,
-                                                    })),
-                                                    modifier: gpu.modifier.toString(),
-                                                    supportsZeroCopyWebGpuImport: true,
-                                                },
-                                            },
-                                            codedSize: { height: bufferObj.height, width: bufferObj.width },
-                                            pixelFormat: gpu.pixelFormat,
-                                        },
-                                    });
-                                    imageFromGpu = t.getVideoFrame();
-                                    t.release();
-                                } finally {
-                                    gpu.close();
-                                }
-                            }
-                        } catch (error) {
-                            console.error(
-                                `dmabuf format 0x${bufferObj.format.toString(16)} GPU conversion failed:`,
-                                error,
-                            );
-                        }
-
-                        if (!imageFromGpu) {
+                        if (!pixelFormat) {
                             try {
-                                const rgba = convertDmabufToRgba({
+                                const gpu = convertDmabufToTexture({
                                     width: bufferObj.width,
                                     height: bufferObj.height,
                                     format: bufferObj.format,
@@ -991,47 +956,97 @@ export const waylandCoreModule = defineModule({
                                         stride: p.stride,
                                     })),
                                 });
-                                converted = new ImageData(
-                                    new Uint8ClampedArray(rgba.buffer as ArrayBuffer, rgba.byteOffset, rgba.byteLength),
-                                    bufferObj.width,
-                                    bufferObj.height,
-                                );
+                                if (gpu) {
+                                    try {
+                                        const t = await importSharedTexture({
+                                            textureInfo: {
+                                                handle: {
+                                                    nativePixmap: {
+                                                        planes: gpu.planes.map((p) => ({
+                                                            stride: p.stride,
+                                                            offset: p.offset ?? 0,
+                                                            size: p.size ?? p.stride * bufferObj.height,
+                                                            fd: p.fd,
+                                                        })),
+                                                        modifier: gpu.modifier.toString(),
+                                                        supportsZeroCopyWebGpuImport: true,
+                                                    },
+                                                },
+                                                codedSize: { height: bufferObj.height, width: bufferObj.width },
+                                                pixelFormat: gpu.pixelFormat,
+                                            },
+                                        });
+                                        imageFromGpu = t.getVideoFrame();
+                                        t.release();
+                                    } finally {
+                                        gpu.close();
+                                    }
+                                }
                             } catch (error) {
                                 console.error(
-                                    `dmabuf format 0x${bufferObj.format.toString(16)} conversion failed:`,
+                                    `dmabuf format 0x${bufferObj.format.toString(16)} GPU conversion failed:`,
                                     error,
                                 );
                             }
-                        }
-                    }
 
-                    if (imageFromGpu) {
-                        image = imageFromGpu;
-                    } else if (converted) {
-                        image = converted;
-                    } else {
-                        const t = await importSharedTexture({
-                            textureInfo: {
-                                handle: {
-                                    nativePixmap: {
+                            if (!imageFromGpu) {
+                                try {
+                                    const rgba = convertDmabufToRgba({
+                                        width: bufferObj.width,
+                                        height: bufferObj.height,
+                                        format: bufferObj.format,
+                                        modifier,
                                         planes: bufferObj.planes.map((p) => ({
-                                            stride: p.stride,
-                                            offset: p.offset,
-                                            size: p.stride * bufferObj.height,
                                             fd: p.fd,
+                                            offset: p.offset,
+                                            stride: p.stride,
                                         })),
-                                        modifier: modifier.toString(),
-                                        supportsZeroCopyWebGpuImport: true,
-                                    },
-                                },
-                                codedSize: { height: bufferObj.height, width: bufferObj.width },
-                                pixelFormat: pixelFormat ?? "bgra",
-                            },
-                        });
+                                    });
+                                    converted = new ImageData(
+                                        new Uint8ClampedArray(
+                                            rgba.buffer as ArrayBuffer,
+                                            rgba.byteOffset,
+                                            rgba.byteLength,
+                                        ),
+                                        bufferObj.width,
+                                        bufferObj.height,
+                                    );
+                                } catch (error) {
+                                    console.error(
+                                        `dmabuf format 0x${bufferObj.format.toString(16)} conversion failed:`,
+                                        error,
+                                    );
+                                }
+                            }
+                        }
 
-                        image = t.getVideoFrame();
-                        t.release();
-                    }
+                        if (imageFromGpu) {
+                            image = imageFromGpu;
+                        } else if (converted) {
+                            image = converted;
+                        } else {
+                            const t = await importSharedTexture({
+                                textureInfo: {
+                                    handle: {
+                                        nativePixmap: {
+                                            planes: bufferObj.planes.map((p) => ({
+                                                stride: p.stride,
+                                                offset: p.offset,
+                                                size: p.stride * bufferObj.height,
+                                                fd: p.fd,
+                                            })),
+                                            modifier: modifier.toString(),
+                                            supportsZeroCopyWebGpuImport: true,
+                                        },
+                                    },
+                                    codedSize: { height: bufferObj.height, width: bufferObj.width },
+                                    pixelFormat: pixelFormat ?? "bgra",
+                                },
+                            });
+
+                            image = t.getVideoFrame();
+                            t.release();
+                        }
                     }
                 }
                 let width = 0,
