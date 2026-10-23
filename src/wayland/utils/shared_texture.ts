@@ -15,7 +15,15 @@ export async function importSharedTexture(
     sharedTextureCbMap.set(id, resolve);
     const fds = options.textureInfo.handle.nativePixmap?.planes.map((p) => p.fd);
 
-    if (fds !== undefined && ipc) ipc.write({ data: Buffer.from(JSON.stringify({ id, options })), fds }, () => {});
+    // 和 display 协议一样用 [4字节大端长度][JSON] 分帧：Unix stream 会把多次
+    // write 合并成一次 read，主进程不能假设一个 data 事件就是一条完整消息
+    if (fds !== undefined && ipc) {
+        const payload = Buffer.from(JSON.stringify({ id, options }));
+        const frame = Buffer.allocUnsafe(4 + payload.length);
+        frame.writeUInt32BE(payload.length, 0);
+        payload.copy(frame, 4);
+        ipc.write({ data: frame, fds }, () => {});
+    }
     return promise;
 }
 

@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 
+import { closeSync } from "node:fs";
 import * as path from "node:path";
 import { app, BrowserWindow, globalShortcut, ipcMain, nativeTheme, sharedTexture } from "electron";
 
@@ -140,23 +141,80 @@ const ipcPath = path.join("/tmp", "myde.sock");
 const server = new mus.UServer();
 server.listen(ipcPath);
 server.on("connection", (socket) => {
-    socket.on("data", (data, fd) => {
-        const message = data.toString();
-        const j = JSON.parse(message) as {
-            id: number;
-            options: Parameters<typeof sharedTexture.importSharedTexture>[0];
-        };
-        for (const [pidx, p] of (j.options.textureInfo.handle.nativePixmap?.planes ?? []).entries()) {
-            p.fd = fd[pidx];
+    // 消息格式：[4字节大端长度][JSON]，fd 走 SCM_RIGHTS。Unix stream 会把多次
+    // write 合并进一次 read，所以必须按长度分帧，不能把每个 data 事件当一条消息。
+    let buffered: Buffer = Buffer.alloc(0);
+    const pendingFds: number[] = [];
+    const MAX_FRAME = 16 * 1024 * 1024;
+
+    const closeFds = () => {
+        for (const fd of pendingFds.splice(0)) {
+            try {
+                closeSync(fd);
+            } catch {
+                /* ignore */
+            }
         }
-        if (mainWin) {
+    };
+
+    const handleMessage = (j: {
+        id: number;
+        options: Parameters<typeof sharedTexture.importSharedTexture>[0];
+    }) => {
+        const planes = j.options.textureInfo.handle.nativePixmap?.planes ?? [];
+        if (planes.length === 0 || pendingFds.length < planes.length) {
+            console.error(`[shared-texture] 消息 id=${j.id} 缺少 fd（需要 ${planes.length}，有 ${pendingFds.length}）`);
+            return;
+        }
+        const fds = pendingFds.splice(0, planes.length);
+        try {
+            for (const [pidx, p] of planes.entries()) p.fd = fds[pidx];
             const texture = sharedTexture.importSharedTexture(j.options);
-            sharedTexture.sendSharedTexture(
-                { importedSharedTexture: texture, frame: mainWin.webContents.mainFrame },
-                j.id,
-            );
+            if (mainWin) {
+                sharedTexture.sendSharedTexture(
+                    { importedSharedTexture: texture, frame: mainWin.webContents.mainFrame },
+                    j.id,
+                );
+            }
+        } catch (e) {
+            console.error(`[shared-texture] 导入失败 id=${j.id}:`, e);
+        } finally {
+            // importSharedTexture 会复制 fd，收到的那份用完要关掉，否则
+            // Chrome/Blender 持续提交 dmabuf 会把 fd 耗尽
+            for (const fd of fds) {
+                try {
+                    closeSync(fd);
+                } catch {
+                    /* ignore */
+                }
+            }
+        }
+    };
+
+    socket.on("data", (data, fds) => {
+        if (fds?.length) pendingFds.push(...fds);
+        buffered = buffered.length === 0 ? data : Buffer.concat([buffered, data]);
+        while (buffered.length >= 4) {
+            const len = buffered.readUInt32BE(0);
+            if (len > MAX_FRAME) {
+                console.error(`[shared-texture] 帧过大（${len}），丢弃缓冲`);
+                buffered = Buffer.alloc(0);
+                closeFds();
+                break;
+            }
+            if (buffered.length < 4 + len) break;
+            const payload = buffered.subarray(4, 4 + len);
+            buffered = buffered.subarray(4 + len);
+            try {
+                handleMessage(JSON.parse(payload.toString()));
+            } catch (e) {
+                // 不能把异常抛回 native 回调（会直接崩掉进程）
+                console.error("[shared-texture] 无效消息:", e);
+            }
         }
     });
+    socket.on("close", closeFds);
+    socket.on("end", closeFds);
 });
 
 ipcMain.on("test", (_, data) => {
