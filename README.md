@@ -58,6 +58,8 @@ pnpm i
 
 release 的安装包已内置编译好的 `myde-wrap`；本地执行 `npm run build:myde-wrap` 编译后，`npm run pack`/`npm run dist` 打包时也会自动带上（没有编译过则不打包）。
 
+桌面在主机上运行时由 `myde` 自己直接读取 `/dev/input/event*`（evdev）。需要保证启动用户有读取权限：把用户加入 `input` 组（`sudo usermod -aG input $USER` 后重新登录），或给输入设备添加 `uaccess` udev 规则。否则画面正常但键盘鼠标无响应（`myde-wrap` 启动时会给出提示）。
+
 ## 开发指南
 
 开发细节请参阅 [AGENTS.md](./AGENTS.md)，该文档面向开发者和 LLM 工具。
