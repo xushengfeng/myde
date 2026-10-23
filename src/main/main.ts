@@ -169,12 +169,17 @@ server.on("connection", (socket) => {
         const fds = pendingFds.splice(0, planes.length);
         try {
             for (const [pidx, p] of planes.entries()) p.fd = fds[pidx];
+            console.log(
+                `[shared-texture] 导入 id=${j.id} ${j.options.textureInfo.codedSize.width}x${j.options.textureInfo.codedSize.height} planes=${planes.length} stride=${planes[0]?.stride ?? 0} fds=${fds.join(",")}`,
+            );
             const texture = sharedTexture.importSharedTexture(j.options);
-            if (mainWin) {
+            console.log(`[shared-texture] 导入完成 id=${j.id}`);
+            if (mainWin && !mainWin.isDestroyed()) {
                 sharedTexture.sendSharedTexture(
                     { importedSharedTexture: texture, frame: mainWin.webContents.mainFrame },
                     j.id,
                 );
+                console.log(`[shared-texture] 已发送 id=${j.id}`);
             }
         } catch (e) {
             console.error(`[shared-texture] 导入失败 id=${j.id}:`, e);
@@ -191,9 +196,9 @@ server.on("connection", (socket) => {
         }
     };
 
-    socket.on("data", (data, fds) => {
-        if (fds?.length) pendingFds.push(...fds);
-        buffered = buffered.length === 0 ? data : Buffer.concat([buffered, data]);
+    let scheduled = false;
+    const drain = () => {
+        scheduled = false;
         while (buffered.length >= 4) {
             const len = buffered.readUInt32BE(0);
             if (len > MAX_FRAME) {
@@ -211,6 +216,16 @@ server.on("connection", (socket) => {
                 // 不能把异常抛回 native 回调（会直接崩掉进程）
                 console.error("[shared-texture] 无效消息:", e);
             }
+        }
+    };
+    socket.on("data", (data, fds) => {
+        if (fds?.length) pendingFds.push(...fds);
+        buffered = buffered.length === 0 ? data : Buffer.concat([buffered, data]);
+        // 真正解析/导入放到普通事件循环里做：native TSFN 回调里只收数据并返回，
+        // 避免在 Neon 回调栈里再调用 Electron 的 sharedTexture 原生接口
+        if (!scheduled) {
+            scheduled = true;
+            setImmediate(drain);
         }
     });
     socket.on("close", closeFds);
