@@ -24,6 +24,7 @@ import {
     HI_RES_SCALE,
     hasRelativeXY,
     type InputPointerPos,
+    isTouchpad,
     pointerKindOf,
     ratioToView,
     WHEEL_STEP,
@@ -2533,11 +2534,14 @@ function useEvdevDevice(
     emit: (e: UniInputEvent) => void,
     pointerPos: InputPointerPos,
     path: string,
+    /** phys → 最近一次相对位移时间，用来识别触摸板的伴随鼠标节点 */
+    relativeActivity: Map<string, number>,
 ) {
     const dev = input.getDevice(path);
     if (!dev) return;
     const info = dev.info;
     const kind = pointerKindOf(info);
+    const touchpad = isTouchpad(info);
     const rel = hasRelativeXY(info);
     const abs = MInputMap.absPosMapping(info);
     const keyboard = canKey(info);
@@ -2556,7 +2560,28 @@ function useEvdevDevice(
     let wheelY = 0;
     const frameKeys: { code: number; value: number }[] = [];
 
+    // ── 触摸板：绝对坐标相邻两帧的差值是位移，不能直接映射到屏幕 ──
+    // ABS_X/ABS_Y 的量程通常就是屏幕分辨率（Huawei 这台是 0..2879/0..1799），
+    // 用 absPosMapping 归一化后乘宽高，量程不同也能得到像素位移。
+    const hasBtnTouch = info.capabilities.keyCodes.includes(InputEventCodes.BTN_TOUCH);
+    let touching = !hasBtnTouch;
+    let haveLastX = false;
+    let haveLastY = false;
+    let lastX = 0;
+    let lastY = 0;
+    // 同一 phys 的伴随鼠标节点在出事件时，说明内核走的是相对鼠标通道，
+    // 触摸板绝对值就不要再用，避免双倍位移
+    const companionActive = () => {
+        if (!info.phys) return false;
+        const t = relativeActivity.get(info.phys);
+        return t !== undefined && performance.now() - t < 500;
+    };
+
     function flushFrame() {
+        if ((dx || dy) && touchpad && companionActive()) {
+            dx = 0;
+            dy = 0;
+        }
         if (dx || dy) {
             pointerPos.x = Math.min(Math.max(pointerPos.x + dx, 0), window.innerWidth - 1);
             pointerPos.y = Math.min(Math.max(pointerPos.y + dy, 0), window.innerHeight - 1);
@@ -2619,6 +2644,8 @@ function useEvdevDevice(
     if (!dev.startReading().ok) return;
 
     dev.on("relative", (code, value) => {
+        // 相对设备出过事件：同 phys 的触摸板绝对坐标视为伴随鼠标通道的重复上报
+        if (!touchpad && info.phys) relativeActivity.set(info.phys, performance.now());
         if (code === InputEventCodes.REL_X) dx += value;
         else if (code === InputEventCodes.REL_Y) dy += value;
         else if (code === InputEventCodes.REL_WHEEL_HI_RES) wheelY += -value * HI_RES_SCALE;
@@ -2634,6 +2661,30 @@ function useEvdevDevice(
             return;
         }
         if (sawSlot && slot !== 0) return;
+        if (touchpad) {
+            if (code === InputEventCodes.ABS_MT_TRACKING_ID) {
+                // 没有 BTN_TOUCH 的设备用 tracking id 判断手指按下/抬起
+                touching = value !== -1;
+                if (!touching) {
+                    haveLastX = false;
+                    haveLastY = false;
+                }
+                return;
+            }
+            if (!touching) return;
+            if (code === abs.xCode) {
+                const px = ratioToView(abs.ratioX(value), window.innerWidth);
+                if (haveLastX) dx += px - lastX;
+                lastX = px;
+                haveLastX = true;
+            } else if (code === abs.yCode) {
+                const py = ratioToView(abs.ratioY(value), window.innerHeight);
+                if (haveLastY) dy += py - lastY;
+                lastY = py;
+                haveLastY = true;
+            }
+            return;
+        }
         if (code === abs.xCode) {
             pointerPos.x = ratioToView(abs.ratioX(value), window.innerWidth);
             moved = true;
@@ -2643,6 +2694,16 @@ function useEvdevDevice(
         }
     });
     dev.on("key", (code, value) => {
+        if (touchpad && code === InputEventCodes.BTN_TOUCH) {
+            // 触摸板的 BTN_TOUCH 是“手指接触”，不是点击；抬起后下一次接触的
+            // 绝对坐标要重新作为基准，否则会跳一大段位移
+            touching = value === 1;
+            if (!touching) {
+                haveLastX = false;
+                haveLastY = false;
+            }
+            return;
+        }
         if (BTN_TO_BUTTON[code] !== undefined) {
             if (value === 0 || value === 1) frameKeys.push({ code, value });
         } else if (code < InputEventCodes.BTN_0) {
@@ -2655,11 +2716,13 @@ function useEvdevDevice(
 
 /** 接入 input api：逐设备解码 evdev 事件流（含热插拔），产出统一输入事件 */
 function useEvdevInput(input: InputManager, emit: (e: UniInputEvent) => void, pointerPos: InputPointerPos) {
+    // phys → 最近一次相对位移时间：触摸板与它的伴随鼠标节点共用
+    const relativeActivity = new Map<string, number>();
     for (const info of input.getDevices()) {
-        useEvdevDevice(input, emit, pointerPos, info.path);
+        useEvdevDevice(input, emit, pointerPos, info.path, relativeActivity);
     }
     input.on("deviceAdded", (info) => {
-        useEvdevDevice(input, emit, pointerPos, info.path);
+        useEvdevDevice(input, emit, pointerPos, info.path, relativeActivity);
     });
 }
 

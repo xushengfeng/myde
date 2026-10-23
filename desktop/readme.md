@@ -223,6 +223,8 @@ inputSim.emit({ kind: "key", type: "up", code: 30, source: "evdev" });
 
 聚合层参考实现见 `desktop/offical`：`main.ts` 的"输入聚合层"完成聚合/融合/分发——window capture 捕获真实 DOM 事件（只收 `isTrusted`，合成事件不回流防环）归一化，`useEvdevDevice` 解码 input api 事件（EV_SYN 帧合并、相对位移积分、绝对轴小数映射、滚轮换算、按键分流，判定/换算工具在 `input_evdev.ts`），统一传入本 api；来源只以 `source` 标记保留类型数据，不做去重。
 
+触摸板（`type === "touchpad"`）按相对设备处理：绝对坐标**不直接映射到屏幕**，而是把相邻帧的差值（按 `absInfo` 量程归一化到视口像素）积分成位移；`BTN_TOUCH` 只表示手指接触、不是点击（点击走 `BTN_LEFT`），抬起后重置基准避免跳变。触摸板常带一个同 `phys` 的伴随鼠标节点，如果那个相对通道真的在出事件，则忽略触摸板的绝对位移，避免双倍移动。
+
 注意被吞掉的原生事件只对**聚合层之后**注册的监听不可见：排在它之前的 window capture 监听仍会先收到原生事件，而原生 `click` 不受 `preventDefault` 影响（它不是兼容鼠标事件），且派发在 inputSim 合成的 `click` 之后——一次物理点击就被处理两遍，出现「合成 click 打开弹窗 → 原生 click 立刻关闭」的点击无反应（evdev 来源没有原生事件，只用 evdev 时看不出）。因此：① 吞事件的注册要早于所有 UI 监听（`desktop/offical` 把整个「输入聚合层」放在工具栏 plant 循环之前）；② 若确要在它之前注册监听，该监听必须忽略 `isTrusted` 事件（`desktop/offical` 的 Tools 关闭弹窗监听保留了这条守卫）。
 
 ### inputMethod

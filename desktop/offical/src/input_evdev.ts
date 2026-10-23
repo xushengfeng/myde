@@ -36,8 +36,15 @@ export function hasRelativeXY(info: DeviceInfo) {
 
 export function pointerKindOf(info: DeviceInfo): "mouse" | "touch" | "pen" {
     if (info.type === "tablet") return "pen";
+    // 触摸板按相对指针处理（绝对坐标在 main.ts 里转成位移）
+    if (info.type === "touchpad" || info.capabilities.hasTouchpad) return "mouse";
     if (info.type === "touchscreen" || info.capabilities.hasTouchscreen) return "touch";
     return "mouse";
+}
+
+/** 触摸板：绝对坐标只用于算位移，不能直接映射到屏幕 */
+export function isTouchpad(info: DeviceInfo) {
+    return info.type === "touchpad" || info.capabilities.hasTouchpad;
 }
 
 export function canPoint(info: DeviceInfo) {
