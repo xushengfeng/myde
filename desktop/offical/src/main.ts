@@ -1031,7 +1031,18 @@ server.server.on("window.changed", (info) => {
 
 // 断开时 server 统一补发该客户端全部窗口的 window.closed，上面的 closeWin 已经覆盖
 
-const mainEl = view().style({ width: "100vw", height: "100vh", fontFamily: "sans-serif" }).addInto();
+// 桌面根节点固定铺满视口并裁剪溢出：整个桌面不能被滚轮/内容撑出滚动
+const mainEl = view()
+    .style({
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        overflow: "hidden",
+        fontFamily: "sans-serif",
+    })
+    .addInto();
 
 const bg = image(fs.readFileAsDataURLSync("/assets/wallpaper/1.svg"), "wallpaper").style({
     width: "100%",

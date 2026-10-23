@@ -358,12 +358,18 @@ function applyWheelDefault(target: Element, deltaX: number, deltaY: number, delt
         el = el.parentElement;
     }
 
-    // 根滚动元素（html）不一定在 parentElement 链上按预期表现，单独兜底
+    // 根滚动元素（html）不一定在 parentElement 链上按预期表现，单独兜底。
+    // 只滚真正的 overflow:auto/scroll 容器；桌面本身（html/body overflow:hidden）
+    // 不能因为滚轮被程序化滚动。
     const root = document.scrollingElement;
     if (root) {
-        const beforeTop = root.scrollTop;
-        root.scrollTop = beforeTop + restY;
-        root.scrollLeft += restX;
+        const rootStyle = getComputedStyle(root);
+        if (isScrollable(rootStyle.overflowY) && root.scrollHeight > root.clientHeight) {
+            root.scrollTop += restY;
+        }
+        if (isScrollable(rootStyle.overflowX) && root.scrollWidth > root.clientWidth) {
+            root.scrollLeft += restX;
+        }
     }
 }
 

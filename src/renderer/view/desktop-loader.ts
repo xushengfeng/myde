@@ -133,10 +133,20 @@ async function newDBusIO(system = false) {
 }
 
 initDKH({ pureStyle: true });
+// 桌面是固定尺寸的画布：html/body 都不能滚动，溢出由各自的容器裁剪
+addStyle({
+    html: {
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+        overscrollBehavior: "none",
+    },
+});
 pack(document.body).style({
     width: "100vw",
     height: "100vh",
     overflow: "hidden",
+    overscrollBehavior: "none",
     background: "black",
 });
 
