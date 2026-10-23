@@ -192,6 +192,9 @@ server.on("connection", (socket) => {
         const fds = pendingFds.splice(0, planes.length);
         try {
             for (const [pidx, p] of planes.entries()) p.fd = fds[pidx];
+            sharedLog(
+                `import start id=${j.id} size=${j.options.textureInfo.codedSize.width}x${j.options.textureInfo.codedSize.height} fmt=${j.options.textureInfo.pixelFormat} stride=${planes[0]?.stride ?? 0} fds=${fds.join(",")}`,
+            );
             const texture = sharedTexture.importSharedTexture(j.options);
             sharedLog(`imported id=${j.id}`);
             if (mainWin && !mainWin.isDestroyed()) {
@@ -228,9 +231,7 @@ server.on("connection", (socket) => {
         }
     };
 
-    let scheduled = false;
     const drain = () => {
-        scheduled = false;
         while (buffered.length >= 4) {
             const len = buffered.readUInt32BE(0);
             if (len > MAX_FRAME) {
@@ -254,18 +255,24 @@ server.on("connection", (socket) => {
     };
     let dataCount = 0;
     socket.on("data", (data, fds) => {
-        if (dataCount < 100) sharedLog(`data len=${data?.length ?? -1} fds=${fds?.length ?? 0} pending=${pendingFds.length}`);
+        if (dataCount < 100)
+            sharedLog(
+                `data len=${data?.length ?? -1} fdvalues=${(fds ?? []).join(",")} pending=${pendingFds.length}`,
+            );
         dataCount++;
         if (fds?.length) pendingFds.push(...fds);
         buffered = buffered.length === 0 ? data : Buffer.concat([buffered, data]);
-        // 真正解析/导入放到普通事件循环里做：native TSFN 回调里只收数据并返回，
-        // 避免在 Neon 回调栈里再调用 Electron 的 sharedTexture 原生接口
-        if (!scheduled) {
-            scheduled = true;
-            setImmediate(drain);
-        }
     });
-    socket.on("close", closeFds);
+    // 从 TSFN 回调里 setImmediate 会继承一个空 async context（CheckImmediate 里
+    // V8 context 为 null 直接崩）。用普通上下文里创建的定时器轮询队列。
+    const timer = setInterval(() => {
+        if (buffered.length >= 4) drain();
+    }, 4);
+    timer.unref?.();
+    socket.on("close", () => {
+        clearInterval(timer);
+        closeFds();
+    });
     socket.on("end", closeFds);
 });
 
