@@ -195,7 +195,7 @@ server.on("connection", (socket) => {
                 sharedLog(`no mainWin/destroyed id=${j.id}`);
             }
         } catch (e) {
-            sharedLog(`import error id=${j.id}: ${String(e?.stack ?? e)}`);
+            sharedLog(`import error id=${j.id}: ${String((e as Error)?.stack ?? e)}`);
             console.error(`[shared-texture] 导入失败 id=${j.id}:`, e);
         } finally {
             // importSharedTexture 会复制 fd，收到的那份用完要关掉，否则
