@@ -252,6 +252,8 @@ const off3 = ctx.on("im", (imInfo) => show(imInfo)); // 当前输入法变化
 
 // 单个按键（X keysym，如 0x61='a'、0xff08=BackSpace）
 const r2 = await ctx.keyEvent(0xff08);
+// 交互式逐键输入：带修饰状态/keycode，并跳过 30ms 等待
+const r2b = await ctx.keyEvent(0x61, { state: 1, keycode: 30, settleMs: 0 });
 
 // 选择候选词（下标对应 r.candidates，选中即上屏）
 const r3 = await ctx.selectCandidate(0);
@@ -270,7 +272,7 @@ await ctx.reset();
 await ctx.destroy();
 ```
 
-- `type(text)` 逐字符发按键（按下+抬起），返回合成快照；`keyEvent(keyval, isRelease?)` 单按键
+- `type(text)` 逐字符发按键（按下+抬起），返回合成快照；`keyEvent(keyval, opt?)` 单按键，`opt` 可带 `isRelease`、`state`（X11 modifier mask）、`keycode`、`time`、`settleMs`（交互式传 0 去掉固定等待）
 - **插入文字的正确姿势（桌面 UI 必读）**：协议只有按键没有文本通道，文字经两条路上屏——
   1. `ctx.on("commit", cb)`：输入法主动提交（合成完成、选词整词、标点转全角等）
   2. `keyEvent`/`type` 返回 `handled=false` 且 `committed=""`：输入法**放行**该按键，客户端按默认行为自己插入字符（典型：无合成时的数字、输入法停用时的字母）
@@ -481,6 +483,12 @@ server.notify("input.key", handle, keyCode, "pressed" | "released");
 // 按客户端 text-input 焦点自动分发 zwp_text_input_v1 / zwp_text_input_v3
 //（两者是竞争协议，单客户端内后激活者胜出：v1 activate / v3 enable 抢占，文本只发给持有对象）
 server.notify("input.text", handle, text, preedit);
+
+// 聚焦窗口的 text-input 状态：是否支持、是否已启用、光标矩形（surface 局部坐标）
+const ti = await server.request("textInput.get", handle);
+// { supported, protocol?, enabled, cursorRect: { x, y, w, h } | null }
+// 只有 supported && enabled 时 input.text 才会真正上屏；cursorRect 由客户端
+// zwp_text_input_v3.set_cursor_rectangle 上报，v1 或未上报时为 null。
 ```
 
 发送门槛（没到门槛就静默丢弃，不报错）：`input.key` 只在**该 seat 有键盘焦点**时下发、

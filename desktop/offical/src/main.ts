@@ -18,6 +18,9 @@ import { InputEventCodes } from "../../../src/input_codes/types";
 import type { MenuItem } from "../../../src/sys_api/menu";
 import { Cursor } from "./cursor";
 import { getIconXEl } from "./icon";
+import { ImeController } from "./ime/ime";
+import { DEFAULT_IME_BINDINGS } from "./ime/shortcut";
+import { createImeTool } from "./ime/tool";
 import {
     BTN_TO_BUTTON,
     canKey,
@@ -364,6 +367,9 @@ function 回布局(index: number): { x: number; y: number } {
     }
 }
 
+/** 输入法控制层在下方创建；焦点回调可能早于此时，统一走可选链 */
+let ime: ImeController | undefined;
+
 class ViewData {
     private views: View[] = [];
     private win2View = new Map<MWinId, View>();
@@ -405,12 +411,14 @@ class ViewData {
             if (info.handle === winid) server.server.notify("window.focus", info.handle);
             else server.server.notify("window.blur", info.handle);
         }
+        void ime?.focus(winid);
     }
     blurAll() {
         this.focusHandle = undefined;
         for (const info of server.server.windows.list()) {
             server.server.notify("window.blur", info.handle);
         }
+        void ime?.blur();
     }
     private checkAndRmView() {
         const allAliveViews = new Set(this.win2View.values());
@@ -547,6 +555,7 @@ const planteData: Plant[] = [
             { id: "network" },
             { id: "power" },
             { id: "volume" },
+            { id: "ime" },
             { id: "login" },
             { id: "notifications" },
             { id: "clock" },
@@ -909,6 +918,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): boolea
         });
         if (type === "down") {
             viewData.focusWin(info.handle);
+            ime?.pointerDown();
             for (const other of server.server.windows.list()) {
                 if (other.clientId === info.clientId && other.handle !== info.handle) {
                     server.server.notify("window.blur", other.handle);
@@ -1002,6 +1012,7 @@ server.server.on("window.created", (info) => {
 server.server.on("window.closed", (wid) => {
     console.log(`window ${wid} closed`);
     appliedState.delete(wid);
+    if (viewData.focusHandle === wid) viewData.blurAll();
     viewData.closeWin(wid);
 });
 
@@ -1222,9 +1233,11 @@ lockScreenAnimate.setUpdateCallback((v) => {
 
 state.on("normal", () => {
     lockScreenAnimate.moveTo("normal(out)");
+    void ime?.resume();
 });
 state.on("lock", () => {
     stateLock.setState("lock");
+    void ime?.blur();
 });
 state.setState("normal");
 
@@ -1263,8 +1276,17 @@ stateLock.on("out", () => {
 stateLock.setState("out");
 
 const cursorEl = view();
+// 候选窗覆盖层：在窗口/工具栏之上、锁屏和光标之下
+const imeOverlay = view().style({
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
+    pointerEvents: "none",
+});
 
-mainEl.add([bg, windowElWarp, toolsEl, lockScreen, cursorEl]);
+mainEl.add([bg, windowElWarp, toolsEl, imeOverlay, lockScreen, cursorEl]);
 
 const windowEl = view()
     .style({
@@ -1288,6 +1310,55 @@ const ob = new ResizeObserver((e) => {
 });
 
 ob.observe(windowEl.el);
+
+// ── 输入法 ──────────────────────────────────────────────────────────────────────────────────────
+// 桌面作为 fcitx5 的输入上下文：按键先经过这里，再决定交给输入法还是转发给聚焦窗口。
+// 客户端没有 text-input 时不拦截（按键仍走原路径）。
+const imeSetting = MSetting.init({
+    version: "0.0.1",
+    nameSpace: "ime",
+    defaultNsSetting: {
+        enabled: true,
+        toggle: DEFAULT_IME_BINDINGS.toggle,
+        nextIM: DEFAULT_IME_BINDINGS.nextIM,
+        prevIM: DEFAULT_IME_BINDINGS.prevIM,
+    },
+});
+
+ime = new ImeController({
+    im: MSysApi.inputMethod,
+    overlay: imeOverlay.el,
+    isNormal: () => state.getState() === "normal",
+    getFocus: () => viewData.focusHandle,
+    sendKey: (handle, code, type) => server.server.notify("input.key", handle, code, type),
+    sendText: (handle, text, preedit) => server.server.notify("input.text", handle, text, preedit),
+    queryTextInput: (handle) => server.server.request("textInput.get", handle),
+    windowFrame: (handle) => {
+        const info = server.server.windows.get(handle);
+        if (!info) return undefined;
+        const el = render.getXdgSurfaceEle(info.renderId);
+        if (!el) return undefined;
+        const rect = el.getBoundingClientRect();
+        return {
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+            scale: info.rect.w > 0 ? rect.width / info.rect.w : 1,
+            offsetX: info.rect.x,
+            offsetY: info.rect.y,
+        };
+    },
+    getPointer: () => mousePos,
+    isEnabled: () => imeSetting.nget("enabled") !== false,
+    setEnabled: (value) => imeSetting.nset("enabled", value),
+    getBindings: () => ({
+        toggle: imeSetting.nget("toggle"),
+        nextIM: imeSetting.nget("nextIM"),
+        prevIM: imeSetting.nget("prevIM"),
+    }),
+});
+void ime.init();
 
 const initRect = windowEl.el.getBoundingClientRect();
 windowCenterManager.setViewport(0, 0, initRect.width, initRect.height);
@@ -2379,6 +2450,14 @@ tools.registerTool(
 );
 
 tools.registerTool(
+    "ime",
+    ({ tipEl, showTip }) => {
+        return createImeTool({ ime: () => ime, tipEl, showTip });
+    },
+    { selfBackground: true },
+);
+
+tools.registerTool(
     "volume",
     ({ tipEl, showTip }) => {
         const btn = button(getIconXEl("speaker", { size: 20, width: 24, height: 24 })).on("click", () => {
@@ -2664,22 +2743,28 @@ windowEl.on("pointerup", (e) => {
 });
 
 body.on("keydown", (e) => {
-    if (state.getState() === "normal") {
+    if (state.getState() !== "normal") return;
+    const handle = viewData.focusHandle;
+    if (handle === undefined) return;
+    if (ime?.handleKeyDown(e)) {
         e.preventDefault();
-        if (e.repeat) return;
-        const handle = viewData.focusHandle;
-        if (handle === undefined) return;
-        server.server.notify("input.key", handle, MInputMap.mapKeyCode(e.code), "pressed");
+        return;
     }
+    e.preventDefault();
+    if (e.repeat) return;
+    server.server.notify("input.key", handle, MInputMap.mapKeyCode(e.code), "pressed");
 });
 body.on("keyup", (e) => {
-    if (state.getState() === "normal") {
+    if (state.getState() !== "normal") return;
+    const handle = viewData.focusHandle;
+    if (handle === undefined) return;
+    if (ime?.handleKeyUp(e)) {
         e.preventDefault();
-        if (e.repeat) return;
-        const handle = viewData.focusHandle;
-        if (handle === undefined) return;
-        server.server.notify("input.key", handle, MInputMap.mapKeyCode(e.code), "released");
+        return;
     }
+    e.preventDefault();
+    if (e.repeat) return;
+    server.server.notify("input.key", handle, MInputMap.mapKeyCode(e.code), "released");
 });
 
 windowEl.on("wheel", (e) => {
