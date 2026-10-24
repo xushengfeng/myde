@@ -516,25 +516,28 @@ let imeTrayStatus: ImeTrayStatus = {
     entries: imeTrayEntries,
     hint: "激活 Ctrl+Space · 切换 Super+Space / Super+Shift+Space",
 };
-const imeTray = imeTrayPanel({
-    toggle: () => {
-        imeTrayStatus = { ...imeTrayStatus, state: imeTrayStatus.state === 2 ? 1 : 2 };
-        imeTray.setStatus(imeTrayStatus);
+const imeTray = imeTrayPanel(
+    {
+        toggle: () => {
+            imeTrayStatus = { ...imeTrayStatus, state: imeTrayStatus.state === 2 ? 1 : 2 };
+            imeTray.setStatus(imeTrayStatus);
+        },
+        setEnabled: (enabled) => {
+            imeTrayStatus = { ...imeTrayStatus, enabled };
+            imeTray.setStatus(imeTrayStatus);
+        },
+        select: (uniqueName) => {
+            const entry = imeTrayEntries.find((e) => e.uniqueName === uniqueName);
+            imeTrayStatus = {
+                ...imeTrayStatus,
+                currentUniqueName: uniqueName,
+                currentName: entry?.name ?? uniqueName,
+            };
+            imeTray.setStatus(imeTrayStatus);
+        },
     },
-    setEnabled: (enabled) => {
-        imeTrayStatus = { ...imeTrayStatus, enabled };
-        imeTray.setStatus(imeTrayStatus);
-    },
-    select: (uniqueName) => {
-        const entry = imeTrayEntries.find((e) => e.uniqueName === uniqueName);
-        imeTrayStatus = {
-            ...imeTrayStatus,
-            currentUniqueName: uniqueName,
-            currentName: entry?.name ?? uniqueName,
-        };
-        imeTray.setStatus(imeTrayStatus);
-    },
-});
+    imeTrayStatus,
+);
 imeTray.el.addInto(imeDemo);
 
 const imePreview = view()

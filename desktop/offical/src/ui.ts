@@ -979,8 +979,8 @@ export interface ImeTrayActions {
     select(uniqueName: string): void;
 }
 
-/** 输入法托盘弹窗：当前输入法、激活/开关和组内切换 */
-export function imeTrayPanel(op: ImeTrayActions) {
+/** 输入法托盘弹窗：当前输入法、激活/开关和组内切换。`initial` 用于静态预览 */
+export function imeTrayPanel(op: ImeTrayActions, initial?: ImeTrayStatus) {
     const content = view("y").style({
         width: px(sSize(7)),
         padding: px(sSize2.padding),
@@ -996,7 +996,6 @@ export function imeTrayPanel(op: ImeTrayActions) {
             })
             .add(content),
     ]);
-    content.add(aLineText().sv("正在初始化…"));
 
     const stateText = (state: ImState) => (state === 2 ? "组合中" : state === 1 ? "英文" : "关闭");
 
@@ -1105,6 +1104,9 @@ export function imeTrayPanel(op: ImeTrayActions) {
             );
         }
     };
+
+    if (initial) setStatus(initial);
+    else content.add(aLineText().sv("正在初始化…"));
 
     return {
         el: wrapper.el,
