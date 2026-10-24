@@ -58,11 +58,12 @@ if (typeof document !== "undefined") {
                         // 指针移入才会给键盘焦点，v3 的 enter/enable 随之而来
                         server.notify("input.pointer", info.handle, { type: "move", x: 60, y: 156, button: 0 });
                         await sleep(settle);
+                        const ti = await server.request("textInput.get", info.handle);
                         for (const t of texts) {
                             server.notify("input.text", info.handle, t, false);
                             await sleep(settle);
                         }
-                        runner.sendData({ texts, settle });
+                        runner.sendData({ texts, settle, ti });
                     } catch (e) {
                         runner.sendData({ texts, error: String(e) });
                     } finally {
@@ -72,13 +73,24 @@ if (typeof document !== "undefined") {
             });
         });
 
-        const raw = (await waitExit()) as { applog?: string; error?: string; texts?: string[] }[];
+        const raw = (await waitExit()) as {
+            applog?: string;
+            error?: string;
+            texts?: string[];
+            ti?: { supported: boolean; protocol?: string; enabled: boolean; cursorRect: unknown };
+        }[];
         expect(
             raw.find((r) => r.error),
             `脚本异常: ${JSON.stringify(raw).slice(0, 800)}`,
         ).toBeUndefined();
         const texts = raw.find((r) => r.texts)?.texts;
         expect(texts, `没拿到注入文案，实际: ${JSON.stringify(raw).slice(0, 800)}`).toBeDefined();
+
+        // textInput.get 应能查到当前窗口的文本焦点（输入法靠它决定是否拦截按键）
+        const ti = raw.find((r) => r.ti)?.ti;
+        expect(ti?.supported, `textInput.get 没报告支持: ${JSON.stringify(ti)}`).toBe(true);
+        expect(ti?.protocol).toBe("v3");
+        expect(ti?.enabled, `textInput.get 没报告启用: ${JSON.stringify(ti)}`).toBe(true);
         // biome-ignore lint/style/noNonNullAssertion: 上面已断言
         const injected = texts!;
 

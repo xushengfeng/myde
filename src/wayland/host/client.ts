@@ -1,5 +1,5 @@
 import type { USocket } from "myde-unix-socket";
-import type { Client, ClientLogConfig, CursorState, Rect } from "../api";
+import type { Client, ClientLogConfig, CursorState, Rect, TextInputState } from "../api";
 import type {
     ActionArgs,
     ActionFn,
@@ -534,6 +534,40 @@ export class WaylandClient implements Client {
     cursorState(): CursorState {
         return this.cursor.state;
     }
+
+    /**
+     * 窗口的 text-input 状态。
+     *
+     * `supported` 看该连接是否创建过 text-input 对象；`enabled` 还要求仲裁持有者确实拿到了
+     * 该窗口的文本焦点（v3: entered + enabled + seat 焦点 surface 命中；v1: activate 后的 focus）。
+     * 光标矩形是 surface 局部坐标，v1 没有可靠来源，返回 null。
+     */
+    textInputState(winId: WaylandWinId): TextInputState {
+        const supported = this.ctx.domain.textInputV3.m.size > 0 || this.ctx.domain.textInputV1.m.size > 0;
+        const owner = this.ctx.domain.textInput.owner;
+        if (!owner) return { supported, enabled: false, cursorRect: null };
+
+        if (owner.protocol === "v3") {
+            const t = this.ctx.domain.textInputV3.m.get(owner.id);
+            if (!t) return { supported, enabled: false, cursorRect: null };
+            const xdgSurfaceId = this.windowXdgSurface(winId);
+            const surface =
+                xdgSurfaceId === undefined ? undefined : this.ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
+            const focused = surface !== undefined && [...this.ctx.domain.textInputV3.focus.values()].includes(surface);
+            const enabled = t.entered && t.current.enabled && focused;
+            const caret = t.current.cursorRect;
+            return {
+                supported: true,
+                protocol: "v3",
+                enabled,
+                cursorRect: enabled && caret ? { x: caret.x, y: caret.y, w: caret.width, h: caret.height } : null,
+            };
+        }
+
+        const t = this.ctx.domain.textInputV1.m.get(owner.id);
+        return { supported: true, protocol: "v1", enabled: t?.focus === true, cursorRect: null };
+    }
+
     getWindows() {
         return this.ctx.domain.windows.wins;
     }

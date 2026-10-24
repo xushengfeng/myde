@@ -116,6 +116,11 @@ class WaylandServer {
             if (info === undefined) throw new Error(`unknown window handle: ${handle}`);
             return info.rect;
         });
+        this.respond("textInput.get", (handle) => {
+            const entry = this.windowTable.get(handle);
+            if (entry === undefined) throw new Error(`unknown window handle: ${handle}`);
+            return entry.client.textInputState(entry.winId);
+        });
 
         console.log("Support protocols:", Object.keys(WaylandProtocols));
 

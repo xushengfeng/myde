@@ -105,6 +105,7 @@ export type {
     ServerNotifyMap,
     ServerRequests,
     Size,
+    TextInputState,
     WaylandWinId,
     WindowInfo,
     WindowStates,

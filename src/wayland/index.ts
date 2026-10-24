@@ -27,6 +27,7 @@ export type {
     ServerNotifyMap,
     ServerRequests,
     Size,
+    TextInputState,
     WindowInfo,
     WindowStates,
     WinHandle,

@@ -81,6 +81,23 @@ export type CursorState =
           canvas?: OffscreenCanvas;
       };
 
+// ───────────────────────── 文本输入 ─────────────────────────
+
+/**
+ * 某个窗口的文本输入状态。桌面据此决定是否把按键交给输入法：
+ * 只有 `supported && enabled` 时才会上屏（`input.text` 对未启用/未焦点的客户端静默丢弃）。
+ */
+export interface TextInputState {
+    /** 客户端是否创建过 text-input 对象（v1/v3），不代表当前已获得文本焦点 */
+    supported: boolean;
+    /** 当前仲裁持有并启用的协议 */
+    protocol?: "v1" | "v3";
+    /** 该窗口当前的文本焦点已启用输入（v3 还需 entered + enabled） */
+    enabled: boolean;
+    /** 光标矩形，surface 局部坐标；v1 或客户端未上报时为 null */
+    cursorRect: Rect | null;
+}
+
 // ───────────────────────── 客户端 ─────────────────────────
 
 export interface ClientLogConfig {
@@ -185,6 +202,8 @@ export type ServerNotifyMap = {
 export type ServerRequests = {
     "window.get": { args: [handle: WinHandle]; result: WindowInfo };
     "window.getBounds": { args: [handle: WinHandle]; result: Rect };
+    /** 该窗口的 text-input 状态与光标矩形，输入法候选窗定位/按键分流用 */
+    "textInput.get": { args: [handle: WinHandle]; result: TextInputState };
     /** 桌面提供可用空间，注册一次，见 api.ts */
     "surfaceBounds.request": { args: []; result: Size };
 };
