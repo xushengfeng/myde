@@ -1,5 +1,6 @@
-import { button, type ElType, image, pack, spacer, trackPoint, view } from "dkh-ui";
+import { button, type ElType, image, pack, spacer, trackPoint, txt, view } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
+import type { ImComposeState, ImState } from "../../../src/sys_api/input_method";
 import type { MenuItem } from "../../../src/sys_api/menu";
 import { getIconXEl } from "./icon";
 import type { BindingSource } from "./registry";
@@ -785,6 +786,329 @@ export function vVolume(op?: {
 
     return {
         el: p.el,
+    };
+}
+
+// ── 输入法界面 ────────────────────────────────────────────────────────────────────────────────
+// 候选窗和托盘弹窗的视觉都集中在这里，方便统一调整圆角、高亮和间距。
+
+/** 输入法选中项/强调色 */
+const imeHighlight = "#00aaff";
+
+export interface ImeCandidateAnchor {
+    /** 视口坐标的光标矩形（x/y 为左上角） */
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+}
+
+export interface ImeCandidateHandlers {
+    select(index: number): void;
+    nextPage(): void;
+    prevPage(): void;
+}
+
+/** 输入法候选窗：只负责显示和鼠标操作，不接收键盘焦点 */
+export function imeCandidatePopup(op: ImeCandidateHandlers) {
+    const body = view("y").style({ gap: px(sSize2.padding) });
+    const el = view("y")
+        .style({
+            position: "absolute",
+            display: "none",
+            maxWidth: "min(560px, 90vw)",
+            padding: px(sSize2.padding),
+            borderRadius: px(sSize2.radius2),
+            boxSizing: "border-box",
+            pointerEvents: "auto",
+            color: "#111",
+            fontFamily: "sans-serif",
+            ...gGlassStyle.bg,
+        })
+        .add(body);
+
+    let anchor: ImeCandidateAnchor | undefined;
+    let wheelAt = 0;
+
+    el.on("wheel", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const now = performance.now();
+        if (now - wheelAt < 80) return;
+        wheelAt = now;
+        if (e.deltaY > 0) op.nextPage();
+        else if (e.deltaY < 0) op.prevPage();
+    });
+
+    const visible = () => el.el.style.display !== "none";
+
+    function place() {
+        if (!anchor) {
+            const w = el.el.offsetWidth;
+            const h = el.el.offsetHeight;
+            el.style({
+                left: `${Math.max(4, (window.innerWidth - w) / 2)}px`,
+                top: `${Math.max(4, window.innerHeight - h - 24)}px`,
+            });
+            return;
+        }
+        const margin = 6;
+        const pad = 4;
+        const w = el.el.offsetWidth;
+        const h = el.el.offsetHeight;
+        let x = anchor.x;
+        let y = anchor.y + anchor.h + margin;
+        if (y + h > window.innerHeight - pad) y = anchor.y - margin - h;
+        x = Math.min(Math.max(x, pad), Math.max(pad, window.innerWidth - w - pad));
+        y = Math.min(Math.max(y, pad), Math.max(pad, window.innerHeight - h - pad));
+        el.style({ left: `${x}px`, top: `${y}px` });
+    }
+
+    function pagerButton(text: string, enabled: boolean, click: () => void) {
+        return button(txt(text))
+            .style({
+                height: "18px",
+                padding: "0 6px",
+                borderRadius: px(sSize2.radius1),
+                backgroundColor: gGlassStyle.itemInBg.backgroundColor,
+                opacity: enabled ? "1" : "0.35",
+                pointerEvents: enabled ? "auto" : "none",
+                cursor: enabled ? "pointer" : "default",
+            })
+            .on("click", click);
+    }
+
+    return {
+        el,
+        setAnchor(a: ImeCandidateAnchor | undefined) {
+            anchor = a;
+            if (visible()) place();
+        },
+        hide() {
+            el.style({ display: "none" });
+        },
+        update(state: ImComposeState) {
+            const hasContent = state.preedit.length > 0 || state.candidates.length > 0 || state.auxiliary.length > 0;
+            if (!hasContent) {
+                el.style({ display: "none" });
+                return;
+            }
+
+            const showPreedit = !!state.preedit || !!state.auxiliary || state.hasPrev || state.hasNext;
+            const preedit = view("x").style({
+                gap: px(sSize2.paddingx),
+                alignItems: "baseline",
+                minHeight: "20px",
+            });
+            if (state.preedit) {
+                preedit.add(txt(state.preedit).style({ whiteSpace: "nowrap", fontSize: "12px", opacity: "0.9" }));
+            }
+            if (state.auxiliary) {
+                preedit.add(txt(state.auxiliary).style({ whiteSpace: "nowrap", fontSize: "11px", opacity: "0.55" }));
+            }
+            preedit.add(spacer());
+            if (state.hasPrev || state.hasNext) {
+                preedit.add(
+                    view("x")
+                        .style({ gap: "4px", alignItems: "center", fontSize: "11px", opacity: "0.8" })
+                        .add([
+                            pagerButton("◀", state.hasPrev, () => op.prevPage()),
+                            pagerButton("▶", state.hasNext, () => op.nextPage()),
+                        ]),
+                );
+            }
+
+            const horizontal = state.candidateLayout >= 2;
+            const list = view(horizontal ? "x" : "y", horizontal ? "wrap" : undefined).style({
+                gap: "4px",
+                alignItems: "stretch",
+                maxWidth: horizontal ? "min(540px, 86vw)" : "320px",
+            });
+            state.candidates.forEach((text, i) => {
+                if (!text) return;
+                const active = i === state.candidateCursor;
+                const label = (state.candidateLabels[i] ?? "").trim() || `${i + 1}`;
+                list.add(
+                    view("x")
+                        .style({
+                            gap: "6px",
+                            alignItems: "baseline",
+                            padding: `5px ${px(sSize2.paddingx)}`,
+                            borderRadius: px(sSize2.radius1),
+                            cursor: "pointer",
+                            whiteSpace: "nowrap",
+                            backgroundColor: active ? imeHighlight : gGlassStyle.itemInBg.backgroundColor,
+                            color: active ? "#fff" : "inherit",
+                        })
+                        .add([
+                            txt(label).style({ fontSize: "10px", opacity: active ? "0.85" : "0.5" }),
+                            txt(text).style({ fontSize: "14px" }),
+                        ])
+                        .on("click", () => op.select(i)),
+                );
+            });
+
+            const hasCandidates = state.candidates.length > 0;
+            body.clear().add([...(showPreedit ? [preedit] : []), ...(hasCandidates ? [list] : [])]);
+            body.style({
+                width: "fit-content",
+                minWidth: !horizontal && hasCandidates ? px(160) : "0px",
+            });
+
+            el.style({ display: "flex", visibility: "hidden" });
+            place();
+            el.style({ visibility: "visible" });
+        },
+    };
+}
+
+export interface ImeTrayStatus {
+    available: boolean;
+    enabled: boolean;
+    state: ImState;
+    currentName: string;
+    currentUniqueName: string;
+    entries: { uniqueName: string; name: string; label: string }[];
+    hint?: string;
+    error?: string;
+}
+
+export interface ImeTrayActions {
+    toggle(): void;
+    setEnabled(enabled: boolean): void;
+    select(uniqueName: string): void;
+}
+
+/** 输入法托盘弹窗：当前输入法、激活/开关和组内切换 */
+export function imeTrayPanel(op: ImeTrayActions) {
+    const content = view("y").style({
+        width: px(sSize(7)),
+        padding: px(sSize2.padding),
+        gap: px(sSize2.padding),
+        boxSizing: "border-box",
+    });
+    const wrapper = xView([
+        view()
+            .style({
+                borderRadius: px(sSize2.radius1),
+                overflow: "hidden",
+                ...gGlassStyle.itemInBg,
+            })
+            .add(content),
+    ]);
+    content.add(aLineText().sv("正在初始化…"));
+
+    const stateText = (state: ImState) => (state === 2 ? "组合中" : state === 1 ? "英文" : "关闭");
+
+    const actionButton = (text: string, click: () => void) =>
+        button(txt(text))
+            .style({
+                flex: "1",
+                padding: `5px ${px(sSize2.paddingx)}`,
+                borderRadius: px(sSize2.radius1),
+                backgroundColor: gGlassStyle.itemInBg.backgroundColor,
+                cursor: "pointer",
+                fontSize: "12px",
+                whiteSpace: "nowrap",
+            })
+            .on("click", click);
+
+    const setStatus = (status: ImeTrayStatus) => {
+        content.clear();
+
+        if (!status.available) {
+            content.add(aLineText().sv("fcitx5 不可用"));
+            if (status.error) {
+                content.add(
+                    txt(status.error).style({
+                        fontSize: "11px",
+                        opacity: "0.6",
+                        wordBreak: "break-all",
+                    }),
+                );
+            }
+            return;
+        }
+
+        content.add(
+            view("x")
+                .style({ alignItems: "baseline", gap: "6px" })
+                .add([
+                    aLineText().sv(status.currentName).style({ fontWeight: "600", flexGrow: "1" }),
+                    txt(stateText(status.state)).style({ fontSize: "11px", opacity: "0.6", flexShrink: "0" }),
+                ]),
+        );
+
+        content.add(
+            view("x")
+                .style({ gap: "4px" })
+                .add([
+                    actionButton(stateText(status.state) === "组合中" ? "停用" : "激活", () => op.toggle()),
+                    actionButton(status.enabled ? "关闭输入法" : "开启输入法", () => op.setEnabled(!status.enabled)),
+                ]),
+        );
+
+        if (status.entries.length > 0) {
+            const list = view("y").style({ gap: "2px" });
+            for (const entry of status.entries) {
+                const active = status.currentUniqueName === entry.uniqueName;
+                list.add(
+                    view("x")
+                        .style({
+                            padding: `5px ${px(sSize2.paddingx)}`,
+                            borderRadius: px(sSize2.radius1),
+                            gap: "6px",
+                            alignItems: "baseline",
+                            cursor: "pointer",
+                            backgroundColor: active ? imeHighlight : gGlassStyle.itemInBg.backgroundColor,
+                            color: active ? "#fff" : "inherit",
+                        })
+                        .add([
+                            txt(entry.label?.trim() || "·").style({
+                                fontSize: "10px",
+                                width: "14px",
+                                flexShrink: "0",
+                                opacity: active ? "0.85" : "0.55",
+                            }),
+                            aLineText().sv(entry.name),
+                            txt(entry.uniqueName).style({
+                                fontSize: "10px",
+                                opacity: "0.5",
+                                flexShrink: "0",
+                                maxWidth: "90px",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                            }),
+                        ])
+                        .on("click", () => op.select(entry.uniqueName)),
+                );
+            }
+            content.add(list);
+        }
+
+        if (status.hint) {
+            content.add(
+                txt(status.hint).style({
+                    fontSize: "10px",
+                    opacity: "0.55",
+                    lineHeight: "1.5",
+                }),
+            );
+        }
+        if (status.error) {
+            content.add(
+                txt(status.error).style({
+                    fontSize: "10px",
+                    opacity: "0.55",
+                    wordBreak: "break-all",
+                }),
+            );
+        }
+    };
+
+    return {
+        el: wrapper.el,
+        setStatus,
     };
 }
 

@@ -7,7 +7,7 @@ import type {
     inputMethod,
     inputMethodContext,
 } from "../../../../src/sys_api/input_method";
-import { CandidateWindow } from "./candidate";
+import { imeCandidatePopup } from "../ui";
 import { keyEventToIme } from "./keysym";
 import { DEFAULT_IME_BINDINGS, type ImeBindings, matchBindings, normalizeBindings } from "./shortcut";
 
@@ -62,7 +62,7 @@ const EMPTY_TEXT_INPUT: TextInputState = { supported: false, enabled: false, cur
  */
 export class ImeController {
     private readonly deps: ImeDeps;
-    private readonly candidate: CandidateWindow;
+    private readonly candidate: ReturnType<typeof imeCandidatePopup>;
     private readonly listeners = new Set<(status: ImeStatus) => void>();
 
     private readonly im: inputMethod | undefined;
@@ -90,7 +90,7 @@ export class ImeController {
     constructor(deps: ImeDeps) {
         this.deps = deps;
         this.im = deps.im;
-        this.candidate = new CandidateWindow({
+        this.candidate = imeCandidatePopup({
             select: (i) => void this.selectCandidate(i),
             nextPage: () => void this.page(true),
             prevPage: () => void this.page(false),

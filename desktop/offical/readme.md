@@ -9,3 +9,4 @@
 - 顶栏输入法工具显示 中/英/关，点击可激活/停用、开关输入法、切换组内输入法
 - 默认快捷键：`Ctrl+Space` 激活/停用合成，`Super+Space` / `Super+Shift+Space` 切换输入法
 - 配置在 `settings.json` 的 `ime` 命名空间：`enabled`、`toggle`、`nextIM`、`prevIM`
+- 候选窗和托盘弹窗的视觉分别在 `src/ui.ts` 的 `imeCandidatePopup` / `imeTrayPanel`，静态预览见 `test/ui_example/ui_demo.ts`
