@@ -29,6 +29,25 @@ export interface ImKeyResult extends ImComposeState {
     committed: string;
 }
 
+/** 按键事件参数（都可不传，保持旧行为） */
+export interface ImKeyOptions {
+    /** 是否为抬起事件 */
+    isRelease?: boolean;
+    /** X11 modifier mask（Shift=1、Lock=2、Control=4、Mod1/Alt=8、Mod4/Super=64） */
+    state?: number;
+    /** evdev 键码，部分输入法会用到 */
+    keycode?: number;
+    /** 事件时间戳，缺省 0 */
+    time?: number;
+    /**
+     * 等待异步信号的毫秒数，缺省 30。
+     *
+     * 交互式逐键输入传 0：fcitx5 在 ProcessKeyEvent 返回前发出的 CommitString 会先于调用结果到达，
+     * 固定等待只会增加按键延迟；测试/脚本仍用缺省值兜底异步提交。
+     */
+    settleMs?: number;
+}
+
 /** 当前输入法信息 */
 export interface ImCurrentIM {
     name: string;
@@ -382,12 +401,23 @@ export class inputMethodContext extends EventEmitter<ImEvents> {
     }
 
     /** 传入单个按键（X keysym，如 0x61='a'、0xff08=BackSpace），返回合成结果 */
-    async keyEvent(keyval: number, isRelease = false): Promise<ImKeyResult> {
+    async keyEvent(keyval: number, opt: ImKeyOptions | boolean = {}): Promise<ImKeyResult> {
+        // 兼容旧调用 keyEvent(keyval, isRelease)
+        const o: ImKeyOptions = typeof opt === "boolean" ? { isRelease: opt } : opt;
         this.committedBuf = "";
         const [handled] = await this.iface()
-            .call<"uuubu">("ProcessKeyEvent", "uuubu", keyval, 0, 0, isRelease, 0)
+            .call<"uuubu">(
+                "ProcessKeyEvent",
+                "uuubu",
+                keyval,
+                o.keycode ?? 0,
+                o.state ?? 0,
+                o.isRelease ?? false,
+                o.time ?? 0,
+            )
             .as<"b">();
-        await new Promise((r) => setTimeout(r, 30));
+        const settleMs = o.settleMs ?? 30;
+        if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
         return { ...this.getState(), handled, committed: this.committedBuf };
     }
 
