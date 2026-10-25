@@ -3,10 +3,16 @@ import { EventEmitter } from "../event-emitter/event-emitter";
 
 /** 合成状态快照 */
 export interface ImComposeState {
-    /** 预编辑（合成中）文本 */
+    /** 预编辑（合成中）文本；客户端预编辑优先，其次面板预编辑 */
     preedit: string;
     /** 预编辑光标（字符下标，-1 表示无） */
     preeditCursor: number;
+    /** 候选窗面板使用的预编辑（UpdateClientSideUI 的 preedit） */
+    panelPreedit: string;
+    /** 客户端内联预编辑（UpdateFormattedPreedit）；fcitx 未启用内联时为空 */
+    clientPreedit: string;
+    /** fcitx 是否在给客户端发内联预编辑（至少收到过一次 UpdateFormattedPreedit） */
+    clientPreeditEnabled: boolean;
     /** 辅助文本 */
     auxiliary: string;
     /** 候选词 */
@@ -104,6 +110,9 @@ export type ImEvents = {
 const emptyState = (): ImComposeState => ({
     preedit: "",
     preeditCursor: 0,
+    panelPreedit: "",
+    clientPreedit: "",
+    clientPreeditEnabled: false,
     auxiliary: "",
     candidates: [],
     candidateLabels: [],
@@ -296,6 +305,8 @@ export class inputMethodContext extends EventEmitter<ImEvents> {
     private preeditClient = { text: "", cursor: 0 };
     /** 面板预编辑（候选窗顶部的合成串） */
     private preeditPanel = { text: "", cursor: 0 };
+    /** fcitx 是否发过内联预编辑；关闭 Preedit 能力或应用在 NO_PREEDIT_APPS 时不会发 */
+    private clientPreeditSeen = false;
     private committedBuf = "";
     private unsubs: (() => void)[] = [];
     private currentIM: ImCurrentIM = { name: "", uniqueName: "", language: "" };
@@ -320,6 +331,7 @@ export class inputMethodContext extends EventEmitter<ImEvents> {
         this.unsubs.push(
             await ic.on<"a(si)i">("UpdateFormattedPreedit", (segments, cursor) => {
                 this.preeditClient = { text: formatSegments(segments), cursor };
+                this.clientPreeditSeen = true;
                 this.syncPreedit();
                 this.emitUpdate();
             }),
@@ -352,11 +364,14 @@ export class inputMethodContext extends EventEmitter<ImEvents> {
         await ic.call<"t">("SetCapability", "t", this.capabilities).await();
     }
 
-    /** 合并两个预编辑来源：客户端预编辑优先，其次面板预编辑 */
+    /** 合并两个预编辑来源；同时把两份原文留给调用方自行决定在哪里显示 */
     private syncPreedit() {
         const src = this.preeditClient.text ? this.preeditClient : this.preeditPanel;
         this.state.preedit = src.text;
         this.state.preeditCursor = src.cursor;
+        this.state.panelPreedit = this.preeditPanel.text;
+        this.state.clientPreedit = this.preeditClient.text;
+        this.state.clientPreeditEnabled = this.clientPreeditSeen;
     }
 
     private emitUpdate() {
@@ -489,6 +504,7 @@ export class inputMethodContext extends EventEmitter<ImEvents> {
         this.state = emptyState();
         this.preeditClient = { text: "", cursor: 0 };
         this.preeditPanel = { text: "", cursor: 0 };
+        this.clientPreeditSeen = false;
         this.committedBuf = "";
     }
 

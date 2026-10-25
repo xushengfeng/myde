@@ -280,7 +280,8 @@ await ctx.destroy();
 - `selectCandidate(index)` 选词上屏，下标对应 `state.candidates`（fcitx5 跳过占位符后的下标）；`commit(raw?)` 提交当前合成（true=回车上屏原文，false=空格上屏高亮候选）；`nextPage()`/`prevPage()` 翻页返回翻页后状态
 - 事件（`ctx.on(event, cb)` 返回取消订阅函数）：`update`（合成状态更新）/ `commit`（提交文字）/ `im`（当前输入法变化）
 - `getState()` 当前合成状态快照；`getCurrentIM()` 当前输入法（`{ name, uniqueName, language }`）
-- 合成快照 `ImComposeState`：`preedit`（预编辑文本）/ `preeditCursor` / `auxiliary`（辅助文本）/ `candidates`（候选词）/ `candidateLabels`（候选标签）/ `candidateCursor` / `candidateLayout` / `hasPrev` / `hasNext`
+- 合成快照 `ImComposeState`：`preedit`（合并后的预编辑）/ `preeditCursor` / `panelPreedit`（面板预编辑）/ `clientPreedit`（客户端内联预编辑）/ `clientPreeditEnabled`（fcitx 是否在发内联预编辑）/ `auxiliary`（辅助文本）/ `candidates`（候选词）/ `candidateLabels`（候选标签）/ `candidateCursor` / `candidateLayout` / `hasPrev` / `hasNext`
+  - `clientPreeditEnabled` 来自是否收到过 `UpdateFormattedPreedit`；fcitx 关闭“在应用中显示预编辑”或把应用列入 `FCITX_NO_PREEDIT_APPS` 时为 false，此时应把 `panelPreedit` 显示在候选窗里作为兜底
 - `ImKeyResult` 追加 `handled`（按键是否被输入法处理）与 `committed`（本次输入提交的文本）
 - `createContext(program, capabilities?)` 可自定义能力位图（缺省 ClientSideUI|Preedit|FormattedPreedit|ClientSideInputPanel；**注意不要全置 1**，会带上 Disable/Password 位导致 fcitx5 退化为键盘布局不合成）
 - 底层为 fcitx5 `org.fcitx.Fcitx.InputMethod1` → `org.fcitx.Fcitx.InputContext1`（信号 `UpdateClientSideUI`/`UpdateFormattedPreedit`/`CommitString`/`CurrentIM`）
