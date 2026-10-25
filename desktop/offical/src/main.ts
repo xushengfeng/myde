@@ -19,7 +19,7 @@ import type { MenuItem } from "../../../src/sys_api/menu";
 import { Cursor } from "./cursor";
 import { getIconXEl } from "./icon";
 import { ImeController } from "./ime/ime";
-import { DEFAULT_IME_BINDINGS } from "./ime/shortcut";
+import { DEFAULT_IME_BINDINGS, type KeyBinding, matchBindings } from "./ime/shortcut";
 import { createImeTool } from "./ime/tool";
 import {
     BTN_TO_BUTTON,
@@ -680,6 +680,12 @@ const stateLock = new stateMachine({
     },
     out: { next: [] },
 });
+
+/** 退出桌面（关闭桌面窗口，结束当前桌面进程）：Super+Shift+E 或 Ctrl+Alt+Delete */
+const EXIT_BINDINGS: KeyBinding[] = [
+    { code: "KeyE", meta: true, shift: true },
+    { code: "Delete", ctrl: true, alt: true },
+];
 
 class Timer {
     private timerId: number | undefined;
@@ -2745,6 +2751,11 @@ windowEl.on("pointerup", (e) => {
 });
 
 body.on("keydown", (e) => {
+    if (!e.repeat && matchBindings(e, EXIT_BINDINGS)) {
+        e.preventDefault();
+        window.close();
+        return;
+    }
     if (state.getState() !== "normal") return;
     const handle = viewData.focusHandle;
     if (handle === undefined) return;

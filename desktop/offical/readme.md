@@ -1,5 +1,9 @@
 # 默认桌面
 
+## 退出
+
+`Super+Shift+E` 或 `Ctrl+Alt+Delete` 关闭桌面窗口，结束当前桌面进程。
+
 ## 输入法
 
 通过 `MSysApi.inputMethod` 连接 fcitx5，桌面作为输入上下文客户端处理按键，不实现 Wayland 的 input-method 协议。
