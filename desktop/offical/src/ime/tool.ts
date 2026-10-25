@@ -24,12 +24,6 @@ export function createImeTool(op: {
     const el = view("x").style({ alignItems: "center", justifyContent: "center", minWidth: "24px" }).add(label);
 
     const panel = imeTrayPanel({
-        toggle: () => {
-            void op.ime()?.toggle();
-        },
-        setEnabled: (enabled) => {
-            void op.ime()?.setEnabled(enabled);
-        },
         select: (uniqueName) => {
             void op.ime()?.setCurrentIM(uniqueName);
         },
@@ -58,17 +52,18 @@ export function createImeTool(op: {
 }
 
 function toTrayStatus(status: ImeStatus, hint?: string): ImeTrayStatus {
+    const entries = (status.group?.inputMethods ?? []).map((entry) => ({
+        uniqueName: entry.uniqueName,
+        name: entry.name,
+        label: entry.label,
+        off: entry.uniqueName === "keyboard-us",
+    }));
+    // 关闭项固定在最前，和 KDE 的布局/输入法列表一致
+    entries.sort((a, b) => Number(!!b.off) - Number(!!a.off));
     return {
         available: status.available,
-        enabled: status.enabled,
-        state: status.state,
-        currentName: status.current?.name || "未命名输入法",
         currentUniqueName: status.current?.uniqueName ?? "",
-        entries: (status.group?.inputMethods ?? []).map((entry) => ({
-            uniqueName: entry.uniqueName,
-            name: entry.name,
-            label: entry.label,
-        })),
+        entries,
         hint,
         error: status.error,
     };

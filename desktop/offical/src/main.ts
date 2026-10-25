@@ -1318,7 +1318,6 @@ const imeSetting = MSetting.init({
     version: "0.0.1",
     nameSpace: "ime",
     defaultNsSetting: {
-        enabled: true,
         toggle: DEFAULT_IME_BINDINGS.toggle,
         nextIM: DEFAULT_IME_BINDINGS.nextIM,
         prevIM: DEFAULT_IME_BINDINGS.prevIM,
@@ -1350,8 +1349,6 @@ ime = new ImeController({
         };
     },
     getPointer: () => mousePos,
-    isEnabled: () => imeSetting.nget("enabled") !== false,
-    setEnabled: (value) => imeSetting.nset("enabled", value),
     getBindings: () => ({
         toggle: imeSetting.nget("toggle"),
         nextIM: imeSetting.nget("nextIM"),

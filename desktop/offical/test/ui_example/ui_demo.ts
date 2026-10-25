@@ -503,36 +503,20 @@ const imeDemo = view("y").style({ marginTop: "30px", gap: "12px", position: "rel
 imeDemo.add(aLineText().sv("输入法界面"));
 
 const imeTrayEntries = [
-    { uniqueName: "keyboard-us", name: "英语（美国）", label: "en" },
+    { uniqueName: "keyboard-us", name: "英语（美国）", label: "en", off: true },
     { uniqueName: "rime", name: "中州韵", label: "中" },
     { uniqueName: "pinyin", name: "拼音", label: "拼" },
 ];
 let imeTrayStatus: ImeTrayStatus = {
     available: true,
-    enabled: true,
-    state: 2,
-    currentName: "中州韵",
     currentUniqueName: "rime",
     entries: imeTrayEntries,
     hint: "激活 Ctrl+Space · 切换 Super+Space / Super+Shift+Space",
 };
 const imeTray = imeTrayPanel(
     {
-        toggle: () => {
-            imeTrayStatus = { ...imeTrayStatus, state: imeTrayStatus.state === 2 ? 1 : 2 };
-            imeTray.setStatus(imeTrayStatus);
-        },
-        setEnabled: (enabled) => {
-            imeTrayStatus = { ...imeTrayStatus, enabled };
-            imeTray.setStatus(imeTrayStatus);
-        },
         select: (uniqueName) => {
-            const entry = imeTrayEntries.find((e) => e.uniqueName === uniqueName);
-            imeTrayStatus = {
-                ...imeTrayStatus,
-                currentUniqueName: uniqueName,
-                currentName: entry?.name ?? uniqueName,
-            };
+            imeTrayStatus = { ...imeTrayStatus, currentUniqueName: uniqueName };
             imeTray.setStatus(imeTrayStatus);
         },
     },
@@ -543,7 +527,7 @@ imeTray.el.addInto(imeDemo);
 const imePreview = view()
     .style({
         position: "relative",
-        height: "260px",
+        height: "300px",
         border: "1px dashed #bbb",
         borderRadius: px(12),
         overflow: "hidden",
@@ -571,7 +555,7 @@ function imeSampleState(op = { layout: 0, cursor: 0, prev: false, next: true }) 
     };
 }
 
-imeCandidate.setAnchor({ x: 24, y: 96, w: 2, h: 16 });
+imeCandidate.setAnchor({ x: 24, y: 24, w: 2, h: 16 });
 imeCandidate.update(imeSampleState());
 
 view("x")

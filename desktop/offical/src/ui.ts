@@ -1,6 +1,6 @@
 import { button, type ElType, image, pack, spacer, trackPoint, txt, view } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
-import type { ImComposeState, ImState } from "../../../src/sys_api/input_method";
+import type { ImComposeState } from "../../../src/sys_api/input_method";
 import type { MenuItem } from "../../../src/sys_api/menu";
 import { getIconXEl } from "./icon";
 import type { BindingSource } from "./registry";
@@ -792,9 +792,6 @@ export function vVolume(op?: {
 // ── 输入法界面 ────────────────────────────────────────────────────────────────────────────────
 // 候选窗和托盘弹窗的视觉都集中在这里，方便统一调整圆角、高亮和间距。
 
-/** 输入法选中项/强调色 */
-const imeHighlight = "#00aaff";
-
 export interface ImeCandidateAnchor {
     /** 视口坐标的光标矩形（x/y 为左上角） */
     x: number;
@@ -864,11 +861,15 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
         el.style({ left: `${x}px`, top: `${y}px` });
     }
 
-    function pagerButton(text: string, enabled: boolean, click: () => void) {
-        return button(txt(text))
+    function pagerButton(arrow: "left" | "right", enabled: boolean, click: () => void) {
+        return button(
+            arrow === "left"
+                ? getIconXEl("chevron.left", { size: 16, width: sSize(1) })
+                : getIconXEl("chevron.right", { size: 16, width: sSize(1) }),
+        )
             .style({
-                height: "18px",
-                padding: "0 6px",
+                width: px(sSize(1)),
+                height: px(sSize(1)),
                 borderRadius: px(sSize2.radius1),
                 backgroundColor: gGlassStyle.itemInBg.backgroundColor,
                 opacity: enabled ? "1" : "0.35",
@@ -896,9 +897,9 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
 
             const showPreedit = !!state.preedit || !!state.auxiliary || state.hasPrev || state.hasNext;
             const preedit = view("x").style({
-                gap: px(sSize2.paddingx),
-                alignItems: "baseline",
-                minHeight: "20px",
+                padding: px(sSize2.paddingx),
+                alignItems: "center",
+                height: px(sSize(1)),
             });
             if (state.preedit) {
                 preedit.add(txt(state.preedit).style({ whiteSpace: "nowrap", fontSize: "12px", opacity: "0.9" }));
@@ -906,21 +907,12 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
             if (state.auxiliary) {
                 preedit.add(txt(state.auxiliary).style({ whiteSpace: "nowrap", fontSize: "11px", opacity: "0.55" }));
             }
-            preedit.add(spacer());
-            if (state.hasPrev || state.hasNext) {
-                preedit.add(
-                    view("x")
-                        .style({ gap: "4px", alignItems: "center", fontSize: "11px", opacity: "0.8" })
-                        .add([
-                            pagerButton("◀", state.hasPrev, () => op.prevPage()),
-                            pagerButton("▶", state.hasNext, () => op.nextPage()),
-                        ]),
-                );
-            }
 
             const horizontal = state.candidateLayout >= 2;
-            const list = view(horizontal ? "x" : "y", horizontal ? "wrap" : undefined).style({
-                gap: "4px",
+            const list = ui.barItem();
+            list.style({
+                display: "flex",
+                flexDirection: horizontal ? "row" : "column",
                 alignItems: "stretch",
                 maxWidth: horizontal ? "min(540px, 86vw)" : "320px",
             });
@@ -937,8 +929,8 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
                             borderRadius: px(sSize2.radius1),
                             cursor: "pointer",
                             whiteSpace: "nowrap",
-                            backgroundColor: active ? imeHighlight : gGlassStyle.itemInBg.backgroundColor,
-                            color: active ? "#fff" : "inherit",
+                            backgroundColor: active ? "#fff" : "transparent",
+                            height: px(sSize(1)),
                         })
                         .add([
                             txt(label).style({ fontSize: "10px", opacity: active ? "0.85" : "0.5" }),
@@ -947,9 +939,24 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
                         .on("click", () => op.select(i)),
                 );
             });
+            list.add(
+                view("x")
+                    .style({
+                        gap: "4px",
+                        alignItems: "center",
+                        fontSize: "11px",
+                        opacity: "0.8",
+                        width: "100%",
+                        height: px(sSize(1)),
+                    })
+                    .add([
+                        pagerButton("left", state.hasPrev, () => op.prevPage()),
+                        pagerButton("right", state.hasNext, () => op.nextPage()),
+                    ]),
+            );
 
             const hasCandidates = state.candidates.length > 0;
-            body.clear().add([...(showPreedit ? [preedit] : []), ...(hasCandidates ? [list] : [])]);
+            body.clear().add([...(showPreedit ? [ui.barItem().add(preedit)] : []), ...(hasCandidates ? [list] : [])]);
             body.style({
                 width: "fit-content",
                 minWidth: !horizontal && hasCandidates ? px(160) : "0px",
@@ -964,113 +971,82 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
 
 export interface ImeTrayStatus {
     available: boolean;
-    enabled: boolean;
-    state: ImState;
-    currentName: string;
     currentUniqueName: string;
-    entries: { uniqueName: string; name: string; label: string }[];
+    /** `off` 的项是关闭输入法的键盘布局（默认 keyboard-us） */
+    entries: { uniqueName: string; name: string; label: string; off?: boolean }[];
     hint?: string;
     error?: string;
 }
 
 export interface ImeTrayActions {
-    toggle(): void;
-    setEnabled(enabled: boolean): void;
     select(uniqueName: string): void;
 }
 
-/** 输入法托盘弹窗：当前输入法、激活/开关和组内切换。`initial` 用于静态预览 */
+/** 输入法托盘弹窗：列表直接切换输入法，键盘布局项即关闭输入法。`initial` 用于静态预览 */
 export function imeTrayPanel(op: ImeTrayActions, initial?: ImeTrayStatus) {
-    const content = view("y").style({
-        width: px(sSize(7)),
-        padding: px(sSize2.padding),
-        gap: px(sSize2.padding),
-        boxSizing: "border-box",
+    const content = view("y");
+    const list = ui.barItem();
+    const wrapper = ui.bar([content, list]);
+    wrapper.el.style({
+        width: px(sSize(4)),
     });
-    const wrapper = xView([
-        view()
-            .style({
-                borderRadius: px(sSize2.radius1),
-                overflow: "hidden",
-                ...gGlassStyle.itemInBg,
-            })
-            .add(content),
-    ]);
-
-    const stateText = (state: ImState) => (state === 2 ? "组合中" : state === 1 ? "英文" : "关闭");
-
-    const actionButton = (text: string, click: () => void) =>
-        button(txt(text))
-            .style({
-                flex: "1",
-                padding: `5px ${px(sSize2.paddingx)}`,
-                borderRadius: px(sSize2.radius1),
-                backgroundColor: gGlassStyle.itemInBg.backgroundColor,
-                cursor: "pointer",
-                fontSize: "12px",
-                whiteSpace: "nowrap",
-            })
-            .on("click", click);
 
     const setStatus = (status: ImeTrayStatus) => {
+        content.style({ display: "flex" });
         content.clear();
+        list.clear();
+        list.style({ display: "none" });
 
         if (!status.available) {
-            content.add(aLineText().sv("fcitx5 不可用"));
+            content.add(
+                aLineText()
+                    .sv("fcitx5 不可用")
+                    .style({ padding: `4px ${px(sSize2.paddingx)}` }),
+            );
             if (status.error) {
                 content.add(
                     txt(status.error).style({
                         fontSize: "11px",
                         opacity: "0.6",
                         wordBreak: "break-all",
+                        padding: `0 ${px(sSize2.paddingx)} 4px`,
                     }),
                 );
             }
             return;
         }
 
-        content.add(
-            view("x")
-                .style({ alignItems: "baseline", gap: "6px" })
-                .add([
-                    aLineText().sv(status.currentName).style({ fontWeight: "600", flexGrow: "1" }),
-                    txt(stateText(status.state)).style({ fontSize: "11px", opacity: "0.6", flexShrink: "0" }),
-                ]),
-        );
-
-        content.add(
-            view("x")
-                .style({ gap: "4px" })
-                .add([
-                    actionButton(stateText(status.state) === "组合中" ? "停用" : "激活", () => op.toggle()),
-                    actionButton(status.enabled ? "关闭输入法" : "开启输入法", () => op.setEnabled(!status.enabled)),
-                ]),
-        );
-
+        list.style({ display: status.entries.length > 0 ? "block" : "none" });
         if (status.entries.length > 0) {
-            const list = view("y").style({ gap: "2px" });
             for (const entry of status.entries) {
                 const active = status.currentUniqueName === entry.uniqueName;
+                const off = !!entry.off;
                 list.add(
                     view("x")
                         .style({
-                            padding: `5px ${px(sSize2.paddingx)}`,
                             borderRadius: px(sSize2.radius1),
-                            gap: "6px",
-                            alignItems: "baseline",
+                            gap: px(sSize2.paddingx),
+                            alignItems: "center",
                             cursor: "pointer",
-                            backgroundColor: active ? imeHighlight : gGlassStyle.itemInBg.backgroundColor,
-                            color: active ? "#fff" : "inherit",
+                            height: px(sSize(1)),
+                            backgroundColor: active ? "#fff" : "transparent",
                         })
                         .add([
-                            txt(entry.label?.trim() || "·").style({
-                                fontSize: "10px",
-                                width: "14px",
-                                flexShrink: "0",
-                                opacity: active ? "0.85" : "0.55",
-                            }),
-                            aLineText().sv(entry.name),
-                            txt(entry.uniqueName).style({
+                            view("x")
+                                .style({
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    width: px(sSize(1)),
+                                    height: px(sSize(1)),
+                                })
+                                .add(
+                                    txt(off ? "关" : entry.label?.trim() || "·").style({
+                                        fontSize: "10px",
+                                        opacity: active ? "0.85" : "0.55",
+                                    }),
+                                ),
+                            aLineText().sv(off ? "关闭输入法" : entry.name),
+                            txt(off ? "" : entry.uniqueName).style({
                                 fontSize: "10px",
                                 opacity: "0.5",
                                 flexShrink: "0",
@@ -1082,17 +1058,9 @@ export function imeTrayPanel(op: ImeTrayActions, initial?: ImeTrayStatus) {
                         .on("click", () => op.select(entry.uniqueName)),
                 );
             }
-            content.add(list);
         }
 
         if (status.hint) {
-            content.add(
-                txt(status.hint).style({
-                    fontSize: "10px",
-                    opacity: "0.55",
-                    lineHeight: "1.5",
-                }),
-            );
         }
         if (status.error) {
             content.add(
@@ -1100,13 +1068,20 @@ export function imeTrayPanel(op: ImeTrayActions, initial?: ImeTrayStatus) {
                     fontSize: "10px",
                     opacity: "0.55",
                     wordBreak: "break-all",
+                    padding: `0 ${px(sSize2.paddingx)} 4px`,
                 }),
             );
         }
+        content.style({ display: content.el.children.length > 0 ? "flex" : "none" });
     };
 
     if (initial) setStatus(initial);
-    else content.add(aLineText().sv("正在初始化…"));
+    else
+        content.add(
+            aLineText()
+                .sv("正在初始化…")
+                .style({ padding: `4px ${px(sSize2.paddingx)}` }),
+        );
 
     return {
         el: wrapper.el,

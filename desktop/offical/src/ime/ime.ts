@@ -33,14 +33,11 @@ export interface ImeDeps {
     queryTextInput(handle: WinHandle): Promise<TextInputState>;
     windowFrame(handle: WinHandle): ImeWindowFrame | undefined;
     getPointer(): { x: number; y: number };
-    isEnabled(): boolean;
-    setEnabled(value: boolean): void;
     getBindings(): Partial<ImeBindings>;
 }
 
 export interface ImeStatus {
     available: boolean;
-    enabled: boolean;
     state: ImState;
     /** 托盘显示的短标签：中/英/关 */
     label: string;
@@ -131,7 +128,6 @@ export class ImeController {
     getStatus(): ImeStatus {
         return {
             available: this.available,
-            enabled: this.deps.isEnabled(),
             state: this.state,
             label: this.label(),
             current: this.current,
@@ -155,7 +151,7 @@ export class ImeController {
 
     async focus(handle: WinHandle) {
         if (!this.available) return;
-        if (!this.deps.isEnabled() || !this.deps.isNormal()) {
+        if (!this.deps.isNormal()) {
             await this.blur();
             return;
         }
@@ -195,7 +191,7 @@ export class ImeController {
 
     /** 锁屏结束等场景：窗口焦点没有变，但上下文被 blur 过 */
     async resume() {
-        if (!this.available || !this.deps.isEnabled()) return;
+        if (!this.available) return;
         const handle = this.deps.getFocus();
         if (handle === undefined) return;
         this.focusHandle = handle;
@@ -234,7 +230,7 @@ export class ImeController {
 
     /** 返回 true 表示这次按下由输入法接管（无论最终是喂给 fcitx 还是原样转发） */
     handleKeyDown(e: KeyboardEvent): boolean {
-        if (!this.available || !this.deps.isEnabled() || !this.deps.isNormal()) return false;
+        if (!this.available || !this.deps.isNormal()) return false;
         if (isEditableTarget(e.target)) return false;
         const handle = this.deps.getFocus();
         if (handle === undefined) return false;
@@ -243,7 +239,7 @@ export class ImeController {
     }
 
     handleKeyUp(e: KeyboardEvent): boolean {
-        if (!this.available || !this.deps.isEnabled() || !this.deps.isNormal()) return false;
+        if (!this.available || !this.deps.isNormal()) return false;
         if (isEditableTarget(e.target)) return false;
         const handle = this.deps.getFocus();
         if (handle === undefined) return false;
@@ -298,7 +294,8 @@ export class ImeController {
             return;
         }
 
-        if (!ti.enabled) {
+        // keyboard-us / 停用状态：直接走客户端，不经过 fcitx，行为与 KDE 的键盘布局一致
+        if (!ti.enabled || this.state !== 2 || this.current?.uniqueName === "keyboard-us") {
             this.pressKinds.set(e.code, "client");
             this.forward(e, handle);
             return;
@@ -378,7 +375,7 @@ export class ImeController {
 
     private onUpdate(state: ImComposeState) {
         const handle = this.focusHandle;
-        if (handle === undefined || !this.deps.isEnabled() || !this.deps.isNormal()) {
+        if (handle === undefined || !this.deps.isNormal()) {
             this.candidate.hide();
             return;
         }
@@ -465,6 +462,8 @@ export class ImeController {
         if (!this.im) return;
         try {
             await this.im.toggle();
+            this.candidate.hide();
+            this.clearPreedit();
             await this.refresh();
         } catch (e) {
             this.setError(e);
@@ -475,6 +474,8 @@ export class ImeController {
         if (!this.im) return;
         try {
             await this.im.setCurrentIM(uniqueName);
+            this.candidate.hide();
+            this.clearPreedit();
             await this.refresh();
         } catch (e) {
             this.setError(e);
@@ -489,13 +490,6 @@ export class ImeController {
         const index = found >= 0 ? found : dir === 1 ? -1 : 0;
         const next = list[(index + dir + list.length) % list.length];
         if (next) await this.setCurrentIM(next.uniqueName);
-    }
-
-    async setEnabled(enabled: boolean) {
-        this.deps.setEnabled(enabled);
-        if (!enabled) await this.blur();
-        else await this.resume();
-        this.emitStatus();
     }
 
     private async refresh() {
@@ -551,7 +545,7 @@ export class ImeController {
 
     private label(): string {
         if (!this.available) return "—";
-        if (!this.deps.isEnabled()) return "关";
+        if (this.current?.uniqueName === "keyboard-us") return "关";
         if (this.state === 2) return this.current?.label?.trim() || this.current?.name?.slice(0, 1) || "中";
         if (this.state === 1) return this.current?.label?.trim() || "英";
         return "关";
