@@ -1,4 +1,5 @@
 import { addStyle, button, initDKH, txt, view } from "dkh-ui";
+import { type PanelPreeditMode, resolveImePreedit } from "../../src/ime/ime";
 import { carousel, dynamicScrollList } from "../../src/scroll-list";
 import {
     aLineText,
@@ -545,6 +546,9 @@ function imeSampleState(op = { layout: 0, cursor: 0, prev: false, next: true }) 
     return {
         preedit: "zhen bu cuo",
         preeditCursor: 11,
+        panelPreedit: "zhen bu cuo",
+        clientPreedit: "zhen bu cuo",
+        clientPreeditEnabled: true,
         auxiliary: "",
         candidates: ["真不错", "真不搓", "真步错", "针不错", "甄不错"],
         candidateLabels: ["1", "2", "3", "4", "5"],
@@ -555,16 +559,38 @@ function imeSampleState(op = { layout: 0, cursor: 0, prev: false, next: true }) 
     };
 }
 
+let imePanelMode: PanelPreeditMode = "auto";
+let imeState = imeSampleState();
+
+function imeRender(state = imeState) {
+    imeState = state;
+    const { panel } = resolveImePreedit(state, imePanelMode);
+    imeCandidate.update({ ...state, preedit: panel });
+}
+
 imeCandidate.setAnchor({ x: 24, y: 24, w: 2, h: 16 });
-imeCandidate.update(imeSampleState());
+imeRender();
 
 view("x")
-    .style({ gap: "8px", padding: "8px" })
+    .style({ gap: "8px", padding: "8px", flexWrap: "wrap" })
     .addInto(imePreview)
     .add([
-        button("纵向").on("click", () => imeCandidate.update(imeSampleState())),
-        button("横向").on("click", () =>
-            imeCandidate.update(imeSampleState({ layout: 2, cursor: 1, prev: true, next: true })),
-        ),
+        button("纵向").on("click", () => imeRender(imeSampleState())),
+        button("横向").on("click", () => imeRender(imeSampleState({ layout: 2, cursor: 1, prev: true, next: true }))),
+        button("预编辑 auto").on("click", () => {
+            imePanelMode = "auto";
+            imeRender();
+        }),
+        button("预编辑 always").on("click", () => {
+            imePanelMode = "always";
+            imeRender();
+        }),
+        button("预编辑 never").on("click", () => {
+            imePanelMode = "never";
+            imeRender();
+        }),
+        button("无内联（面板兜底）").on("click", () => {
+            imeRender({ ...imeSampleState(), clientPreedit: "", clientPreeditEnabled: false });
+        }),
         button("隐藏").on("click", () => imeCandidate.hide()),
     ]);

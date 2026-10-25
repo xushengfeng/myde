@@ -22,6 +22,8 @@ export interface ImeWindowFrame {
     offsetY: number;
 }
 
+export type PanelPreeditMode = "auto" | "always" | "never";
+
 export interface ImeDeps {
     im: inputMethod | undefined;
     /** 候选窗挂载点（桌面覆盖层） */
@@ -34,6 +36,8 @@ export interface ImeDeps {
     windowFrame(handle: WinHandle): ImeWindowFrame | undefined;
     getPointer(): { x: number; y: number };
     getBindings(): Partial<ImeBindings>;
+    /** 候选窗是否重复显示 fcitx 已经发给客户端的预编辑 */
+    getPanelPreedit(): PanelPreeditMode;
 }
 
 export interface ImeStatus {
@@ -49,6 +53,22 @@ export interface ImeStatus {
 type KeyKind = "ime" | "client" | "shortcut";
 
 const EMPTY_TEXT_INPUT: TextInputState = { supported: false, enabled: false, cursorRect: null };
+
+/**
+ * 决定预编辑显示在哪：
+ * - `inline` 只有在 fcitx 确实发了客户端预编辑时才下发；
+ * - `panel` 在 `auto` 下避免和内联重复，fcitx 没发内联时作为兜底。
+ */
+export function resolveImePreedit(state: ImComposeState, mode: PanelPreeditMode): { inline: string; panel: string } {
+    const inline = state.clientPreeditEnabled ? state.clientPreedit : "";
+    let panel = "";
+    if (mode === "always") {
+        panel = state.panelPreedit;
+    } else if (mode === "auto") {
+        panel = state.clientPreeditEnabled && state.clientPreedit ? "" : state.panelPreedit;
+    }
+    return { inline, panel };
+}
 
 /**
  * 官方桌面的输入法控制层。
@@ -387,11 +407,12 @@ export class ImeController {
             return;
         }
 
-        if (state.preedit !== this.lastPreedit) this.sendPreedit(handle, state.preedit);
+        const { inline, panel } = this.splitPreedit(state);
+        if (inline !== this.lastPreedit) this.sendPreedit(handle, inline);
 
         const seq = ++this.caretSeq;
         this.candidate.setAnchor(this.anchorFor(handle));
-        this.candidate.update(state);
+        this.candidate.update({ ...state, preedit: panel });
 
         // 光标可能刚移动，异步刷新后再校正一次位置；旧请求不覆盖新状态
         void this.queryTextInput(handle)
@@ -399,6 +420,15 @@ export class ImeController {
                 if (seq === this.caretSeq) this.candidate.setAnchor(this.anchorFor(handle));
             })
             .catch(() => {});
+    }
+
+    /**
+     * 决定预编辑去哪儿：
+     * - `inline` 只有在 fcitx 确实在发客户端预编辑时才下发（应用在 NO_PREEDIT_APPS 或被关掉时为空）；
+     * - `panel` 默认在已经内联显示时不重复，应用不画或 fcitx 没开内联时作为兜底。
+     */
+    private splitPreedit(state: ImComposeState): { inline: string; panel: string } {
+        return resolveImePreedit(state, this.deps.getPanelPreedit());
     }
 
     private onCommit(text: string) {
@@ -450,9 +480,10 @@ export class ImeController {
 
     private applyState(s: ImComposeState) {
         if (this.focusHandle === undefined) return;
-        if (s.preedit !== this.lastPreedit) this.sendPreedit(this.focusHandle, s.preedit);
+        const { inline, panel } = this.splitPreedit(s);
+        if (inline !== this.lastPreedit) this.sendPreedit(this.focusHandle, inline);
         this.candidate.setAnchor(this.anchorFor(this.focusHandle));
-        if (s.preedit || s.candidates.length > 0 || s.auxiliary) this.candidate.update(s);
+        if (panel || s.candidates.length > 0 || s.auxiliary) this.candidate.update({ ...s, preedit: panel });
         else this.candidate.hide();
     }
 

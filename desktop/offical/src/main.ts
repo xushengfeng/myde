@@ -1321,6 +1321,7 @@ const imeSetting = MSetting.init({
         toggle: DEFAULT_IME_BINDINGS.toggle,
         nextIM: DEFAULT_IME_BINDINGS.nextIM,
         prevIM: DEFAULT_IME_BINDINGS.prevIM,
+        panelPreedit: "auto",
     },
 });
 
@@ -1349,6 +1350,10 @@ ime = new ImeController({
         };
     },
     getPointer: () => mousePos,
+    getPanelPreedit: () => {
+        const mode = imeSetting.nget("panelPreedit");
+        return mode === "always" || mode === "never" ? mode : "auto";
+    },
     getBindings: () => ({
         toggle: imeSetting.nget("toggle"),
         nextIM: imeSetting.nget("nextIM"),
