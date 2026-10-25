@@ -445,6 +445,20 @@ function sendPointer(ctx: ModuleCtx, seat: SeatRecord, ev: PointerCommand, hit: 
 }
 
 /**
+ * 解绑后的 surface 不应继续留在画面/命中测试里：
+ * 工作画布缩成 1×1 透明帧（DOM canvas 同步缩小），surface 尺寸置 0；
+ * 下次 attach buffer 时尺寸变化会重新走 updateWlSurfaceSize + render。
+ */
+function unmapSurface(ctx: ModuleCtx, surfaceId: SurfaceId): void {
+    const canvas = ctx.objects.getOption(surfaceId)?.data.canvas;
+    if (!canvas) return;
+    canvas.width = 1;
+    canvas.height = 1;
+    ctx.core.surface.updateWlSurfaceSize(surfaceId, 0, 0);
+    ctx.core.surface.renderWlSurface(surfaceId, canvas);
+}
+
+/**
  * 按键注入：**该 seat 没有键盘焦点就不发**（否则客户端会收到不属于任何聚焦窗口的按键）。
  * 修饰键按该 seat 的掩码补发 `wl_keyboard.modifiers`（两把键盘各记各的；todo repeat）。
  */
@@ -822,9 +836,8 @@ export const waylandCoreModule = defineModule({
         "wl_surface.attach": (x, ctx) => {
             const surface = ctx.objects.get(x.id);
             const bufferId = waylandObjectId(x.args.buffer, "wl_buffer");
-            // todo attach(null)应该unmap，commit后视为无内容（如隐藏光标surface）
-            if (!bufferId) return;
-            surface.data.pending.buffer = { id: bufferId };
+            // attach(nil)：显式解绑，commit 后 unmap（与「本次没有 attach」不同）
+            surface.data.pending.buffer = bufferId ? { id: bufferId } : null;
         },
         "wl_surface.damage": (x, ctx) => {
             const surface = ctx.objects.get(x.id);
@@ -865,7 +878,12 @@ export const waylandCoreModule = defineModule({
             const buffer = data.buffer;
             const bufferId = buffer?.id;
             const bufferObj = ctx.objects.getOption(bufferId)?.data;
-            if (!bufferObj) {
+            if (buffer === null) {
+                // attach(nil) 的提交：surface 进入 unmap，上一帧必须从画面里撤掉
+                unmapSurface(ctx, surfaceId);
+                ctx.cursor.hide(surfaceId);
+                ctx.notify.commit(surfaceId, false);
+            } else if (!bufferObj) {
                 // 无 buffer 的 commit 也要让扩展看到：xdg 靠初始 commit 才能下发 configure
                 // （规范：客户端先不带 buffer 提交，合成器才回 configure，之后才允许 attach）
                 ctx.notify.commit(surfaceId, false);
@@ -1214,7 +1232,11 @@ export const waylandCoreModule = defineModule({
             ctx.core.subsurface.setPosition(x.id, x.args.x, x.args.y);
         },
         "wl_subsurface.destroy": (x, ctx) => {
+            const sub = ctx.core.subsurface.getSubSurface(x.id);
             ctx.core.subsurface.destroySubSurface(x.id);
+            // 销毁后 surface 不再参与合成；客户端常只 attach(nil)+destroy，
+            // 不在这里撤掉会留下最后一帧（Chrome 的地址栏补全下拉就是这种生命周期）
+            unmapSurface(ctx, sub.surface);
         },
     },
     actions: {
@@ -1224,6 +1246,8 @@ export const waylandCoreModule = defineModule({
             const seat = resolveSeat(ctx, msg.args[1]);
             if (seat === undefined) return;
             const hit = ctx.domain.xdgSurface.hitTest(msg.winId, { x: ev.x, y: ev.y });
+            // 按下先收回不再包含指针的 popup grab（点击外部关闭），点击本身照常路由
+            if (ev.type === "down") ctx.domain.xdgSurface.dismissGrabsForPointer(hit, seat.name, ctx);
             if (!hit) return;
             updatePointerFocus(ctx, seat, hit);
             sendPointer(ctx, seat, ev, hit);

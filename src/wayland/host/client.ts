@@ -106,6 +106,9 @@ export class WaylandClient implements Client {
     /** server 注入的宿主能力（可用空间、光标状态出口） */
     private host: ClientHost;
 
+    /** close 可能被 socket close/error 两条路径各调一次，渲染清理只做一次 */
+    private cleanedUp = false;
+
     constructor({
         id,
         socket,
@@ -131,16 +134,27 @@ export class WaylandClient implements Client {
         });
 
         socket.on("close", () => {
-            console.log(`Client ${this.id} disconnected`);
-            this.emit("close");
-            this.close();
+            this.handleDisconnect("disconnected");
+        });
+
+        socket.on("end", () => {
+            // myde-unix-socket 的 USocket 在对端断开时只发 end（close 还要本地先 shutdown），
+            // 不能只监听 close，否则客户端进程退出后连接和窗口会一直挂在 server 里
+            this.handleDisconnect("peer end");
         });
 
         socket.on("error", (err) => {
             console.error(`Client ${this.id} error:`, err);
-            this.emit("close");
-            this.close();
+            this.handleDisconnect("error");
         });
+    }
+
+    /** 连接断开只处理一次：socket 可能先后发 end/close/error */
+    private handleDisconnect(reason: string): void {
+        if (this.cleanedUp) return;
+        console.log(`Client ${this.id} ${reason}`);
+        this.emit("close");
+        this.close();
     }
 
     private receiveLog(...data: unknown[]) {
@@ -653,14 +667,28 @@ export class WaylandClient implements Client {
             this.ctx.domain.dataDevice.pendingPaste = undefined;
         }
     };
+    /**
+     * 连接断开兜底：客户端不会再发 wl_surface.destroy / xdg destroy，
+     * 这里直接撤掉元素与画布，避免软件已退出但 canvas DOM 还留在屏幕上。
+     */
+    private cleanupRender(): void {
+        if (this.cleanedUp) return;
+        this.cleanedUp = true;
+        this.ctx.domain.xdgSurface.destroyAll();
+        for (const [id, obj] of this.objects) {
+            if (obj.protocol.name !== "wl_surface") continue;
+            const surfaceId = id as WaylandObjectId2<"wl_surface">;
+            if (this.cursor.isCursorSurface(surfaceId)) this.cursor.hide(surfaceId);
+            this.ctx.core.surface.destroyWlSurface(surfaceId);
+        }
+        this.cursor.hide();
+    }
     close() {
+        this.cleanupRender();
         for (const obj of this.objects.values()) {
             if (obj.protocol.name === "wl_shm_pool") {
                 fs.closeSync(obj.data.fd);
             }
-        }
-        for (const _win of this.ctx.domain.windows.wins.values()) {
-            // todo close win
         }
         this.socket.end();
         this.socket.destroy();

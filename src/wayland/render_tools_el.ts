@@ -82,13 +82,13 @@ export class renderToolsHtmlEl implements renderTools {
     }
     destroyXdgSurfaceEle(id: string, type: "toplevel" | "popup"): void {
         const el = this.xdgElMap.get(id);
-        if (el) {
-            if (type === "toplevel" && this._on.onToplevelRemove) {
-                this._on.onToplevelRemove?.(id);
-            } else {
-                el.warpEl.remove();
-            }
+        if (!el) return;
+        if (type === "toplevel") {
+            // 桌面可能要在回调里取元素做额外清理；回调之后再无条件移除，避免没注册回调时残留
+            this._on.onToplevelRemove?.(id);
         }
+        el.warpEl.remove();
+        this.xdgElMap.delete(id);
     }
     setXdgSurfaceGeo(id: string, width: number, height: number, offsetX: number, offsetY: number) {
         const surface = this.xdgElMap.get(id);

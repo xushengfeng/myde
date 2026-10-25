@@ -316,6 +316,14 @@ export class xdgSurfaceData {
     > = {};
     xdg_popup = new Map<WaylandObjectId2<"xdg_popup">, WaylandObjectId2<"xdg_surface">>();
     xdg_toplevel = new Map<WaylandObjectId2<"xdg_toplevel">, WaylandObjectId2<"xdg_surface">>();
+    /**
+     * seat 名 → 显式 popup grab 栈（父 popup 在前、topmost 在后）。
+     * 同一 seat 只有一个 grab 生效；嵌套菜单会用子 popup 的 grab 覆盖，销毁后栈顶回落到父 popup。
+     */
+    private popupGrabs = new Map<
+        string,
+        { popupId: WaylandObjectId2<"xdg_popup">; xdgSurfaceId: WaylandObjectId2<"xdg_surface"> }[]
+    >();
     /** 反向索引：commit 走 wl_surface id，靠它找回 xdg_surface */
     private byWlSurface = new Map<WaylandObjectId2<"wl_surface">, WaylandObjectId2<"xdg_surface">>();
     /** xdg configure serial：客户端级单调递增，起点 1（0 会被 Qt 当作无效 configure） */
@@ -358,6 +366,78 @@ export class xdgSurfaceData {
     ackConfigure(id: WaylandObjectId2<"xdg_surface">, serial: number) {
         const s = this.getXdgSurface(id);
         if (s && s.lastConfigureSerial === serial) s.lastConfigureSerial = undefined;
+    }
+
+    /** `xdg_popup.grab`：把 popup 压到该 seat 的 grab 栈顶 */
+    grabPopup(seatName: string, popupId: WaylandObjectId2<"xdg_popup">, xdgSurfaceId: WaylandObjectId2<"xdg_surface">) {
+        let list = this.popupGrabs.get(seatName);
+        if (list === undefined) {
+            list = [];
+            this.popupGrabs.set(seatName, list);
+        }
+        const same = list.findIndex((g) => g.popupId === popupId);
+        if (same >= 0) list.splice(same, 1);
+        list.push({ popupId, xdgSurfaceId });
+    }
+
+    /** id 是否在 ancestorId 的子树里（含自身） */
+    private inSubtree(id: WaylandObjectId2<"xdg_surface">, ancestorId: WaylandObjectId2<"xdg_surface">): boolean {
+        let cur: WaylandObjectId2<"xdg_surface"> | undefined = id;
+        while (cur !== undefined) {
+            if (cur === ancestorId) return true;
+            cur = this.xdg_surface[cur]?.parent;
+        }
+        return false;
+    }
+
+    /** 摘掉满足条件的 grab（topmost 先发 popup_done）；指针/失焦/销毁三个入口共用 */
+    private dismissGrabs(
+        where: (g: {
+            popupId: WaylandObjectId2<"xdg_popup">;
+            xdgSurfaceId: WaylandObjectId2<"xdg_surface">;
+        }) => boolean,
+        ctx: ModuleCtx,
+    ) {
+        for (const [seatName, list] of this.popupGrabs) {
+            const kept: typeof list = [];
+            const dismissed: typeof list = [];
+            for (const g of list) (where(g) ? dismissed : kept).push(g);
+            if (dismissed.length === 0) continue;
+            if (kept.length === 0) this.popupGrabs.delete(seatName);
+            else this.popupGrabs.set(seatName, kept);
+            // 逆序：先关子菜单，再关父菜单
+            for (const g of dismissed.toReversed()) ctx.sendNow(g.popupId, "xdg_popup.popup_done", {});
+        }
+    }
+
+    /**
+     * 指针按下时调用：关掉不再包含指针的 grabbing popup。
+     * 命中父菜单内、子菜单外时只关子菜单；命中所有 popup 外时整条链关闭。
+     */
+    dismissGrabsForPointer(hit: HitTestResult | undefined, seatName: string, ctx: ModuleCtx) {
+        if (!this.popupGrabs.has(seatName)) return;
+        this.dismissGrabs((g) => hit === undefined || !this.inSubtree(hit.xdgSurface, g.xdgSurfaceId), ctx);
+    }
+
+    /** 窗口失焦/销毁：关掉属于该 toplevel 的全部 grabbing popup */
+    dismissGrabsForWindow(winId: WaylandWinId, ctx: ModuleCtx) {
+        const root = this.getXdgSurfaceByToplevel(winId);
+        if (root === undefined) return;
+        this.dismissGrabs((g) => this.rootXdgSurface(g.xdgSurfaceId) === root, ctx);
+    }
+
+    /** 删除 popup 时清掉它和它子树的 grab；子树里仍存活的 popup 会先收到 popup_done */
+    private removePopupGrabs(
+        popupId: WaylandObjectId2<"xdg_popup">,
+        xdgSurfaceId: WaylandObjectId2<"xdg_surface">,
+        ctx: ModuleCtx,
+    ) {
+        this.dismissGrabs((g) => g.xdgSurfaceId !== xdgSurfaceId && this.inSubtree(g.xdgSurfaceId, xdgSurfaceId), ctx);
+        for (const [seatName, list] of this.popupGrabs) {
+            const kept = list.filter((g) => g.popupId !== popupId);
+            if (kept.length === 0) this.popupGrabs.delete(seatName);
+            else this.popupGrabs.set(seatName, kept);
+        }
     }
     getXdgSurface(id: WaylandObjectId2<"xdg_surface">) {
         return this.xdg_surface[id];
@@ -434,6 +514,23 @@ export class xdgSurfaceData {
         if (!info.parent) return id;
         return this.rootXdgSurface(info.parent);
     }
+    /** 连接断开：客户端不会再发 destroy 请求，主动撤掉该连接的全部 xdg 元素 */
+    destroyAll(): void {
+        const ids = Object.keys(this.xdg_surface) as unknown as WaylandObjectId2<"xdg_surface">[];
+        for (const id of ids) {
+            const info = this.xdg_surface[id];
+            const role = info?.xdg_role;
+            const type =
+                role !== undefined && this.objects.getOption(role)?.protocol.name === "xdg_popup"
+                    ? "popup"
+                    : "toplevel";
+            this.xdgSurfaceDestroyed(id, type);
+        }
+        this.xdg_popup.clear();
+        this.xdg_toplevel.clear();
+        this.popupGrabs.clear();
+        this.byWlSurface.clear();
+    }
     xdgSurfaceDestroyed(xdgSurfaceId: WaylandObjectId2<"xdg_surface">, type: "toplevel" | "popup") {
         const surface = this.xdg_surface[xdgSurfaceId]?.surface;
         if (surface !== undefined && this.byWlSurface.get(surface) === xdgSurfaceId) {
@@ -443,11 +540,12 @@ export class xdgSurfaceData {
 
         this.render.destroyXdgSurfaceEle(this.idScope(xdgSurfaceId), type);
     }
-    popupDestroyed(popupId: WaylandObjectId2<"xdg_popup">) {
+    popupDestroyed(popupId: WaylandObjectId2<"xdg_popup">, ctx: ModuleCtx) {
         const id = this.xdg_popup.get(popupId);
         if (id === undefined) {
             return;
         }
+        this.removePopupGrabs(popupId, id, ctx);
         const xdgSurface = this.getXdgSurface(id);
         const parent = xdgSurface.parent;
         if (parent) {
@@ -578,7 +676,13 @@ export class xdgSurfaceData {
         }
 
         if (inSurface) {
-            return { surface: inSurface.id, x: inSurface.x, y: inSurface.y, role: reasonSurfaceType ?? "main" };
+            return {
+                surface: inSurface.id,
+                xdgSurface: inXdgSurface,
+                x: inSurface.x,
+                y: inSurface.y,
+                role: reasonSurfaceType ?? "main",
+            };
         }
         // todo 指针不在任何surface上时应发送wl_pointer.leave并清除指针焦点
         //  现在焦点悬挂：客户端收不到leave（hover状态卡住），重新进来也不发enter、客户端不重发光标
@@ -785,11 +889,18 @@ export const xdgShellModule = defineModule({
         "xdg_surface.ack_configure": (x, ctx) => {
             ctx.domain.xdgSurface.ackConfigure(x.id, x.args.serial);
         },
+        "xdg_popup.grab": (x, ctx) => {
+            const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByPopup(x.id);
+            if (xdgSurfaceId === undefined) return;
+            const seatName = ctx.domain.seat.get(x.args.seat)?.name;
+            if (seatName === undefined) return;
+            ctx.domain.xdgSurface.grabPopup(seatName, x.id, xdgSurfaceId);
+        },
         "xdg_popup.destroy": (x, ctx) => {
             const xid = x.id;
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByPopup(xid);
             if (xdgSurfaceId === undefined) return;
-            ctx.domain.xdgSurface.popupDestroyed(xid);
+            ctx.domain.xdgSurface.popupDestroyed(xid, ctx);
         },
         "xdg_toplevel.set_app_id": (x, ctx) => {
             if (!ctx.domain.xdg.appid) {
@@ -812,6 +923,8 @@ export const xdgShellModule = defineModule({
         "xdg_toplevel.destroy": (x, ctx) => {
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(x.id);
             if (xdgSurfaceId === undefined) return;
+            // 关窗时仍在的 grabbing popup 一并 dismiss（否则关闭流程里可能漏掉）
+            ctx.domain.xdgSurface.dismissGrabsForWindow(x.id, ctx);
             // 顺序对桌面可见：记录删除 → onToplevelRemove → windowClosed
             ctx.domain.windows.remove(x.id);
             ctx.domain.xdgSurface.toplevelDestroyed(x.id);
@@ -840,6 +953,8 @@ export const xdgShellModule = defineModule({
         "window.blur": (msg, ctx) => {
             const win = ctx.domain.windows.get(msg.winId);
             if (win === undefined) return;
+            // 窗口失焦时把它的 grabbing popup 一并关掉（点击其他窗口不会给本窗口送指针事件）
+            ctx.domain.xdgSurface.dismissGrabsForWindow(msg.winId, ctx);
             if (win.actived) {
                 win.actived = false;
                 configureWin(ctx, msg.winId);

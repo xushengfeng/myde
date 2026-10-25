@@ -130,7 +130,35 @@ describe.skipIf(!fs.existsSync(KONSOLE))("xdg_popup", () => {
                             if (popups.some((p) => p.canvasW > 1 && p.canvasH > 1 && p.nonEmpty > 0)) break;
                             await sleep(100);
                         }
-                        finish({ rect, clicked: pt, popups });
+
+                        // 点击弹层外部：xdg_popup.grab 收回，客户端应销毁弹层（DOM 随之移除）
+                        const away = { x: 20, y: 20 };
+                        server.notify("input.pointer", info.handle, {
+                            type: "move",
+                            x: away.x,
+                            y: away.y,
+                            button: 0,
+                        });
+                        await sleep(100);
+                        server.notify("input.pointer", info.handle, {
+                            type: "down",
+                            x: away.x,
+                            y: away.y,
+                            button: 0,
+                        });
+                        await sleep(100);
+                        server.notify("input.pointer", info.handle, {
+                            type: "up",
+                            x: away.x,
+                            y: away.y,
+                            button: 0,
+                        });
+                        let afterClickAway = readPopups(info.renderId).length;
+                        for (let i = 0; i < 50 && afterClickAway > 0; i++) {
+                            await sleep(100);
+                            afterClickAway = readPopups(info.renderId).length;
+                        }
+                        finish({ rect, clicked: pt, popups, afterClickAway });
                     } catch (e) {
                         finish({ error: String(e) });
                     }
@@ -154,6 +182,7 @@ describe.skipIf(!fs.existsSync(KONSOLE))("xdg_popup", () => {
                     canvasH: number;
                     nonEmpty: number;
                 }[];
+                afterClickAway?: number;
             };
             logs?: string[];
         }[];
@@ -178,5 +207,8 @@ describe.skipIf(!fs.existsSync(KONSOLE))("xdg_popup", () => {
         expect(p.top, `popup 上边界越界: ${dump()}`).toBeGreaterThanOrEqual(0);
         expect(p.left + p.w, `popup 右边界越界: ${dump()}`).toBeLessThanOrEqual(geo.w + 1);
         expect(p.top + p.h, `popup 下边界越界: ${dump()}`).toBeLessThanOrEqual(geo.h + 1);
+
+        // 点击外部后客户端应销毁弹层：grab(-> popup_done) 的回归
+        expect(r.afterClickAway, `点击外部后 popup 仍残留: ${dump()}`).toBe(0);
     });
 });

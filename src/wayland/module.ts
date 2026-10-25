@@ -32,7 +32,8 @@ export type WaylandWinId = WaylandObjectId2<"xdg_toplevel">;
 // ───────────────────────── 对象状态类型 ─────────────────────────
 
 export type WaylandSurfaceData = {
-    buffer?: { id: BufferId };
+    /** `null` = 客户端 `attach(nil)` 过，commit 后 surface 处于 unmap（与「本次没 attach」的 undefined 不同） */
+    buffer?: { id: BufferId } | null;
     damageList?: { x: number; y: number; width: number; height: number }[];
     damageBufferList?: { x: number; y: number; width: number; height: number }[];
     callback?: WaylandObjectId2<"wl_callback">;
@@ -259,6 +260,8 @@ export interface SubSurfaceApi {
     /** 返回 bad_surface / bad_parent 或 true，由调用方转成协议错误 */
     setWlSubSurface(sub: SubSurfaceId, parent: SurfaceId, child: SurfaceId): "bad_surface" | "bad_parent" | true;
     setPosition(id: SubSurfaceId, x: number, y: number): void;
+    /** 销毁前取关系：拿到 child surface 用于撤掉最后一帧 */
+    getSubSurface(id: SubSurfaceId): { parent: SurfaceId; surface: SurfaceId; posi: { x: number; y: number } };
     destroySubSurface(id: SubSurfaceId): void;
     getChildrenDeep(parent: SurfaceId): {
         id: SurfaceId;
@@ -286,6 +289,12 @@ export interface XdgSurfaceApi {
     /** 客户端级单调 serial（0 在 Qt 里等于「没有 configure」） */
     nextConfigureSerial(): number;
     ackConfigure(id: XdgSurfaceId, serial: number): void;
+    /** `xdg_popup.grab`：seat 名 → grab 栈（嵌套 popup 压栈） */
+    grabPopup(seatName: string, popupId: XdgPopupId, xdgSurfaceId: XdgSurfaceId): void;
+    /** 指针按下：关掉不再包含指针的 grabbing popup（点击外部关闭） */
+    dismissGrabsForPointer(hit: HitTestResult | undefined, seatName: string, ctx: ModuleCtx): void;
+    /** 窗口失焦/销毁：关掉属于该 toplevel 的 grabbing popup */
+    dismissGrabsForWindow(winId: WaylandWinId, ctx: ModuleCtx): void;
     setXdgSurfaceSize(id: XdgSurfaceId, x: number, y: number, w: number, h: number): void;
     getXdgSurfaceByToplevel(id: XdgToplevelId): XdgSurfaceId | undefined;
     getXdgSurfaceByPopup(id: XdgPopupId): XdgSurfaceId | undefined;
@@ -296,7 +305,9 @@ export interface XdgSurfaceApi {
     absoluteOffset(id: XdgSurfaceId): { x: number; y: number };
     /** 沿 parent 链找到顶层 xdg_surface */
     rootXdgSurface(id: XdgSurfaceId): XdgSurfaceId;
-    popupDestroyed(popupId: XdgPopupId): void;
+    /** 连接断开：撤掉该连接的全部 xdg 元素（不再走协议 destroy） */
+    destroyAll(): void;
+    popupDestroyed(popupId: XdgPopupId, ctx: ModuleCtx): void;
     toplevelDestroyed(toplevelId: XdgToplevelId): void;
     /** 窗口几何：`winGeo` 优先，未声明时退化为 surface 尺寸（host 的 `windowRect`/`windowInBounds` 在用） */
     getReRect(id: XdgSurfaceId): { w: number; h: number };
@@ -520,6 +531,8 @@ export interface SeatApi {
  */
 export interface HitTestResult {
     surface: SurfaceId;
+    /** 该 surface 所属的 xdg_surface（主 surface 或某个 popup） */
+    xdgSurface: XdgSurfaceId;
     /** 相对该 surface 的坐标 */
     x: number;
     y: number;

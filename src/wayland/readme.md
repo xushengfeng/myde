@@ -79,7 +79,8 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
 | `pointer.test.ts` | `input.pointer`（move / down / up 三键落点与坐标）、`input.scroll` 滚轮方向、`cursor.changed` |
 | `text_input.test.ts` | `input.text` → `zwp_text_input_v3` 的 `commit_string` 落进编辑框 |
 | `clipboard.test.ts` | 双向剪贴板：`clipboard.offer` → `pasteRequested` → `paste` 回填；客户端 `set_selection` → `clipboard.copy` |
-| `popup.test.ts` | 真实 Qt/KDE 客户端（konsole）右键菜单：`xdg_popup` 初始 configure/ack 后提交首帧、`constraint_adjustment` 把菜单约束在窗口内（无 konsole 时跳过） |
+| `popup.test.ts` | 真实 Qt/KDE 客户端（konsole）右键菜单：`xdg_popup` 初始 configure/ack 后提交首帧、`constraint_adjustment` 把菜单约束在窗口内、点击外部收回 grab 并销毁弹层（无 konsole 时跳过） |
+| `window_close.test.ts` | 客户端断线 / `xdg_toplevel.destroy` 后撤掉 canvas DOM（konsole `--separate`，无 konsole 时跳过） |
 
 ```bash
 npx vitest run src/wayland/test/pointer.test.ts
