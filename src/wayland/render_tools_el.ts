@@ -28,6 +28,9 @@ export class renderToolsHtmlEl implements renderTools {
             el.height = canvas.height;
             const ctx = el.getContext("2d");
             if (ctx) {
+                // 每帧是完整替换，不是叠加：同尺寸时设置 width/height 不会清空旧像素，
+                // 直接 drawImage 会让半透明/透明区域按 source-over 叠在上一帧上。
+                ctx.clearRect(0, 0, el.width, el.height);
                 ctx.drawImage(canvas, 0, 0);
             }
         } else {

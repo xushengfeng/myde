@@ -34,6 +34,7 @@ export type WaylandWinId = WaylandObjectId2<"xdg_toplevel">;
 export type WaylandSurfaceData = {
     /** `null` = 客户端 `attach(nil)` 过，commit 后 surface 处于 unmap（与「本次没 attach」的 undefined 不同） */
     buffer?: { id: BufferId } | null;
+    /** 客户端上报的 damage：合成时保留 damage 外的上一帧内容（surface / buffer 坐标） */
     damageList?: { x: number; y: number; width: number; height: number }[];
     damageBufferList?: { x: number; y: number; width: number; height: number }[];
     callback?: WaylandObjectId2<"wl_callback">;

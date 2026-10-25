@@ -1089,18 +1089,25 @@ export const waylandCoreModule = defineModule({
                 ctx.notify.commit(surfaceId, sizeChanged);
 
                 const damageList = [...(data.damageList || []), ...(data.damageBufferList || [])];
-                // todo 有区别，但现在先不处理
+                // damage 是「相对上一帧的变更区域」：组合器保留 damage 外的旧内容。
+                // 新 buffer 在 damage 外的像素可能是复用缓冲区的旧数据/未定义内容，
+                // 不能整帧覆盖，只能把 damage 区域贴到已有画布上。
+                // todo damage 与 damage_buffer 坐标系不同；当前 buffer_scale=1、无 transform
+                // 时直接合并，之后支持缩放/变换时要分别转换。
                 if (damageList.length) {
                     for (const damage of damageList) {
                         const dw = Math.min(canvas.width, damage.width);
                         const dh = Math.min(canvas.height, damage.height);
                         if (image instanceof VideoFrame) {
+                            // VideoFrame 走 source-over，先清掉 damage 区域，透明像素才是替换
                             c2d.clearRect(damage.x, damage.y, dw, dh);
                             c2d.drawImage(image, damage.x, damage.y, dw, dh, damage.x, damage.y, dw, dh);
                         } else c2d.putImageData(image, 0, 0, damage.x, damage.y, dw, dh);
                     }
                 } else {
+                    // 没有 damage 的提交（少见）：按整帧处理
                     if (image instanceof VideoFrame) {
+                        c2d.clearRect(0, 0, canvas.width, canvas.height);
                         c2d.drawImage(image, 0, 0, canvas.width, canvas.height);
                     } else c2d.putImageData(image, 0, 0);
                 }
