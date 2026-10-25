@@ -57,15 +57,24 @@ export type UniInputEvent = (UniPointerEvent | UniKeyEvent) & { source: InputSou
 export type SimEventInit =
     | {
           kind: "pointer";
-          type: "down" | "up" | "move";
+          type: "down" | "up" | "move" | "over" | "out" | "enter" | "leave";
           x: number;
           y: number;
           button: number;
           buttons: number;
           pointerType: string;
           pointerId: number;
+          relatedTarget?: unknown;
       }
-    | { kind: "mouse"; type: "click"; x: number; y: number; button: number; buttons: number }
+    | {
+          kind: "mouse";
+          type: "click" | "over" | "out" | "enter" | "leave";
+          x: number;
+          y: number;
+          button: number;
+          buttons: number;
+          relatedTarget?: unknown;
+      }
     | { kind: "wheel"; type: "wheel"; x: number; y: number; deltaX: number; deltaY: number; deltaMode: number }
     | {
           kind: "key";
@@ -83,6 +92,8 @@ export type SimEventInit =
 export interface InputSimHost {
     /** 命中测试视口坐标下的目标（DOM 实现：document.elementFromPoint） */
     targetAt(x: number, y: number): unknown;
+    /** 目标的父级（hover 链用；DOM 实现：parentElement），无父级返回 null/undefined */
+    parentOf?(target: unknown): unknown;
     /** 当前聚焦目标（DOM 实现：document.activeElement） */
     activeTarget(): unknown;
     /** 聚焦目标或其最近的可聚焦元素 */
@@ -104,6 +115,8 @@ export class inputSim {
     private ctrl = false;
     private alt = false;
     private meta = false;
+    // pointerId → 当前 hover 命中的目标；目标变化时补发 over/out/enter/leave
+    private hoverTargets = new Map<number, unknown>();
 
     constructor(host?: InputSimHost) {
         this.host = host ?? null;
@@ -117,11 +130,11 @@ export class inputSim {
 
     /** 传入统一输入事件，当前行为为模拟对应 DOM 事件 */
     emit(e: UniInputEvent): void {
-        if (e.kind === "pointer") this.emitPointer(e);
+        if (e.kind === "pointer") this.emitPointer(e, e.source);
         else this.emitKey(e);
     }
 
-    private emitPointer(e: UniPointerEvent) {
+    private emitPointer(e: UniPointerEvent, source: InputSource) {
         const host = this.getHost();
         const target = e.target ?? host.targetAt(e.x, e.y);
         const pointerType = e.pointerType ?? "mouse";
@@ -139,6 +152,9 @@ export class inputSim {
             });
             return;
         }
+
+        // DOM 来源已经有浏览器生成的 hover 事件，只有 evdev 等合成输入需要补齐
+        if (source !== "dom") this.updateHover(host, pointerId, target, e.x, e.y, pointerType);
 
         const button = e.button ?? 0;
         const bit = BUTTONS_BIT[button] ?? 0;
@@ -196,6 +212,75 @@ export class inputSim {
         }
     }
 
+    /**
+     * hover 目标变化时补齐 over/out/enter/leave（合成事件不会让浏览器自己产生这些事件）。
+     * over/out 冒泡、只在旧/新目标上派发；enter/leave 不冒泡，按祖先链逐级派发。
+     */
+    private updateHover(
+        host: InputSimHost,
+        pointerId: number,
+        target: unknown,
+        x: number,
+        y: number,
+        pointerType: string,
+    ) {
+        const prev = this.hoverTargets.get(pointerId);
+        if (prev === target) return;
+        const oldChain = this.chainOf(host, prev);
+        const newChain = this.chainOf(host, target);
+        const oldSet = new Set(oldChain);
+        // 新链上第一个仍在旧链里的元素就是共同祖先，只对两侧的差集补事件
+        const common = newChain.find((el) => oldSet.has(el));
+        const oldIndex = common === undefined ? -1 : oldChain.indexOf(common);
+        const newIndex = common === undefined ? -1 : newChain.indexOf(common);
+        const outChain = common === undefined ? oldChain : oldChain.slice(0, oldIndex);
+        const inChain = (common === undefined ? newChain : newChain.slice(0, newIndex)).slice().reverse();
+
+        const emit = (kind: "pointer" | "mouse", type: "over" | "out" | "enter" | "leave", t: unknown) => {
+            const relatedTarget = type === "out" || type === "leave" ? target : prev;
+            if (kind === "pointer") {
+                host.dispatch(t, {
+                    kind,
+                    type,
+                    x,
+                    y,
+                    button: -1,
+                    buttons: this.buttons,
+                    pointerType,
+                    pointerId,
+                    relatedTarget,
+                });
+            } else {
+                host.dispatch(t, { kind, type, x, y, button: -1, buttons: this.buttons, relatedTarget });
+            }
+        };
+
+        if (prev !== undefined && oldChain.length > 0) {
+            emit("pointer", "out", prev);
+            for (const el of outChain) emit("pointer", "leave", el);
+            emit("mouse", "out", prev);
+            for (const el of outChain) emit("mouse", "leave", el);
+        }
+        if (target !== undefined && target !== null && newChain.length > 0) {
+            emit("pointer", "over", target);
+            for (const el of inChain) emit("pointer", "enter", el);
+            emit("mouse", "over", target);
+            for (const el of inChain) emit("mouse", "enter", el);
+        }
+        this.hoverTargets.set(pointerId, target);
+    }
+
+    /** 目标的祖先链（含自身，由内到外）；宿主没有 parentOf 时退回 DOM parentElement */
+    private chainOf(host: InputSimHost, target: unknown): unknown[] {
+        const chain: unknown[] = [];
+        let el = target;
+        while (el !== undefined && el !== null) {
+            chain.push(el);
+            el = host.parentOf ? host.parentOf(el) : ((el as Element).parentElement ?? null);
+        }
+        return chain;
+    }
+
     private emitKey(e: UniKeyEvent) {
         const host = this.getHost();
         const web = e.webCode ?? evdevToWebCode(e.code);
@@ -225,6 +310,7 @@ export class inputSim {
 export function domInputSimHost(): InputSimHost {
     return {
         targetAt: (x, y) => document.elementFromPoint(x, y) ?? document.body,
+        parentOf: (target) => (target as Element | null)?.parentElement ?? null,
         activeTarget: () => document.activeElement ?? document.body,
         focus: (target) => {
             const el = target as Element | null;
@@ -262,6 +348,7 @@ function makeDomEvent(e: SimEventInit): Event {
                 pointerId: e.pointerId,
                 pointerType: e.pointerType,
                 isPrimary: true,
+                relatedTarget: (e.relatedTarget as EventTarget | null | undefined) ?? null,
             });
         case "mouse":
             return new MouseEvent(e.type, {
@@ -273,6 +360,7 @@ function makeDomEvent(e: SimEventInit): Event {
                 clientY: e.y,
                 button: e.button,
                 buttons: e.buttons,
+                relatedTarget: (e.relatedTarget as EventTarget | null | undefined) ?? null,
             });
         case "wheel":
             return new WheelEvent(e.type, {

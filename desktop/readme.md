@@ -217,7 +217,7 @@ inputSim.emit({ kind: "key", type: "up", code: 30, source: "evdev" });
 行为细节：
 
 - 左键按下后抬起才合成 `click`，并补齐聚焦（最近的 `input, textarea, select, [tabindex]`），按钮位掩码与修饰键（Shift/Ctrl/Alt/Meta、CapsLock）状态由 api 自己维护
-- `pointerover/out/enter/leave`、`mousedown/up`、`auxclick`、`dblclick`、`contextmenu` 不模拟（hover 类建议放行原生事件）
+- `pointerover/out/enter/leave`、`mouseover/out/enter/leave` 在目标变化时由 api 补齐（`source` 为 `"dom"` 时跳过，浏览器已经生成过原生 hover 事件）；`mousedown/up`、`auxclick`、`dblclick`、`contextmenu` 不模拟
 - 合成事件没有浏览器默认行为：按键派发后未被 `preventDefault` 时补齐文本输入（`input`/`textarea`/contenteditable 的插入、Backspace、Delete）；滚轮派发后未被 `preventDefault` 时滚动最近的可滚动祖先，原生 `overflow: auto/scroll` 容器也能滚动
 - DOM 操作通过宿主接口 `InputSimHost`（`targetAt`/`activeTarget`/`focus`/`dispatch`）访问，默认实现 `domInputSimHost()` 操作真实 DOM，纯 node 环境可 `new inputSim(host)` 注入自定义宿主
 

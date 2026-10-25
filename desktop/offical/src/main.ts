@@ -2597,7 +2597,7 @@ function dispatchInput(e: UniInputEvent) {
 const inputPointerPos = { x: Math.floor(window.innerWidth / 2), y: Math.floor(window.innerHeight / 2) };
 
 // 统一重新模拟的真实事件（click/auxclick/contextmenu 等由 inputSim 从 down/up 合成，原生的直接吞掉；
-// hover 类（pointerover/out/enter/leave）不在其中，放行原生事件保持 hover 行为；
+// hover 类（pointerover/out/enter/leave）不在其中，DOM 来源放行原生事件，evdev 来源由 inputSim 按目标变化补齐；
 // keydown 原生默认行为也被屏蔽，文本输入由 inputSim 在未被 preventDefault 时补齐）
 const SWALLOWED_EVENTS = [
     "pointerdown",
