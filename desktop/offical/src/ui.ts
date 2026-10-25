@@ -889,23 +889,25 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
             el.style({ display: "none" });
         },
         update(state: ImComposeState) {
-            const hasContent = state.preedit.length > 0 || state.candidates.length > 0 || state.auxiliary.length > 0;
+            const preeditText = state.preedit.trim();
+            const auxiliaryText = state.auxiliary.trim();
+            const hasContent = preeditText.length > 0 || state.candidates.length > 0 || auxiliaryText.length > 0;
             if (!hasContent) {
                 el.style({ display: "none" });
                 return;
             }
 
-            const showPreedit = !!state.preedit || !!state.auxiliary || state.hasPrev || state.hasNext;
+            const showPreedit = !!preeditText || !!auxiliaryText;
             const preedit = view("x").style({
                 padding: px(sSize2.paddingx),
                 alignItems: "center",
                 height: px(sSize(1)),
             });
-            if (state.preedit) {
-                preedit.add(txt(state.preedit).style({ whiteSpace: "nowrap", fontSize: "12px", opacity: "0.9" }));
+            if (preeditText) {
+                preedit.add(txt(preeditText).style({ whiteSpace: "nowrap", fontSize: "12px", opacity: "0.9" }));
             }
-            if (state.auxiliary) {
-                preedit.add(txt(state.auxiliary).style({ whiteSpace: "nowrap", fontSize: "11px", opacity: "0.55" }));
+            if (auxiliaryText) {
+                preedit.add(txt(auxiliaryText).style({ whiteSpace: "nowrap", fontSize: "11px", opacity: "0.55" }));
             }
 
             const horizontal = state.candidateLayout >= 2;
