@@ -69,7 +69,7 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
 
 ## 测试
 
-`src/wayland/test/` 是端到端测试：起真 Electron 客户端连本服务端，注入输入/命令，再从客户端回传的日志断言。
+`src/wayland/test/` 是端到端测试：起真 Electron 客户端（或真实应用）连本服务端，注入输入/命令，再从客户端回传的日志断言。
 
 | 文件 | 覆盖 |
 | --- | --- |
@@ -79,6 +79,7 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
 | `pointer.test.ts` | `input.pointer`（move / down / up 三键落点与坐标）、`input.scroll` 滚轮方向、`cursor.changed` |
 | `text_input.test.ts` | `input.text` → `zwp_text_input_v3` 的 `commit_string` 落进编辑框 |
 | `clipboard.test.ts` | 双向剪贴板：`clipboard.offer` → `pasteRequested` → `paste` 回填；客户端 `set_selection` → `clipboard.copy` |
+| `popup.test.ts` | 真实 Qt/KDE 客户端（konsole）右键菜单：`xdg_popup` 初始 configure/ack 后提交首帧、`constraint_adjustment` 把菜单约束在窗口内（无 konsole 时跳过） |
 
 ```bash
 npx vitest run src/wayland/test/pointer.test.ts
@@ -197,7 +198,7 @@ export const exampleModule = defineModule({
 - **协议间双向通信都走 `ctx`，协议文件之间零 import**：ext 调 `ctx.core`、core 调
   `ctx.domain.<ext>` 的**查询方法**都是普通同步调用（现役仅一条：core `input.pointer` →
   `ctx.domain.xdgSurface.hitTest`）。`hooks` 是 core → 扩展的**通知/扇出**通道：扩展注册回调，
-  由 `host/client.ts` 聚合、`ctx.notify.*` 触发。`onCommit`（buffer 已应用、像素尚未合成）与 `onFrame`（已合成、渲染之前）
+  由 `host/client.ts` 聚合、`ctx.notify.*` 触发。`onCommit`（每次 commit，含无 buffer 的初始 commit）与 `onFrame`（已合成、渲染之前）
   分阶段，**不能合并**；`onTextInput` 是 `input.text` 的仲裁通道（core 不认识 `zwp_*` 事件）。
 - **语义事实进域状态，谁拥有谁持有（单写入点）**：窗口记录与它的 `window.*` fan-in 在
   `protocols/ext/windows_store.ts`（`ctx.domain.windows`）、输入设备记录在

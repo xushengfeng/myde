@@ -866,6 +866,9 @@ export const waylandCoreModule = defineModule({
             const bufferId = buffer?.id;
             const bufferObj = ctx.objects.getOption(bufferId)?.data;
             if (!bufferObj) {
+                // 无 buffer 的 commit 也要让扩展看到：xdg 靠初始 commit 才能下发 configure
+                // （规范：客户端先不带 buffer 提交，合成器才回 configure，之后才允许 attach）
+                ctx.notify.commit(surfaceId, false);
             } else {
                 let image: ImageData | VideoFrame;
                 if (bufferObj.type === "shm") {

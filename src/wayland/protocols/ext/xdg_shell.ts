@@ -59,6 +59,62 @@ declare module "../../module" {
  */
 const FOCUS_SEAT = "seat0";
 
+// ───────────── xdg_positioner：锚点/重力/约束 ─────────────
+
+type KeyPoint = Parameters<typeof getRectKeyPoint>[1];
+
+/** anchor 枚举 → anchor_rect 上被取的点 */
+const ANCHOR_POINT: Record<number, KeyPoint> = {
+    [getEnumValue("xdg_positioner.anchor", "none")]: "none",
+    [getEnumValue("xdg_positioner.anchor", "top")]: "top",
+    [getEnumValue("xdg_positioner.anchor", "bottom")]: "bottom",
+    [getEnumValue("xdg_positioner.anchor", "left")]: "left",
+    [getEnumValue("xdg_positioner.anchor", "right")]: "right",
+    [getEnumValue("xdg_positioner.anchor", "top_left")]: "top_left",
+    [getEnumValue("xdg_positioner.anchor", "top_right")]: "top_right",
+    [getEnumValue("xdg_positioner.anchor", "bottom_left")]: "bottom_left",
+    [getEnumValue("xdg_positioner.anchor", "bottom_right")]: "bottom_right",
+};
+
+/** gravity 指子 surface 相对锚点朝哪个方向摆，换成本 surface 上被对齐的那个点 */
+const GRAVITY_POINT: Record<number, KeyPoint> = {
+    [getEnumValue("xdg_positioner.gravity", "none")]: "none",
+    [getEnumValue("xdg_positioner.gravity", "top")]: "bottom",
+    [getEnumValue("xdg_positioner.gravity", "bottom")]: "top",
+    [getEnumValue("xdg_positioner.gravity", "left")]: "right",
+    [getEnumValue("xdg_positioner.gravity", "right")]: "left",
+    [getEnumValue("xdg_positioner.gravity", "top_left")]: "bottom_right",
+    [getEnumValue("xdg_positioner.gravity", "top_right")]: "bottom_left",
+    [getEnumValue("xdg_positioner.gravity", "bottom_left")]: "top_right",
+    [getEnumValue("xdg_positioner.gravity", "bottom_right")]: "top_left",
+};
+
+/** 绕轴翻转一个点（用于 constraint_adjustment 的 flip_x / flip_y） */
+function flipPoint(p: KeyPoint, axis: "x" | "y"): KeyPoint {
+    if (axis === "x") {
+        if (p === "left") return "right";
+        if (p === "right") return "left";
+        if (p === "top_left") return "top_right";
+        if (p === "top_right") return "top_left";
+        if (p === "bottom_left") return "bottom_right";
+        if (p === "bottom_right") return "bottom_left";
+    } else {
+        if (p === "top") return "bottom";
+        if (p === "bottom") return "top";
+        if (p === "top_left") return "bottom_left";
+        if (p === "bottom_left") return "top_left";
+        if (p === "top_right") return "bottom_right";
+        if (p === "bottom_right") return "top_right";
+    }
+    return p;
+}
+
+/** xdg_positioner.constraint_adjustment 的位；resize_x/resize_y 未实现（保持原尺寸） */
+const ADJ_SLIDE_X = 1;
+const ADJ_SLIDE_Y = 2;
+const ADJ_FLIP_X = 4;
+const ADJ_FLIP_Y = 8;
+
 /** 该 toplevel 的主 wl_surface —— 键盘焦点落在它上面；已解体的窗口返回 null */
 function mainSurface(ctx: ModuleCtx, winId: WaylandWinId): SurfaceId | null {
     const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId);
@@ -66,17 +122,74 @@ function mainSurface(ctx: ModuleCtx, winId: WaylandWinId): SurfaceId | null {
     return ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
 }
 
-function configureWin(ctx: ModuleCtx, winId: WaylandWinId, win: WindowRecord): void {
-    const s: number[] = [];
-    if (win.actived) s.push(getEnumValue("xdg_toplevel.state", "activated"));
-    ctx.sendNow(winId, "xdg_toplevel.configure", {
-        width: win.box.width,
-        height: win.box.height,
-        states: new Uint32Array(s),
-    });
+/**
+ * 下发一次完整的 configure：先 role 事件（xdg_toplevel/xdg_popup.configure），
+ * 再以唯一 serial 收尾 xdg_surface.configure。
+ *
+ * 客户端完成初始 commit 之前只记 pending、不发包——这是 xdg-shell 的硬性顺序，
+ * 也是 Qt/KDE 客户端能正常 map popup 的前提（它们会丢弃初始 commit 前 / serial 0 的 configure）。
+ * `now`：桌面命令用 sendNow（非请求上下文），commit 钩子里用 send（本批请求结束后统一 flush）。
+ */
+function sendConfigure(ctx: ModuleCtx, xdgSurfaceId: WaylandObjectId2<"xdg_surface">, now: boolean): void {
+    const xdg = ctx.domain.xdgSurface;
+    const s = xdg.getXdgSurface(xdgSurfaceId);
+    if (s === undefined || s.xdg_role === undefined) return;
+    if (!s.initialCommitDone) {
+        s.configurePending = true;
+        return;
+    }
+    const send: ModuleCtx["send"] = now ? ctx.sendNow : ctx.send;
+    const role = s.xdg_role;
+    if (ctx.objects.get(role).protocol.name === "xdg_popup") {
+        const p = s.popupConfigure;
+        if (p === undefined) return;
+        send(role as WaylandObjectId2<"xdg_popup">, "xdg_popup.configure", {
+            x: p.x,
+            y: p.y,
+            width: p.width,
+            height: p.height,
+        });
+    } else {
+        const win = ctx.domain.windows.get(role as WaylandObjectId2<"xdg_toplevel">);
+        if (win === undefined) return;
+        const states: number[] = [];
+        if (win.actived) states.push(getEnumValue("xdg_toplevel.state", "activated"));
+        if (win.maximized) states.push(getEnumValue("xdg_toplevel.state", "maximized"));
+        send(role as WaylandObjectId2<"xdg_toplevel">, "xdg_toplevel.configure", {
+            width: win.box.width,
+            height: win.box.height,
+            states: new Uint32Array(states),
+        });
+    }
+    const serial = xdg.nextConfigureSerial();
+    s.lastConfigureSerial = serial;
+    send(xdgSurfaceId, "xdg_surface.configure", { serial });
+    s.configurePending = false;
+}
+
+/** 窗口状态变化（focus/size/maximize…）后请求一次 configure；初始 commit 前会转成 pending */
+function configureWin(ctx: ModuleCtx, winId: WaylandWinId): void {
     const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId);
     if (xdgSurfaceId === undefined) return;
-    ctx.sendNow(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
+    sendConfigure(ctx, xdgSurfaceId, true);
+}
+
+/**
+ * 初始 commit（无 buffer）后才允许 map：此时回一份 configure。
+ * 之后的 commit 只在桌面改了状态（configurePending）时补发，避免同一状态反复 configure。
+ */
+function onSurfaceCommit(ctx: ModuleCtx, surfaceId: SurfaceId): void {
+    const xdg = ctx.domain.xdgSurface;
+    const xdgSurfaceId = xdg.getXdgSurfaceByWlSurface(surfaceId);
+    if (xdgSurfaceId === undefined) return;
+    const s = xdg.getXdgSurface(xdgSurfaceId);
+    if (s.xdg_role === undefined) return;
+    if (!s.initialCommitDone) {
+        s.initialCommitDone = true;
+        sendConfigure(ctx, xdgSurfaceId, false);
+        return;
+    }
+    if (s.configurePending) sendConfigure(ctx, xdgSurfaceId, false);
 }
 
 /**
@@ -188,10 +301,25 @@ export class xdgSurfaceData {
             xdg_role?: WaylandObjectId2<"xdg_toplevel" | "xdg_popup">;
             parent: WaylandObjectId2<"xdg_surface"> | undefined;
             children: WaylandObjectId2<"xdg_surface">[];
+            /**
+             * 客户端是否已完成该 xdg_surface 的「初始 commit（无 buffer）」。
+             * 规范要求初始 commit 之后才能发 configure；Qt/KDE 会丢弃更早的 configure。
+             */
+            initialCommitDone: boolean;
+            /** 初始 commit 前桌面就可能改了状态（focus/setBox），先记下，等 commit 再发 */
+            configurePending: boolean;
+            /** 最近一次下发的 xdg_surface.configure serial，ack 时对账 */
+            lastConfigureSerial?: number;
+            /** popup 的初始 configure 参数，get_popup 时按 positioner 算好 */
+            popupConfigure?: { x: number; y: number; width: number; height: number };
         }
     > = {};
     xdg_popup = new Map<WaylandObjectId2<"xdg_popup">, WaylandObjectId2<"xdg_surface">>();
     xdg_toplevel = new Map<WaylandObjectId2<"xdg_toplevel">, WaylandObjectId2<"xdg_surface">>();
+    /** 反向索引：commit 走 wl_surface id，靠它找回 xdg_surface */
+    private byWlSurface = new Map<WaylandObjectId2<"wl_surface">, WaylandObjectId2<"xdg_surface">>();
+    /** xdg configure serial：客户端级单调递增，起点 1（0 会被 Qt 当作无效 configure） */
+    #configureSerial = 1;
     private render: renderTools;
     private idScope: (id: unknown) => string;
     /** core 的 subsurface 树与对象表：`hitTest` 的正向依赖（ext → core 允许） */
@@ -206,9 +334,30 @@ export class xdgSurfaceData {
     }
 
     addXdgSurface(id: WaylandObjectId2<"xdg_surface">, wlSurface: WaylandObjectId2<"wl_surface">) {
-        this.xdg_surface[id] = { surface: wlSurface, parent: undefined, children: [], offset: { x: 0, y: 0 } };
+        this.xdg_surface[id] = {
+            surface: wlSurface,
+            parent: undefined,
+            children: [],
+            offset: { x: 0, y: 0 },
+            initialCommitDone: false,
+            configurePending: false,
+        };
+        this.byWlSurface.set(wlSurface, id);
 
         this.render.createXdgSurfaceEle(this.idScope(id), this.idScope(wlSurface));
+    }
+    getXdgSurfaceByWlSurface(id: WaylandObjectId2<"wl_surface">) {
+        return this.byWlSurface.get(id);
+    }
+    nextConfigureSerial() {
+        const serial = this.#configureSerial;
+        this.#configureSerial += 2;
+        return serial;
+    }
+    /** 记录 ack；只用于把「已送达」的 serial 收掉 */
+    ackConfigure(id: WaylandObjectId2<"xdg_surface">, serial: number) {
+        const s = this.getXdgSurface(id);
+        if (s && s.lastConfigureSerial === serial) s.lastConfigureSerial = undefined;
     }
     getXdgSurface(id: WaylandObjectId2<"xdg_surface">) {
         return this.xdg_surface[id];
@@ -272,7 +421,24 @@ export class xdgSurfaceData {
 
         this.render.setPopupPosi(this.idScope(id), x, y);
     }
+    /** xdg_surface 在窗口元素（顶层窗口几何原点）坐标系里的偏移：父链 offset 累加 */
+    absoluteOffset(id: WaylandObjectId2<"xdg_surface">): { x: number; y: number } {
+        const info = this.getXdgSurface(id);
+        if (!info.parent) return { x: 0, y: 0 };
+        const parent = this.absoluteOffset(info.parent);
+        return { x: parent.x + info.offset.x, y: parent.y + info.offset.y };
+    }
+    /** 沿 parent 链找到顶层 xdg_surface（popup 的约束范围以它为界） */
+    rootXdgSurface(id: WaylandObjectId2<"xdg_surface">): WaylandObjectId2<"xdg_surface"> {
+        const info = this.getXdgSurface(id);
+        if (!info.parent) return id;
+        return this.rootXdgSurface(info.parent);
+    }
     xdgSurfaceDestroyed(xdgSurfaceId: WaylandObjectId2<"xdg_surface">, type: "toplevel" | "popup") {
+        const surface = this.xdg_surface[xdgSurfaceId]?.surface;
+        if (surface !== undefined && this.byWlSurface.get(surface) === xdgSurfaceId) {
+            this.byWlSurface.delete(surface);
+        }
         delete this.xdg_surface[xdgSurfaceId];
 
         this.render.destroyXdgSurfaceEle(this.idScope(xdgSurfaceId), type);
@@ -309,16 +475,20 @@ export class xdgSurfaceData {
             offset: { x: number; y: number };
             size: { w: number; h: number };
         }[] = [];
-        // todo tree walk
-        children.push(
-            ...this.xdg_surface[parent].children
-                .filter((c) => this.wl_surface.getWlSurface(this.getXdgSurface(c).surface).role === "popup")
-                .map((i) => ({
-                    id: i,
-                    offset: this.getXdgSurface(i).offset, // todo 合并父偏移
-                    size: this.getReRect(i),
-                })),
-        );
+        // 深度优先：父 popup 在前、子 popup 在后；hitTest 反向遍历，子菜单（更上层）先命中。
+        // offset 用 absoluteOffset 合并父链，坐标系与顶层 xdg_surface 一致。
+        const walk = (parentId: WaylandObjectId2<"xdg_surface">) => {
+            for (const c of this.xdg_surface[parentId].children) {
+                if (this.wl_surface.getWlSurface(this.getXdgSurface(c).surface).role !== "popup") continue;
+                children.push({
+                    id: c,
+                    offset: this.absoluteOffset(c),
+                    size: this.getReRect(c),
+                });
+                walk(c);
+            }
+        };
+        walk(parent);
         return children;
     }
 
@@ -452,19 +622,11 @@ export const xdgShellModule = defineModule({
     ],
     hooks: {
         /**
-         * 由 wl_surface.commit 触发。
-         *
-         * 注意保留了原有语义：尺寸一变就给**所有** xdg_surface 发 configure，
-         * 而不只是本 surface 对应的那个——是否该收窄属于另一个问题，不在本次改动范围。
+         * 每个 wl_surface.commit 都会到达（含无 buffer 的初始 commit）：
+         * 初始 commit 回 xdg configure，之后的 commit 只在状态 pending 时补发。
          */
-        onCommit: (_surfaceId, sizeChanged, ctx) => {
-            if (!sizeChanged) return;
-            // todo 考虑实际窗口的几何，否则有外边框的会变大
-            for (const [id, p] of ctx.objects.entries()) {
-                if (p.protocol.name === "xdg_surface") {
-                    ctx.send(id as WaylandObjectId2<"xdg_surface">, "xdg_surface.configure", { serial: 1 });
-                }
-            }
+        onCommit: (surfaceId, _sizeChanged, ctx) => {
+            onSurfaceCommit(ctx, surfaceId);
         },
     },
     requests: {
@@ -540,19 +702,16 @@ export const xdgShellModule = defineModule({
                 width: outerBounds.width,
                 height: outerBounds.height,
             });
-            ctx.send(x.id, "xdg_surface.configure", { serial: 1 });
             ctx.domain.xdgSurface.setAsToplevel(xid, toplevelId);
             ctx.domain.windows.created(toplevelId, ctx.core.surface.idScope(xid));
         },
         "xdg_surface.set_window_geometry": (x, ctx) => {
             const thisXdgSurface = ctx.domain.xdgSurface.getXdgSurface(x.id);
             ctx.domain.xdgSurface.setXdgSurfaceSize(x.id, x.args.x, x.args.y, x.args.width, x.args.height);
-            if (thisXdgSurface.xdg_role) {
-                ctx.domain.windows.resized(
-                    thisXdgSurface.xdg_role as WaylandObjectId2<"xdg_toplevel">, // todo check
-                    x.args.width,
-                    x.args.height,
-                );
+            const role = thisXdgSurface.xdg_role;
+            // popup 的几何只影响自身渲染，不该冒充窗口变化广播给桌面
+            if (role !== undefined && ctx.objects.get(role).protocol.name === "xdg_toplevel") {
+                ctx.domain.windows.resized(role as WaylandObjectId2<"xdg_toplevel">, x.args.width, x.args.height);
             }
         },
         "xdg_surface.get_popup": (x, ctx) => {
@@ -566,66 +725,71 @@ export const xdgShellModule = defineModule({
 
             const positioner = ctx.objects.get(waylandObjectId(x.args.positioner, "xdg_positioner"));
             const positionerData = positioner.data;
+            const width = positionerData.size.width;
+            const height = positionerData.size.height;
 
-            const anchor = positionerData.anchor;
-            const anchorPoint = getRectKeyPoint(
-                positionerData.anchor_rect,
-                (
-                    {
-                        [getEnumValue("xdg_positioner.anchor", "none")]: "none",
-                        [getEnumValue("xdg_positioner.anchor", "top")]: "top",
-                        [getEnumValue("xdg_positioner.anchor", "bottom")]: "bottom",
-                        [getEnumValue("xdg_positioner.anchor", "left")]: "left",
-                        [getEnumValue("xdg_positioner.anchor", "right")]: "right",
-                        [getEnumValue("xdg_positioner.anchor", "top_left")]: "top_left",
-                        [getEnumValue("xdg_positioner.anchor", "top_right")]: "top_right",
-                        [getEnumValue("xdg_positioner.anchor", "bottom_left")]: "bottom_left",
-                        [getEnumValue("xdg_positioner.anchor", "bottom_right")]: "bottom_right",
-                    } as const
-                )[anchor],
-            );
-            const popupPoint = getRectKeyPoint(
-                { x: 0, y: 0, width: positionerData.size.width, height: positionerData.size.height },
-                (
-                    {
-                        [getEnumValue("xdg_positioner.gravity", "none")]: "none",
-                        [getEnumValue("xdg_positioner.gravity", "top")]: "bottom",
-                        [getEnumValue("xdg_positioner.gravity", "bottom")]: "top",
-                        [getEnumValue("xdg_positioner.gravity", "left")]: "right",
-                        [getEnumValue("xdg_positioner.gravity", "right")]: "left",
-                        [getEnumValue("xdg_positioner.gravity", "top_left")]: "bottom_right",
-                        [getEnumValue("xdg_positioner.gravity", "top_right")]: "bottom_left",
-                        [getEnumValue("xdg_positioner.gravity", "bottom_left")]: "top_right",
-                        [getEnumValue("xdg_positioner.gravity", "bottom_right")]: "top_left",
-                    } as const
-                )[positionerData.gravity],
-            );
+            const position = (anchorPointName: KeyPoint, popupPointName: KeyPoint) => {
+                const anchorPoint = getRectKeyPoint(positionerData.anchor_rect, anchorPointName);
+                const popupPoint = getRectKeyPoint({ x: 0, y: 0, width, height }, popupPointName);
+                return {
+                    x: anchorPoint.x - popupPoint.x + positionerData.offset.x,
+                    y: anchorPoint.y - popupPoint.y + positionerData.offset.y,
+                };
+            };
 
-            // todo offset
-            // todo constraint_adjustment
-            const nx = anchorPoint.x - popupPoint.x;
-            const ny = anchorPoint.y - popupPoint.y;
+            const anchorName = ANCHOR_POINT[positionerData.anchor] ?? "none";
+            const gravityName = GRAVITY_POINT[positionerData.gravity] ?? "none";
+            let pos = position(anchorName, gravityName);
+
+            // 约束范围用根窗口（嵌套 popup 的可用区域是顶层窗口，不是父菜单本身）
+            const parentAbs = ctx.domain.xdgSurface.absoluteOffset(parentXdgSurfaceId);
+            const rootId = ctx.domain.xdgSurface.rootXdgSurface(parentXdgSurfaceId);
+            const bounds = ctx.domain.xdgSurface.getReRect(rootId);
+            const outsideX = (x: number) => x < 0 || x + width > bounds.w;
+            const outsideY = (y: number) => y < 0 || y + height > bounds.h;
+
+            const adj = positionerData.constraint_adjustment;
+            // 优先级按协议：flip → slide → resize
+            if (outsideX(parentAbs.x + pos.x) && adj & ADJ_FLIP_X) {
+                const flipped = position(flipPoint(anchorName, "x"), flipPoint(gravityName, "x"));
+                if (!outsideX(parentAbs.x + flipped.x)) pos = { ...pos, x: flipped.x };
+            }
+            if (outsideY(parentAbs.y + pos.y) && adj & ADJ_FLIP_Y) {
+                const flipped = position(flipPoint(anchorName, "y"), flipPoint(gravityName, "y"));
+                if (!outsideY(parentAbs.y + flipped.y)) pos = { ...pos, y: flipped.y };
+            }
+            if (adj & ADJ_SLIDE_X) {
+                const absX = parentAbs.x + pos.x;
+                pos.x = Math.min(Math.max(absX, 0), Math.max(0, bounds.w - width)) - parentAbs.x;
+            }
+            if (adj & ADJ_SLIDE_Y) {
+                const absY = parentAbs.y + pos.y;
+                pos.y = Math.min(Math.max(absY, 0), Math.max(0, bounds.h - height)) - parentAbs.y;
+            }
+
+            const nx = pos.x;
+            const ny = pos.y;
 
             const xdgSurfaceM = ctx.domain.xdgSurface;
             xdgSurfaceM.setAsPopup(xid, popupId, parentXdgSurfaceId);
             xdgSurfaceM.setOffset(xid, nx, ny);
 
-            // todo 给定外部处理的接口
-
-            ctx.send(x.args.id, "xdg_popup.configure", {
+            // 初始 commit 后才发 configure（Qt/KDE 只认那时机的 configure）
+            xdgSurfaceM.getXdgSurface(xid).popupConfigure = {
                 x: Math.floor(nx),
                 y: Math.floor(ny),
                 width: positionerData.size.width,
                 height: positionerData.size.height,
-            });
-            ctx.send(x.id, "xdg_surface.configure", { serial: 0 });
+            };
+        },
+        "xdg_surface.ack_configure": (x, ctx) => {
+            ctx.domain.xdgSurface.ackConfigure(x.id, x.args.serial);
         },
         "xdg_popup.destroy": (x, ctx) => {
             const xid = x.id;
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByPopup(xid);
             if (xdgSurfaceId === undefined) return;
             ctx.domain.xdgSurface.popupDestroyed(xid);
-            ctx.send(x.id, "xdg_popup.popup_done", {});
         },
         "xdg_toplevel.set_app_id": (x, ctx) => {
             if (!ctx.domain.xdg.appid) {
@@ -667,7 +831,7 @@ export const xdgShellModule = defineModule({
             if (!win.actived) {
                 win.actived = true;
                 win.minimized = false;
-                configureWin(ctx, msg.winId, win);
+                configureWin(ctx, msg.winId);
             }
             // 主 surface 已解体的窗口只处理 actived，**不能**把焦点清空（会误伤真正在聚焦的那个）
             const surface = mainSurface(ctx, msg.winId);
@@ -678,7 +842,7 @@ export const xdgShellModule = defineModule({
             if (win === undefined) return;
             if (win.actived) {
                 win.actived = false;
-                configureWin(ctx, msg.winId, win);
+                configureWin(ctx, msg.winId);
             }
             // 只清**自己拥有**的键盘焦点：桌面 `focusWin` 是「目标 focus + 其余 blur」的全量循环，
             // 这样写与遍历顺序无关，终态一定是目标窗口持有焦点（重复 blur 也被 focusKeyboard 去重）
@@ -701,7 +865,7 @@ export const xdgShellModule = defineModule({
             if (win === undefined) return;
             win.box.width = msg.args[0].width;
             win.box.height = msg.args[0].height;
-            configureWin(ctx, msg.winId, win);
+            configureWin(ctx, msg.winId);
         },
         "window.maximize": (msg, ctx) => {
             const win = ctx.domain.windows.get(msg.winId);
@@ -712,18 +876,7 @@ export const xdgShellModule = defineModule({
             win.minimized = false;
             win.box.width = msg.args[0]?.width ?? win.box.width;
             win.box.height = msg.args[0]?.height ?? win.box.height;
-
-            ctx.sendNow(msg.winId, "xdg_toplevel.configure", {
-                width: win.box.width,
-                height: win.box.height,
-                states: new Uint32Array([
-                    getEnumValue("xdg_toplevel.state", "activated"),
-                    getEnumValue("xdg_toplevel.state", "maximized"),
-                ]),
-            });
-            const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(msg.winId);
-            if (xdgSurfaceId === undefined) return;
-            ctx.sendNow(xdgSurfaceId, "xdg_surface.configure", { serial: 1 });
+            configureWin(ctx, msg.winId);
         },
         "window.unmaximize": (msg, ctx) => {
             const win = ctx.domain.windows.get(msg.winId);
@@ -731,14 +884,14 @@ export const xdgShellModule = defineModule({
             win.maximized = false;
             win.box.width = msg.args[0]?.width ?? win.box.width;
             win.box.height = msg.args[0]?.height ?? win.box.height;
-            configureWin(ctx, msg.winId, win);
+            configureWin(ctx, msg.winId);
         },
         "window.minimize": (msg, ctx) => {
             const win = ctx.domain.windows.get(msg.winId);
             if (win === undefined) return;
             win.actived = false;
             win.minimized = true;
-            configureWin(ctx, msg.winId, win);
+            configureWin(ctx, msg.winId);
         },
     },
 });

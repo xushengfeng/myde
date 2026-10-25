@@ -273,22 +273,37 @@ export interface XdgSurfaceInfo {
     xdg_role?: XdgToplevelId | XdgPopupId;
     parent: XdgSurfaceId | undefined;
     children: XdgSurfaceId[];
+    initialCommitDone: boolean;
+    configurePending: boolean;
+    lastConfigureSerial?: number;
+    popupConfigure?: { x: number; y: number; width: number; height: number };
 }
 
 export interface XdgSurfaceApi {
     addXdgSurface(id: XdgSurfaceId, wlSurface: SurfaceId): void;
     getXdgSurface(id: XdgSurfaceId): XdgSurfaceInfo;
+    getXdgSurfaceByWlSurface(id: SurfaceId): XdgSurfaceId | undefined;
+    /** 客户端级单调 serial（0 在 Qt 里等于「没有 configure」） */
+    nextConfigureSerial(): number;
+    ackConfigure(id: XdgSurfaceId, serial: number): void;
     setXdgSurfaceSize(id: XdgSurfaceId, x: number, y: number, w: number, h: number): void;
     getXdgSurfaceByToplevel(id: XdgToplevelId): XdgSurfaceId | undefined;
     getXdgSurfaceByPopup(id: XdgPopupId): XdgSurfaceId | undefined;
     setAsToplevel(id: XdgSurfaceId, toplevelId: XdgToplevelId): void;
     setAsPopup(id: XdgSurfaceId, popupId: XdgPopupId, parent: XdgSurfaceId): void;
     setOffset(id: XdgSurfaceId, x: number, y: number): void;
+    /** xdg_surface 在窗口元素坐标系里的偏移（父链累加）；toplevel 为 0 */
+    absoluteOffset(id: XdgSurfaceId): { x: number; y: number };
+    /** 沿 parent 链找到顶层 xdg_surface */
+    rootXdgSurface(id: XdgSurfaceId): XdgSurfaceId;
     popupDestroyed(popupId: XdgPopupId): void;
     toplevelDestroyed(toplevelId: XdgToplevelId): void;
     /** 窗口几何：`winGeo` 优先，未声明时退化为 surface 尺寸（host 的 `windowRect`/`windowInBounds` 在用） */
     getReRect(id: XdgSurfaceId): { w: number; h: number };
-    /** 直接子 xdg_surface 里 role 为 popup 的那些（id + 偏移 + 尺寸），本模块的 `hitTest` 在用 */
+    /**
+     * xdg_surface 子树里所有 popup（含嵌套子菜单），偏移已合并父链、与顶层坐标系一致。
+     * 本模块的 `hitTest` 在用。
+     */
     getChildenDeepOnlyPopup(parent: XdgSurfaceId): {
         id: XdgSurfaceId;
         offset: { x: number; y: number };
@@ -347,8 +362,9 @@ export interface WaylandDomainRegistry {}
  */
 export interface SurfaceHooks {
     /**
-     * buffer 已应用、像素尚未合成。`sizeChanged` 为本次 commit 是否改变了 surface 尺寸
-     * ——xdg 只在此时发 configure。
+     * 每次 wl_surface.commit 后（含无 buffer 的初始 commit）触发。
+     * `sizeChanged` 为本次 commit 是否改变了 surface 尺寸；xdg 用初始 commit 下发 configure，
+     * 之后仅在状态 pending 时补发。
      */
     onCommit?(surfaceId: SurfaceId, sizeChanged: boolean, ctx: ModuleCtx): void;
     /**
