@@ -1916,6 +1916,7 @@ function createStartMenu(
             overflowY: "auto",
             alignContent: "flex-start",
             background: "rgba(245, 245, 245, 0.96)",
+            backdropFilter: "blur(12px)",
             boxShadow: "0 8px 32px #00000033",
             contain: "layout paint style",
         })
@@ -1964,18 +1965,16 @@ function createStartMenu(
     }
 
     function createAppTile(app: DesktopApp) {
-        const appEl = view("y")
-            .style({
-                width: "80px",
-                height: "80px",
-                alignItems: "center",
-                justifyContent: "flex-start",
-                flexShrink: 0,
-                // 屏幕外的格子跳过布局和绘制，长列表滚动更轻
-                contentVisibility: "auto",
-                containIntrinsicSize: "80px 80px",
-            })
-            .attr({ title: app.nameLocal || app.name });
+        const appEl = view("y").style({
+            width: "80px",
+            height: "80px",
+            alignItems: "center",
+            justifyContent: "flex-start",
+            flexShrink: 0,
+            // 屏幕外的格子跳过布局和绘制，长列表滚动更轻
+            contentVisibility: "auto",
+            containIntrinsicSize: "80px 80px",
+        });
         const iconView = view().addInto(appEl);
         const iconEl = appIconEl(app.exec).style({
             width: "40px",
