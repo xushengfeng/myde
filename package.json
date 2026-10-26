@@ -1,6 +1,6 @@
 {
     "name": "myde",
-    "version": "26.08.17-alpha",
+    "version": "26.10.26-alpha",
     "description": "my desktop",
     "main": "./out/main/main.js",
     "scripts": {
