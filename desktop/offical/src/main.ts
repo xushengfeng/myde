@@ -772,17 +772,45 @@ function setViewScorll({ x, y }: { x: number; y: number }) {
     });
 }
 
+/** 多窗口总览把所有窗口缩放到 VIEW_ALL_SCALE，关闭按钮反向放大以保持屏幕尺寸不变 */
+const VIEW_ALL_SCALE = 0.25;
+
+const windowCloseButtons = new Map<WinHandle, ElType<HTMLButtonElement>>();
+
+/** 统一的窗口关闭按钮：白色圆底 + 叉号，压在任意窗口内容上都能看清 */
+function createWindowCloseButton(op: { size: number; scale?: number; onClick: () => void }) {
+    const btn = button(getIconXEl("cross", { size: Math.round(op.size * 0.55) })).style({
+        width: `${op.size}px`,
+        height: `${op.size}px`,
+        padding: "0",
+        border: "none",
+        borderRadius: "50%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(255, 255, 255, 0.92)",
+        boxShadow: "0 1px 4px #00000055",
+        cursor: "pointer",
+        zIndex: "10",
+    });
+    if (op.scale) {
+        btn.style({ transform: `scale(${op.scale})`, transformOrigin: "top right" });
+    }
+    btn.on("click", (e) => {
+        // 预览里父级点击是跳转窗口，总览里父级点击是退出总览
+        e.stopPropagation();
+        op.onClick();
+    });
+    return btn;
+}
+
 function viewAll(s: boolean) {
-    if (s) {
-        windowElWarp.style({
-            transition: "all 0.3s ease-in-out",
-            transform: "scale(0.25)",
-        });
-    } else {
-        windowElWarp.style({
-            transition: "all 0.3s ease-in-out",
-            transform: "none",
-        });
+    windowElWarp.style({
+        transition: "all 0.3s ease-in-out",
+        transform: s ? `scale(${VIEW_ALL_SCALE})` : "none",
+    });
+    for (const btn of windowCloseButtons.values()) {
+        btn.style({ display: s ? "flex" : "none" });
     }
 }
 
@@ -1023,7 +1051,20 @@ server.server.on("window.created", (info) => {
     const v = viewData.newView();
     viewData.moveWinToView(wid, v);
     // biome-ignore lint/style/noNonNullAssertion: 刚刚创建的，一定有
-    addWindow(v, render.getXdgSurfaceEle(info.renderId)!, wid);
+    const winEl = render.getXdgSurfaceEle(info.renderId)!;
+    const closeBtn = createWindowCloseButton({
+        size: 24,
+        scale: 1 / VIEW_ALL_SCALE,
+        onClick: () => server.server.notify("window.close", wid),
+    }).style({
+        position: "absolute",
+        top: "4px",
+        right: "4px",
+        display: viewAllShowing ? "flex" : "none",
+    });
+    closeBtn.addInto(winEl);
+    windowCloseButtons.set(wid, closeBtn);
+    addWindow(v, winEl, wid);
     viewData.focusWin(wid);
     server.server.notify("window.setBox", wid, { width: 800, height: 600 });
 });
@@ -1031,6 +1072,7 @@ server.server.on("window.created", (info) => {
 server.server.on("window.closed", (wid) => {
     console.log(`window ${wid} closed`);
     appliedState.delete(wid);
+    windowCloseButtons.delete(wid);
     if (viewData.focusHandle === wid) viewData.blurAll();
     viewData.closeWin(wid);
     // 指针还停在刚关闭的窗口上时，立刻回到默认光标；
@@ -2192,7 +2234,7 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
 
                     preview.clear().add(
                         allWin.map((info) => {
-                            const el = view();
+                            const el = view().style({ position: "relative" });
                             el.add(txt(info.title || ""));
                             const canvas = ele("canvas").addInto(el);
                             const rawCanvas = server.server.windows.preview(info.handle);
@@ -2202,6 +2244,17 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
                             // biome-ignore lint/style/noNonNullAssertion: ---
                             const ctx = canvas.el.getContext("2d")!;
                             ctx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, w, h);
+                            el.add(
+                                createWindowCloseButton({
+                                    size: 20,
+                                    onClick: () => {
+                                        server.server.notify("window.close", info.handle);
+                                        // 立刻从预览里拿掉，不用等 window.closed 回来
+                                        el.remove();
+                                        if (preview.el.children.length === 0) showTip({ state: "hide" });
+                                    },
+                                }).style({ position: "absolute", top: "2px", right: "2px" }),
+                            );
                             el.on("click", () => {
                                 jump2Win(info.handle);
                             });
