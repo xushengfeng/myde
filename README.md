@@ -30,6 +30,7 @@ myde 更进一步，它负责将应用渲染到 Canvas 并处理部分输入事�
 
 - Linux 系统，已运行 X11 或 Wayland 会话
 - 需安装 `xwayland-satellite`
+- 支持 x86_64 与 arm64（release 提供对应架构的安装包；原生依赖会按架构自动选择预编译模块）
 
 ### 安装依赖
 

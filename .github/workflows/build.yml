@@ -9,16 +9,27 @@ env:
     # myde-wrap 固定版本（完整 commit hash），与 script/myde_wrap/build.sh 的默认值一致
     MYDE_WRAP_REF: 44c604138429c2ace27ed0af1a304d07b2fbddeb
 
+permissions:
+    contents: write
+
 jobs:
-    release:
-        runs-on: ubuntu-latest
+    build:
+        strategy:
+            matrix:
+                include:
+                    - runner: ubuntu-latest
+                      arch: x64
+                    - runner: ubuntu-24.04-arm
+                      arch: arm64
+
+        runs-on: ${{ matrix.runner }}
 
         steps:
             - name: Check out Git repository
-              uses: actions/checkout@v1
+              uses: actions/checkout@v4
 
             - name: Install Node.js, NPM and Yarn
-              uses: actions/setup-node@v6
+              uses: actions/setup-node@v4
               with:
                   node-version: 24
 
@@ -29,7 +40,7 @@ jobs:
               uses: actions/cache@v4
               with:
                   path: ${{ runner.temp }}/myde-wrap/target
-                  key: myde-wrap-${{ runner.os }}-${{ env.MYDE_WRAP_REF }}
+                  key: myde-wrap-${{ runner.os }}-${{ matrix.arch }}-${{ env.MYDE_WRAP_REF }}
 
             - name: Install Linux dependencies
               run: |
@@ -42,9 +53,9 @@ jobs:
                   MYDE_WRAP_DIR: ${{ runner.temp }}/myde-wrap
               run: bash script/myde_wrap/build.sh
 
-            - name: Build (Linux x64)
+            - name: Build (Linux ${{ matrix.arch }})
               env:
-                  M_ARCH: x64
+                  M_ARCH: ${{ matrix.arch }}
                   USE_HARD_LINKS: false
               run: |
                   npm install
@@ -54,10 +65,31 @@ jobs:
                   cd ..
                   npm run dist
 
-            - name: release
+            - name: Upload packages
+              uses: actions/upload-artifact@v4
+              with:
+                  name: myde-linux-${{ matrix.arch }}
+                  path: |
+                      build/*.tar.gz
+                      build/*.deb
+                      build/*.rpm
+                  if-no-files-found: error
+
+    release:
+        needs: build
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Download packages
+              uses: actions/download-artifact@v4
+              with:
+                  path: dist
+                  merge-multiple: true
+
+            - name: Create GitHub Release
               uses: softprops/action-gh-release@v2
               with:
-                  files: "build/*"
+                  files: "dist/*"
                   draft: false
                   prerelease: true
                   generate_release_notes: true

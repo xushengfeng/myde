@@ -30,6 +30,7 @@ Only a small number of example applications can display correctly. Custom deskto
 
 - Linux system with X11 or Wayland session running
 - `xwayland-satellite` installed
+- x86_64 and arm64 are supported (releases ship matching packages; native dependencies pick the matching prebuilt binary)
 
 ### Install Dependencies
 
