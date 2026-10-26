@@ -13,22 +13,27 @@ const shapeStyle = {
     transform: "translate(-50%, -50%)",
 };
 
+const DEFAULT_STATE: cursorState = { type: "default" };
+
 /** 桌面光标
  *
  * 管理光标的位置与内容：默认圆点、语义shape（wp_cursor_shape_device_v1.shape枚举名）、
  * 客户端surface图片光标（含热点）、隐藏
  *
- * 客户端设置的光标会被记忆：指针移开surface（软件窗口）时显示默认光标，重新进入时恢复记忆的光标
+ * 客户端设置的光标按客户端记忆：指针离开surface（软件窗口）时显示默认光标，
+ * 回到同一个客户端时恢复它的光标，进入另一个客户端时用另一个客户端自己的记忆，
+ * 避免某个客户端（尤其是正在退出的客户端）的光标状态串到其他软件上。
+ * `hidden` 只影响当前焦点，不参与记忆，防止退出流程里的隐藏把光标永久留空。
  *
  * 状态变化统一经过apply/render，日后可在render里实现过渡动画
  */
 export class Cursor {
     private warpEl: ElType<HTMLElement>;
-    private state: cursorState = { type: "default" };
-    /** 客户端最后设置的光标（记忆），指针移开surface后重新进入时恢复 */
-    private clientState: cursorState = { type: "default" };
-    /** 指针是否在客户端surface（软件窗口）上 */
-    private surfaceFocus = false;
+    private state: cursorState = DEFAULT_STATE;
+    /** 每个客户端最后设置的光标（记忆），指针离开后重新进入时恢复 */
+    private clientStates = new Map<string, cursorState>();
+    /** 指针当前所在客户端的 id，undefined 表示在桌面上 */
+    private clientId: string | undefined;
 
     constructor(parent: ElType<HTMLElement>) {
         this.warpEl = view()
@@ -50,39 +55,57 @@ export class Cursor {
 
     /** 指针进入/离开客户端surface（软件窗口）
      *
-     * 离开时显示默认光标，重新进入时恢复记忆的客户端光标
+     * 离开时显示默认光标，重新进入时恢复该客户端记忆的光标
      */
-    setSurfaceFocus(focus: boolean) {
-        if (focus === this.surfaceFocus) return;
-        this.surfaceFocus = focus;
-        this.apply(focus ? this.clientState : { type: "default" });
+    setSurfaceFocus(clientId: string | undefined) {
+        if (clientId === this.clientId) return;
+        this.clientId = clientId;
+        this.apply(this.contentOf(clientId));
     }
 
     /** 客户端surface图片光标，hotspot为热点相对图片左上角的偏移 */
-    setImage(canvas: OffscreenCanvas, hotspotX: number, hotspotY: number) {
-        this.clientUpdate({ type: "image", canvas, hotspot: { x: hotspotX, y: hotspotY } });
+    setImage(clientId: string, canvas: OffscreenCanvas, hotspotX: number, hotspotY: number) {
+        this.clientUpdate(clientId, { type: "image", canvas, hotspot: { x: hotspotX, y: hotspotY } });
     }
 
     /** 语义shape，wp_cursor_shape_device_v1.shape的枚举名 */
-    setShape(shape: string) {
-        this.clientUpdate({ type: "shape", shape });
+    setShape(clientId: string, shape: string) {
+        this.clientUpdate(clientId, { type: "shape", shape });
     }
 
     /** 隐藏光标 */
-    hide() {
-        this.clientUpdate({ type: "hidden" });
+    hide(clientId: string) {
+        this.clientUpdate(clientId, { type: "hidden" });
     }
 
-    /** 清空记忆并恢复默认光标 */
+    /** 客户端退出：丢弃它的记忆；指针还停在它的窗口上时立即恢复默认光标 */
+    forgetClient(clientId: string) {
+        this.clientStates.delete(clientId);
+        if (this.clientId === clientId) {
+            this.clientId = undefined;
+            this.apply(DEFAULT_STATE);
+        }
+    }
+
+    /** 清空全部记忆并恢复默认光标 */
     reset() {
-        this.clientState = { type: "default" };
-        this.apply({ type: "default" });
+        this.clientStates.clear();
+        this.clientId = undefined;
+        this.apply(DEFAULT_STATE);
     }
 
-    /** 记忆客户端设置的光标，指针焦点在客户端surface上时才显示（协议规定焦点外不改变光标） */
-    private clientUpdate(state: cursorState) {
-        this.clientState = state;
-        if (this.surfaceFocus) this.apply(state);
+    private contentOf(clientId: string | undefined): cursorState {
+        if (clientId === undefined) return DEFAULT_STATE;
+        return this.clientStates.get(clientId) ?? DEFAULT_STATE;
+    }
+
+    /** 记忆客户端设置的光标，指针焦点在该客户端上时才显示（协议规定焦点外不改变光标） */
+    private clientUpdate(clientId: string, state: cursorState) {
+        // hidden 只在当前焦点下生效，不进入记忆：隐藏往往发生在软件退出/窗口销毁的收尾阶段，
+        // 若记下来，指针下次进入（或其他窗口复用同一客户端）就会得到一把看不见的光标
+        if (state.type === "hidden") this.clientStates.delete(clientId);
+        else this.clientStates.set(clientId, state);
+        if (this.clientId === clientId) this.apply(state);
     }
 
     private apply(state: cursorState) {

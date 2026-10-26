@@ -575,6 +575,9 @@ const tools = new Tools();
 // 全局记录当前鼠标坐标（与页面视口坐标系一致）
 const mousePos = { x: 0, y: 0 } as { x: number; y: number };
 
+/** 指针当前命中的客户端窗口；窗口关闭时据此立即清掉光标焦点 */
+let pointerTarget: { handle: WinHandle; clientId: string } | undefined;
+
 let viewAllShowing = false;
 
 class trigger {
@@ -717,9 +720,9 @@ function mouseMove(x: number, y: number) {
     mousePos.x = x;
     mousePos.y = y;
     cursor.move(x, y);
-    const inWin = sendPointerEvent("move", new PointerEvent("pointermove", { clientX: x, clientY: y }));
-    // 指针移开surface或软件后恢复默认光标，重新进入时恢复记忆的客户端光标
-    cursor.setSurfaceFocus(inWin);
+    const target = sendPointerEvent("move", new PointerEvent("pointermove", { clientX: x, clientY: y }));
+    // 指针移开surface或软件后恢复默认光标，重新进入时恢复对应客户端记忆的光标
+    cursor.setSurfaceFocus(target?.clientId);
 }
 
 function cssVar(name: string) {
@@ -900,9 +903,15 @@ function loadAppIcon(
         .catch(() => {});
 }
 
-function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): boolean {
-    if (viewAllShowing) return false;
-    let hit = false;
+function sendPointerEvent(
+    type: "move" | "down" | "up",
+    p: PointerEvent,
+): { handle: WinHandle; clientId: string } | undefined {
+    if (viewAllShowing) {
+        pointerTarget = undefined;
+        return undefined;
+    }
+    let hit: { handle: WinHandle; clientId: string } | undefined;
     const handled = new Set<string>();
     for (const info of server.server.windows.list()) {
         // 每个客户端只处理第一个命中的窗口
@@ -914,7 +923,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): boolea
         // todo 指针离开窗口时下发 wl_pointer.leave（待 server 提供），见 xdg 域 hitTest 的未命中分支
         if (nx < 0 || nx >= info.rect.w || ny < 0 || ny >= info.rect.h) continue;
         handled.add(info.clientId);
-        hit = true;
+        hit ??= { handle: info.handle, clientId: info.clientId };
 
         server.server.notify("input.pointer", info.handle, {
             type,
@@ -932,6 +941,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): boolea
             }
         }
     }
+    pointerTarget = hit;
     return hit;
 }
 
@@ -995,6 +1005,9 @@ server.server.respond("surfaceBounds.request", () => {
 server.server.on("client.opened", (clientId) => {
     server.server.clients.get(clientId)?.setLogConfig({ receive: [], send: [] });
 });
+server.server.on("client.closed", (clientId) => {
+    cursor.forgetClient(clientId);
+});
 
 /**
  * 桌面已应用的窗口状态。`window.changed` 是合并事件（rect/states/title/appid 任一变化），
@@ -1020,6 +1033,12 @@ server.server.on("window.closed", (wid) => {
     appliedState.delete(wid);
     if (viewData.focusHandle === wid) viewData.blurAll();
     viewData.closeWin(wid);
+    // 指针还停在刚关闭的窗口上时，立刻回到默认光标；
+    // 否则客户端退出流程补发的 hidden 会把光标留成空白
+    if (pointerTarget?.handle === wid) {
+        pointerTarget = undefined;
+        cursor.setSurfaceFocus(undefined);
+    }
 });
 
 server.server.on("window.startMove", (wid) => {
@@ -2786,10 +2805,12 @@ windowEl.on("wheel", (e) => {
 const cursor = new Cursor(cursorEl);
 
 // 光标形态改由 server 事件下发（renderToolsOn.onCursorUpdata 保留给渲染侧，语义相同）
-server.server.on("cursor.changed", (_clientId, state) => {
-    if (state.kind === "hidden") cursor.hide();
-    else if (state.kind === "shape") cursor.setShape(state.shape);
-    else if (state.canvas) cursor.setImage(state.canvas, state.hotspot.x, state.hotspot.y);
+server.server.on("cursor.changed", (clientId, state) => {
+    // 客户端断开后 close 流程还会补发一次 hidden，忽略已经不在册的客户端
+    if (!server.server.clients.get(clientId)) return;
+    if (state.kind === "hidden") cursor.hide(clientId);
+    else if (state.kind === "shape") cursor.setShape(clientId, state.shape);
+    else if (state.canvas) cursor.setImage(clientId, state.canvas, state.hotspot.x, state.hotspot.y);
 });
 
 // ── 输入聚合层：evdev（input api）设备接入 ────────────────────────────────────────────────────────
