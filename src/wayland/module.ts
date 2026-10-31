@@ -310,7 +310,7 @@ export interface XdgSurfaceApi {
     destroyAll(): void;
     popupDestroyed(popupId: XdgPopupId, ctx: ModuleCtx): void;
     toplevelDestroyed(toplevelId: XdgToplevelId): void;
-    /** 窗口几何：`winGeo` 优先，未声明时退化为 surface 尺寸（host 的 `windowRect`/`windowInBounds` 在用） */
+    /** 窗口几何：`winGeo` 优先，未声明时退化为 surface 尺寸（host 的 `windowRect` 在用） */
     getReRect(id: XdgSurfaceId): { w: number; h: number };
     /**
      * xdg_surface 子树里所有 popup（含嵌套子菜单），偏移已合并父链、与顶层坐标系一致。

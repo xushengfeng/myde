@@ -603,14 +603,14 @@ export class WaylandClient implements Client {
         return { x: 0, y: 0, w: size.w, h: size.h };
     }
 
-    /** 命中检测：p 相对窗口元素左上角（几何原点） */
-    windowInBounds(winId: WaylandWinId, p: { x: number; y: number }): boolean {
-        const xdgSurfaceId = this.windowXdgSurface(winId);
-        if (xdgSurfaceId === undefined) return false;
-        const rel = this.ctx.domain.xdgSurface.getReRect(xdgSurfaceId);
-        // todo popup
-        if (p.x < 0 || p.x >= rel.w || p.y < 0 || p.y >= rel.h) return false;
-        return true; // todo
+    /**
+     * 命中检测：p 相对窗口元素左上角（几何原点）。
+     * 走 xdg 域的完整几何（主 surface + popup 树 + subsurface + input region），
+     * popup 超出顶层窗口范围时也能命中。
+     */
+    windowHitTest(winId: WaylandWinId, p: { x: number; y: number }): boolean {
+        if (this.windowXdgSurface(winId) === undefined) return false;
+        return this.ctx.domain.xdgSurface.hitTest(winId, p) !== undefined;
     }
 
     windowTitle(winId: WaylandWinId): string {

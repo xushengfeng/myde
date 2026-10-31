@@ -88,6 +88,16 @@ class WaylandServer {
             if (entry === undefined) return undefined;
             return entry.client.windowPreview(entry.winId);
         },
+        /**
+         * 指针命中检测：p 相对窗口元素左上角（几何原点）。
+         * 包含主 surface、popup 树、subsurface 与 input region，popup 超出窗口范围也能命中；
+         * 桌面据此决定是否把 `input.pointer` / `input.scroll` 发给该窗口。
+         */
+        hitTest: (handle: WinHandle, p: { x: number; y: number }): boolean => {
+            const entry = this.windowTable.get(handle);
+            if (entry === undefined) return false;
+            return entry.client.windowHitTest(entry.winId, p);
+        },
     };
 
     cursor = {

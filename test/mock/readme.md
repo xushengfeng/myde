@@ -207,7 +207,7 @@ interface MockConfig {
 
 | API | 状态 | 说明 |
 |-----|------|------|
-| `windows.list/get/preview` | ✅ | 全局 handle 表的快照查询 |
+| `windows.list/get/preview/hitTest` | ✅ | 全局 handle 表的快照查询；`hitTest` 按窗口几何判断（不模拟 popup） |
 | `cursor.get` | ✅ | 光标状态 |
 | `on/off/emit` | ✅ | `window.*` / `cursor.*` / `clipboard.*` / `client.*` 域事件 |
 | `notify` | ✅ | 窗口命令与输入注入（mock 不模拟客户端） |

@@ -88,6 +88,7 @@ export interface MockWaylandServer {
         list(): MockWindowInfo[];
         get(handle: string): MockWindowInfo | undefined;
         preview(handle: string): OffscreenCanvas | undefined;
+        hitTest(handle: string, p: { x: number; y: number }): boolean;
     };
     cursor: { get(clientId: string): unknown };
     /** 造窗口：分配全局 handle 并发出 `window.created` */
@@ -261,6 +262,12 @@ export function createMockServer(): MockWaylandServer {
                 const winId = winByHandle.get(handle);
                 if (!info || winId === undefined) return undefined;
                 return clients.get(info.clientId)?.getWindows().get(winId)?.getPreview();
+            },
+            // mock 不模拟 popup，按窗口几何判断
+            hitTest: (handle, p) => {
+                const info = infos.get(handle);
+                if (!info) return false;
+                return p.x >= 0 && p.x < info.rect.w && p.y >= 0 && p.y < info.rect.h;
             },
         },
         cursor: { get: (clientId) => (clients.has(clientId) ? "default" : undefined) },

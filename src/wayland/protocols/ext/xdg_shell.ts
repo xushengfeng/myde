@@ -611,7 +611,6 @@ export class xdgSurfaceData {
             const offsetX1 = offset.x + size.w;
             const offsetY1 = offset.y + size.h;
             if (x >= offsetX && x < offsetX1 && y >= offsetY && y < offsetY1) {
-                console.log(`pointer in popup surface ${p}`);
                 inXdgSurface = p;
                 xdgSurfaceOffset.x = offset.x;
                 xdgSurfaceOffset.y = offset.y;
@@ -620,7 +619,7 @@ export class xdgSurfaceData {
             }
         }
         if (!inXdgSurface) {
-            if (0 < x && x < this.getReRect(xdgSurfaceId).w && 0 < y && y < this.getReRect(xdgSurfaceId).h) {
+            if (x >= 0 && x < this.getReRect(xdgSurfaceId).w && y >= 0 && y < this.getReRect(xdgSurfaceId).h) {
                 inXdgSurface = xdgSurfaceId;
                 xdgSurfaceOffset.x = 0;
                 xdgSurfaceOffset.y = 0;
@@ -668,7 +667,6 @@ export class xdgSurfaceData {
                 } else canSend = true;
 
                 if (canSend) {
-                    console.log(`pointer in surface ${s}`);
                     inSurface = { id: s, x: nx, y: ny };
                     break;
                 }

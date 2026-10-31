@@ -949,15 +949,16 @@ function sendPointerEvent(
         if (!rect) continue;
         const nx = p.x - rect.left;
         const ny = p.y - rect.top;
+        // 交给 wayland 的完整几何命中检测：popup 超出顶层窗口范围时也能命中
         // todo 指针离开窗口时下发 wl_pointer.leave（待 server 提供），见 xdg 域 hitTest 的未命中分支
-        if (nx < 0 || nx >= info.rect.w || ny < 0 || ny >= info.rect.h) continue;
+        if (!server.server.windows.hitTest(info.handle, { x: nx, y: ny })) continue;
         handled.add(info.clientId);
         hit ??= { handle: info.handle, clientId: info.clientId };
 
         server.server.notify("input.pointer", info.handle, {
             type,
-            x: p.x - rect.left,
-            y: p.y - rect.top,
+            x: nx,
+            y: ny,
             button: p.button,
         });
         if (type === "down") {
@@ -984,7 +985,7 @@ function sendScrollEvent(p: WheelEvent) {
         const rect = rootEl.getBoundingClientRect();
         const nx = p.x - rect.left;
         const ny = p.y - rect.top;
-        if (nx < 0 || nx >= info.rect.w || ny < 0 || ny >= info.rect.h) continue;
+        if (!server.server.windows.hitTest(info.handle, { x: nx, y: ny })) continue;
         handled.add(info.clientId);
 
         server.server.notify("input.scroll", info.handle, {

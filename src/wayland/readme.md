@@ -57,7 +57,8 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
 
 - **事件**：`server.on("window.created" | "window.changed" | "window.closed" | "window.startMove" |
   "cursor.changed" | "clipboard.copy" | "clipboard.pasteRequested" | "client.opened" | "client.closed", …)`
-- **查询**：`server.windows.list() / get() / preview()`、`server.cursor.get(clientId)`、`await server.request(…)`
+- **查询**：`server.windows.list() / get() / preview() / hitTest()`、`server.cursor.get(clientId)`、`await server.request(…)`
+  （`hitTest(handle, p)` 走 xdg 域的完整几何，含 popup/subsurface/input region，供桌面决定指针事件发给哪个窗口）
 - **命令**：`server.notify("window.focus" | … | "input.pointer" | …, handle, …)`
   → `host/server.ts` 按 handle 反查 `(client, winId)` → 协议模块的 `actions` 表，组包在协议文件里。
   `input.pointer|scroll|key|text` 末尾可带 `seat`（缺省 `"seat0"`，选择器语义、不广播）：
@@ -199,8 +200,8 @@ export const exampleModule = defineModule({
   （`ctx.domain.xdgSurface.hitTest`，由 core 的 `input.pointer` 调用），焦点转移与
   enter/leave 的协议动作留在 core。
 - **协议间双向通信都走 `ctx`，协议文件之间零 import**：ext 调 `ctx.core`、core 调
-  `ctx.domain.<ext>` 的**查询方法**都是普通同步调用（现役仅一条：core `input.pointer` →
-  `ctx.domain.xdgSurface.hitTest`）。`hooks` 是 core → 扩展的**通知/扇出**通道：扩展注册回调，
+  `ctx.domain.<ext>` 的**查询方法**都是普通同步调用（core `input.pointer` → `ctx.domain.xdgSurface.hitTest`，
+  host 的 `windows.hitTest` 也走同一个查询）。`hooks` 是 core → 扩展的**通知/扇出**通道：扩展注册回调，
   由 `host/client.ts` 聚合、`ctx.notify.*` 触发。`onCommit`（每次 commit，含无 buffer 的初始 commit）与 `onFrame`（已合成、渲染之前）
   分阶段，**不能合并**；`onTextInput` 是 `input.text` 的仲裁通道（core 不认识 `zwp_*` 事件）。
 - **语义事实进域状态，谁拥有谁持有（单写入点）**：窗口记录与它的 `window.*` fan-in 在

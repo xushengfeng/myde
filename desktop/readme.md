@@ -430,7 +430,8 @@ interface WindowInfo {
 
 `rect` 的 `w`/`h` 是客户端 `set_window_geometry` 声明的尺寸；`x`/`y` 是 surface 局部的几何偏移，
 **不是屏幕位置**（摆放由桌面负责，渲染时几何原点即窗口元素左上角）。
-命中检测用 `0 ≤ p.x < rect.w && 0 ≤ p.y < rect.h`（窗口元素的局部坐标）。
+命中检测用 `server.windows.hitTest(handle, p)`（窗口元素的局部坐标）：它包含 popup 树、subsurface
+与 input region，popup 超出顶层窗口范围时也能命中；只比较 `rect` 会漏掉超出的 popup。
 
 ### 事件
 
@@ -475,6 +476,7 @@ server.on("window.changed", (info) => {
 server.windows.list(); // WindowInfo[]
 server.windows.get(handle); // WindowInfo | undefined
 server.windows.preview(handle); // OffscreenCanvas | undefined（缩略图）
+server.windows.hitTest(handle, { x, y }); // boolean：含 popup/subsurface/input region 的完整几何命中
 server.cursor.get(clientId); // CursorState
 await server.request("window.get", handle); // WindowInfo，未知 handle 会 reject
 await server.request("window.getBounds", handle); // Rect
@@ -562,23 +564,23 @@ function windowAtPoint(p) {
         const rect = el.getBoundingClientRect();
         const nx = p.x - rect.left,
             ny = p.y - rect.top;
-        // 实际上，对于堆叠桌面，还要看遮挡关系
-        if (nx >= 0 && nx < info.rect.w && ny >= 0 && ny < info.rect.h) return info;
+        // 完整几何命中（主 surface + popup + subsurface + input region），
+        // popup 超出窗口范围时也能命中；堆叠桌面还要看遮挡关系
+        if (server.windows.hitTest(info.handle, { x: nx, y: ny })) return { info, x: nx, y: ny };
     }
     return undefined;
 }
 
 function sendPointerEvent(type, p) {
-    const info = windowAtPoint(p);
-    if (!info) return;
-    const rect = render.getXdgSurfaceEle(info.renderId).getBoundingClientRect();
-    server.notify("input.pointer", info.handle, {
+    const at = windowAtPoint(p);
+    if (!at) return;
+    server.notify("input.pointer", at.info.handle, {
         type,
-        x: p.x - rect.left,
-        y: p.y - rect.top,
+        x: at.x,
+        y: at.y,
         button: p.button,
     });
-    if (type === "down") server.notify("window.focus", info.handle);
+    if (type === "down") server.notify("window.focus", at.info.handle);
 }
 
 document.addEventListener("pointermove", (e) => sendPointerEvent("move", e));

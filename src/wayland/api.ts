@@ -55,7 +55,9 @@ export interface WindowInfo {
      * - `x`/`y`：客户端声明的几何偏移（surface 局部坐标），**不是屏幕位置**——
      *   摆放由桌面负责，桌面渲染时几何原点即窗口元素左上角（renderTools 已按 offset 平移内容）。
      *
-     * 命中检测请用 `0 ≤ p.x < rect.w && 0 ≤ p.y < rect.h`（窗口元素的局部坐标）。
+     * 命中检测用 `server.windows.hitTest(handle, p)`（窗口元素的局部坐标）：
+     * 它包含 popup 树、subsurface 与 input region，popup 超出顶层窗口范围时也能命中；
+     * 只比较这个 `rect` 会漏掉超出窗口的 popup。
      */
     rect: Rect;
     states: WindowStates;
