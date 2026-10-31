@@ -2,6 +2,7 @@ import { button, type ElType, image, pack, spacer, trackPoint, txt, view } from 
 import { AnimationGear, timingFunction } from "myde-ui";
 import type { ImComposeState } from "../../../src/sys_api/input_method";
 import type { MenuItem } from "../../../src/sys_api/menu";
+import { throttle } from "../../../src/utils/throttle";
 import { getIconXEl } from "./icon";
 import type { BindingSource } from "./registry";
 import { carousel, dynamicScrollList } from "./scroll-list";
@@ -609,11 +610,18 @@ export function nNumber(n: string, op?: { fontSize?: number; lineHeight?: number
     return t;
 }
 
-export function rRange(op?: { dir?: "right" | "left" | "up" | "down"; mel?: HTMLElement }) {
+export function rRange(op?: {
+    dir?: "right" | "left" | "up" | "down";
+    mel?: HTMLElement;
+    /** 拖动结束（用于补发节流后的最后一次值） */
+    onEnd?: () => void;
+}) {
     const pel = view().style({ width: "200px", height: "16px" });
     const t = (op?.mel ? pack(op.mel) : view().style({ background: "#000" })).addInto(pel);
 
     let v = 0; // 0-1
+    // 拖动中忽略外部回传值，避免节流后的旧值把滑块拉回去
+    let dragging = false;
 
     let onChange: ((v: number) => void) | null = null;
 
@@ -654,6 +662,7 @@ export function rRange(op?: { dir?: "right" | "left" | "up" | "down"; mel?: HTML
 
     trackPoint(pel, {
         start: () => {
+            dragging = true;
             return { x: 0, y: 0, data: v };
         },
         ing: ({ x, y }, _, { startData }) => {
@@ -677,13 +686,19 @@ export function rRange(op?: { dir?: "right" | "left" | "up" | "down"; mel?: HTML
             set(vv); // todo 考虑移除，或者用动画区分手势预期位置和实际反馈sv
             onChange?.(limitV(vv));
         },
+        end: () => {
+            dragging = false;
+            op?.onEnd?.();
+        },
     });
 
     set(0);
 
     return {
         el: pel,
-        sv: (v: number) => set(v),
+        sv: (v: number) => {
+            if (!dragging) set(v);
+        },
         gv: () => v,
         onChange(f: (v: number) => void) {
             onChange = f;
@@ -741,8 +756,18 @@ export function vVolume(op?: {
         bInput.sv(!el.gv);
     });
 
-    const rOutput = rRange({ mel: view().style({ background: "white", borderRadius: px(sSize2.radius1) }).el });
-    const rInput = rRange({ mel: view().style({ background: "white", borderRadius: px(sSize2.radius1) }).el });
+    // 拖动滑块产生的高频输入在桌面层节流，系统 API 不做频率限制
+    const setOutputVolume = throttle((v: number) => void op?.outputV.set?.(v), 50);
+    const setInputVolume = throttle((v: number) => void op?.inputV.set?.(v), 50);
+
+    const rOutput = rRange({
+        mel: view().style({ background: "white", borderRadius: px(sSize2.radius1) }).el,
+        onEnd: () => setOutputVolume.flush(),
+    });
+    const rInput = rRange({
+        mel: view().style({ background: "white", borderRadius: px(sSize2.radius1) }).el,
+        onEnd: () => setInputVolume.flush(),
+    });
 
     rOutput.el.style({
         height: px(sSize(d)),
@@ -781,8 +806,8 @@ export function vVolume(op?: {
     op?.inputV.getAndSubscribe((v) => {
         rInput.sv(v);
     });
-    rOutput.onChange((v) => op?.outputV.set?.(v));
-    rInput.onChange((v) => op?.inputV.set?.(v));
+    rOutput.onChange(setOutputVolume);
+    rInput.onChange(setInputVolume);
 
     return {
         el: p.el,

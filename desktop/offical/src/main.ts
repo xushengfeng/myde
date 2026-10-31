@@ -2545,7 +2545,7 @@ tools.registerTool(
 
         const m = vVolume({
             outputM: rawRegistry.get("volume.output.default.muted"),
-            inputM: rawRegistry.get("volume.output.default.muted"),
+            inputM: rawRegistry.get("volume.input.default.muted"),
             outputV: rawRegistry.get("volume.output.default.volume"),
             inputV: rawRegistry.get("volume.input.default.volume"),
         });

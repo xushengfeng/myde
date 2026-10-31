@@ -20,6 +20,7 @@ import type { notification } from "./sys_api/notification";
 import type { power } from "./sys_api/power";
 import { server } from "./sys_api/run";
 import type { volumeControl } from "./sys_api/volume";
+import { throttle } from "./utils/throttle";
 import { renderToolsHtmlEl } from "./wayland/render_tools_el";
 
 export const _myde = {
@@ -59,6 +60,7 @@ export const _myde = {
     },
     MUtils: {
         renderToolsHtmlEl,
+        throttle,
     },
     MSetting: undefined as unknown as setting<nowConfig>,
     MConnect: undefined as unknown as (id: string) => Connect,

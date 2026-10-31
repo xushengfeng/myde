@@ -119,6 +119,16 @@ mpris，获取正在播放的媒体相关信息，并控制播放暂停等
 
 主要查看无线网络连接名称，包括设备连接和断开，还没有开发新连接
 
+### volume
+
+音频设备与应用音量控制。PipeWire/WirePlumber 没有音频控制的 D-Bus 接口，这里用 `pactl subscribe` 订阅事件，收到事件后再用 `pactl --format=json` 刷新，不做轮询
+
+应用（stream）只包含播放/录音流，monitor source 不算输入设备。`id` 用于回传控制：sink 与输出流直接用 pactl 索引，source 与输入流用 `-(index + 1)`，因为 pactl 的这两类索引是独立命名空间、可能重号。`getDevices()` 只有 sink 和 source，不包含硬件 card
+
+音量与静音变化会通过 `deviceVolumeChange` / `deviceMuteChange` / `streamVolumeChange` / `streamMuteChange` 事件通知，外部（如键盘音量键）修改也能收到
+
+音量条拖动这类高频输入在桌面层用 `MUtils.throttle` 限制写入频率（见“MUtils”），API 本身每次都立即生效
+
 ### input
 
 原生输入设备读取（evdev），支持键盘、鼠标、触控板、数位板、触屏、游戏手柄。由 `myde-input` 模块提供（Rust 子进程读取，不占用渲染进程线程）。
@@ -340,6 +350,22 @@ render.on({
 
 // 获取窗口元素
 const el = render.getXdgSurfaceEle(renderId);
+```
+
+### throttle
+
+高频输入（拖动滑块、滚轮等）的节流工具，默认第一次立即执行、结束时补发最后一次。节流放在桌面层做，系统 API 不做频率限制。
+
+```typescript
+const setVolume = MUtils.throttle((v: number) => {
+    volume.setDeviceVolume(id, v);
+}, 50);
+
+setVolume(0.5); // 立即执行
+setVolume(0.6); // 100ms 内只保留最后一次
+
+setVolume.flush(); // 立即补发挂起的最后一次
+setVolume.cancel(); // 丢弃挂起的调用
 ```
 
 ## MInputMap

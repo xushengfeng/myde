@@ -1,9 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { volumeControl } from "../volume";
 
 describe("volumeControl", () => {
+    let volume: volumeControl | undefined;
+
+    afterEach(() => {
+        volume?.destroy();
+        volume = undefined;
+    });
+
     it("init and get devices", async () => {
-        const volume = new volumeControl();
+        volume = new volumeControl();
         await volume.init();
 
         const devices = volume.getDevices();
@@ -20,7 +27,7 @@ describe("volumeControl", () => {
     });
 
     it("get streams", async () => {
-        const volume = new volumeControl();
+        volume = new volumeControl();
         await volume.init();
 
         const streams = volume.getStreams();
@@ -31,7 +38,7 @@ describe("volumeControl", () => {
     });
 
     it("get device volume", async () => {
-        const volume = new volumeControl();
+        volume = new volumeControl();
         await volume.init();
 
         const sinks = volume.getSinks();
@@ -39,16 +46,16 @@ describe("volumeControl", () => {
             const sink = sinks[0];
             console.log(`Sink ${sink.id} (${sink.name}):`);
 
-            const vol = volume.getDeviceVolume(sink.id);
+            const vol = await volume.getDeviceVolume(sink.id);
             console.log(`  Volume: ${vol}`);
 
-            const muted = volume.getDeviceMute(sink.id);
+            const muted = await volume.getDeviceMute(sink.id);
             console.log(`  Muted: ${muted}`);
         }
     });
 
     it("get stream volume", async () => {
-        const volume = new volumeControl();
+        volume = new volumeControl();
         await volume.init();
 
         const streams = volume.getStreams();
@@ -56,16 +63,16 @@ describe("volumeControl", () => {
             const stream = streams[0];
             console.log(`Stream ${stream.id} (${stream.applicationName}):`);
 
-            const vol = volume.getStreamVolume(stream.id);
+            const vol = await volume.getStreamVolume(stream.id);
             console.log(`  Volume: ${vol}`);
 
-            const muted = volume.getStreamMute(stream.id);
+            const muted = await volume.getStreamMute(stream.id);
             console.log(`  Muted: ${muted}`);
         }
     });
 
     it("events", async () => {
-        const volume = new volumeControl();
+        volume = new volumeControl();
 
         const events: string[] = [];
 
@@ -99,7 +106,7 @@ describe("volumeControl", () => {
     });
 
     it("inspect stream info", async () => {
-        const volume = new volumeControl();
+        volume = new volumeControl();
         await volume.init();
 
         const streams = volume.getStreams();
