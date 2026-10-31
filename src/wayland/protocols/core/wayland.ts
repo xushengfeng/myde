@@ -80,6 +80,22 @@ declare module "../../module" {
         textInput: { owner: TextInputOwner | null };
         /** 输入设备状态（`SeatStore` 在本文件旁边的 `seat_store.ts`）：只有 core 读写，host 不碰 */
         seat: SeatApi;
+        /**
+         * 该连接绑定的 wl_output 与已创建的 wl_surface。
+         * 两者到达顺序不确定：output 先绑就把已有 surface 补进 output，surface 先建就等
+         * output 绑定时再 enter。客户端靠 enter 把窗口和 output 的刷新率关联起来。
+         */
+        output: {
+            outputs: Set<WaylandObjectId2<"wl_output">>;
+            surfaces: Set<SurfaceId>;
+        };
+    }
+}
+
+/** 给 surface 补发所有已绑定 output 的 `wl_surface.enter`（只在 surface/output 新建时调用） */
+function enterBoundOutputs(ctx: ModuleCtx, surface: SurfaceId) {
+    for (const output of ctx.domain.output.outputs) {
+        ctx.send(surface, "wl_surface.enter", { output });
     }
 }
 
@@ -595,6 +611,7 @@ export const waylandCoreModule = defineModule({
         textInput: () => ({ owner: null }),
         /** 输入设备记录（原 `state/seat_store.ts`，host 已不持有）：只有 core 读写 */
         seat: () => new SeatStore(),
+        output: () => ({ outputs: new Set(), surfaces: new Set() }),
     },
     globals: [
         {
@@ -626,8 +643,8 @@ export const waylandCoreModule = defineModule({
                 ctx.send(id, "wl_output.mode", {
                     width: 1920,
                     height: 1080,
-                    refresh: 60000,
-                    flags: getEnumValue("wl_output.mode", "current"),
+                    refresh: 120000,
+                    flags: getEnumValue("wl_output.mode", ["current", "preferred"]),
                 });
                 ctx.send(id, "wl_output.geometry", {
                     x: 0,
@@ -639,7 +656,14 @@ export const waylandCoreModule = defineModule({
                     subpixel: getEnumValue("wl_output.subpixel", "unknown"),
                     transform: getEnumValue("wl_output.transform", "normal"),
                 });
+                ctx.send(id, "wl_output.scale", { factor: 1 });
                 ctx.send(id, "wl_output.done", {});
+                // 记录绑定，并把已存在的 surface 关联到该 output（客户端可能在 output 之后才建窗口）
+                const outputId = id as WaylandObjectId2<"wl_output">;
+                ctx.domain.output.outputs.add(outputId);
+                for (const surface of ctx.domain.output.surfaces) {
+                    ctx.send(surface, "wl_surface.enter", { output: outputId });
+                }
             },
         },
     ],
@@ -682,6 +706,8 @@ export const waylandCoreModule = defineModule({
             const surface = ctx.objects.get(surfaceId);
             surface.data = { canvas: new OffscreenCanvas(1, 1), current: {}, pending: {} };
             ctx.core.surface.addWlSurface(surfaceId);
+            ctx.domain.output.surfaces.add(surfaceId);
+            enterBoundOutputs(ctx, surfaceId);
         },
         "wl_compositor.create_region"(msg, ctx) {
             ctx.objects.setData(msg.args.id, { rects: [] });
@@ -1138,6 +1164,7 @@ export const waylandCoreModule = defineModule({
         },
         "wl_surface.destroy": (x, ctx) => {
             const surfaceId = x.id;
+            ctx.domain.output.surfaces.delete(surfaceId);
             // 光标surface销毁后隐藏光标
             ctx.cursor.hide(surfaceId);
             ctx.notify.destroy(surfaceId);
@@ -1153,6 +1180,9 @@ export const waylandCoreModule = defineModule({
             }
             ctx.core.surface.destroyWlSurface(surfaceId);
             // todo 相关的如subsurface、xdgsurface等
+        },
+        "wl_output.release": (x, ctx) => {
+            ctx.domain.output.outputs.delete(x.id as WaylandObjectId2<"wl_output">);
         },
         "wl_surface.set_input_region": (x, ctx) => {
             const surface = ctx.objects.get(x.id);
