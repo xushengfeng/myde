@@ -89,6 +89,11 @@ declare module "../../module" {
             outputs: Set<WaylandObjectId2<"wl_output">>;
             surfaces: Set<SurfaceId>;
         };
+        /** 帧回调按桌面 vsync 排队：每个 surface 每次 rAF 只放一个 done，避免客户端跑超刷新率 */
+        commitPacing: {
+            pending: Map<SurfaceId, WaylandObjectId2<"wl_callback">[]>;
+            raf: boolean;
+        };
     }
 }
 
@@ -97,6 +102,43 @@ function enterBoundOutputs(ctx: ModuleCtx, surface: SurfaceId) {
     for (const output of ctx.domain.output.outputs) {
         ctx.send(surface, "wl_surface.enter", { output });
     }
+}
+
+/**
+ * 帧回调按桌面 rAF 排队：同一 surface 每次 rAF 只发一个 done。
+ *
+ * 立即回 done 会让客户端一路跑超刷新率（实测能到 200+ commit/s）；等一个 rAF
+ * 再回则是把每个 surface 的更新节拍钉在桌面刷新率上，Chrome 会按 120Hz 稳定出帧。
+ */
+function scheduleFrameDone(ctx: ModuleCtx, surfaceId: SurfaceId, callback: WaylandObjectId2<"wl_callback">) {
+    const pacing = ctx.domain.commitPacing;
+    let queue = pacing.pending.get(surfaceId);
+    if (!queue) {
+        queue = [];
+        pacing.pending.set(surfaceId, queue);
+    }
+    queue.push(callback);
+    if (pacing.raf) return;
+
+    const drain = () => {
+        pacing.raf = false;
+        let more = false;
+        for (const [sid, q] of pacing.pending) {
+            const cb = q.shift();
+            if (cb !== undefined) {
+                ctx.sendNow(cb, "wl_callback.done", { callback_data: Date.now() });
+                ctx.sendNow(ctx.client.displayId, "wl_display.delete_id", { id: cb });
+            }
+            if (q.length === 0) pacing.pending.delete(sid);
+            else more = true;
+        }
+        if (more) {
+            pacing.raf = true;
+            requestAnimationFrame(drain);
+        }
+    };
+    pacing.raf = true;
+    requestAnimationFrame(drain);
 }
 
 /**
@@ -612,6 +654,7 @@ export const waylandCoreModule = defineModule({
         /** 输入设备记录（原 `state/seat_store.ts`，host 已不持有）：只有 core 读写 */
         seat: () => new SeatStore(),
         output: () => ({ outputs: new Set(), surfaces: new Set() }),
+        commitPacing: () => ({ pending: new Map(), raf: false }),
     },
     globals: [
         {
@@ -1140,27 +1183,19 @@ export const waylandCoreModule = defineModule({
                 if (image instanceof VideoFrame) {
                     image.close();
                 }
-                // 像素已合成、渲染之前交给扩展后处理（viewporter 的裁剪缩放）
+                // 像素已经复制进合成器自己的画布，源 buffer 可以立刻还给客户端。
+                // frame callback 走 rAF 排队，把每个 surface 的提交节拍钉在桌面刷新率上。
+                if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
+                const callback = data.callback;
+                if (callback) scheduleFrameDone(ctx, surfaceId, callback);
+
+                // 渲染之前交给扩展后处理（viewporter 的裁剪缩放）
                 const fcanvas = ctx.notify.frame(surfaceId, canvas, data);
                 ctx.core.surface.renderWlSurface(surfaceId, fcanvas);
 
                 // 只有当前光标surface才推送光标，隐藏后commit不应重新显示
                 ctx.cursor.updateFrame(surfaceId, fcanvas);
             }
-
-            requestAnimationFrame(() => {
-                const bufferId = data.buffer?.id;
-                if (bufferId) {
-                    ctx.sendNow(bufferId, "wl_buffer.release", {});
-                }
-                const x = data.callback;
-                if (x) {
-                    ctx.sendNow(x, "wl_callback.done", { callback_data: Date.now() });
-                    ctx.sendNow(ctx.client.displayId, "wl_display.delete_id", {
-                        id: x,
-                    });
-                }
-            });
         },
         "wl_surface.destroy": (x, ctx) => {
             const surfaceId = x.id;
@@ -1186,7 +1221,6 @@ export const waylandCoreModule = defineModule({
         },
         "wl_surface.set_input_region": (x, ctx) => {
             const surface = ctx.objects.get(x.id);
-            console.error("re", x.args);
             const region = ctx.objects.getOption(waylandObjectId(x.args.region, "wl_region"));
             surface.data.pending.inputRegion = region?.data.rects;
         },

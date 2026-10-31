@@ -53,13 +53,13 @@ const supportedProtocols: Array<{
             { name: "wp_viewport", version: 1 },
         ],
     },
-    // {
-    //     name: "presentation-time",
-    //     interfaces: [
-    //         { name: "wp_presentation", version: 2 },
-    //         { name: "wp_presentation_feedback", version: 2 },
-    //     ],
-    // },
+    {
+        name: "presentation-time",
+        interfaces: [
+            { name: "wp_presentation", version: 2 },
+            { name: "wp_presentation_feedback", version: 2 },
+        ],
+    },
     {
         name: "linux-dmabuf-v1",
         interfaces: [

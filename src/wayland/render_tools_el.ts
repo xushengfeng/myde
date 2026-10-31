@@ -24,8 +24,10 @@ export class renderToolsHtmlEl implements renderTools {
     renderCanvas(canvas: OffscreenCanvas, id: string) {
         const el = this.canvasMap.get(id)?.canvas.el;
         if (el) {
-            el.width = canvas.width;
-            el.height = canvas.height;
+            // 给 width/height 赋值会重置整块位图（即使数值没变），每帧都写等于每帧重新分配
+            // 后备存储；只在尺寸变化时更新。
+            if (el.width !== canvas.width) el.width = canvas.width;
+            if (el.height !== canvas.height) el.height = canvas.height;
             const ctx = el.getContext("2d");
             if (ctx) {
                 // 每帧是完整替换，不是叠加：同尺寸时设置 width/height 不会清空旧像素，

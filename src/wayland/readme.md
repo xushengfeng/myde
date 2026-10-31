@@ -35,6 +35,10 @@
     - zwp_linux_buffer_params_v1 部分
     - zwp_linux_dmabuf_feedback_v1
 
+- presentation-time
+    - wp_presentation
+    - wp_presentation_feedback（presented 的 refresh 用固定 120Hz，客户端据此确定刷新率）
+
 - viewporter
     - wp_viewporter
     - wp_viewport

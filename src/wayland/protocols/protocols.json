@@ -2695,6 +2695,133 @@
       ]
     }
   ],
+  "presentation-time": [
+    {
+      "name": "wp_presentation",
+      "version": 2,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "feedback",
+          "args": [
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface",
+              "summary": "target surface"
+            },
+            {
+              "name": "callback",
+              "type": "new_id",
+              "interface": "wp_presentation_feedback",
+              "summary": "new feedback object"
+            }
+          ]
+        }
+      ],
+      "event": [
+        {
+          "name": "clock_id",
+          "args": [
+            {
+              "name": "clk_id",
+              "type": "uint",
+              "summary": "platform clock identifier"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "invalid_timestamp": 0,
+            "invalid_flag": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "wp_presentation_feedback",
+      "version": 2,
+      "request": [],
+      "event": [
+        {
+          "name": "sync_output",
+          "args": [
+            {
+              "name": "output",
+              "type": "object",
+              "interface": "wl_output",
+              "summary": "presentation output"
+            }
+          ]
+        },
+        {
+          "name": "presented",
+          "args": [
+            {
+              "name": "tv_sec_hi",
+              "type": "uint",
+              "summary": "high 32 bits of the seconds part of the presentation timestamp"
+            },
+            {
+              "name": "tv_sec_lo",
+              "type": "uint",
+              "summary": "low 32 bits of the seconds part of the presentation timestamp"
+            },
+            {
+              "name": "tv_nsec",
+              "type": "uint",
+              "summary": "nanoseconds part of the presentation timestamp"
+            },
+            {
+              "name": "refresh",
+              "type": "uint",
+              "summary": "nanoseconds till next refresh"
+            },
+            {
+              "name": "seq_hi",
+              "type": "uint",
+              "summary": "high 32 bits of refresh counter"
+            },
+            {
+              "name": "seq_lo",
+              "type": "uint",
+              "summary": "low 32 bits of refresh counter"
+            },
+            {
+              "name": "flags",
+              "type": "uint",
+              "summary": "combination of 'kind' values"
+            }
+          ],
+          "isDestructor": true
+        },
+        {
+          "name": "discarded",
+          "args": [],
+          "isDestructor": true
+        }
+      ],
+      "enum": [
+        {
+          "name": "kind",
+          "enum": {
+            "vsync": 1,
+            "hw_clock": 2,
+            "hw_completion": 4,
+            "zero_copy": 8
+          },
+          "bitfield": true
+        }
+      ]
+    }
+  ],
   "linux-dmabuf-v1": [
     {
       "name": "zwp_linux_dmabuf_v1",

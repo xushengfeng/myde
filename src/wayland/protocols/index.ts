@@ -2,6 +2,7 @@ import type { ProtocolModule } from "../module";
 import { waylandCoreModule } from "./core/wayland";
 import { cursorShapeModule } from "./ext/cursor_shape";
 import { dmabufModule } from "./ext/dmabuf";
+import { presentationModule } from "./ext/presentation";
 import { textInputV1Module } from "./ext/text_input_v1";
 import { textInputV3Module } from "./ext/text_input_v3";
 import { viewporterModule } from "./ext/viewporter";
@@ -18,6 +19,7 @@ export const protocolModules: readonly ProtocolModule[] = [
     viewporterModule,
     cursorShapeModule,
     dmabufModule,
+    presentationModule,
     xdgShellModule,
     textInputV1Module,
     textInputV3Module,

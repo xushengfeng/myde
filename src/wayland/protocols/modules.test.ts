@@ -32,7 +32,7 @@ describe("协议模块注册", () => {
             .filter((m) => m.hooks.onFrame || m.hooks.onCommit || m.hooks.onDestroy)
             .map((m) => m.name)
             .sort();
-        expect(withHooks).toEqual(["text-input-unstable-v3", "viewporter", "xdg-shell"]);
+        expect(withHooks).toEqual(["presentation-time", "text-input-unstable-v3", "viewporter", "xdg-shell"]);
     });
 
     it("registry 一次广播两把 wl_seat，onBind 按广播序命名 seat0/seat1", () => {
