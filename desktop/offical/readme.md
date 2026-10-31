@@ -1,5 +1,14 @@
 # 默认桌面
 
+## 触控
+
+触屏按接触点映射成独立指针：一根手指对应一个 `pointerId`，各自产生 down/move/up，第一根手指 `isPrimary` 为 true。点按由输入聚合层合成 `click`，只在单指接触（没有出现两指以上）且主指针抬起时合成，多指手势留给交互层。
+
+- DOM 模式（window）：浏览器为触摸生成的 pointer 事件和其他指针一样进入聚合层，`pointerId`/`isPrimary` 原样保留；`html`/`body` 设置 `touch-action: none`，关闭浏览器自己的平移、缩放与双击放大手势
+- evdev 模式（desktop）：MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪每根手指，绝对坐标按屏幕量程映射；没有 tracking id 的旧设备退回单指 `BTN_TOUCH` 路径
+- 桌面光标和窗口转发只跟随主指针，其余指针事件照常派发给 UI，供交互层实现长按、双指缩放等手势
+- 桌面与 UI 只监听 pointer 事件，不依赖 mouse 事件
+
 ## 退出
 
 `Super+Shift+E` 或 `Ctrl+Alt+Delete` 关闭桌面窗口，结束当前桌面进程。

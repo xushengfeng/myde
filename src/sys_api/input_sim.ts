@@ -27,6 +27,8 @@ export interface UniPointerEvent {
     button?: number;
     pointerType?: "mouse" | "touch" | "pen";
     pointerId?: number;
+    /** 同一指针类型中的主指针（缺省 true；多指触摸只有第一根为 true） */
+    isPrimary?: boolean;
     /** wheel 滚动量 */
     deltaX?: number;
     deltaY?: number;
@@ -64,6 +66,7 @@ export type SimEventInit =
           buttons: number;
           pointerType: string;
           pointerId: number;
+          isPrimary?: boolean;
           relatedTarget?: unknown;
       }
     | {
@@ -105,11 +108,19 @@ export interface InputSimHost {
 // DOM buttons 位掩码（1=左 2=右 4=中）
 const BUTTONS_BIT = [1, 4, 2];
 
+/** 单个指针的按键状态：多指触摸时各指针互不影响 */
+interface PointerState {
+    buttons: number;
+    downButtons: Set<number>;
+}
+
 export class inputSim {
     private host: InputSimHost | null;
-    // 按钮位掩码与修饰键状态由 api 自己维护（多来源事件统一推导）
-    private buttons = 0;
-    private downButtons = new Set<number>();
+    // 指针按键状态按 pointerType + pointerId 分开维护，多指同时按下时位掩码不会互相清除
+    private pointers = new Map<string, PointerState>();
+    // 当前按下的触摸指针，以及这一轮接触是否出现过多指（多指手势不合成 click）
+    private activeTouches = new Set<number>();
+    private multiTouch = false;
     private shift = false;
     private capsLock = false;
     private ctrl = false;
@@ -128,6 +139,16 @@ export class inputSim {
         return this.host;
     }
 
+    private pointerState(pointerType: string, pointerId: number): PointerState {
+        const key = `${pointerType}:${pointerId}`;
+        let state = this.pointers.get(key);
+        if (!state) {
+            state = { buttons: 0, downButtons: new Set() };
+            this.pointers.set(key, state);
+        }
+        return state;
+    }
+
     /** 传入统一输入事件，当前行为为模拟对应 DOM 事件 */
     emit(e: UniInputEvent): void {
         if (e.kind === "pointer") this.emitPointer(e, e.source);
@@ -139,6 +160,7 @@ export class inputSim {
         const target = e.target ?? host.targetAt(e.x, e.y);
         const pointerType = e.pointerType ?? "mouse";
         const pointerId = e.pointerId ?? 1;
+        const isPrimary = e.isPrimary ?? true;
 
         if (e.type === "wheel") {
             host.dispatch(target, {
@@ -153,8 +175,9 @@ export class inputSim {
             return;
         }
 
+        const state = this.pointerState(pointerType, pointerId);
         // DOM 来源已经有浏览器生成的 hover 事件，只有 evdev 等合成输入需要补齐
-        if (source !== "dom") this.updateHover(host, pointerId, target, e.x, e.y, pointerType);
+        if (source !== "dom") this.updateHover(host, pointerId, target, e.x, e.y, pointerType, state.buttons);
 
         const button = e.button ?? 0;
         const bit = BUTTONS_BIT[button] ?? 0;
@@ -165,41 +188,52 @@ export class inputSim {
                 x: e.x,
                 y: e.y,
                 button: -1,
-                buttons: this.buttons,
+                buttons: state.buttons,
                 pointerType,
                 pointerId,
+                isPrimary,
             });
             return;
         }
         if (e.type === "down") {
-            this.buttons |= bit;
-            this.downButtons.add(button);
+            state.buttons |= bit;
+            state.downButtons.add(button);
+            if (pointerType === "touch") {
+                if (this.activeTouches.size > 0) this.multiTouch = true;
+                this.activeTouches.add(pointerId);
+            }
             host.dispatch(target, {
                 kind: "pointer",
                 type: "down",
                 x: e.x,
                 y: e.y,
                 button,
-                buttons: this.buttons,
+                buttons: state.buttons,
                 pointerType,
                 pointerId,
+                isPrimary,
             });
             return;
         }
-        this.buttons &= ~bit;
-        const pressed = this.downButtons.delete(button);
+        state.buttons &= ~bit;
+        const pressed = state.downButtons.delete(button);
+        if (pointerType === "touch") this.activeTouches.delete(pointerId);
         host.dispatch(target, {
             kind: "pointer",
             type: "up",
             x: e.x,
             y: e.y,
             button,
-            buttons: this.buttons,
+            buttons: state.buttons,
             pointerType,
             pointerId,
+            isPrimary,
         });
+        // 多指手势（长按、双指缩放等）交给交互层，这一轮接触出现过两指以上就不合成 click
+        const touchClick = pointerType !== "touch" || (isPrimary && this.activeTouches.size === 0 && !this.multiTouch);
+        if (pointerType === "touch" && this.activeTouches.size === 0) this.multiTouch = false;
         // 合成的 click 不会触发聚焦，手动补齐，保证锁屏密码框等可输入
-        if (pressed && button === 0) {
+        if (pressed && button === 0 && touchClick) {
             host.focus(target);
             host.dispatch(target, {
                 kind: "mouse",
@@ -207,8 +241,13 @@ export class inputSim {
                 x: e.x,
                 y: e.y,
                 button: 0,
-                buttons: this.buttons,
+                buttons: state.buttons,
             });
+        }
+        if (state.buttons === 0 && state.downButtons.size === 0) {
+            this.pointers.delete(`${pointerType}:${pointerId}`);
+            // 触摸的 pointerId 每次接触都不同，hover 记录要跟着清掉，避免越积越多
+            if (pointerType === "touch") this.hoverTargets.delete(pointerId);
         }
     }
 
@@ -223,6 +262,7 @@ export class inputSim {
         x: number,
         y: number,
         pointerType: string,
+        buttons: number,
     ) {
         const prev = this.hoverTargets.get(pointerId);
         if (prev === target) return;
@@ -245,13 +285,13 @@ export class inputSim {
                     x,
                     y,
                     button: -1,
-                    buttons: this.buttons,
+                    buttons,
                     pointerType,
                     pointerId,
                     relatedTarget,
                 });
             } else {
-                host.dispatch(t, { kind, type, x, y, button: -1, buttons: this.buttons, relatedTarget });
+                host.dispatch(t, { kind, type, x, y, button: -1, buttons, relatedTarget });
             }
         };
 
@@ -347,7 +387,7 @@ function makeDomEvent(e: SimEventInit): Event {
                 buttons: e.buttons,
                 pointerId: e.pointerId,
                 pointerType: e.pointerType,
-                isPrimary: true,
+                isPrimary: e.isPrimary ?? true,
                 relatedTarget: (e.relatedTarget as EventTarget | null | undefined) ?? null,
             });
         case "mouse":

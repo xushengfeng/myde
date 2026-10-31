@@ -220,20 +220,24 @@ inputSim.emit({ kind: "key", type: "up", code: 30, source: "evdev" });
 
 统一输入事件：
 
-- `UniPointerEvent`：`kind: "pointer"`，`type: "move" | "down" | "up" | "wheel"`，`x`/`y`（视口坐标），`button?`（down/up，0左 1中 2右），`pointerType?`（"mouse"/"touch"/"pen"），`pointerId?`，`deltaX?`/`deltaY?`/`deltaMode?`（wheel），`target?`（指定派发目标，缺省按坐标命中测试）
+- `UniPointerEvent`：`kind: "pointer"`，`type: "move" | "down" | "up" | "wheel"`，`x`/`y`（视口坐标），`button?`（down/up，0左 1中 2右），`pointerType?`（"mouse"/"touch"/"pen"），`pointerId?`，`isPrimary?`（同一指针类型中的主指针，缺省 true；多指触摸只有第一根为 true），`deltaX?`/`deltaY?`/`deltaMode?`（wheel），`target?`（指定派发目标，缺省按坐标命中测试）
 - `UniKeyEvent`：`kind: "key"`，`type: "down" | "up"`，`code`（evdev 键码），`webCode?`（DOM `KeyboardEvent.code`，缺省由 evdev 码反查），`key?`（DOM `KeyboardEvent.key`，缺省按美式布局 + 修饰键推导），`repeat?`，`target?`（缺省为当前聚焦元素）
 - `source`："dom"（DOM 原生事件）或 "evdev"（input api），聚合层用它区分/去重来源
 
 行为细节：
 
-- 左键按下后抬起才合成 `click`，并补齐聚焦（最近的 `input, textarea, select, [tabindex]`），按钮位掩码与修饰键（Shift/Ctrl/Alt/Meta、CapsLock）状态由 api 自己维护
+- 左键按下后抬起才合成 `click`，并补齐聚焦（最近的 `input, textarea, select, [tabindex]`）；按钮位掩码按指针分开维护（多指互不影响），修饰键（Shift/Ctrl/Alt/Meta、CapsLock）状态由 api 自己维护
 - `pointerover/out/enter/leave`、`mouseover/out/enter/leave` 在目标变化时由 api 补齐（`source` 为 `"dom"` 时跳过，浏览器已经生成过原生 hover 事件）；`mousedown/up`、`auxclick`、`dblclick`、`contextmenu` 不模拟
+- 多指触摸按 `pointerId` 各自产生独立的 pointer 事件（第一根 `isPrimary`），按键状态也按指针分开维护，一根手指抬起不会清掉另一根的 buttons
+- 触摸的 `click` 只在单指接触（这一轮没有出现两指以上）且主指针抬起时合成，多指手势（长按、双指缩放等）由交互层自己根据 pointer 事件处理
 - 合成事件没有浏览器默认行为：按键派发后未被 `preventDefault` 时补齐文本输入（`input`/`textarea`/contenteditable 的插入、Backspace、Delete）；滚轮派发后未被 `preventDefault` 时滚动最近的可滚动祖先，原生 `overflow: auto/scroll` 容器也能滚动
 - DOM 操作通过宿主接口 `InputSimHost`（`targetAt`/`activeTarget`/`focus`/`dispatch`）访问，默认实现 `domInputSimHost()` 操作真实 DOM，纯 node 环境可 `new inputSim(host)` 注入自定义宿主
 
 聚合层参考实现见 `desktop/offical`：`main.ts` 的"输入聚合层"完成聚合/融合/分发——window capture 捕获真实 DOM 事件（只收 `isTrusted`，合成事件不回流防环）归一化，`useEvdevDevice` 解码 input api 事件（EV_SYN 帧合并、相对位移积分、绝对轴小数映射、滚轮换算、按键分流，判定/换算工具在 `input_evdev.ts`），统一传入本 api；来源只以 `source` 标记保留类型数据，不做去重。
 
 触摸板（`type === "touchpad"`）按相对设备处理：绝对坐标**不直接映射到屏幕**，而是把相邻帧的差值（按 `absInfo` 量程归一化到视口像素）积分成位移；`BTN_TOUCH` 只表示手指接触、不是点击（点击走 `BTN_LEFT`），抬起后重置基准避免跳变。触摸板常带一个同 `phys` 的伴随鼠标节点，如果那个相对通道真的在出事件，则忽略触摸板的绝对位移，避免双倍移动。
+
+触屏（`type === "touchscreen"`）的绝对坐标直接映射到视口，MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪每个接触点：一根手指对应一个 `pointerId`，各自产生独立的 down/move/up，第一根按下的手指 `isPrimary` 为 true。没有 tracking id 的旧设备退回单指 `BTN_TOUCH` 路径。统一输入事件的 `pointerType` 为 `"touch"`，`inputSim` 合成 `PointerEvent` 时保留 `pointerType`/`pointerId`/`isPrimary`，UI 只监听 pointer 事件即可同时响应鼠标、触摸板和触屏，多指手势由交互层处理。
 
 注意被吞掉的原生事件只对**聚合层之后**注册的监听不可见：排在它之前的 window capture 监听仍会先收到原生事件，而原生 `click` 不受 `preventDefault` 影响（它不是兼容鼠标事件），且派发在 inputSim 合成的 `click` 之后——一次物理点击就被处理两遍，出现「合成 click 打开弹窗 → 原生 click 立刻关闭」的点击无反应（evdev 来源没有原生事件，只用 evdev 时看不出）。因此：① 吞事件的注册要早于所有 UI 监听（`desktop/offical` 把整个「输入聚合层」放在工具栏 plant 循环之前）；② 若确要在它之前注册监听，该监听必须忽略 `isTrusted` 事件（`desktop/offical` 的 Tools 关闭弹窗监听保留了这条守卫）。
 

@@ -47,6 +47,12 @@ export function isTouchpad(info: DeviceInfo) {
     return info.type === "touchpad" || info.capabilities.hasTouchpad;
 }
 
+/** 触屏：绝对坐标直接映射到屏幕，按一次接触对应一次指针按下/抬起（数位板按笔处理，不算触屏） */
+export function isTouchscreen(info: DeviceInfo) {
+    if (info.type === "tablet") return false;
+    return info.type === "touchscreen" || info.capabilities.hasTouchscreen;
+}
+
 export function canPoint(info: DeviceInfo) {
     return hasRelativeXY(info) || MInputMap.absPosMapping(info) !== undefined;
 }
