@@ -35,6 +35,7 @@ import {
 } from "./input_evdev";
 import { Registry } from "./registry";
 import { dynamicScrollList } from "./scroll-list";
+import { createSettingsContent, type ImePanelPreeditMode } from "./settings";
 import {
     aLineText,
     gGlassStyle,
@@ -162,6 +163,19 @@ type View = {
     ox: number;
     oy: number;
 };
+
+type InternalWindowEntry = {
+    el: ElType<HTMLDivElement>;
+    view: View;
+    setActive(active: boolean): void;
+};
+
+/** 桌面自己创建的 DOM 窗口（不是 Wayland 客户端），与客户端窗口共用虚拟桌面、聚焦和关闭逻辑 */
+const internalWindows = new Map<string, InternalWindowEntry>();
+
+function isInternalWindow(id: MWinId | undefined): id is string {
+    return id !== undefined && internalWindows.has(id);
+}
 
 type Plant = {
     id: string;
@@ -402,20 +416,32 @@ class ViewData {
         this.checkAndRmView();
     }
     focusWin(winid: MWinId) {
-        if (!server.server.windows.get(winid)) {
+        const internal = internalWindows.has(winid);
+        if (!internal && !server.server.windows.get(winid)) {
             console.warn("cant find window", winid);
             return;
         }
         this.focusHandle = winid;
-        // 目标聚焦、其余失焦，全部经 server 下发
+        for (const [id, win] of internalWindows) {
+            win.setActive(id === winid);
+        }
+        // 目标聚焦、其余失焦，全部经 server 下发；内部窗口没有 Wayland 焦点，只清掉客户端焦点
         for (const info of server.server.windows.list()) {
-            if (info.handle === winid) server.server.notify("window.focus", info.handle);
+            if (!internal && info.handle === winid) server.server.notify("window.focus", info.handle);
             else server.server.notify("window.blur", info.handle);
         }
-        void ime?.focus(winid);
+        if (internal) void ime?.blur();
+        else void ime?.focus(winid);
+    }
+    /** 只有 Wayland 窗口才有输入法上下文，内部窗口的文本输入由 DOM 自己处理 */
+    getWaylandFocus() {
+        return this.focusHandle !== undefined && !isInternalWindow(this.focusHandle) ? this.focusHandle : undefined;
     }
     blurAll() {
         this.focusHandle = undefined;
+        for (const win of internalWindows.values()) {
+            win.setActive(false);
+        }
         for (const info of server.server.windows.list()) {
             server.server.notify("window.blur", info.handle);
         }
@@ -836,6 +862,133 @@ function jump2Win(winid: MWinId) {
     viewData.focusWin(winid);
 }
 
+// ── 桌面自己的 DOM 窗口 ────────────────────────────────────────────────────────────────────────
+// 设置窗口不是 Wayland 客户端，但仍然占用一个虚拟桌面、参与总览、聚焦和关闭，
+// 与客户端窗口走同一套 ViewData / WindowCenterManager 逻辑。
+const SETTINGS_WINDOW_ID = "internal:settings";
+
+function openSettingsWindow() {
+    if (viewAllShowing) {
+        viewAllShowing = false;
+        viewAll(false);
+    }
+    if (internalWindows.has(SETTINGS_WINDOW_ID)) {
+        jump2Win(SETTINGS_WINDOW_ID);
+        return;
+    }
+
+    const v = viewData.newView();
+    viewData.moveWinToView(SETTINGS_WINDOW_ID, v);
+
+    const root = view("y").data({ "internal-window": SETTINGS_WINDOW_ID }).style({
+        position: "absolute",
+        width: "760px",
+        height: "540px",
+        maxWidth: "calc(100vw - 24px)",
+        maxHeight: "calc(100vh - 24px)",
+        borderRadius: "18px",
+        overflow: "hidden",
+        background: "rgba(245, 245, 245, 0.97)",
+        backdropFilter: "blur(18px)",
+        boxShadow: "0 12px 40px #00000033",
+        color: "#111",
+        fontFamily: "sans-serif",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+    });
+
+    const header = view("x")
+        .style({
+            height: "48px",
+            alignItems: "center",
+            gap: "10px",
+            padding: "0 16px",
+            flexShrink: "0",
+            borderBottom: "1px solid #00000012",
+            boxSizing: "border-box",
+        })
+        .add([
+            getIconXEl("settings", { size: 18, width: 20, height: 20 }).el,
+            txt("设置").style({ fontWeight: "600" }),
+        ]);
+
+    const content = createSettingsContent({
+        getIconTheme: () => setting.get("icon.theme") || "breeze",
+        setIconTheme: (theme) => setting.set("icon.theme", theme),
+        getImePanelPreedit: () => (imeSetting.nget("panelPreedit") ?? "auto") as ImePanelPreeditMode,
+        setImePanelPreedit: (mode) => imeSetting.nset("panelPreedit", mode),
+        getCenterWindows: () => desktopSetting.nget("centerWindows") ?? true,
+        setCenterWindows: (enabled) => {
+            desktopSetting.nset("centerWindows", enabled);
+            windowCenterManager.setEnabled(enabled);
+        },
+        inputMethodAvailable: !!MSysApi.inputMethod,
+    });
+
+    const closeBtn = createWindowCloseButton({
+        size: 24,
+        onClick: () => closeSettingsWindow(),
+    }).style({
+        position: "absolute",
+        top: "12px",
+        right: "12px",
+        zIndex: "20",
+    });
+
+    const setActive = (active: boolean) => {
+        root.style({
+            boxShadow: active ? "0 16px 48px #00000044" : "0 12px 40px #0000002a",
+            outline: active ? "1px solid #00aaff88" : "1px solid transparent",
+        });
+    };
+    setActive(false);
+
+    root.add([header, content, closeBtn]);
+    root.on("pointerdown", () => viewData.focusWin(SETTINGS_WINDOW_ID));
+
+    // 标题栏拖动。拖动后暂停自动居中，避免父容器变化时把窗口拽回中间。
+    header.on("pointerdown", (e) => {
+        if ((e.target as HTMLElement).closest("button, input, select, textarea")) return;
+        windowCenterManager.pauseCentering(SETTINGS_WINDOW_ID);
+        const startX = e.clientX;
+        const startY = e.clientY;
+        const rect = root.el.getBoundingClientRect();
+        const parentRect = root.el.parentElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
+        const origLeft = rect.left - parentRect.left;
+        const origTop = rect.top - parentRect.top;
+
+        function onPointerMove(ev: PointerEvent) {
+            root.style({
+                left: `${Math.round(ev.clientX - startX + origLeft)}px`,
+                top: `${Math.round(ev.clientY - startY + origTop)}px`,
+            });
+        }
+        function cleanup() {
+            window.removeEventListener("pointermove", onPointerMove);
+            window.removeEventListener("pointerup", cleanup);
+            window.removeEventListener("pointercancel", cleanup);
+        }
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", cleanup, { once: true });
+        window.addEventListener("pointercancel", cleanup, { once: true });
+    });
+
+    internalWindows.set(SETTINGS_WINDOW_ID, { el: root, view: v, setActive });
+    addWindow(v, root.el, SETTINGS_WINDOW_ID);
+    viewData.focusWin(SETTINGS_WINDOW_ID);
+}
+
+function closeSettingsWindow() {
+    const entry = internalWindows.get(SETTINGS_WINDOW_ID);
+    if (!entry) return;
+    if (viewData.focusHandle === SETTINGS_WINDOW_ID) viewData.blurAll();
+    internalWindows.delete(SETTINGS_WINDOW_ID);
+    viewData.closeWin(SETTINGS_WINDOW_ID);
+    windowCenterManager.removeWindow(SETTINGS_WINDOW_ID);
+    entry.el.remove();
+}
+
 function appLauncher(iconPath: () => Promise<string>, name: string, exec: string) {
     const p = appIconEl(exec);
     loadAppIcon(p, iconPath, name);
@@ -932,11 +1085,21 @@ function loadAppIcon(
         .catch(() => {});
 }
 
+function internalWindowUnderPoint(x: number, y: number) {
+    const target = document.elementFromPoint(x, y) as HTMLElement | null;
+    return target?.closest<HTMLElement>("[data-internal-window]") ?? undefined;
+}
+
 function sendPointerEvent(
     type: "move" | "down" | "up",
     p: PointerEvent,
 ): { handle: WinHandle; clientId: string } | undefined {
     if (viewAllShowing) {
+        pointerTarget = undefined;
+        return undefined;
+    }
+    // 桌面自己的 DOM 窗口盖在客户端窗口上时，指针事件只交给 DOM，不再转发给 Wayland
+    if (internalWindowUnderPoint(p.x, p.y)) {
         pointerTarget = undefined;
         return undefined;
     }
@@ -977,6 +1140,7 @@ function sendPointerEvent(
 
 function sendScrollEvent(p: WheelEvent) {
     if (viewAllShowing) return;
+    if (internalWindowUnderPoint(p.x, p.y)) return;
     const handled = new Set<string>();
     for (const info of server.server.windows.list()) {
         if (handled.has(info.clientId)) continue;
@@ -1011,6 +1175,16 @@ const setting = MSetting.init({
     version: "0.0.1",
     defaultNsSetting: {},
 });
+
+const desktopSetting = MSetting.init({
+    version: "0.0.1",
+    nameSpace: "desktop",
+    defaultNsSetting: {
+        centerWindows: true,
+    },
+});
+
+windowCenterManager.setEnabled(desktopSetting.nget("centerWindows"));
 
 // @ts-expect-error
 window.dy = () => dyj电源键.fire();
@@ -1398,7 +1572,7 @@ ime = new ImeController({
     im: MSysApi.inputMethod,
     overlay: imeOverlay.el,
     isNormal: () => state.getState() === "normal",
-    getFocus: () => viewData.focusHandle,
+    getFocus: () => viewData.getWaylandFocus(),
     sendKey: (handle, code, type) => server.server.notify("input.key", handle, code, type),
     sendText: (handle, text, preedit) => server.server.notify("input.text", handle, text, preedit),
     queryTextInput: (handle) => server.server.request("textInput.get", handle),
@@ -2066,6 +2240,38 @@ function createStartMenu(
         return appEl;
     }
 
+    /** 设置不是真实应用，但在开始菜单里模拟一个应用格子 */
+    function createSettingsTile() {
+        const appEl = view("y").style({
+            width: "80px",
+            height: "80px",
+            alignItems: "center",
+            justifyContent: "flex-start",
+            flexShrink: 0,
+        });
+        const iconView = view().addInto(appEl);
+        const iconEl = appIconEl().style({
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+        });
+        iconEl.add(getIconXEl("settings", { size: 36, width: 36, height: 36 }));
+        iconView.add(iconEl);
+        appEl.add(
+            txt("设置").style({
+                fontSize: "12px",
+                maxWidth: "80%",
+                overflow: "hidden",
+                textAlign: "center",
+            }),
+        );
+        appEl.on("click", () => {
+            showTip({ state: "hide" });
+            openSettingsWindow();
+        });
+        return appEl;
+    }
+
     // 元数据在空闲时预取，但不创建 DOM / 不读图标
     const entriesPromise = MSysApi.getDesktopEntries().catch(() => [] as DesktopApp[]);
     let buildPromise: Promise<void> | null = null;
@@ -2074,6 +2280,7 @@ function createStartMenu(
         buildPromise = (async () => {
             const apps = await entriesPromise;
             loadingEl.remove();
+            menu.add(createSettingsTile());
             if (apps.length === 0) {
                 txt("未找到应用").style({ padding: "8px", opacity: "0.6" }).addInto(menu);
                 return;
@@ -2837,6 +3044,19 @@ windowEl.on("pointerup", (e) => {
     sendPointerEvent("up", e);
 });
 
+// 点击桌面或其他窗口时让内部窗口失焦。只处理 inputSim 合成的 pointerdown：
+// 原生事件在输入聚合层已经被 stopImmediatePropagation 拦截，不会再走到这里。
+window.addEventListener(
+    "pointerdown",
+    (e) => {
+        if (e.isTrusted) return;
+        if (!isInternalWindow(viewData.focusHandle)) return;
+        const target = e.target as HTMLElement | null;
+        if (!target?.closest("[data-internal-window]")) viewData.blurAll();
+    },
+    true,
+);
+
 body.on("keydown", (e) => {
     if (!e.repeat && matchBindings(e, EXIT_BINDINGS)) {
         e.preventDefault();
@@ -2844,6 +3064,8 @@ body.on("keydown", (e) => {
         return;
     }
     if (state.getState() !== "normal") return;
+    // 内部窗口自己处理 DOM 键盘事件（输入框、下拉框等），不转发给 Wayland 客户端
+    if (isInternalWindow(viewData.focusHandle)) return;
     const handle = viewData.focusHandle;
     if (handle === undefined) return;
     if (ime?.handleKeyDown(e)) {
@@ -2856,6 +3078,7 @@ body.on("keydown", (e) => {
 });
 body.on("keyup", (e) => {
     if (state.getState() !== "normal") return;
+    if (isInternalWindow(viewData.focusHandle)) return;
     const handle = viewData.focusHandle;
     if (handle === undefined) return;
     if (ime?.handleKeyUp(e)) {

@@ -2098,6 +2098,42 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             ],
         };
     },
+    settings: (env) => {
+        const { size, center } = buildZb(256);
+        const teeth = [0, 45, 90, 135, 180, 225, 270, 315].map((angle) => ({
+            type: "zline" as const,
+            data: {
+                ps: [
+                    { p: p(center, angle, 76), ro: 10, ri: 10 },
+                    { p: p(center, angle, 112), ro: 10, ri: 10 },
+                ],
+                width: 22,
+                color: env.color,
+            },
+        }));
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "arc",
+                            data: {
+                                center,
+                                r: 68,
+                                width: 24,
+                                fromAngle: 0,
+                                endAngle: 0,
+                                color: env.color,
+                            },
+                        },
+                        ...teeth,
+                    ],
+                },
+            ],
+        };
+    },
     "font.space": () => {
         const { center, size } = buildZb(256);
         return {

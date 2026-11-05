@@ -13,6 +13,20 @@
 
 `Super+Shift+E` 或 `Ctrl+Alt+Delete` 关闭桌面窗口，结束当前桌面进程。
 
+## 设置
+
+顶栏不放设置入口，设置作为模拟应用出现在开始菜单里。设置窗口是桌面自己创建的 DOM 窗口，不是 Wayland 客户端，但和客户端窗口共用同一套窗口逻辑：
+
+- 占用一个虚拟桌面（`ViewData.newView`），打开时居中，参与多窗口总览
+- 点击后聚焦，点击桌面或其他窗口时失焦，键盘事件留在 DOM 内处理
+- 标题栏可拖动，关闭时回收虚拟桌面和居中管理
+- 打开中的设置窗口再次点开始菜单里的设置会跳回它所在的虚拟桌面
+
+设置项：
+- 外观：`icon.theme` 应用图标主题
+- 输入法：候选窗预编辑 `ime.panelPreedit`（`auto` / `always` / `never`）
+- 窗口：新窗口居中，保存到 `desktop.centerWindows` 命名空间
+
 ## 输入法
 
 通过 `MSysApi.inputMethod` 连接 fcitx5，桌面作为输入上下文客户端处理按键，不实现 Wayland 的 input-method 协议。
