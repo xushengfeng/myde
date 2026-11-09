@@ -20,6 +20,7 @@ import { network } from "../../sys_api/network";
 import { notification } from "../../sys_api/notification";
 import { power } from "../../sys_api/power";
 import { volumeControl } from "../../sys_api/volume";
+import { xdgDesktopPortal } from "../../sys_api/xdg_desktop_portal/xdg_desktop_portal";
 
 const {
     default: { loginService },
@@ -73,6 +74,15 @@ async function loadDesktop(p: string) {
     myde.MSysApi.blue = new blue(await newDBusIO(true));
     myde.MSysApi.network = new network(await newDBusIO(true));
     myde.MSysApi.volume = new volumeControl();
+    // xdg-desktop-portal 后端。窗口模式下只是占一个唯一的 impl 名字，
+    // 不会抢占宿主的 org.freedesktop.portal.Desktop。
+    try {
+        const portal = new xdgDesktopPortal(await newDBusIO());
+        await portal.init();
+        myde.MSysApi.portal = portal;
+    } catch (e) {
+        console.warn("[portal] 初始化失败:", e);
+    }
     // 统一输入事件 → 模拟 DOM 事件（无外部依赖，始终可用）
     myde.MSysApi.inputSim = new inputSim();
     // 输入法（fcitx5），不可用时保留空实现不影响桌面加载
@@ -125,11 +135,29 @@ async function newDBusIO(system = false) {
     if (system) {
         socket.connect("/run/dbus/system_bus_socket");
     } else {
-        socket.connect("/run/user/1000/bus");
+        socket.connect(sessionBusPath());
     }
     const io = new dbusIO({ socket });
     await io.connect();
     return io;
+}
+
+/** 会话总线路径：优先 DBUS_SESSION_BUS_ADDRESS，其次 XDG_RUNTIME_DIR/bus。 */
+function sessionBusPath() {
+    const env = getEnv();
+    const address = env.DBUS_SESSION_BUS_ADDRESS;
+    if (address) {
+        const match = /(?:^|;)unix:path=([^;]+)/.exec(address);
+        if (match) {
+            try {
+                return decodeURIComponent(match[1]);
+            } catch {
+                // 地址里的百分号编码损坏时退回默认路径
+            }
+        }
+    }
+    if (env.XDG_RUNTIME_DIR) return `${env.XDG_RUNTIME_DIR}/bus`;
+    return `/run/user/${process.getuid?.() ?? 1000}/bus`;
 }
 
 initDKH({ pureStyle: true });

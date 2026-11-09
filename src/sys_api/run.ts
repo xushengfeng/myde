@@ -19,6 +19,8 @@ export function server(op: { dev?: boolean; render: renderTools }) {
                     HOME: env.HOME,
                     LANG: env.LANG,
                     LANGUAGE: env.LANGUAGE,
+                    DBUS_SESSION_BUS_ADDRESS: env.DBUS_SESSION_BUS_ADDRESS,
+                    XDG_CURRENT_DESKTOP: env.XDG_CURRENT_DESKTOP || "MyDE",
                     ...(op?.dev ? { WAYLAND_DEBUG: "1" } : {}),
                 },
                 server: { socketDir: server.socketDir, socketName: server.socketName },
@@ -42,6 +44,8 @@ export function runApp(
             LANG?: string;
             LANGUAGE?: string;
             WAYLAND_DEBUG?: string;
+            DBUS_SESSION_BUS_ADDRESS?: string;
+            XDG_CURRENT_DESKTOP?: string;
         };
         server: {
             socketDir: string;
@@ -61,6 +65,9 @@ export function runApp(
             LANGUAGE: op.deEnv.LANGUAGE || "en_US:en",
             XDG_SESSION_TYPE: "wayland",
             XDG_RUNTIME_DIR: op.server.socketDir,
+            XDG_CURRENT_DESKTOP: op.deEnv.XDG_CURRENT_DESKTOP || "MyDE",
+            XDG_SESSION_DESKTOP: "MyDE",
+            DBUS_SESSION_BUS_ADDRESS: op.deEnv.DBUS_SESSION_BUS_ADDRESS || `unix:path=${op.server.socketDir}/bus`,
             WAYLAND_DISPLAY: op.server.socketName,
             WAYLAND_DEBUG: op.deEnv.WAYLAND_DEBUG || "",
             ...(Number.isNaN(op.xServerNum) ? {} : { DISPLAY: `:${op.xServerNum}` }),

@@ -97,6 +97,37 @@ mpris，获取正在播放的媒体相关信息，并控制播放暂停等
 
 通知
 
+### portal
+
+xdg-desktop-portal 后端（`org.freedesktop.impl.portal.desktop.myde`）。当前实现 `FileChooser` 的 `OpenFile` / `SaveFile` / `SaveFiles`，由系统的 xdg-desktop-portal 前端转发；桌面只负责弹窗和返回用户选择。
+
+```typescript
+const portal = MSysApi.portal;
+
+portal.on("fileChooser.request", async (req) => {
+    // req.mode: "open" | "save" | "save-many"
+    // req.filters / req.choices / req.currentFolder / req.currentName ...
+    const places = await portal.browse.places();
+    const entries = await portal.browse.list(req.currentFolder ?? places[0].path);
+
+    // 用户确认后返回绝对路径，后端负责转成 file:// URI
+    const result = await req.accept({
+        paths: ["/home/me/file.txt"],
+        choices: { encoding: "utf8" },
+        currentFilter: req.filters[0],
+    });
+    if (!result.ok) console.warn(result.error);
+
+    // 用户关闭窗口：await req.cancel()
+    // 应用调用 Request.Close：req.onCancel(() => closeDialog())
+});
+```
+
+- `browse` 只提供 `list` / `stat` / `places` / `home` / `matchFilter`，不提供 `readFile`
+- `accept` 的路径由后端校验：打开要求存在，保存要求父目录存在、文件本身可以不存在
+- `parent_window` 目前只保留原始字符串；没有 `xdg-foreign` 时不解析，模态由桌面自己用遮罩实现
+- 需要系统安装 xdg-desktop-portal，并安装 `assets/portal` 里的 `myde.portal` 和 `myde-portals.conf`；会话设置 `XDG_CURRENT_DESKTOP=MyDE`。开发测试用 `XDG_DESKTOP_PORTAL_DIR` 指向 `assets/portal/portals`，不要改系统配置
+
 ### verifyUserPassword
 
 判断当前用户输入密码是否正确，用于锁屏，底层是pam

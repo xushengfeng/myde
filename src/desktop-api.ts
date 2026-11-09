@@ -20,6 +20,7 @@ import type { notification } from "./sys_api/notification";
 import type { power } from "./sys_api/power";
 import { server } from "./sys_api/run";
 import type { volumeControl } from "./sys_api/volume";
+import type { xdgDesktopPortal } from "./sys_api/xdg_desktop_portal/xdg_desktop_portal";
 import { throttle } from "./utils/throttle";
 import { renderToolsHtmlEl } from "./wayland/render_tools_el";
 
@@ -47,6 +48,7 @@ export const _myde = {
         inputSim: undefined as unknown as inputSim,
         inputMethod: undefined as unknown as inputMethod,
         volume: undefined as unknown as volumeControl,
+        portal: undefined as unknown as xdgDesktopPortal,
         appControl: {
             getPidTree,
             getPid,
@@ -96,6 +98,20 @@ export type {
     UniKeyEvent,
     UniPointerEvent,
 } from "./sys_api/input_sim";
+export type {
+    FileChooserMode,
+    FileChooserRequest,
+    FileChooserSelection,
+    PortalAcceptResult,
+    PortalChoice,
+    PortalChoiceOption,
+    PortalDirEntry,
+    PortalFileKind,
+    PortalFilter,
+    PortalFilterRule,
+    PortalPlace,
+    PortalStat,
+} from "./sys_api/xdg_desktop_portal/xdg_desktop_portal";
 export type {
     Client,
     CursorState,
