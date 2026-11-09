@@ -102,11 +102,20 @@ export function testRunnerRaw(js: string) {
     };
 }
 
+export type TestServerX = {
+    runApp: (exec: string, xServerNum?: number) => import("node:child_process").ChildProcess;
+    startXwayland: () => Promise<number | undefined>;
+    stopXwayland: () => void;
+    server: WaylandServer;
+};
+
 export function testRunnerApp(
     appPath: string,
     script: (a: {
         /** wayland 服务端：窗口/光标/剪贴板的事件、查询、命令都在这 */
         server: WaylandServer;
+        /** MSysApi.server() 的完整返回值（含 startXwayland） */
+        serverX: TestServerX;
         /** 渲染器实例，用于取窗口元素与像素预览 */
         render: renderTools;
         runner: {
@@ -140,7 +149,7 @@ export function testRunnerApp(
     // baseTeamplate 是函数体原文，末尾没有分号；若直接拼接下一行以 `(` 开头的脚本调用，
     // JS 会按 ASI 规则把两行合并成一条调用链（p.stdout.on(...)(fn)）→ TypeError 中止整个模块，
     // 导致后面的测试脚本永远执行不到。补分号强制语句结束。
-    const app = `const appPath="${appPath}"\n${baseTeamplate};\n${runnerCode}\n(${script.toString()})({ server, render, runner })`;
+    const app = `const appPath="${appPath}"\n${baseTeamplate};\n${runnerCode}\n(${script.toString()})({ server, serverX, render, runner })`;
     const r = testRunnerRaw(app);
     return r;
 }

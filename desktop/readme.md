@@ -646,20 +646,26 @@ for (const info of server.windows.list()) {
 ## 启动应用
 
 ```typescript
-// Wayland 应用
-runApp("weston-terminal");
+const serverX = MSysApi.server({ render });
 
-// X11 应用 (需要 xwayland-satellite)
-let xServerNum = NaN;
-for (let i = 0; i < 100; i++) {
-    if (!fs.existsSync(`/tmp/.X11-unix/X${i}`)) {
-        xServerNum = i;
-        runApp("xwayland-satellite", [`:${xServerNum}`]);
-        break;
-    }
+// 启动 xwayland-satellite，之后 runApp 自动带 DISPLAY
+const display = await serverX.startXwayland();
+if (display === undefined) {
+    console.warn("xwayland-satellite 不可用，X11 应用将无法启动");
 }
-runApp("chrome", [], xServerNum);
+
+// Wayland / X11 应用都由 runApp 启动；有 xwayland 时会自动带 DISPLAY
+serverX.runApp("weston-terminal");
+serverX.runApp("chrome");
+
+// 显式指定 display 仍然可以覆盖自动值
+serverX.runApp("chrome", 0);
+
+// 退出桌面时可选
+serverX.stopXwayland();
 ```
+
+`startXwayland()` 会找一个空闲的 `:N`，启动 `xwayland-satellite :N`，等待 `/tmp/.X11-unix/XN` 出现；可用 `MYDE_XWAYLAND_SATELLITE` 指定 binary 路径。
 
 ## 开发提示
 

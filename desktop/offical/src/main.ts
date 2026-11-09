@@ -1007,8 +1007,9 @@ function appIconEl(exec?: string) {
         flexShrink: 0,
     });
     if (exec !== undefined) {
-        p.on("click", () => {
+        p.on("click", async () => {
             console.log("exec", exec);
+            await server.startXwayland();
             server.runApp(exec);
         });
     }
@@ -1199,6 +1200,8 @@ render.on({
     },
 });
 const server = MSysApi.server({ render });
+// 提前启动 xwayland-satellite；每次启动应用前再 await 一次，崩溃后也能重新拉起。
+void server.startXwayland();
 
 // 桌面可用空间
 server.server.respond("surfaceBounds.request", () => {

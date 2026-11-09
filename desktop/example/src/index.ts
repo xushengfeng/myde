@@ -32,6 +32,7 @@ render.on({
 });
 
 const server = MSysApi.server({ render });
+void server.startXwayland();
 
 // 桌面可用空间：server 在 xdg_surface.get_toplevel 的同步 handler 里取
 server.server.respond("surfaceBounds.request", () => {
@@ -413,7 +414,8 @@ async function openLauncher() {
             txt(app.nameLocal).style({ fontSize: "12px", maxWidth: "80%", overflow: "hidden", textAlign: "center" }),
         );
 
-        appEl.on("click", () => {
+        appEl.on("click", async () => {
+            await server.startXwayland();
             server.runApp(app.exec);
             menu.remove();
         });
