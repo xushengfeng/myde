@@ -19,7 +19,7 @@ export function server(op: { dev?: boolean; render: renderTools }) {
                     HOME: env.HOME,
                     LANG: env.LANG,
                     LANGUAGE: env.LANGUAGE,
-                    DBUS_SESSION_BUS_ADDRESS: env.DBUS_SESSION_BUS_ADDRESS,
+                    DBUS_SESSION_BUS_ADDRESS: env.MYDE_INTERNAL_BUS_ADDRESS || env.DBUS_SESSION_BUS_ADDRESS,
                     XDG_CURRENT_DESKTOP: env.XDG_CURRENT_DESKTOP || "MyDE",
                     ...(op?.dev ? { WAYLAND_DEBUG: "1" } : {}),
                 },

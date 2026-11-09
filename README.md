@@ -53,6 +53,16 @@ pnpm i
 
 执行后将会弹出窗口，你可以在其中启动系统已安装的应用程序。
 
+窗口模式下如果需要使用 MyDE 自己的文件选择器，可以开启内部 portal（私有 dbus + xdg-desktop-portal 子进程）：
+
+```shell
+MYDE_INTERNAL_PORTAL=1 pnpm run desktop:offical
+# 或给已安装的 myde 可执行文件加参数
+myde --internal-portal
+```
+
+该模式只影响由 MyDE 启动的应用，不会修改宿主的 session bus 或 portal 配置；代价是这些应用只连私有总线，看不到宿主的 MPRIS、通知等服务。
+
 ### 运行在主机上
 
 如果不想以窗口模式运行，需要使用[myde-wrap](https://github.com/xushengfeng/myde-wrap/tree/44c604138429c2ace27ed0af1a304d07b2fbddeb)项目，用`cargo build`编译后即可通过`./myde-wrap myde`运行，`myde`可以从release获取。

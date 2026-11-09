@@ -3,6 +3,7 @@
 import { closeSync } from "node:fs";
 import * as path from "node:path";
 import { app, BrowserWindow, globalShortcut, ipcMain, nativeTheme, sharedTexture } from "electron";
+import { startInternalPortal, stopInternalPortal } from "./internal_portal";
 
 const run_path = path.join(path.resolve(__dirname, ""), "../../");
 
@@ -124,6 +125,9 @@ dev = true;
 
 const isTestMode = process.env.testMode === "on";
 
+// 全局开关：窗口模式下启动私有 dbus + xdg-desktop-portal，避免影响宿主 portal。
+const useInternalPortal = process.env.MYDE_INTERNAL_PORTAL === "1" || process.argv.includes("--internal-portal");
+
 if (isTestMode) {
     dev = false;
 }
@@ -132,11 +136,22 @@ const runAsDesktop = Boolean(process.env.runAsDesktop);
 
 app.commandLine.appendSwitch("enable-experimental-web-platform-features", "enable");
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+    if (useInternalPortal) {
+        try {
+            await startInternalPortal({
+                userDataDir: app.getPath("userData"),
+                runtimeDir: process.env.XDG_RUNTIME_DIR || app.getPath("temp"),
+            });
+        } catch (e) {
+            console.warn("[portal] 内部 portal 启动失败，回退到宿主 session bus:", e);
+        }
+    }
     createWin();
 });
 
 app.on("will-quit", () => {
+    stopInternalPortal();
     // Unregister all shortcuts.
     globalShortcut.unregisterAll();
 });
@@ -195,10 +210,7 @@ server.on("connection", (socket) => {
         }
     };
 
-    const handleMessage = (j: {
-        id: number;
-        options: Parameters<typeof sharedTexture.importSharedTexture>[0];
-    }) => {
+    const handleMessage = (j: { id: number; options: Parameters<typeof sharedTexture.importSharedTexture>[0] }) => {
         const planes = j.options.textureInfo.handle.nativePixmap?.planes ?? [];
         if (planes.length > 0 && pendingFds.length < planes.length) {
             console.error(`[shared-texture] 消息 id=${j.id} 缺少 fd（需要 ${planes.length}，有 ${pendingFds.length}）`);
@@ -216,10 +228,7 @@ server.on("connection", (socket) => {
                 // sendSharedTexture 有 1000ms 超时；必须处理 rejection，
                 // 否则会变成主进程的 unhandledRejection
                 sharedTexture
-                    .sendSharedTexture(
-                        { importedSharedTexture: texture, frame: mainWin.webContents.mainFrame },
-                        j.id,
-                    )
+                    .sendSharedTexture({ importedSharedTexture: texture, frame: mainWin.webContents.mainFrame }, j.id)
                     .then(() => sharedLog(`sent id=${j.id}`))
                     .catch((e: unknown) => {
                         sharedLog(`send error id=${j.id}: ${String((e as Error)?.stack ?? e)}`);
@@ -260,7 +269,9 @@ server.on("connection", (socket) => {
             buffered = buffered.subarray(4 + len);
             try {
                 const j = JSON.parse(payload.toString());
-                sharedLog(`frame id=${j.id} planes=${j.options?.textureInfo?.handle?.nativePixmap?.planes?.length ?? 0} pending=${pendingFds.length}`);
+                sharedLog(
+                    `frame id=${j.id} planes=${j.options?.textureInfo?.handle?.nativePixmap?.planes?.length ?? 0} pending=${pendingFds.length}`,
+                );
                 handleMessage(j);
             } catch (e) {
                 // 不能把异常抛回 native 回调（会直接崩掉进程）
@@ -271,9 +282,7 @@ server.on("connection", (socket) => {
     let dataCount = 0;
     socket.on("data", (data, fds) => {
         if (dataCount < 100)
-            sharedLog(
-                `data len=${data?.length ?? -1} fdvalues=${(fds ?? []).join(",")} pending=${pendingFds.length}`,
-            );
+            sharedLog(`data len=${data?.length ?? -1} fdvalues=${(fds ?? []).join(",")} pending=${pendingFds.length}`);
         dataCount++;
         if (fds?.length) pendingFds.push(...fds);
         buffered = buffered.length === 0 ? data : Buffer.concat([buffered, data]);

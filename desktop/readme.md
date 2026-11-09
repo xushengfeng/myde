@@ -127,6 +127,7 @@ portal.on("fileChooser.request", async (req) => {
 - `accept` 的路径由后端校验：打开要求存在，保存要求父目录存在、文件本身可以不存在
 - `parent_window` 目前只保留原始字符串；没有 `xdg-foreign` 时不解析，模态由桌面自己用遮罩实现
 - 需要系统安装 xdg-desktop-portal，并安装 `assets/portal` 里的 `myde.portal` 和 `myde-portals.conf`；会话设置 `XDG_CURRENT_DESKTOP=MyDE`。开发测试用 `XDG_DESKTOP_PORTAL_DIR` 指向 `assets/portal/portals`，不要改系统配置
+- 窗口模式下可以加 `--internal-portal`（或 `MYDE_INTERNAL_PORTAL=1`）启动私有 dbus 和 xdg-desktop-portal，MyDE 启动的应用会连到私有总线，不影响宿主 portal
 
 ### verifyUserPassword
 

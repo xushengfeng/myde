@@ -77,7 +77,7 @@ async function loadDesktop(p: string) {
     // xdg-desktop-portal 后端。窗口模式下只是占一个唯一的 impl 名字，
     // 不会抢占宿主的 org.freedesktop.portal.Desktop。
     try {
-        const portal = new xdgDesktopPortal(await newDBusIO());
+        const portal = new xdgDesktopPortal(await newDBusIO(false, getEnv().MYDE_INTERNAL_BUS_ADDRESS));
         await portal.init();
         myde.MSysApi.portal = portal;
     } catch (e) {
@@ -130,32 +130,35 @@ async function loadDesktop(p: string) {
     document.body.appendChild(script);
 }
 
-async function newDBusIO(system = false) {
+async function newDBusIO(system = false, address?: string) {
     const socket = new mus.USocket();
     if (system) {
         socket.connect("/run/dbus/system_bus_socket");
     } else {
-        socket.connect(sessionBusPath());
+        socket.connect((address ? busPathFromAddress(address) : undefined) ?? sessionBusPath());
     }
     const io = new dbusIO({ socket });
     await io.connect();
     return io;
 }
 
+/** unix:path=... → socket 路径；其他地址形式返回 undefined。 */
+function busPathFromAddress(address: string | undefined) {
+    if (!address) return undefined;
+    const match = /(?:^|;)unix:path=([^;]+)/.exec(address);
+    if (!match) return undefined;
+    try {
+        return decodeURIComponent(match[1]);
+    } catch {
+        return undefined;
+    }
+}
+
 /** 会话总线路径：优先 DBUS_SESSION_BUS_ADDRESS，其次 XDG_RUNTIME_DIR/bus。 */
 function sessionBusPath() {
     const env = getEnv();
-    const address = env.DBUS_SESSION_BUS_ADDRESS;
-    if (address) {
-        const match = /(?:^|;)unix:path=([^;]+)/.exec(address);
-        if (match) {
-            try {
-                return decodeURIComponent(match[1]);
-            } catch {
-                // 地址里的百分号编码损坏时退回默认路径
-            }
-        }
-    }
+    const fromAddress = busPathFromAddress(env.DBUS_SESSION_BUS_ADDRESS);
+    if (fromAddress) return fromAddress;
     if (env.XDG_RUNTIME_DIR) return `${env.XDG_RUNTIME_DIR}/bus`;
     return `/run/user/${process.getuid?.() ?? 1000}/bus`;
 }
