@@ -26,6 +26,11 @@ function hasDisplayNumber(n: number | undefined): n is number {
     return typeof n === "number" && Number.isInteger(n) && n >= 0;
 }
 
+/** LANGUAGE 缺省时从 LANG 推导（zh_CN.UTF-8@variant → zh_CN）；C/POSIX 等没有语言信息时返回 undefined。 */
+function languageFromLang(lang: string | undefined): string | undefined {
+    return lang?.match(/^([a-zA-Z]{2,3}(?:_[a-zA-Z0-9]+)?)(?:[.@]|$)/)?.[1];
+}
+
 async function waitForXSocket(display: number, child: import("node:child_process").ChildProcess, timeout: number) {
     const socketPath = `/tmp/.X11-unix/X${display}`;
     const deadline = Date.now() + timeout;
@@ -185,13 +190,16 @@ export function runApp(
 ) {
     console.log(`Running application: ${execPath}`);
 
+    const lang = op.deEnv.LANG || "en_US.UTF-8";
+    const language = op.deEnv.LANGUAGE || languageFromLang(lang);
+
     const subprocess = child_process.spawn(execPath, op.args, {
         stdio: ["ignore", "pipe", "pipe"],
         env: {
             HOME: op.deEnv.HOME,
             PATH: op.deEnv.PATH || "/usr/local/bin:/usr/bin:/bin",
-            LANG: op.deEnv.LANG || "en_US.UTF-8",
-            LANGUAGE: op.deEnv.LANGUAGE || "en_US:en",
+            LANG: lang,
+            ...(language ? { LANGUAGE: language } : {}),
             XDG_SESSION_TYPE: "wayland",
             XDG_RUNTIME_DIR: op.server.socketDir,
             XDG_CURRENT_DESKTOP: op.deEnv.XDG_CURRENT_DESKTOP || "MyDE",
