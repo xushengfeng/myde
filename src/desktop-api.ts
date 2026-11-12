@@ -17,6 +17,7 @@ import { setPowerState } from "./sys_api/login";
 import type { mpris } from "./sys_api/mpris";
 import type { network } from "./sys_api/network";
 import type { notification } from "./sys_api/notification";
+import type { polkit } from "./sys_api/polkit";
 import type { power } from "./sys_api/power";
 import { server } from "./sys_api/run";
 import type { volumeControl } from "./sys_api/volume";
@@ -43,6 +44,7 @@ export const _myde = {
         power: undefined as unknown as power,
         blue: undefined as unknown as blue,
         network: undefined as unknown as network,
+        polkit: undefined as unknown as polkit,
         display: undefined as unknown as display,
         input: undefined as unknown as InputManager,
         inputSim: undefined as unknown as inputSim,
@@ -98,6 +100,7 @@ export type {
     UniKeyEvent,
     UniPointerEvent,
 } from "./sys_api/input_sim";
+export type { PolkitAuthRequest, PolkitAuthResult, PolkitEvents, PolkitIdentity } from "./sys_api/polkit";
 export type {
     FileChooserMode,
     FileChooserRequest,

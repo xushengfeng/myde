@@ -18,6 +18,7 @@ import { inputSim } from "../../sys_api/input_sim";
 import { mpris } from "../../sys_api/mpris";
 import { network } from "../../sys_api/network";
 import { notification } from "../../sys_api/notification";
+import { polkit } from "../../sys_api/polkit";
 import { power } from "../../sys_api/power";
 import { volumeControl } from "../../sys_api/volume";
 import { xdgDesktopPortal } from "../../sys_api/xdg_desktop_portal/xdg_desktop_portal";
@@ -74,6 +75,14 @@ async function loadDesktop(p: string) {
     myde.MSysApi.blue = new blue(await newDBusIO(true));
     myde.MSysApi.network = new network(await newDBusIO(true));
     myde.MSysApi.volume = new volumeControl();
+    // polkit 认证前端。没有 polkit/logind 或 helper 时只告警，不阻断桌面启动。
+    try {
+        const agent = new polkit(await newDBusIO(true));
+        await agent.init();
+        myde.MSysApi.polkit = agent;
+    } catch (e) {
+        console.warn("[polkit] 初始化失败:", e);
+    }
     // xdg-desktop-portal 后端。窗口模式下只是占一个唯一的 impl 名字，
     // 不会抢占宿主的 org.freedesktop.portal.Desktop。
     try {
