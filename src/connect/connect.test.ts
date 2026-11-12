@@ -1,6 +1,11 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { LoopbackAdapterManager, UntrustedLoopbackAdapterManager } from "myde-remote-connect/loopback_adapter_manager";
 import { describe, expect, it } from "vitest";
 import { AnyTarget, buildMessage, Connect, ConnectMap, type PairResult, parseMessage } from "./connect";
+import { FileConnectStorage } from "./file_storage";
+import { MemoryConnectStorage } from "./storage";
 
 async function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -147,6 +152,99 @@ describe("认证", () => {
         expect(arr.remotePublicKey).toEqual(brr.myPublicKey);
         await sleep(50);
         await testConnection(a, b, "A", "B");
+    });
+});
+
+describe("持久化", () => {
+    it("自动生成并保存 id", () => {
+        const storage = new MemoryConnectStorage();
+        const adapter = () => {
+            throw new Error("adapter not used");
+        };
+        const a = new Connect({ adapter, storage });
+        const id = a.getId();
+        expect(id).toBeTruthy();
+
+        const b = new Connect({ adapter, storage });
+        expect(b.getId()).toBe(id);
+
+        const newId = b.refreshId();
+        expect(newId).not.toBe(id);
+        const c = new Connect({ adapter, storage });
+        expect(c.getId()).toBe(newId);
+    });
+
+    it("重启后保留 id 和配对凭据", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myde-connect-test-"));
+        try {
+            const storageA = new FileConnectStorage(path.join(dir, "a.json"));
+            const storageB = new FileConnectStorage(path.join(dir, "b.json"));
+            const manager = new UntrustedLoopbackAdapterManager();
+            const a = new Connect({ id: "A", adapter: () => manager.newAdapter(), storage: storageA });
+            const b = new Connect({ id: "B", adapter: () => manager.newAdapter(), storage: storageB });
+            await a.init();
+            await b.init();
+
+            const ac = await a.startPairing();
+            const bc = await b.startPairing();
+            const ap = Promise.withResolvers<PairResult>();
+            const br = await bc.connect(ac.pointId);
+            ac.onPair((rq) => {
+                rq.waitForPair().then((pair) => ap.resolve(pair));
+            });
+            br.inputOtherPin(ac.pin);
+            await Promise.all([ap.promise, br.waitForPair()]);
+            await sleep(50);
+
+            expect(a.getSavedConnections().length).toBe(1);
+            expect(b.getSavedConnections().length).toBe(1);
+
+            const manager2 = new UntrustedLoopbackAdapterManager();
+            const a2 = new Connect({ adapter: () => manager2.newAdapter(), storage: storageA });
+            const b2 = new Connect({ adapter: () => manager2.newAdapter(), storage: storageB });
+            expect(a2.getId()).toBe("A");
+            expect(b2.getId()).toBe("B");
+            await a2.init();
+            await b2.init();
+            expect(a2.getSavedConnections().length).toBe(1);
+            await a2.connect({ targetId: Connect.pointDeviceId("B") });
+            await sleep(50);
+            await testConnection(a2, b2, "A", "B");
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it("临时连接不写入存储", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myde-connect-test-"));
+        try {
+            const storageA = new FileConnectStorage(path.join(dir, "a.json"));
+            const storageB = new FileConnectStorage(path.join(dir, "b.json"));
+            const manager = new UntrustedLoopbackAdapterManager();
+            const a = new Connect({ id: "A", adapter: () => manager.newAdapter(), storage: storageA });
+            const b = new Connect({ id: "B", adapter: () => manager.newAdapter(), storage: storageB });
+            await a.init();
+            await b.init();
+
+            const ac = await a.startPairing({ remember: false });
+            const bc = await b.startPairing({ remember: false });
+            const br = await bc.connect(ac.pointId);
+            ac.onPair((rq) => {
+                rq.waitForPair().catch(() => {});
+            });
+            br.inputOtherPin(ac.pin);
+            await br.waitForPair();
+            await sleep(50);
+
+            expect(a.getSavedConnections()).toEqual([]);
+            expect(b.getSavedConnections()).toEqual([]);
+
+            const a2 = new Connect({ adapter: () => manager.newAdapter(), storage: storageA });
+            await a2.init();
+            expect(a2.getSavedConnections()).toEqual([]);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 });
 

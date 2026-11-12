@@ -482,6 +482,31 @@ if (abs) {
 
 自带类型约束和默认配置。
 
+## MConnect
+
+远程连接。设备 id、配对凭据和连接配置由连接层持久化，桌面只需按类似 NetworkManager 的方式查询和操作：
+
+```typescript
+const connect = myde.MConnect();
+await connect.init();
+
+const myId = connect.getId();
+const saved = connect.getSavedConnections();
+const active = connect.getActiveConnections();
+
+await connect.connect("peer-device-id");
+await connect.disconnect("peer-device-id");
+connect.removeConnection("peer-device-id");
+
+const pairing = await connect.startPairing();
+// pairing.pin 展示给对端；这里输入对端展示的 PIN
+const result = await pairing.connect("peer-device-id", { remember: true });
+result.inputOtherPin(remotePin);
+await result.waitForPair();
+```
+
+`remember: false` 创建临时连接，不写入存储。事件：`connection-added`、`connection-removed`、`connection-changed`、`connected`、`disconnected`、`id-changed`、`error`。
+
 ## Wayland 服务器
 
 从 `MSysApi.server({ render })` 导出的 `server` 变量的进一步用法。

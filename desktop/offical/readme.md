@@ -36,7 +36,10 @@ desktop（evdev）模式下触摸板事件由仓库的 `src/utils/touchpad.ts` �
 设置项：
 - 外观：`icon.theme` 应用图标主题
 - 输入法：候选窗预编辑 `ime.panelPreedit`（`auto` / `always` / `never`）
+- 互联：启用开关、本机 ID、已配对设备列表和忘记设备；添加设备时显示本机配对 ID/PIN，输入对方配对 ID/PIN 和是否记住
 - 窗口：新窗口居中，保存到 `desktop.centerWindows` 命名空间
+
+顶栏有互联工具，类似 WiFi：开关互联、显示本机 ID、列出已记忆和当前连接的设备；点击设备可在连接/断开之间切换。互联开关状态保存在 `connect.enabled`。
 
 ## 输入法
 

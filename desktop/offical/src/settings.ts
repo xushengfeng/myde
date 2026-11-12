@@ -1,4 +1,5 @@
-import { type ElType, input, spacer, txt, view } from "dkh-ui";
+import { button, type ElType, input, spacer, txt, view } from "dkh-ui";
+import type { ConnectConnection, PairingSession } from "../../../src/desktop-api";
 import { aLineText, gGlassStyle, px, sSize2 } from "./ui";
 
 export type ImePanelPreeditMode = "auto" | "always" | "never";
@@ -12,6 +13,17 @@ export type SettingsContentOptions = {
     getCenterWindows(): boolean;
     setCenterWindows(enabled: boolean): void;
     inputMethodAvailable: boolean;
+    connectAvailable: boolean;
+    getConnectEnabled(): boolean;
+    setConnectEnabled(enabled: boolean): void;
+    getConnectId(): string;
+    listConnectDevices(): ConnectConnection[];
+    forgetConnectDevice(targetId: string): void;
+    setConnectRemember(targetId: string, remember: boolean): void;
+    createConnectPairing(): Promise<PairingSession>;
+    subscribeConnect(callback: () => void): () => void;
+    /** 设置窗口根元素，弹窗挂在这里，避免覆盖整个桌面和光标 */
+    modalHost: HTMLElement;
 };
 
 type Section = {
@@ -145,7 +157,180 @@ function createSegmented<T extends string>(
     return group;
 }
 
-export function createSettingsContent(op: SettingsContentOptions) {
+function dialogField(control: ElType<HTMLInputElement>) {
+    return control.style({
+        width: "100%",
+        height: "30px",
+        padding: "0 8px",
+        borderRadius: "7px",
+        border: "1px solid #00000024",
+        background: "#fff",
+        boxSizing: "border-box",
+    });
+}
+
+function dialogButton(label: string, primary = false) {
+    return button(txt(label)).style({
+        padding: "6px 14px",
+        borderRadius: "7px",
+        border: primary ? "1px solid #0088dd" : "1px solid #00000020",
+        background: primary ? "#00aaff" : "#fff",
+        color: primary ? "#fff" : "#111",
+        cursor: "pointer",
+        fontSize: "12px",
+    });
+}
+
+function openConnectDialog(op: SettingsContentOptions, onDone: () => void) {
+    const overlay = view().style({
+        position: "absolute",
+        inset: "0",
+        zIndex: "30",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        // 只让卡片接收鼠标，避免整层遮罩挡住桌面的指针层级。
+        pointerEvents: "none",
+    });
+    const card = view("y").style({
+        width: "380px",
+        maxWidth: "calc(100% - 24px)",
+        maxHeight: "calc(100% - 24px)",
+        overflowY: "auto",
+        boxSizing: "border-box",
+        padding: "16px",
+        gap: "8px",
+        borderRadius: "14px",
+        background: "#fafafa",
+        boxShadow: "0 18px 60px #00000044",
+        color: "#111",
+        fontFamily: "sans-serif",
+        pointerEvents: "auto",
+    });
+    const fieldRow = (label: string, control: ElType<HTMLElement>) =>
+        view("y")
+            .style({ gap: "2px" })
+            .add([txt(label).style({ fontSize: "11px", opacity: "0.65" }), control]);
+
+    const pointText = txt("准备中…").style({
+        fontFamily: "monospace",
+        fontSize: "11px",
+        userSelect: "text",
+        overflowWrap: "anywhere",
+    });
+    const pinText = txt("准备中…").style({
+        fontFamily: "monospace",
+        fontSize: "22px",
+        letterSpacing: "4px",
+        userSelect: "text",
+    });
+    const remoteIdInput = dialogField(input("text").attr({ placeholder: "对方设备 ID" }));
+    const remotePinInput = dialogField(input("text").attr({ placeholder: "对方 PIN", maxLength: 6 }));
+    const remember = input("checkbox").attr({ checked: true });
+    const status = txt("").style({ fontSize: "11px", color: "#c33", minHeight: "14px" });
+
+    let session: PairingSession | undefined;
+    let closed = false;
+    function close() {
+        if (closed) return;
+        closed = true;
+        window.removeEventListener("pointerdown", onOutside, true);
+        overlay.remove();
+    }
+    function onOutside(e: PointerEvent) {
+        if (!card.el.contains(e.target as Node)) close();
+    }
+    window.addEventListener("pointerdown", onOutside, true);
+
+    const connectButton = dialogButton("连接", true).on("click", async () => {
+        if (!session) {
+            status.sv("配对尚未准备好");
+            return;
+        }
+        const remoteId = remoteIdInput.gv.trim();
+        const remotePin = remotePinInput.gv.trim();
+        if (!remoteId) {
+            status.sv("请输入对方设备 ID");
+            return;
+        }
+        if (!/^\d{6}$/.test(remotePin)) {
+            status.sv("对方 PIN 应为 6 位数字");
+            return;
+        }
+
+        connectButton.attr({ disabled: true });
+        status.sv("连接中…");
+        status.style({ color: "#555" });
+        try {
+            const result = await session.connect(remoteId, { remember: remember.el.checked });
+            result.inputOtherPin(remotePin);
+            await result.waitForPair();
+            close();
+            onDone();
+        } catch (error) {
+            status.sv(error instanceof Error ? error.message : String(error));
+            status.style({ color: "#c33" });
+            connectButton.attr({ disabled: false });
+        }
+    });
+    const cancelButton = dialogButton("取消").on("click", close);
+
+    card.add([
+        txt("添加互联设备").style({ fontSize: "17px", fontWeight: "600" }),
+        txt("把本机配对 ID 和 PIN 告诉对方，再输入对方的配对 ID 和 PIN。").style({
+            fontSize: "11px",
+            opacity: "0.6",
+        }),
+        fieldRow("本机配对 ID", pointText),
+        fieldRow("本机 PIN", pinText),
+        fieldRow("对方配对 ID", remoteIdInput),
+        fieldRow("对方 PIN", remotePinInput),
+        view("x")
+            .style({ alignItems: "center", gap: "6px" })
+            .add([remember, txt("记住此设备")]),
+        status,
+        view("x").style({ justifyContent: "flex-end", gap: "8px" }).add([cancelButton, connectButton]),
+    ]);
+    overlay.add(card).addInto(op.modalHost);
+
+    op.createConnectPairing()
+        .then((pairing) => {
+            if (closed) return;
+            session = pairing;
+            pointText.sv(pairing.pointId);
+            pinText.sv(pairing.pin);
+            pairing.onPair((request) => {
+                if (closed) return;
+                status.style({ color: "#555" });
+                status.sv(`收到 ${request.remoteDeviceId.slice(0, 8)} 的配对请求，等待对方输入 PIN…`);
+                request
+                    .waitForPair()
+                    .then((result) => {
+                        op.setConnectRemember(result.targetId, remember.el.checked);
+                        close();
+                        onDone();
+                    })
+                    .catch((error) => {
+                        if (closed) return;
+                        status.sv(error instanceof Error ? error.message : String(error));
+                        status.style({ color: "#c33" });
+                    });
+            });
+        })
+        .catch((error) => {
+            if (closed) return;
+            status.sv(error instanceof Error ? error.message : String(error));
+            status.style({ color: "#c33" });
+        });
+}
+
+export type SettingsContent = {
+    el: ElType<HTMLElement>;
+    dispose: () => void;
+};
+
+export function createSettingsContent(op: SettingsContentOptions): SettingsContent {
+    let sectionCleanup: (() => void) | undefined;
     const sections: Section[] = [
         {
             id: "appearance",
@@ -198,6 +383,107 @@ export function createSettingsContent(op: SettingsContentOptions) {
                                 op.setImePanelPreedit,
                             ),
                         ),
+                    ]);
+            },
+        },
+        {
+            id: "connect",
+            name: "互联",
+            build: () => {
+                const list = view("y").style({ gap: "6px" });
+                const renderList = () => {
+                    list.clear();
+                    if (!op.connectAvailable) {
+                        list.add(txt("当前环境没有可用的互联接口。").style({ opacity: "0.6" }));
+                        return;
+                    }
+                    const devices = op.listConnectDevices();
+                    if (devices.length === 0) {
+                        list.add(txt("还没有记忆设备。").style({ opacity: "0.6" }));
+                        return;
+                    }
+                    for (const device of devices) {
+                        const name = device.remoteDeviceName === "unknown" ? device.targetId : device.remoteDeviceName;
+                        const status = device.connected ? "已连接" : device.remembered ? "已记忆" : "临时";
+                        const row = view("x")
+                            .style({
+                                alignItems: "center",
+                                gap: px(sSize2.padding),
+                                padding: `${px(sSize2.padding)} ${px(sSize2.padding + 4)}`,
+                                borderRadius: px(sSize2.radius1),
+                                ...gGlassStyle.itemInBg,
+                            })
+                            .add([
+                                view("y")
+                                    .style({ gap: "2px", minWidth: "0", flexGrow: "1" })
+                                    .add([
+                                        aLineText().sv(name),
+                                        txt(device.targetId).style({
+                                            fontSize: "11px",
+                                            opacity: "0.55",
+                                            fontFamily: "monospace",
+                                            userSelect: "text",
+                                            overflowWrap: "anywhere",
+                                        }),
+                                    ]),
+                                txt(status).style({ fontSize: "12px", opacity: "0.7", flexShrink: "0" }),
+                                button(txt("忘记"))
+                                    .style({
+                                        padding: "5px 10px",
+                                        borderRadius: "7px",
+                                        border: "1px solid #00000020",
+                                        background: "#fff",
+                                        cursor: "pointer",
+                                        fontSize: "12px",
+                                        flexShrink: "0",
+                                    })
+                                    .on("click", () => {
+                                        op.forgetConnectDevice(device.targetId);
+                                        renderList();
+                                    }),
+                            ]);
+                        list.add(row);
+                    }
+                };
+
+                const addButton = dialogButton("添加设备", true).on("click", () => {
+                    if (!op.getConnectEnabled()) return;
+                    openConnectDialog(op, renderList);
+                });
+                if (!op.connectAvailable) addButton.attr({ disabled: true });
+
+                renderList();
+                sectionCleanup = op.subscribeConnect(renderList);
+
+                return view("y")
+                    .style({ gap: px(sSize2.padding + 8) })
+                    .add([
+                        sectionTitle("互联", "与其他设备建立远程连接。"),
+                        settingRow(
+                            "启用互联",
+                            "关闭后断开当前互联，并停止自动连接记忆设备。",
+                            createToggle(op.getConnectEnabled, op.setConnectEnabled),
+                        ),
+                        settingRow(
+                            "本机 ID",
+                            "设备长期身份。配对时请使用添加设备弹窗里显示的本机配对 ID。",
+                            txt(op.connectAvailable ? op.getConnectId() : "-").style({
+                                fontFamily: "monospace",
+                                fontSize: "12px",
+                                userSelect: "text",
+                                overflowWrap: "anywhere",
+                                maxWidth: "260px",
+                                textAlign: "right",
+                            }),
+                        ),
+                        settingRow(
+                            "添加设备",
+                            "输入对方配对 ID 和 PIN；把本机配对 ID/PIN 告诉对方完成配对。",
+                            addButton,
+                        ),
+                        view("y")
+                            .style({ gap: "6px" })
+                            .add([txt("设备").style({ fontSize: "13px", fontWeight: "600" }), list]),
                     ]);
             },
         },
@@ -266,6 +552,8 @@ export function createSettingsContent(op: SettingsContentOptions) {
         }
         const section = sections.find((s) => s.id === id);
         if (!section) return;
+        sectionCleanup?.();
+        sectionCleanup = undefined;
         content.clear().add(section.build());
     }
 
@@ -287,11 +575,19 @@ export function createSettingsContent(op: SettingsContentOptions) {
 
     show("appearance");
 
-    return view("x")
+    const el = view("x")
         .style({
             flexGrow: "1",
             minHeight: "0",
             minWidth: "0",
         })
         .add([nav, content]);
+
+    return {
+        el,
+        dispose: () => {
+            sectionCleanup?.();
+            sectionCleanup = undefined;
+        },
+    };
 }

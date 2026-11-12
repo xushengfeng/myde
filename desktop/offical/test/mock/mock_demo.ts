@@ -560,6 +560,8 @@ async function init() {
                         }
                         return {} as any;
                     },
+                    startXwayland: async () => undefined,
+                    stopXwayland: () => {},
                     server: mockServer,
                 } as any;
             },

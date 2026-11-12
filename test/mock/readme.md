@@ -199,7 +199,7 @@ interface MockConfig {
 
 | API | 状态 | 说明 |
 |-----|------|------|
-| 工厂函数 | ✅ | 返回空对象 |
+| 工厂函数 | ✅ | 返回内存存储的 Connect，可读写 ID、设备列表和开关状态；不会真正建立网络连接 |
 
 ### WaylandServer
 
@@ -213,6 +213,7 @@ interface MockConfig {
 | `notify` | ✅ | 窗口命令与输入注入（mock 不模拟客户端） |
 | `respond/request` | ✅ | `surfaceBounds.request`、`window.get`、`window.getBounds` |
 | `openWindow/closeWindow/touchAppid` | ✅ | mock 侧造窗口、关窗口、改 appid |
+| `startXwayland` | ✅ | 返回 `undefined`，不启动真实 Xwayland |
 | `clients` | ✅ | Map |
 | `destroy` | ✅ | 清理 |
 

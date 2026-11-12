@@ -1,5 +1,7 @@
 import { SConnect } from "myde-remote-connect";
 import type { SignalingAdapter } from "myde-remote-connect/types";
+import { EventEmitter } from "../event-emitter/event-emitter";
+import { type ConnectStorage, MemoryConnectStorage } from "./storage";
 
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
@@ -11,6 +13,48 @@ export type PairResult = {
     from: string;
     to: string;
     targetId: string;
+};
+
+export type PairRequestArg = {
+    remoteDeviceId: string;
+    reject: () => void;
+    waitForPair: () => Promise<PairResult>;
+};
+
+export type PairRequestHandler = (a: PairRequestArg) => void;
+
+export type PairConnectResult = Omit<PairRequestArg, "reject"> & {
+    inputOtherPin: (pin: string) => void;
+};
+
+export type PairingSession = {
+    pointId: string;
+    pin: string;
+    connect: (remoteId: string, op?: { remember?: boolean }) => Promise<PairConnectResult>;
+    onPair: (handle: PairRequestHandler) => void;
+};
+
+/** 一个连接在桌面侧可见的快照，类似 NetworkManager 的 connection/device 信息。 */
+export type ConnectConnection = {
+    targetId: string;
+    from: string;
+    to: string;
+    remoteDeviceName: string;
+    /** 是否写入持久化存储；false 为临时连接 */
+    remembered: boolean;
+    connected: boolean;
+    createdAt?: number;
+    lastConnected?: number;
+};
+
+export type ConnectEvents = {
+    "connection-added": [connection: ConnectConnection];
+    "connection-removed": [targetId: string];
+    "connection-changed": [connection: ConnectConnection];
+    connected: [targetId: string];
+    disconnected: [targetId: string];
+    "id-changed": [id: string];
+    error: [error: Error];
 };
 
 type PointId = string & { __label: "PointId" };
@@ -29,13 +73,64 @@ type MetaType = {
     messageId?: string;
 };
 
-export class Connect {
-    private adapter: () => SignalingAdapter;
+type Cert = {
+    myPrivateKey: Uint8Array;
+    myPublicKey: Uint8Array;
+    remotePublicKey: Uint8Array;
+    createdAt: number;
+    lastConnected?: number;
+};
 
-    private connectionConfig = new Map<
-        PointDeviceId,
-        { from: PointId; to: PointId; remoteDeviceName: string; cert: string }
-    >();
+type ConnectionConfig = {
+    from: PointId;
+    to: PointId;
+    remoteDeviceName: string;
+    credentialId: string;
+    remembered: boolean;
+};
+
+type PersistedConnectState = {
+    version: 1;
+    id: string;
+    links: {
+        targetId: string;
+        from: string;
+        to: string;
+        remoteDeviceName: string;
+        credentialId: string;
+        remembered: boolean;
+    }[];
+    credentials: {
+        id: string;
+        myPrivateKey: string;
+        myPublicKey: string;
+        remotePublicKey: string;
+        createdAt: number;
+        lastConnected?: number;
+    }[];
+};
+
+const STORAGE_VERSION = 1;
+const STORAGE_KEY = "myde-connect";
+
+function encodeBase64(data: Uint8Array): string {
+    let text = "";
+    for (const byte of data) text += String.fromCharCode(byte);
+    return btoa(text);
+}
+
+function decodeBase64(value: string): Uint8Array {
+    const text = atob(value);
+    const data = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) data[i] = text.charCodeAt(i);
+    return data;
+}
+
+export class Connect extends EventEmitter<ConnectEvents> {
+    private adapter: () => SignalingAdapter;
+    private storage: ConnectStorage;
+
+    private connectionConfig = new Map<PointDeviceId, ConnectionConfig>();
     private connection: Map<
         PointDeviceId,
         {
@@ -43,18 +138,24 @@ export class Connect {
             ready: boolean;
         }
     > = new Map();
-    private cert: Map<string, { myPrivateKey: Uint8Array; myPublicKey: Uint8Array; remotePublicKey: Uint8Array }> =
-        new Map();
+    private cert: Map<string, Cert> = new Map();
 
     private globalMapHint = new ConnectMap();
 
-    private myId: PointDeviceId = crypto.randomUUID() as PointDeviceId;
+    private myId: PointDeviceId;
+    private initialized = false;
+    private initializedConnect = new WeakSet<SConnect>();
+
     constructor(op: {
-        id: string;
+        id?: string;
         adapter: () => SignalingAdapter;
+        storage?: ConnectStorage;
     }) {
-        this.myId = op.id as PointDeviceId;
+        super();
         this.adapter = op.adapter;
+        this.storage = op.storage ?? new MemoryConnectStorage();
+        this.myId = (op.id ?? crypto.randomUUID()) as PointDeviceId;
+        this.loadState(op.id);
     }
 
     static pointDeviceId(id: string): PointDeviceId {
@@ -67,30 +168,218 @@ export class Connect {
         return id as TargetId;
     }
 
+    /** 读取本机设备 id。没有时在构造阶段已经生成并保存。 */
+    getId(): string {
+        return this.myId;
+    }
+
+    /**
+     * 刷新本机设备 id。已连接的节点需要重新连接后才能看到新 id，
+     * 因此有活动连接时拒绝刷新。
+     */
+    refreshId(): string {
+        if (this.avalableConnections().length > 0) {
+            throw new Error("Cannot refresh id while connected");
+        }
+        for (const peer of this.globalMapHint.getNeighbors(this.myId)) {
+            this.globalMapHint.destroyPair(this.myId, peer);
+        }
+        this.myId = crypto.randomUUID() as PointDeviceId;
+        this.saveState();
+        this.emit("id-changed", this.myId);
+        return this.myId;
+    }
+
+    private loadState(overrideId?: string) {
+        const raw = this.storage.getItem(STORAGE_KEY);
+        let state: PersistedConnectState | undefined;
+        if (raw) {
+            try {
+                state = JSON.parse(raw) as PersistedConnectState;
+            } catch (error) {
+                console.warn("connect: failed to parse stored state", error);
+            }
+        }
+        if (state && state.version !== STORAGE_VERSION) {
+            console.warn(`connect: unsupported storage version ${state.version}`);
+            state = undefined;
+        }
+
+        if (state) {
+            for (const link of state.links ?? []) {
+                this.connectionConfig.set(link.targetId as PointDeviceId, {
+                    from: link.from as PointId,
+                    to: link.to as PointId,
+                    remoteDeviceName: link.remoteDeviceName,
+                    credentialId: link.credentialId,
+                    remembered: link.remembered !== false,
+                });
+            }
+            for (const credential of state.credentials ?? []) {
+                this.cert.set(credential.id, {
+                    myPrivateKey: decodeBase64(credential.myPrivateKey),
+                    myPublicKey: decodeBase64(credential.myPublicKey),
+                    remotePublicKey: decodeBase64(credential.remotePublicKey),
+                    createdAt: credential.createdAt,
+                    lastConnected: credential.lastConnected,
+                });
+            }
+        }
+
+        const id = overrideId ?? state?.id;
+        if (id) this.myId = id as PointDeviceId;
+        if (!state || state.id !== this.myId) this.saveState();
+    }
+
+    private saveState() {
+        const links: PersistedConnectState["links"] = [];
+        const credentialIds = new Set<string>();
+        for (const [targetId, config] of this.connectionConfig) {
+            if (!config.remembered) continue;
+            links.push({
+                targetId,
+                from: config.from,
+                to: config.to,
+                remoteDeviceName: config.remoteDeviceName,
+                credentialId: config.credentialId,
+                remembered: true,
+            });
+            if (config.credentialId) credentialIds.add(config.credentialId);
+        }
+
+        const credentials: PersistedConnectState["credentials"] = [];
+        for (const id of credentialIds) {
+            const credential = this.cert.get(id);
+            if (!credential) continue;
+            credentials.push({
+                id,
+                myPrivateKey: encodeBase64(credential.myPrivateKey),
+                myPublicKey: encodeBase64(credential.myPublicKey),
+                remotePublicKey: encodeBase64(credential.remotePublicKey),
+                createdAt: credential.createdAt,
+                lastConnected: credential.lastConnected,
+            });
+        }
+
+        this.storage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({
+                version: STORAGE_VERSION,
+                id: this.myId,
+                links,
+                credentials,
+            } satisfies PersistedConnectState),
+        );
+    }
+
     setConnectionConfig(op: {
         targetId: PointDeviceId;
         from: PointId;
         to: PointId;
         remoteDeviceName: string;
         cert: string;
+        remember?: boolean;
     }) {
-        this.connectionConfig.set(op.targetId, {
+        this.upsertConnectionConfig(op.targetId, {
             from: op.from,
             to: op.to,
             remoteDeviceName: op.remoteDeviceName,
-            cert: op.cert,
+            credentialId: op.cert,
+            remembered: op.remember ?? true,
         });
     }
 
+    private upsertConnectionConfig(targetId: PointDeviceId, config: ConnectionConfig) {
+        const old = this.connectionConfig.get(targetId);
+        const existed = old !== undefined;
+        this.connectionConfig.set(targetId, config);
+        if (
+            old?.credentialId &&
+            old.credentialId !== config.credentialId &&
+            !this.isCredentialInUse(old.credentialId)
+        ) {
+            this.cert.delete(old.credentialId);
+        }
+        this.saveState();
+        const connection = this.getConnection(targetId);
+        if (!connection) return;
+        if (existed) this.emit("connection-changed", connection);
+        else this.emit("connection-added", connection);
+    }
+
+    getConnection(targetId: string): ConnectConnection | undefined {
+        const id = targetId as PointDeviceId;
+        const config = this.connectionConfig.get(id);
+        if (!config) return undefined;
+        const credential = config.credentialId ? this.cert.get(config.credentialId) : undefined;
+        return {
+            targetId: id,
+            from: config.from,
+            to: config.to,
+            remoteDeviceName: config.remoteDeviceName,
+            remembered: config.remembered,
+            connected: this.connection.get(id)?.ready === true,
+            createdAt: credential?.createdAt,
+            lastConnected: credential?.lastConnected,
+        };
+    }
+
+    /** 所有已知连接，包括临时连接。 */
+    getConnections(): ConnectConnection[] {
+        const result: ConnectConnection[] = [];
+        for (const targetId of this.connectionConfig.keys()) {
+            const connection = this.getConnection(targetId);
+            if (connection) result.push(connection);
+        }
+        return result;
+    }
+
+    /** 已记住的连接，对应 NetworkManager 的 saved connections。 */
+    getSavedConnections(): ConnectConnection[] {
+        return this.getConnections().filter((connection) => connection.remembered);
+    }
+
+    /** 当前已建立的连接。 */
+    getActiveConnections(): ConnectConnection[] {
+        return this.getConnections().filter((connection) => connection.connected);
+    }
+
+    isConnected(targetId: string): boolean {
+        return this.connection.get(targetId as PointDeviceId)?.ready === true;
+    }
+
+    /** 临时连接可以随时提升为记忆连接，反之亦然。 */
+    setRemember(targetId: string, remembered: boolean) {
+        const id = targetId as PointDeviceId;
+        const config = this.connectionConfig.get(id);
+        if (!config) throw new Error(`No connection config for targetId: ${targetId}`);
+        config.remembered = remembered;
+        this.saveState();
+        const connection = this.getConnection(id);
+        if (connection) this.emit("connection-changed", connection);
+    }
+
+    getState() {
+        return {
+            id: this.myId,
+            connections: this.getConnections(),
+            savedConnections: this.getSavedConnections(),
+            activeConnections: this.getActiveConnections(),
+            globalMap: this.getGlobalMap(),
+        };
+    }
+
     async init() {
-        for (const [targetId, c] of this.connectionConfig) {
-            const connect = new SConnect(this.adapter());
-            await connect.init(c.from, c.to);
+        if (this.initialized) return;
+        this.initialized = true;
+
+        for (const [targetId, config] of this.connectionConfig) {
+            const { connect, trusted } = await this.createConnect(config.from, config.to);
             this.connection.set(targetId, {
                 connect,
                 ready: false,
             });
-            this.connectInit(connect);
+            this.connectInit(connect, trusted);
         }
 
         this.addHandler(({ json }) => {
@@ -113,88 +402,143 @@ export class Connect {
         });
         this.addCallBackHandler(async ({ json }) => {
             if (json.serverName === "connect.new") {
-                const connect = new SConnect(this.adapter());
                 const connectId = crypto.randomUUID();
-                await connect.init(connectId, json.pointId);
-                this.connectionConfig.set(json.sourceId, {
-                    from: Connect.pointId(connectId),
-                    to: json.pointId,
-                    remoteDeviceName: "unknown",
-                    cert: "",
-                });
+                const remember = json.remember !== false;
+                const { connect, trusted } = await this.createConnect(
+                    Connect.pointId(connectId),
+                    Connect.pointId(json.pointId),
+                );
                 const pin = connect.updatePIN();
                 connect.on("pairRequest", (rq) => {
-                    rq.waitForPairing().then((pair) => {
-                        const certId = crypto.randomUUID();
-                        this.cert.set(certId, {
-                            myPrivateKey: pair.myPrivateKey,
-                            myPublicKey: pair.myPublicKey,
-                            remotePublicKey: pair.remotePublicKey,
+                    rq.waitForPairing()
+                        .then((pair) => {
+                            const certId = crypto.randomUUID();
+                            this.cert.set(certId, {
+                                myPrivateKey: pair.myPrivateKey,
+                                myPublicKey: pair.myPublicKey,
+                                remotePublicKey: pair.remotePublicKey,
+                                createdAt: pair.createdAt ?? Date.now(),
+                                lastConnected: Date.now(),
+                            });
+                            this.upsertConnectionConfig(json.sourceId as PointDeviceId, {
+                                from: Connect.pointId(connectId),
+                                to: Connect.pointId(json.pointId),
+                                remoteDeviceName: "unknown",
+                                credentialId: certId,
+                                remembered: remember,
+                            });
+                            this.afterConnect({ targetId: json.sourceId, connect });
+                        })
+                        .catch((error) => {
+                            this.emit("error", error instanceof Error ? error : new Error(String(error)));
                         });
-                        this.connectionConfig.set(json.sourceId, {
-                            from: Connect.pointId(connectId),
-                            to: json.pointId,
-                            remoteDeviceName: "unknown",
-                            cert: certId,
-                        });
-                        this.afterConnect({ targetId: json.sourceId, connect });
-                    });
                 });
-                this.connectInit(connect);
+                this.connectInit(connect, trusted);
                 return { json: { connectId, pin }, bins: [] };
             }
             return undefined;
         });
     }
-    private connectInit(connect: SConnect) {
+
+    private async createConnect(from: PointId, to?: PointId) {
+        const adapter = this.adapter();
+        const connect = new SConnect(adapter);
+        await connect.init(from, to);
+        return { connect, trusted: adapter.trustIdentity };
+    }
+
+    private connectInit(connect: SConnect, trusted: boolean) {
         connect.on("connectRequest", (rq) => {
-            const entry = Array.from(this.connectionConfig).find(([_, c]) => c.to === rq.remoteDeviceId);
+            const entry = Array.from(this.connectionConfig).find(([_, config]) => config.to === rq.remoteDeviceId);
             if (!entry) {
-                throw new Error(`No connection config for pointId: ${rq.remoteDeviceId}`);
+                rq.reject();
+                return;
             }
             const [targetId, config] = entry;
 
-            // todo 交互
-            const cert = this.cert.get(config.cert);
-            if (!cert) {
-                rq.accept();
-            } else
+            const markReady = (credential?: Cert) => {
+                const current = this.connectionConfig.get(targetId);
+                if (!current) return;
+                if (credential && current.credentialId) {
+                    this.updateCredential(current.credentialId, credential);
+                }
+                this.afterConnect({ targetId, connect });
+            };
+
+            if (config.credentialId) {
+                const credential = this.cert.get(config.credentialId);
+                if (!credential) {
+                    rq.reject();
+                    return;
+                }
                 rq.acceptWithCre({
-                    myPrivateKey: cert.myPrivateKey,
-                    myPublicKey: cert.myPublicKey,
-                    remotePublicKey: cert.remotePublicKey,
-                    createdAt: Date.now(),
-                });
-
-            this.connection.set(targetId, {
-                connect,
-                ready: true,
-            });
-
-            this.afterConnect({ targetId, connect });
+                    myPrivateKey: credential.myPrivateKey,
+                    myPublicKey: credential.myPublicKey,
+                    remotePublicKey: credential.remotePublicKey,
+                    createdAt: credential.createdAt,
+                })
+                    .then((result) => {
+                        if (result.success) {
+                            markReady({
+                                myPrivateKey: result.credential.myPrivateKey,
+                                myPublicKey: result.credential.myPublicKey,
+                                remotePublicKey: result.credential.remotePublicKey,
+                                createdAt: result.credential.createdAt,
+                                lastConnected: result.credential.lastConnected,
+                            });
+                        }
+                    })
+                    .catch((error) => {
+                        this.emit("error", error instanceof Error ? error : new Error(String(error)));
+                    });
+            } else if (trusted) {
+                rq.accept();
+                markReady();
+            } else {
+                rq.reject();
+            }
+        });
+        connect.on("error", (error) => {
+            this.emit("error", error);
         });
     }
 
-    /** 用于不信任的渠道，如网络连接，需要PIN码配对 */
-    async startPairing() {
-        const connect = new SConnect(this.adapter());
-        const connectId = crypto.randomUUID();
-        await connect.init(connectId);
+    private updateCredential(
+        credentialId: string,
+        credential: {
+            myPrivateKey: Uint8Array;
+            myPublicKey: Uint8Array;
+            remotePublicKey: Uint8Array;
+            createdAt?: number;
+            lastConnected?: number;
+        },
+    ) {
+        const old = this.cert.get(credentialId);
+        this.cert.set(credentialId, {
+            myPrivateKey: credential.myPrivateKey,
+            myPublicKey: credential.myPublicKey,
+            remotePublicKey: credential.remotePublicKey,
+            createdAt: credential.createdAt ?? old?.createdAt ?? Date.now(),
+            lastConnected: credential.lastConnected ?? Date.now(),
+        });
+        this.saveState();
+    }
 
-        type PairRequestArg = {
-            reject: () => void;
-            waitForPair: () => Promise<PairResult>;
-        };
-        type PairRequestHandler = (a: PairRequestArg) => void;
+    /** 用于不信任的渠道，如网络连接，需要PIN码配对 */
+    async startPairing(op?: { remember?: boolean }): Promise<PairingSession> {
+        const defaultRemember = op?.remember ?? true;
+        const connectId = crypto.randomUUID();
+        const { connect, trusted } = await this.createConnect(Connect.pointId(connectId));
 
         let h: PairRequestHandler = () => {};
         connect.on("pairRequest", (rq) => {
             h({
+                remoteDeviceId: rq.remoteDeviceId,
                 reject: () => rq.reject(),
                 waitForPair: async () => {
                     const cert = await rq.waitForPairing();
                     const targetId = (await askMeta()).targetId;
-                    const r = {
+                    const result = {
                         myPrivateKey: cert.myPrivateKey,
                         myPublicKey: cert.myPublicKey,
                         remotePublicKey: cert.remotePublicKey,
@@ -202,22 +546,25 @@ export class Connect {
                         to: rq.remoteDeviceId,
                         targetId,
                     };
-                    afterConnect(r);
-                    return r;
+                    afterConnect(result, defaultRemember);
+                    return result;
                 },
             });
         });
-        const x = {
-            connect: async (remoteId: string) => {
+
+        const session = {
+            connect: async (remoteId: string, connectOp?: { remember?: boolean }): Promise<PairConnectResult> => {
+                const remember = connectOp?.remember ?? defaultRemember;
                 const p = await connect.pairInit({ myDeviceId: connectId, remoteDeviceId: remoteId });
                 return {
+                    remoteDeviceId: remoteId,
                     inputOtherPin: (pin: string) => {
                         p.inputOtherPin(pin);
                     },
                     waitForPair: async () => {
                         const cert = await p.waitForPairing();
                         const targetId = (await askMeta()).targetId;
-                        const r = {
+                        const result = {
                             myPrivateKey: cert.myPrivateKey,
                             myPublicKey: cert.myPublicKey,
                             remotePublicKey: cert.remotePublicKey,
@@ -225,17 +572,17 @@ export class Connect {
                             to: remoteId,
                             targetId,
                         };
-                        afterConnect(r);
-                        return r;
+                        afterConnect(result, remember);
+                        return result;
                     },
-                } as Omit<PairRequestArg, "reject"> & { inputOtherPin: (pin: string) => void };
+                };
             },
             pointId: connectId,
             pin: connect.updatePIN(),
             onPair: (handle: PairRequestHandler) => {
                 h = handle;
             },
-        };
+        } satisfies PairingSession;
 
         const metaRq = Promise.withResolvers<{
             targetId: string;
@@ -254,108 +601,173 @@ export class Connect {
             connect.sendBinary(this.build({ type: "askMeta" }, []));
             return metaRq.promise;
         };
-        const afterConnect = (r: PairResult) => {
+        const afterConnect = (result: PairResult, remember: boolean) => {
             const certId = crypto.randomUUID();
-            this.connectionConfig.set(r.targetId as PointDeviceId, {
-                from: Connect.pointId(r.from),
-                to: Connect.pointId(r.to),
-                remoteDeviceName: "unknown",
-                cert: certId,
-            });
             this.cert.set(certId, {
-                myPrivateKey: r.myPrivateKey,
-                myPublicKey: r.myPublicKey,
-                remotePublicKey: r.remotePublicKey,
+                myPrivateKey: result.myPrivateKey,
+                myPublicKey: result.myPublicKey,
+                remotePublicKey: result.remotePublicKey,
+                createdAt: Date.now(),
+                lastConnected: Date.now(),
             });
-            this.connection.set(r.targetId as PointDeviceId, {
-                connect,
-                ready: true,
+            this.upsertConnectionConfig(result.targetId as PointDeviceId, {
+                from: Connect.pointId(result.from),
+                to: Connect.pointId(result.to),
+                remoteDeviceName: "unknown",
+                credentialId: certId,
+                remembered: remember,
             });
-            this.connectInit(connect);
-            this.afterConnect({ targetId: r.targetId as PointDeviceId, connect });
+            this.afterConnect({ targetId: result.targetId as PointDeviceId, connect });
         };
-        return x;
+
+        this.connectInit(connect, trusted);
+        return session;
     }
 
-    async connect(op: { targetId: PointDeviceId }) {
-        const connect = this.connection.get(op.targetId)?.connect;
-        if (!connect) {
-            throw new Error(`No connection for targetId: ${op.targetId}`);
+    async connect(op: { targetId: string } | string) {
+        const targetId = (typeof op === "string" ? op : op.targetId) as PointDeviceId;
+        const connection = this.connection.get(targetId);
+        const config = this.connectionConfig.get(targetId);
+        if (!connection) {
+            throw new Error(`No connection for targetId: ${targetId}`);
         }
 
-        const r = await connect.tryConnect();
-        if (r.success === false) {
-            throw new Error(`Failed to connect to targetId: ${op.targetId}`);
+        const credential = config?.credentialId ? this.cert.get(config.credentialId) : undefined;
+        const result = await connection.connect.tryConnect(
+            credential
+                ? {
+                      myPrivateKey: credential.myPrivateKey,
+                      myPublicKey: credential.myPublicKey,
+                      remotePublicKey: credential.remotePublicKey,
+                      createdAt: credential.createdAt,
+                  }
+                : undefined,
+        );
+        if (result.success === false) {
+            const reason = "reason" in result ? result.reason : undefined;
+            throw new Error(`Failed to connect to targetId: ${targetId}${reason ? ` (${reason})` : ""}`);
         }
-        this.afterConnect({ targetId: op.targetId, connect });
+
+        if (config?.credentialId && result.credential.myPrivateKey.length > 0) {
+            this.updateCredential(config.credentialId, result.credential);
+        }
+        this.afterConnect({ targetId, connect: connection.connect });
     }
+
     private afterConnect(op: { targetId: PointDeviceId; connect: SConnect }) {
         const connect = op.connect;
-        this.connection.set(op.targetId, {
+        const targetId = op.targetId;
+        const wasReady = this.connection.get(targetId)?.ready === true;
+        this.connection.set(targetId, {
             connect,
             ready: true,
         });
-        this.sendTo({
-            targetId: AnyTarget,
-            json: { serverName: "connect.connect", baseId: this.myId, connectId: op.targetId },
-        });
-        // todo 添加包括自己的广播省去一个重复书写
-        this.globalMapHint.createPair(this.myId, op.targetId);
-        // 新节点需要了解已有的网络结构
-        this.sendTo({
-            targetId: [op.targetId],
-            json: {
-                serverName: "connect.globalMap",
-                pairs: this.globalMapHint.exportPairs(),
-            },
-        });
 
-        const config = this.connectionConfig.get(op.targetId);
+        const config = this.connectionConfig.get(targetId);
         if (!config) {
-            throw new Error(`No connection config for targetId: ${op.targetId}`);
+            throw new Error(`No connection config for targetId: ${targetId}`);
         }
 
+        if (!this.initializedConnect.has(connect)) {
+            this.initializedConnect.add(connect);
+            this.initDataHandler(targetId, connect, config);
+        }
+
+        if (!wasReady) {
+            this.sendTo({
+                targetId: AnyTarget,
+                json: { serverName: "connect.connect", baseId: this.myId, connectId: targetId },
+            });
+            this.globalMapHint.createPair(this.myId, targetId);
+            this.sendTo({
+                targetId: [targetId],
+                json: {
+                    serverName: "connect.globalMap",
+                    pairs: this.globalMapHint.exportPairs(),
+                },
+            });
+        }
+
+        this.saveState();
+        if (!wasReady) {
+            this.emit("connected", targetId);
+            const connection = this.getConnection(targetId);
+            if (connection) this.emit("connection-changed", connection);
+        }
+    }
+
+    private initDataHandler(targetId: PointDeviceId, connect: SConnect, config: ConnectionConfig) {
         connect.on("data", (data: ArrayBuffer) => {
-            // todo
             const { json, bins } = this.parse(data);
             if ("_" in json) {
                 const meta = json._ as MetaType;
-                const myid = this.myId;
-                if (meta.targetId === AnyTarget || meta.targetId.includes(myid))
+                const myId = this.myId;
+                if (meta.targetId === AnyTarget || meta.targetId.includes(myId)) {
                     for (const handler of this.messageHandlers) {
                         handler({ fromName: config.remoteDeviceName, json, bins });
                     }
-                if (meta.path.includes(myid)) return;
-                meta.path.push(myid);
-                const ndata = this.build(json, bins);
+                }
+                if (meta.path.includes(myId)) return;
+                meta.path.push(myId);
+                const nextData = this.build(json, bins);
                 let nextId: PointDeviceId | null = null;
                 if (meta.pathHint) {
-                    const thisIndex = meta.pathHint.path.indexOf(myid);
+                    const thisIndex = meta.pathHint.path.indexOf(myId);
                     if (thisIndex >= 0) {
                         nextId = meta.pathHint.path[thisIndex + 1] as PointDeviceId;
                     }
                 }
                 for (const id of this.avalableConnections()) {
-                    if (id !== op.targetId && (nextId === null || id === nextId))
-                        this.sendMessage({ targetId: id, message: ndata });
+                    if (id !== targetId && (nextId === null || id === nextId)) {
+                        this.sendMessage({ targetId: id, message: nextData });
+                    }
                 }
             }
         });
         connect.on("disconnect", () => {
-            this.connection.delete(op.targetId);
+            this.connection.delete(targetId);
             this.sendTo({
                 targetId: AnyTarget,
-                json: { serverName: "connect.disconnect", baseId: this.myId, connectId: op.targetId },
+                json: { serverName: "connect.disconnect", baseId: this.myId, connectId: targetId },
             });
-            this.globalMapHint.destroyPair(this.myId, op.targetId);
+            this.globalMapHint.destroyPair(this.myId, targetId);
+            this.emit("disconnected", targetId);
+            const connection = this.getConnection(targetId);
+            if (connection) this.emit("connection-changed", connection);
+            this.saveState();
         });
     }
-    async disconnect(op: { targetId: PointDeviceId }) {
-        const connect = this.connection.get(op.targetId)?.connect;
-        if (!connect) {
-            return;
-        }
+
+    async disconnect(op: { targetId: string } | string) {
+        const targetId = (typeof op === "string" ? op : op.targetId) as PointDeviceId;
+        const connect = this.connection.get(targetId)?.connect;
+        if (!connect) return;
         connect.disconnect();
+    }
+
+    /** 删除连接配置及配对凭证；先断开再删除。 */
+    removeConnection(targetId: string) {
+        const id = targetId as PointDeviceId;
+        const connect = this.connection.get(id)?.connect;
+        connect?.disconnect();
+        this.connection.delete(id);
+
+        const config = this.connectionConfig.get(id);
+        if (!config) return;
+        this.connectionConfig.delete(id);
+        if (config.credentialId && !this.isCredentialInUse(config.credentialId)) {
+            this.cert.delete(config.credentialId);
+        }
+        this.globalMapHint.destroyPair(this.myId, id);
+        this.saveState();
+        this.emit("connection-removed", id);
+    }
+
+    private isCredentialInUse(credentialId: string): boolean {
+        for (const config of this.connectionConfig.values()) {
+            if (config.credentialId === credentialId) return true;
+        }
+        return false;
     }
 
     private async sendMessage(op: { targetId: PointDeviceId; message: ArrayBuffer }) {
@@ -489,56 +901,82 @@ export class Connect {
     getGlobalMap(): [string, string][] {
         return this.globalMapHint.exportPairs();
     }
-    async connect2(op: { targetId: TargetId }) {
+    async connect2(op: { targetId: string; remember?: boolean }) {
+        const targetId = op.targetId as PointDeviceId;
         if (op.targetId === this.myId) return;
-        if (this.connection.has(op.targetId as PointDeviceId)) return;
-        if (this.connectionConfig.has(op.targetId as PointDeviceId)) {
-            await this.connect({ targetId: op.targetId as PointDeviceId });
-        } else {
-            const path = this.globalMapHint.findPath(this.myId, op.targetId);
-            if (path.length < 2) {
-                throw new Error(`No path to targetId: ${op.targetId}`);
-            }
-            const thisConnectId = crypto.randomUUID();
-            const targetConnect = await this.sendToAndReceive({
-                targetId: op.targetId,
-                json: { serverName: "connect.new", pointId: thisConnectId, sourceId: this.myId },
+        if (this.connection.has(targetId)) return;
+        if (this.connectionConfig.has(targetId)) {
+            await this.connect({ targetId });
+            return;
+        }
+
+        const path = this.globalMapHint.findPath(this.myId, op.targetId);
+        if (path.length < 2) {
+            throw new Error(`No path to targetId: ${op.targetId}`);
+        }
+        const remember = op.remember ?? true;
+        const thisConnectId = crypto.randomUUID();
+        const targetConnect = await this.sendToAndReceive({
+            targetId: op.targetId as TargetId,
+            json: {
+                serverName: "connect.new",
+                pointId: thisConnectId,
+                sourceId: this.myId,
+                remember,
+            },
+        });
+        const targetConnectId = targetConnect.json.connectId as PointDeviceId;
+        const pin = targetConnect.json.pin as string;
+
+        const { connect, trusted } = await this.createConnect(
+            Connect.pointId(thisConnectId),
+            Connect.pointId(targetConnectId),
+        );
+        const result = await connect.tryConnect();
+        if (result.success === false) {
+            const pairing = await connect.pairInit({
+                myDeviceId: thisConnectId,
+                remoteDeviceId: targetConnectId,
             });
-            const [targetConnectId, pin] = [
-                targetConnect.json.connectId as PointDeviceId,
-                targetConnect.json.pin as string,
-            ];
-            const connect = new SConnect(this.adapter());
-            await connect.init(thisConnectId, targetConnectId);
-            this.connectionConfig.set(op.targetId as PointDeviceId, {
+            pairing.inputOtherPin(pin);
+            const credential = await pairing.waitForPairing();
+            const certId = crypto.randomUUID();
+            this.cert.set(certId, {
+                myPrivateKey: credential.myPrivateKey,
+                myPublicKey: credential.myPublicKey,
+                remotePublicKey: credential.remotePublicKey,
+                createdAt: credential.createdAt ?? Date.now(),
+                lastConnected: Date.now(),
+            });
+            this.upsertConnectionConfig(targetId, {
                 from: Connect.pointId(thisConnectId),
                 to: Connect.pointId(targetConnectId),
                 remoteDeviceName: "unknown",
-                cert: "",
+                credentialId: certId,
+                remembered: remember,
             });
-            const r = await connect.tryConnect();
-            if (r.success === false) {
-                const x = await connect.pairInit({ myDeviceId: thisConnectId, remoteDeviceId: targetConnectId });
-                x.inputOtherPin(pin);
-                const c = await x.waitForPairing();
-                const certId = crypto.randomUUID();
+        } else {
+            const certId = result.credential.myPrivateKey.length > 0 && remember ? crypto.randomUUID() : "";
+            if (certId) {
                 this.cert.set(certId, {
-                    myPrivateKey: c.myPrivateKey,
-                    myPublicKey: c.myPublicKey,
-                    remotePublicKey: c.remotePublicKey,
+                    myPrivateKey: result.credential.myPrivateKey,
+                    myPublicKey: result.credential.myPublicKey,
+                    remotePublicKey: result.credential.remotePublicKey,
+                    createdAt: result.credential.createdAt,
+                    lastConnected: result.credential.lastConnected ?? Date.now(),
                 });
-                this.connectionConfig.set(op.targetId as PointDeviceId, {
-                    from: Connect.pointId(thisConnectId),
-                    to: Connect.pointId(targetConnectId),
-                    remoteDeviceName: "unknown",
-                    cert: certId,
-                });
-                this.connectInit(connect);
-                this.afterConnect({ targetId: op.targetId as PointDeviceId, connect });
-            } else {
-                this.afterConnect({ targetId: op.targetId as PointDeviceId, connect });
             }
+            this.upsertConnectionConfig(targetId, {
+                from: Connect.pointId(thisConnectId),
+                to: Connect.pointId(targetConnectId),
+                remoteDeviceName: "unknown",
+                credentialId: certId,
+                remembered: remember,
+            });
         }
+
+        this.connectInit(connect, trusted);
+        this.afterConnect({ targetId, connect });
     }
 }
 

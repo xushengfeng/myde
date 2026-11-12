@@ -1,29 +1,12 @@
 import type {} from "../../../src/desktop-api";
 import { RemoteRender } from "./remote-render";
 
-const { MSysApi, MInputMap, MSetting } = myde;
+const { MSysApi, MInputMap } = myde;
 
-const nSetting = MSetting.init<{
-    "remote.myId": string;
-    "remote.peers": {
-        id: string;
-        lastConnected: number;
-        type: "launcher" | "render";
-    }[];
-}>({
-    version: "0.0.1",
-    defaultNsSetting: {
-        "remote.myId": "",
-        "remote.peers": [],
-    },
-});
-
-const myId = nSetting.nget("remote.myId") || crypto.randomUUID();
-nSetting.nset("remote.myId", myId);
-
-const connect = myde.MConnect(myId);
+const connect = myde.MConnect();
 await connect.init();
-console.log("connect load");
+const myId = connect.getId();
+console.log("connect load", myId);
 
 const render = new RemoteRender(connect);
 const server = MSysApi.server({ render: render });

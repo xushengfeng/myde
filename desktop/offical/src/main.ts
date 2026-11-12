@@ -13,7 +13,13 @@ import {
     view,
 } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
-import type { DesktopIconConfig, InputManager, UniInputEvent, WinHandle } from "../../../src/desktop-api";
+import type {
+    ConnectConnection,
+    DesktopIconConfig,
+    InputManager,
+    UniInputEvent,
+    WinHandle,
+} from "../../../src/desktop-api";
 import { InputEventCodes } from "../../../src/input_codes/types";
 import type { blueDevice } from "../../../src/sys_api/blue";
 import type { MenuItem } from "../../../src/sys_api/menu";
@@ -89,6 +95,15 @@ interface RegistrySchema {
         ssid: string;
         connected: boolean;
     };
+    "connect.enabled": boolean;
+    "connect.id": string;
+    "connect.devices": id<"connect.devices[]">[];
+    "connect.devices[]": {
+        id: string;
+        name: string;
+        connected: boolean;
+        remembered: boolean;
+    };
     "blue.power": boolean;
     "blue.devices": id<"blue.devices[]">[];
     "blue.devices[]": {
@@ -136,7 +151,7 @@ interface RegistrySchema {
 type tmpRegistry = Registry<RegistrySchema>;
 
 // 具体的键类型
-type BooleanRegistryKeys = "wifi.enabled" | "blue.power";
+type BooleanRegistryKeys = "wifi.enabled" | "blue.power" | "connect.enabled";
 type NumericRegistryKeys = "power.battery";
 
 function createToggle(registry: tmpRegistry, id: BooleanRegistryKeys): ControlNode {
@@ -172,6 +187,7 @@ type InternalWindowEntry = {
     el: ElType<HTMLDivElement>;
     view: View;
     setActive(active: boolean): void;
+    dispose?: () => void;
 };
 
 /** 桌面自己创建的 DOM 窗口（不是 Wayland 客户端），与客户端窗口共用虚拟桌面、聚焦和关闭逻辑 */
@@ -584,6 +600,7 @@ const planteData: Plant[] = [
             { id: "tray" },
             { id: "blue" },
             { id: "network" },
+            { id: "connect" },
             { id: "power" },
             { id: "volume" },
             { id: "ime" },
@@ -917,7 +934,7 @@ function openSettingsWindow() {
             txt("设置").style({ fontWeight: "600" }),
         ]);
 
-    const content = createSettingsContent({
+    const settingsContent = createSettingsContent({
         getIconTheme: () => setting.get("icon.theme") || "breeze",
         setIconTheme: (theme) => setting.set("icon.theme", theme),
         getImePanelPreedit: () => (imeSetting.nget("panelPreedit") ?? "auto") as ImePanelPreeditMode,
@@ -928,7 +945,20 @@ function openSettingsWindow() {
             windowCenterManager.setEnabled(enabled);
         },
         inputMethodAvailable: !!MSysApi.inputMethod,
+        connectAvailable: !!myde.MConnect,
+        getConnectEnabled,
+        setConnectEnabled: (enabled) => {
+            void setConnectEnabled(enabled);
+        },
+        getConnectId: () => connect.getId(),
+        listConnectDevices,
+        forgetConnectDevice,
+        setConnectRemember: (targetId, remember) => connect.setRemember(targetId, remember),
+        createConnectPairing,
+        subscribeConnect,
+        modalHost: root.el,
     });
+    const content = settingsContent.el;
 
     const closeBtn = createWindowCloseButton({
         size: 24,
@@ -978,7 +1008,7 @@ function openSettingsWindow() {
         window.addEventListener("pointercancel", cleanup, { once: true });
     });
 
-    internalWindows.set(SETTINGS_WINDOW_ID, { el: root, view: v, setActive });
+    internalWindows.set(SETTINGS_WINDOW_ID, { el: root, view: v, setActive, dispose: settingsContent.dispose });
     addWindow(v, root.el, SETTINGS_WINDOW_ID);
     viewData.focusWin(SETTINGS_WINDOW_ID);
 }
@@ -990,6 +1020,7 @@ function closeSettingsWindow() {
     internalWindows.delete(SETTINGS_WINDOW_ID);
     viewData.closeWin(SETTINGS_WINDOW_ID);
     windowCenterManager.removeWindow(SETTINGS_WINDOW_ID);
+    entry.dispose?.();
     entry.el.remove();
 }
 
@@ -1190,6 +1221,21 @@ const desktopSetting = MSetting.init({
 });
 
 windowCenterManager.setEnabled(desktopSetting.nget("centerWindows"));
+
+const connectSetting = MSetting.init({
+    version: "0.0.1",
+    nameSpace: "connect",
+    defaultNsSetting: {
+        enabled: true,
+    },
+});
+
+const connect = myde.MConnect();
+let connectInited = false;
+
+function getConnectEnabled() {
+    return connectSetting.nget("enabled") ?? true;
+}
 
 // @ts-expect-error
 window.dy = () => dyj电源键.fire();
@@ -1677,6 +1723,78 @@ const _hubRegistry = new Registry<RegistrySchema>();
 void _desktopRegistry;
 void _hubRegistry;
 
+function updateConnectRegistry() {
+    rawRegistry.setData("connect.id", connect.getId());
+    const devices = connect
+        .getConnections()
+        .filter((device) => device.remembered || device.connected)
+        .sort((a, b) => Number(b.connected) - Number(a.connected) || a.targetId.localeCompare(b.targetId));
+    const ids: id<"connect.devices[]">[] = [];
+    for (const device of devices) {
+        const key = `connect.devices.${device.targetId}` as "connect.devices[]";
+        rawRegistry.setData(key, {
+            id: device.targetId,
+            name: device.remoteDeviceName === "unknown" ? device.targetId : device.remoteDeviceName,
+            connected: device.connected,
+            remembered: device.remembered,
+        });
+        ids.push(key as id<"connect.devices[]">);
+    }
+    rawRegistry.setData("connect.devices", ids);
+}
+
+function subscribeConnect(callback: () => void) {
+    const unsubs = [
+        connect.on("connection-added", callback),
+        connect.on("connection-removed", callback),
+        connect.on("connection-changed", callback),
+        connect.on("connected", callback),
+        connect.on("disconnected", callback),
+        connect.on("id-changed", callback),
+    ];
+    return () => {
+        for (const unsubscribe of unsubs) unsubscribe();
+    };
+}
+
+async function setConnectEnabled(enabled: boolean) {
+    connectSetting.nset("enabled", enabled);
+    rawRegistry.setData("connect.enabled", enabled);
+    if (enabled) {
+        try {
+            if (!connectInited) {
+                await connect.init();
+                connectInited = true;
+            }
+            for (const device of connect.getSavedConnections()) {
+                void connect.connect(device.targetId).catch((error) => {
+                    console.warn("connect: auto connect failed", device.targetId, error);
+                });
+            }
+        } catch (error) {
+            console.error("connect init error", error);
+        }
+    } else {
+        for (const device of connect.getActiveConnections()) {
+            await connect.disconnect(device.targetId);
+        }
+    }
+    updateConnectRegistry();
+}
+
+function forgetConnectDevice(targetId: string) {
+    connect.removeConnection(targetId);
+    updateConnectRegistry();
+}
+
+function listConnectDevices(): ConnectConnection[] {
+    return connect.getConnections();
+}
+
+function createConnectPairing() {
+    return connect.startPairing();
+}
+
 function updateTime() {
     const now = new Date();
     rawRegistry.setData("time.second", now.getSeconds());
@@ -1832,6 +1950,16 @@ MSysApi.network
         await updateAccessPoints();
     })
     .catch((e) => console.error("network init error", e));
+
+rawRegistry.setData("connect.enabled", getConnectEnabled());
+rawRegistry.setSetCallback("connect.enabled", async (enabled) => {
+    await setConnectEnabled(enabled);
+});
+updateConnectRegistry();
+void subscribeConnect(updateConnectRegistry);
+if (getConnectEnabled()) {
+    void setConnectEnabled(true);
+}
 
 MSysApi.blue
     .init()
@@ -2173,6 +2301,63 @@ const uipool = {
         });
         return {
             id: "wifi.devices",
+            type: "dynamic-list",
+            el: container.el.style({ width: px(sSize(6)) }),
+            unmount: () => {
+                unsub();
+                for (const s of us) s();
+            },
+        };
+    },
+    "connect.toggle": () => createToggle(rawRegistry, "connect.enabled"),
+    "connect.devices": () => {
+        const source = rawRegistry.get("connect.devices");
+        const us: (() => void)[] = [];
+        const container = dynamicScrollList<string>({
+            itemSize: sSize(1.5),
+            containerSize: sSize(1.5) * 4,
+            direction: "down",
+            keyExtractor: (x) => x,
+            renderItem: (k) => {
+                const el = iItem({ type: "h", size: 1.5 }).style({
+                    display: "flex",
+                    alignItems: "center",
+                    padding: `${sSize2.padding}px`,
+                    gap: `${sSize2.padding}px`,
+                });
+                const s = rawRegistry.get(k as "connect.devices[]").getAndSubscribe((v) => {
+                    el.clear().add([
+                        aLineText().sv(v.name),
+                        spacer(),
+                        aLineText()
+                            .sv(v.connected ? "已连接" : v.remembered ? "已记忆" : "临时")
+                            .style({ flexShrink: "0" }),
+                    ]);
+                    el.style({ cursor: v.connected || getConnectEnabled() ? "pointer" : "default" });
+                });
+                el.on("click", async () => {
+                    const device = await rawRegistry.get(k as "connect.devices[]").get();
+                    if (!device || !getConnectEnabled()) return;
+                    try {
+                        if (device.connected) {
+                            await connect.disconnect(device.id);
+                        } else {
+                            await connect.connect(device.id);
+                        }
+                    } catch (error) {
+                        console.warn("connect: toggle device failed", device.id, error);
+                    }
+                });
+                us.push(s);
+                return el;
+            },
+        });
+
+        const unsub = source.getAndSubscribe(async (ids) => {
+            container.setList(ids);
+        });
+        return {
+            id: "connect.devices",
             type: "dynamic-list",
             el: container.el.style({ width: px(sSize(6)) }),
             unmount: () => {
@@ -2780,6 +2965,30 @@ tools.registerTool(
         const toggle = uipool["wifi.toggle"]();
         const apList = uipool["wifi.accessPoints"]();
         ui.bar([ui.barItem().add(toggle.el), ui.barItem().add(apList.el)]).el.addInto(tipEl);
+
+        el.on("click", () => {
+            showTip({ state: "show", anchorEl: el.el });
+        });
+
+        return el;
+    },
+    { selfBackground: true },
+);
+
+tools.registerTool(
+    "connect",
+    ({ tipEl, showTip }) => {
+        const el = view("x")
+            .style({ alignItems: "center" })
+            .add(getIconXEl("connect", { size: 20, width: 24, height: 24 }).el);
+        const toggle = uipool["connect.toggle"]();
+        const deviceList = uipool["connect.devices"]();
+        const idText = aLineText();
+        rawRegistry.get("connect.id").getAndSubscribe((id) => idText.sv(`本机 ID: ${id}`));
+
+        ui.bar([ui.barItem().add(toggle.el), ui.barItem().add(idText), ui.barItem().add(deviceList.el)]).el.addInto(
+            tipEl,
+        );
 
         el.on("click", () => {
             showTip({ state: "show", anchorEl: el.el });

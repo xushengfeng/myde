@@ -67,9 +67,10 @@ export const _myde = {
         throttle,
     },
     MSetting: undefined as unknown as setting<nowConfig>,
-    MConnect: undefined as unknown as (id: string) => Connect,
+    MConnect: undefined as unknown as () => Connect,
 };
 export type DesktopApi = typeof _myde;
+export type { ConnectConnection, ConnectEvents, PairingSession } from "./connect/connect";
 export type { DesktopIconConfig } from "./sys_api/application";
 
 declare global {

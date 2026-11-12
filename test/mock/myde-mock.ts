@@ -1,4 +1,6 @@
 import type { InputManager } from "myde-input";
+import { Connect } from "../../src/connect/connect";
+import { MemoryConnectStorage } from "../../src/connect/storage";
 import type { DesktopApi } from "../../src/desktop-api";
 import { EventEmitter } from "../../src/event-emitter/event-emitter";
 import { absPosMapping, absRange, absRatio } from "../../src/input_map/abs";
@@ -84,6 +86,7 @@ export interface MockWaylandServer {
     socketDir: string;
     socketName: string;
     clients: Map<string, MockWaylandClient>;
+    startXwayland(): Promise<number | undefined>;
     windows: {
         list(): MockWindowInfo[];
         get(handle: string): MockWindowInfo | undefined;
@@ -254,6 +257,7 @@ export function createMockServer(): MockWaylandServer {
         socketDir: "/tmp/mock",
         socketName: "mock-socket",
         clients,
+        startXwayland: async () => undefined,
         windows: {
             list: () => Array.from(infos.values()),
             get: (handle) => infos.get(handle),
@@ -1635,6 +1639,8 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
                     log("runApp", exec, xServerNum);
                     return {} as any;
                 },
+                startXwayland: async () => undefined,
+                stopXwayland: () => {},
                 server: mockServer,
             } as any;
         },
@@ -1694,9 +1700,23 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         },
     } as DesktopApi["MSetting"];
 
-    const defaultConnect: DesktopApi["MConnect"] = (id: string) => {
-        log("MConnect", id);
-        return {} as any;
+    const mockConnect = new Connect({
+        adapter: () => ({
+            trustIdentity: true,
+            supportNativeEncryption: false,
+            init: async () => {},
+            connect: async () => {},
+            send: async () => {},
+            close: () => {},
+            onMessage: () => {},
+            onClose: () => {},
+            onError: () => {},
+        }),
+        storage: new MemoryConnectStorage(),
+    });
+    const defaultConnect: DesktopApi["MConnect"] = () => {
+        log("MConnect");
+        return mockConnect;
     };
 
     return {

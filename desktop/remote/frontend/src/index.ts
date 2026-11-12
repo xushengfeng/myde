@@ -19,15 +19,6 @@ interface ServerMsg {
     toplevels?: Array<{ id: string; surfaceId: string }>;
 }
 
-function getOrCreateDeviceId(): string {
-    let id = localStorage.getItem("myde-remote-device-id");
-    if (!id) {
-        id = crypto.randomUUID();
-        localStorage.setItem("myde-remote-device-id", id);
-    }
-    return id;
-}
-
 class App {
     private connect: Connect;
     private myDeviceId: string;
@@ -39,8 +30,11 @@ class App {
     private toplevelEls = new Map<string, HTMLElement>();
 
     constructor() {
-        this.myDeviceId = getOrCreateDeviceId();
-        this.connect = new Connect({ id: this.myDeviceId, adapter: () => new PeerjsAdapter() });
+        this.connect = new Connect({
+            adapter: () => new PeerjsAdapter(),
+            storage: localStorage,
+        });
+        this.myDeviceId = this.connect.getId();
         this.buildUI();
         this.initConnect();
         this.setupGlobalKeys();
@@ -112,7 +106,8 @@ class App {
         const go = () => {
             const id = (document.getElementById("rid") as HTMLInputElement).value.trim();
             const pin = (document.getElementById("rpin") as HTMLInputElement).value.trim();
-            if (id && pin) {
+            const saved = this.connect.getSavedConnections().some((connection) => connection.targetId === id);
+            if (id && (pin || saved)) {
                 localStorage.setItem("myde-remote-id", id);
                 this.connectToServer(id, pin);
             }
@@ -151,19 +146,35 @@ class App {
     }
 
     private async connectToServer(remoteId: string, remotePin: string) {
-        const x = await this.connect.startPairing();
-        const xx = await x.connect(remoteId);
-        xx.inputOtherPin(remotePin);
         try {
+            const saved = this.connect.getSavedConnections().some((connection) => connection.targetId === remoteId);
+            if (saved) {
+                try {
+                    await this.connect.connect(remoteId);
+                    this.onConnectedSuccess();
+                    return;
+                } catch (err) {
+                    if (!remotePin) throw err;
+                    console.warn("saved connection failed, fallback to pairing", err);
+                }
+            }
+
+            const x = await this.connect.startPairing();
+            const xx = await x.connect(remoteId);
+            xx.inputOtherPin(remotePin);
             await xx.waitForPair();
-            this.connected = true;
-            this.setStatus("Connected", true);
-            document.getElementById("conn")?.classList.add("collapsed");
-            this.onConnected();
+            this.onConnectedSuccess();
         } catch (err) {
             console.error("pairing failed:", err);
             this.setStatus("Pairing Failed", false);
         }
+    }
+
+    private onConnectedSuccess() {
+        this.connected = true;
+        this.setStatus("Connected", true);
+        document.getElementById("conn")?.classList.add("collapsed");
+        this.onConnected();
     }
 
     private onConnected() {

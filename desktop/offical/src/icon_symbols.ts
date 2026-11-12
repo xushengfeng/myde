@@ -172,6 +172,39 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             ],
         };
     },
+    connect: (env) => {
+        const { size } = buildZb(256);
+        const w = 18;
+        const node = 52;
+        const top = { x: size / 2, y: 62 };
+        const left = { x: 60, y: 194 };
+        const right = { x: 196, y: 194 };
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: left, ro: 8, ri: 0 },
+                                    { p: top, ro: 8, ri: 0 },
+                                    { p: right, ro: 8, ri: 0 },
+                                ],
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        { type: "dot", data: { p: top, sizeWidth: node, color: env.color } },
+                        { type: "dot", data: { p: left, sizeWidth: node, color: env.color } },
+                        { type: "dot", data: { p: right, sizeWidth: node, color: env.color } },
+                    ],
+                },
+            ],
+        };
+    },
     blue: (env) => {
         const { size, center } = buildZb(256);
         const w = 24;

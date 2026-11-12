@@ -67,7 +67,14 @@ async function loadDesktop(p: string) {
         },
         defaultSetting: { version: "0.0.1", "icon.theme": "breeze" },
     });
-    myde.MConnect = (id: string) => new Connect({ id, adapter: () => new PeerjsAdapter() });
+    let defaultConnect: Connect | undefined;
+    myde.MConnect = () => {
+        defaultConnect ??= new Connect({
+            adapter: () => new PeerjsAdapter(),
+            storage: localStorage,
+        });
+        return defaultConnect;
+    };
     myde.MSysApi.media = new mpris(await newDBusIO());
     myde.MSysApi.notification = new notification(await newDBusIO());
     myde.MSysApi.tray = new tray(await newDBusIO());
