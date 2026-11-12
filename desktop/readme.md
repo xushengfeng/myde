@@ -267,7 +267,7 @@ inputSim.emit({ kind: "key", type: "up", code: 30, source: "evdev" });
 
 聚合层参考实现见 `desktop/offical`：`main.ts` 的"输入聚合层"完成聚合/融合/分发——window capture 捕获真实 DOM 事件（只收 `isTrusted`，合成事件不回流防环）归一化，`useEvdevDevice` 解码 input api 事件（EV_SYN 帧合并、相对位移积分、绝对轴小数映射、滚轮换算、按键分流，判定/换算工具在 `input_evdev.ts`），统一传入本 api；来源只以 `source` 标记保留类型数据，不做去重。
 
-触摸板（`type === "touchpad"`）按相对设备处理：绝对坐标**不直接映射到屏幕**，而是把相邻帧的差值（按 `absInfo` 量程归一化到视口像素）积分成位移；`BTN_TOUCH` 只表示手指接触、不是点击（点击走 `BTN_LEFT`），抬起后重置基准避免跳变。触摸板常带一个同 `phys` 的伴随鼠标节点，如果那个相对通道真的在出事件，则忽略触摸板的绝对位移，避免双倍移动。
+触摸板（`type === "touchpad"`）的绝对坐标**不直接映射到屏幕**，只用来计算相邻帧位移；`BTN_TOUCH` 只表示手指接触、不是点击（点击走 `BTN_LEFT`）。仓库的 `src/utils/touchpad.ts` 把设备事件封装成 `move`/`scroll`/`button` 语义事件：单指轻触左键、双指轻触右键、三指轻触中键、双指自然滚动、轻触后再次按住移动进入拖拽；物理按键按下的那一轮不合成轻触。三指及以上移动不发滚动，而是单独发 `multiStart`/`multiMove`/`multiEnd`，官方桌面不订阅。MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪接触点，没有 tracking id 的旧设备用 `BTN_TOOL_*` 手指数兜底。触摸板常带一个同 `phys` 的伴随鼠标节点，如果那个相对通道真的在出事件，则忽略触摸板的绝对位移，避免双倍移动。
 
 触屏（`type === "touchscreen"`）的绝对坐标直接映射到视口，MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪每个接触点：一根手指对应一个 `pointerId`，各自产生独立的 down/move/up，第一根按下的手指 `isPrimary` 为 true。没有 tracking id 的旧设备退回单指 `BTN_TOUCH` 路径。统一输入事件的 `pointerType` 为 `"touch"`，`inputSim` 合成 `PointerEvent` 时保留 `pointerType`/`pointerId`/`isPrimary`，UI 只监听 pointer 事件即可同时响应鼠标、触摸板和触屏，多指手势由交互层处理。
 

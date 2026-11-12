@@ -16,6 +16,7 @@ import { AnimationGear, timingFunction } from "myde-ui";
 import type { DesktopIconConfig, InputManager, UniInputEvent, WinHandle } from "../../../src/desktop-api";
 import { InputEventCodes } from "../../../src/input_codes/types";
 import type { MenuItem } from "../../../src/sys_api/menu";
+import { TouchpadInput } from "../../../src/utils/touchpad";
 import { Cursor } from "./cursor";
 import { getIconXEl } from "./icon";
 import { ImeController } from "./ime/ime";
@@ -3145,16 +3146,8 @@ function useEvdevDevice(
     let wheelY = 0;
     const frameKeys: { code: number; value: number }[] = [];
 
-    // ── 触摸板：绝对坐标相邻两帧的差值是位移，不能直接映射到屏幕 ──
-    // ABS_X/ABS_Y 的量程通常就是屏幕分辨率（Huawei 这台是 0..2879/0..1799），
-    // 用 absPosMapping 归一化后乘宽高，量程不同也能得到像素位移。
-    const hasBtnTouch = info.capabilities.keyCodes.includes(InputEventCodes.BTN_TOUCH);
+    // ── 触摸板：设备事件交给 utils/touchpad 封装，绝对坐标只用于算位移和手指数 ──
     const hasTrackingId = info.capabilities.absAxes.includes(InputEventCodes.ABS_MT_TRACKING_ID);
-    let touching = !hasBtnTouch;
-    let haveLastX = false;
-    let haveLastY = false;
-    let lastX = 0;
-    let lastY = 0;
     // ── 触屏：每个接触点映射成一个独立 pointer，pointerId 区分手指 ──
     // MT-B 用 slot + tracking id 跟踪每根手指，第一根按下的手指是主指针（isPrimary）；
     // 没有 tracking id 的旧设备退回单指 BTN_TOUCH 路径。
@@ -3190,6 +3183,55 @@ function useEvdevDevice(
         const t = relativeActivity.get(info.phys);
         return t !== undefined && performance.now() - t < 500;
     };
+    // 触摸板事件工具：自己订阅设备事件，桌面只接收 move/scroll/button 语义事件
+    const touchpadInput =
+        touchpad && abs
+            ? new TouchpadInput(dev, info, {
+                  mapX: (code, value) => {
+                      const ratio = MInputMap.absRatio(info, code, value);
+                      return ratio === undefined ? undefined : ratioToView(ratio, window.innerWidth);
+                  },
+                  mapY: (code, value) => {
+                      const ratio = MInputMap.absRatio(info, code, value);
+                      return ratio === undefined ? undefined : ratioToView(ratio, window.innerHeight);
+                  },
+                  ignoreAbs: companionActive,
+              })
+            : undefined;
+    touchpadInput?.on("move", (moveX, moveY) => {
+        pointerPos.x = Math.min(Math.max(pointerPos.x + moveX, 0), window.innerWidth - 1);
+        pointerPos.y = Math.min(Math.max(pointerPos.y + moveY, 0), window.innerHeight - 1);
+        emit({
+            kind: "pointer",
+            type: "move",
+            x: pointerPos.x,
+            y: pointerPos.y,
+            pointerType: kind,
+            source: "evdev",
+        });
+    });
+    touchpadInput?.on("scroll", (deltaX, deltaY) => {
+        emit({
+            kind: "pointer",
+            type: "wheel",
+            x: pointerPos.x,
+            y: pointerPos.y,
+            deltaX,
+            deltaY,
+            source: "evdev",
+        });
+    });
+    touchpadInput?.on("button", (action, button) => {
+        emit({
+            kind: "pointer",
+            type: action,
+            x: pointerPos.x,
+            y: pointerPos.y,
+            button,
+            pointerType: kind,
+            source: "evdev",
+        });
+    });
 
     function flushFrame() {
         if ((dx || dy) && touchpad && companionActive()) {
@@ -3312,34 +3354,11 @@ function useEvdevDevice(
     });
     dev.on("absolute", (code, value) => {
         if (!abs) return;
+        // 触摸板的绝对坐标由事件工具订阅并转换
+        if (touchpad) return;
         if (code === InputEventCodes.ABS_MT_SLOT) {
             sawSlot = true;
             slot = value;
-            return;
-        }
-        if (touchpad) {
-            if (sawSlot && slot !== 0) return;
-            if (code === InputEventCodes.ABS_MT_TRACKING_ID) {
-                // 没有 BTN_TOUCH 的设备用 tracking id 判断手指按下/抬起
-                touching = value !== -1;
-                if (!touching) {
-                    haveLastX = false;
-                    haveLastY = false;
-                }
-                return;
-            }
-            if (!touching) return;
-            if (code === abs.xCode) {
-                const px = ratioToView(abs.ratioX(value), window.innerWidth);
-                if (haveLastX) dx += px - lastX;
-                lastX = px;
-                haveLastX = true;
-            } else if (code === abs.yCode) {
-                const py = ratioToView(abs.ratioY(value), window.innerHeight);
-                if (haveLastY) dy += py - lastY;
-                lastY = py;
-                haveLastY = true;
-            }
             return;
         }
         if (touchscreen) {
@@ -3416,18 +3435,13 @@ function useEvdevDevice(
         }
     });
     dev.on("key", (code, value) => {
-        if (touchpad && code === InputEventCodes.BTN_TOUCH) {
-            // 触摸板的 BTN_TOUCH 是“手指接触”，不是点击；抬起后下一次接触的
-            // 绝对坐标要重新作为基准，否则会跳一大段位移
-            touching = value === 1;
-            if (!touching) {
-                haveLastX = false;
-                haveLastY = false;
-            }
-            return;
+        if (touchpad) {
+            // 触摸板的 BTN_TOUCH/BTN_TOOL_*/物理按键由事件工具订阅，
+            // BTN_TOUCH 只是“手指接触”不能当左键
+            if (touchpadInput) return;
+            if (code === InputEventCodes.BTN_TOUCH) return;
         }
         if (touchscreen && code === InputEventCodes.BTN_TOUCH) {
-            touching = value === 1;
             // 多接触设备每根手指的按下/抬起由 tracking id 产生，BTN_TOUCH 只表示“还有手指”
             if (touchByContacts) return;
             // 单指旧设备仍走下面的 BTN_TO_BUTTON 分支
