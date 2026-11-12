@@ -3,15 +3,15 @@ import type { DesktopApi } from "../../src/desktop-api";
 import { EventEmitter } from "../../src/event-emitter/event-emitter";
 import { absPosMapping, absRange, absRatio } from "../../src/input_map/abs";
 import type { Item } from "../../src/sys_api/app_control";
-import type { tray } from "../../src/sys_api/appIndicator";
-import type { blue } from "../../src/sys_api/blue";
+import type { TrayEvents, TrayItemEvents, tray } from "../../src/sys_api/appIndicator";
+import type { BlueDeviceEvents, BlueEvents, blue } from "../../src/sys_api/blue";
 import type { display, Rect, Transform } from "../../src/sys_api/display";
 import { inputSim } from "../../src/sys_api/input_sim";
 import type { MenuItem } from "../../src/sys_api/menu";
 import type { MprisEvents, mpris } from "../../src/sys_api/mpris";
-import type { network } from "../../src/sys_api/network";
+import type { AccessPointEvents, NetworkEvents, network, WifiDeviceEvents } from "../../src/sys_api/network";
 import type { NotificationData, NotificationEvents, notification } from "../../src/sys_api/notification";
-import type { power } from "../../src/sys_api/power";
+import type { PowerDeviceEvents, PowerEvents, power } from "../../src/sys_api/power";
 import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools";
 import type { MockRenderTools } from "./render-tools";
 import type { MockVolumeManager } from "./volume-mock";
@@ -495,6 +495,7 @@ export class MockTrayItem {
     private itemIsMenuValue: boolean;
     private iconName: string;
     private menuLayout: MenuItem[];
+    ev = new EventEmitter<TrayItemEvents>();
 
     constructor(name: string, title: string, iconName = "application-default-icon", itemIsMenu = false) {
         this.name = name;
@@ -523,15 +524,19 @@ export class MockTrayItem {
 
     setTitle(title: string) {
         this.titleValue = title;
+        this.ev.emit("changed");
     }
     setItemIsMenu(itemIsMenu: boolean) {
         this.itemIsMenuValue = itemIsMenu;
+        this.ev.emit("changed");
     }
     setIconName(iconName: string) {
         this.iconName = iconName;
+        this.ev.emit("changed");
     }
     setMenuLayout(layout: MenuItem[]) {
         this.menuLayout = layout;
+        this.ev.emit("menuUpdate");
     }
 }
 
@@ -660,7 +665,8 @@ export class MockMprisManager {
     }
 
     removePlayer(name: string) {
-        this.players.delete(name);
+        if (!this.players.delete(name)) return;
+        this.emitter.emit("remove-player", name);
     }
 
     getPlayer(name: string) {
@@ -676,6 +682,9 @@ export class MockMprisManager {
         return {
             async init() {
                 manager.log("media.init");
+            },
+            getPlayers() {
+                return manager.getPlayers() as any;
             },
             on: manager.emitter.on.bind(manager.emitter),
             off: manager.emitter.off.bind(manager.emitter),
@@ -715,11 +724,24 @@ export class MockNotificationManager {
         return id;
     }
 
+    async close(id: number, reason = 3) {
+        if (!this.notifications.delete(id)) return false;
+        this.emitter.emit("closed", id, reason);
+        return true;
+    }
+
+    async invokeAction(id: number, actionKey: string) {
+        if (!this.notifications.has(id)) return false;
+        this.emitter.emit("action", id, actionKey);
+        return true;
+    }
+
     removeNotification(id: number) {
-        this.notifications.delete(id);
+        void this.close(id, 2);
     }
 
     clearNotifications() {
+        for (const id of this.notifications.keys()) void this.close(id, 2);
         this.notifications.clear();
     }
 
@@ -736,6 +758,18 @@ export class MockNotificationManager {
         return {
             async init() {
                 manager.log("notification.init");
+            },
+            async close(id: number, reason = 3) {
+                return await manager.close(id, reason);
+            },
+            async invokeAction(id: number, actionKey: string) {
+                return await manager.invokeAction(id, actionKey);
+            },
+            getNotification(id: number) {
+                return manager.getNotification(id);
+            },
+            getNotifications() {
+                return manager.getNotifications();
             },
             on: manager.emitter.on.bind(manager.emitter),
             off: manager.emitter.off.bind(manager.emitter),
@@ -758,6 +792,7 @@ function createMockNotification(log: (...args: any[]) => void): MockType<notific
 
 export class MockTrayManager {
     private items = new Map<string, MockTrayItem>();
+    private emitter = createMockEventEmitter<TrayEvents>();
     private log: (...args: any[]) => void;
 
     constructor(log: (...args: any[]) => void) {
@@ -766,10 +801,14 @@ export class MockTrayManager {
 
     addItem(item: MockTrayItem) {
         this.items.set(item.getPath(), item);
+        item.ev.on("menuUpdate", () => this.emitter.emit("menuUpdate"));
+        item.ev.on("changed", () => this.emitter.emit("changed", item.getPath()));
+        this.emitter.emit("new", item.getPath());
     }
 
     removeItem(path: string) {
-        this.items.delete(path);
+        if (!this.items.delete(path)) return;
+        this.emitter.emit("remove", path);
     }
 
     getItem(path: string) {
@@ -786,7 +825,7 @@ export class MockTrayManager {
             async init() {
                 manager.log("tray.init");
             },
-            ev: new EventEmitter<{ new: [string]; remove: [string]; menuUpdate: [] }>(),
+            ev: manager.emitter,
             tarysService: manager.items as any,
         };
     }
@@ -797,7 +836,7 @@ function createMockTray(log: (...args: any[]) => void): MockType<tray> {
     return manager.createMock();
 }
 
-export class MockPowerDevice {
+export class MockPowerDevice extends EventEmitter<PowerDeviceEvents> {
     private path: string;
     private percentage: number;
     private state: string;
@@ -813,6 +852,7 @@ export class MockPowerDevice {
         type = "Battery",
         model = "mock-battery",
     ) {
+        super();
         this.path = path;
         this.percentage = percentage;
         this.state = state;
@@ -843,20 +883,25 @@ export class MockPowerDevice {
 
     setPercentage(percentage: number) {
         this.percentage = percentage;
+        this.emit("changed", { Percentage: percentage });
     }
     setState(state: string) {
         this.state = state;
+        this.emit("changed", { State: state });
     }
     setType(type: string) {
         this.type = type;
+        this.emit("changed", { Type: type });
     }
     setModel(model: string) {
         this.model = model;
+        this.emit("changed", { Model: model });
     }
 }
 
 export class MockPowerManager {
     private devices = new Map<string, MockPowerDevice>();
+    private emitter = createMockEventEmitter<PowerEvents>();
     private log: (...args: any[]) => void;
 
     constructor(log: (...args: any[]) => void) {
@@ -865,10 +910,12 @@ export class MockPowerManager {
 
     addDevice(device: MockPowerDevice) {
         this.devices.set(device.getPath(), device);
+        this.emitter.emit("device-added", device as any);
     }
 
     removeDevice(path: string) {
         this.devices.delete(path);
+        this.emitter.emit("device-removed", path);
     }
 
     getDevice(path: string) {
@@ -884,6 +931,16 @@ export class MockPowerManager {
             getDevices() {
                 return Array.from(manager.devices.values()) as any;
             },
+            on: manager.emitter.on.bind(manager.emitter),
+            off: manager.emitter.off.bind(manager.emitter),
+            once: manager.emitter.once.bind(manager.emitter),
+            emit: manager.emitter.emit.bind(manager.emitter),
+            waitFor: manager.emitter.waitFor.bind(manager.emitter),
+            removeAllListeners: manager.emitter.removeAllListeners.bind(manager.emitter),
+            listenerCount: manager.emitter.listenerCount.bind(manager.emitter),
+            hasListeners: manager.emitter.hasListeners.bind(manager.emitter),
+            respond: manager.emitter.respond.bind(manager.emitter),
+            request: manager.emitter.request.bind(manager.emitter),
         };
     }
 }
@@ -893,7 +950,7 @@ function createMockPower(log: (...args: any[]) => void): MockType<power> {
     return manager.createMock();
 }
 
-export class MockBlueDevice {
+export class MockBlueDevice extends EventEmitter<BlueDeviceEvents> {
     private path: string;
     private name: string;
     private address: string;
@@ -901,6 +958,7 @@ export class MockBlueDevice {
     private trusted: boolean;
 
     constructor(path: string, name: string, address: string, connected = false, trusted = false) {
+        super();
         this.path = path;
         this.name = name;
         this.address = address;
@@ -922,13 +980,13 @@ export class MockBlueDevice {
         return this.trusted;
     }
     async connect() {
-        this.connected = true;
+        this.setConnected(true);
     }
     async disconnect() {
-        this.connected = false;
+        this.setConnected(false);
     }
     async pair() {
-        this.trusted = true;
+        this.setTrusted(true);
     }
     async remove() {}
     getPath() {
@@ -937,12 +995,15 @@ export class MockBlueDevice {
 
     setName(name: string) {
         this.name = name;
+        this.emit("changed", { Name: name });
     }
     setConnected(connected: boolean) {
         this.connected = connected;
+        this.emit("changed", { Connected: connected });
     }
     setTrusted(trusted: boolean) {
         this.trusted = trusted;
+        this.emit("changed", { Trusted: trusted });
     }
 }
 
@@ -950,6 +1011,7 @@ export class MockBlueManager {
     private devices = new Map<string, MockBlueDevice>();
     private powered = false;
     private adapterName = "mock-adapter";
+    private emitter = createMockEventEmitter<BlueEvents>();
     private log: (...args: any[]) => void;
 
     constructor(log: (...args: any[]) => void) {
@@ -958,10 +1020,12 @@ export class MockBlueManager {
 
     addDevice(device: MockBlueDevice) {
         this.devices.set(device.getPath(), device);
+        this.emitter.emit("device-added", device as any);
     }
 
     removeDevice(path: string) {
-        this.devices.delete(path);
+        if (!this.devices.delete(path)) return;
+        this.emitter.emit("device-removed", path);
     }
 
     getDevice(path: string) {
@@ -970,6 +1034,7 @@ export class MockBlueManager {
 
     setPowered(powered: boolean) {
         this.powered = powered;
+        this.emitter.emit("adapter-changed", { Powered: powered });
     }
     setAdapterName(name: string) {
         this.adapterName = name;
@@ -989,7 +1054,7 @@ export class MockBlueManager {
             },
             async setPowered(powered: boolean) {
                 manager.log("blue.setPowered", powered);
-                manager.powered = powered;
+                manager.setPowered(powered);
             },
             async startDiscovery() {
                 manager.log("blue.startDiscovery");
@@ -1000,6 +1065,16 @@ export class MockBlueManager {
             getDevices() {
                 return Array.from(manager.devices.values()) as any;
             },
+            on: manager.emitter.on.bind(manager.emitter),
+            off: manager.emitter.off.bind(manager.emitter),
+            once: manager.emitter.once.bind(manager.emitter),
+            emit: manager.emitter.emit.bind(manager.emitter),
+            waitFor: manager.emitter.waitFor.bind(manager.emitter),
+            removeAllListeners: manager.emitter.removeAllListeners.bind(manager.emitter),
+            listenerCount: manager.emitter.listenerCount.bind(manager.emitter),
+            hasListeners: manager.emitter.hasListeners.bind(manager.emitter),
+            respond: manager.emitter.respond.bind(manager.emitter),
+            request: manager.emitter.request.bind(manager.emitter),
         };
     }
 }
@@ -1009,7 +1084,7 @@ function createMockBlue(log: (...args: any[]) => void): MockType<blue> {
     return manager.createMock();
 }
 
-export class MockAccessPoint {
+export class MockAccessPoint extends EventEmitter<AccessPointEvents> {
     private path: string;
     private ssid: string;
     private strength: number;
@@ -1026,6 +1101,7 @@ export class MockAccessPoint {
         hwAddress = "00:11:22:33:44:55",
         maxBitrate = 54000,
     ) {
+        super();
         this.path = path;
         this.ssid = ssid;
         this.strength = strength;
@@ -1060,16 +1136,19 @@ export class MockAccessPoint {
 
     setSsid(ssid: string) {
         this.ssid = ssid;
+        this.emit("changed", { Ssid: ssid });
     }
     setStrength(strength: number) {
         this.strength = strength;
+        this.emit("changed", { Strength: strength });
     }
     setActive(active: boolean) {
         this.active = active;
+        this.emit("changed", { Active: active });
     }
 }
 
-export class MockWifiDevice {
+export class MockWifiDevice extends EventEmitter<WifiDeviceEvents> {
     private path: string;
     private iface: string;
     private state: number;
@@ -1078,6 +1157,7 @@ export class MockWifiDevice {
     private activeAp: MockAccessPoint | null = null;
 
     constructor(path: string, iface = "wlan0", state = 30, deviceType = 2) {
+        super();
         this.path = path;
         this.iface = iface;
         this.state = state;
@@ -1112,10 +1192,13 @@ export class MockWifiDevice {
 
     addAccessPoint(ap: MockAccessPoint) {
         this.accessPoints.set(ap.getPath(), ap);
+        ap.on("changed", () => this.emit("access-point-changed", ap as any));
+        this.emit("access-point-added", ap as any);
     }
 
     removeAccessPoint(path: string) {
-        this.accessPoints.delete(path);
+        if (!this.accessPoints.delete(path)) return;
+        this.emit("access-point-removed", path);
         if (this.activeAp?.getPath() === path) {
             this.activeAp = null;
         }
@@ -1123,13 +1206,16 @@ export class MockWifiDevice {
 
     setActiveAccessPoint(ap: MockAccessPoint | null) {
         this.activeAp = ap;
+        this.emit("changed", { ActiveAccessPoint: ap?.getPath() ?? "/" });
     }
 
     setState(state: number) {
         this.state = state;
+        this.emit("changed", { State: state });
     }
     setInterface(iface: string) {
         this.iface = iface;
+        this.emit("changed", { Interface: iface });
     }
 }
 
@@ -1146,6 +1232,7 @@ export class MockNetworkManager {
         specificObject: string;
         devicePath: string;
     } | null = null;
+    private emitter = createMockEventEmitter<NetworkEvents>();
     private log: (...args: any[]) => void;
 
     constructor(log: (...args: any[]) => void) {
@@ -1154,10 +1241,12 @@ export class MockNetworkManager {
 
     addWifiDevice(device: MockWifiDevice) {
         this.wifiDevices.set(device.getPath(), device);
+        this.emitter.emit("device-added", device as any);
     }
 
     removeWifiDevice(path: string) {
-        this.wifiDevices.delete(path);
+        if (!this.wifiDevices.delete(path)) return;
+        this.emitter.emit("device-removed", path);
     }
 
     getWifiDevice(path: string) {
@@ -1166,15 +1255,19 @@ export class MockNetworkManager {
 
     setNetworkingEnabled(enabled: boolean) {
         this.networkingEnabled = enabled;
+        this.emitter.emit("changed", { NetworkingEnabled: enabled });
     }
     setWirelessEnabled(enabled: boolean) {
         this.wirelessEnabled = enabled;
+        this.emitter.emit("changed", { WirelessEnabled: enabled });
     }
     setState(state: number) {
         this.state = state;
+        this.emitter.emit("changed", { State: state });
     }
     setActiveConnection(conn: typeof this.activeConnection) {
         this.activeConnection = conn;
+        this.emitter.emit("changed", { ActiveConnections: conn ? [conn.path] : [] });
     }
 
     createMock(): MockType<network> {
@@ -1197,11 +1290,21 @@ export class MockNetworkManager {
             },
             async setWirelessEnabled(enabled: boolean) {
                 manager.log("network.setWirelessEnabled", enabled);
-                manager.wirelessEnabled = enabled;
+                manager.setWirelessEnabled(enabled);
             },
             getWifiDevices() {
                 return Array.from(manager.wifiDevices.values()) as any;
             },
+            on: manager.emitter.on.bind(manager.emitter),
+            off: manager.emitter.off.bind(manager.emitter),
+            once: manager.emitter.once.bind(manager.emitter),
+            emit: manager.emitter.emit.bind(manager.emitter),
+            waitFor: manager.emitter.waitFor.bind(manager.emitter),
+            removeAllListeners: manager.emitter.removeAllListeners.bind(manager.emitter),
+            listenerCount: manager.emitter.listenerCount.bind(manager.emitter),
+            hasListeners: manager.emitter.hasListeners.bind(manager.emitter),
+            respond: manager.emitter.respond.bind(manager.emitter),
+            request: manager.emitter.request.bind(manager.emitter),
         };
     }
 }

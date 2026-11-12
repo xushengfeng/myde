@@ -21,6 +21,7 @@ export class dbusMenu {
     private serverName: string;
     private objectPath: string;
     private mainInterface: dbusInterface | undefined;
+    private unsubs: (() => void)[] = [];
     ev = new EventEmitter<{ update: [] }>();
 
     constructor(dbus: dbusClient, op: { serverName: string; objectPath: string }) {
@@ -34,14 +35,24 @@ export class dbusMenu {
         const menuObj = await service.getObject(this.objectPath);
 
         this.mainInterface = await menuObj.getInterface("com.canonical.dbusmenu");
-        this.mainInterface.on<"a(ia{sv})a(ias)">("ItemsPropertiesUpdated", (_updatedProps, _removedProps) => {
-            this.ev.emit("update");
-        });
+        this.unsubs.push(
+            await this.mainInterface.on<"a(ia{sv})a(ias)">("ItemsPropertiesUpdated", (_updatedProps, _removedProps) => {
+                this.ev.emit("update");
+            }),
+        );
 
         // 监听整体菜单布局更新
-        this.mainInterface.on<"ui">("LayoutUpdated", (_revision, _parent) => {
-            this.ev.emit("update");
-        });
+        this.unsubs.push(
+            await this.mainInterface.on<"ui">("LayoutUpdated", (_revision, _parent) => {
+                this.ev.emit("update");
+            }),
+        );
+    }
+    destroy() {
+        for (const unsub of this.unsubs) unsub();
+        this.unsubs = [];
+        this.mainInterface = undefined;
+        this.ev.removeAllListeners("update");
     }
     private infc() {
         if (!this.mainInterface) throw new Error("init first");

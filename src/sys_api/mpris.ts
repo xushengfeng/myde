@@ -3,10 +3,20 @@ import { EventEmitter } from "../event-emitter/event-emitter";
 
 export type MprisEvents = {
     "new-player": [mprisPlayer];
+    "remove-player": [name: string];
+};
+
+export type MprisPlayerEvents = {
+    changed: [changedProperties: Record<string, unknown>];
+    meta: [];
+    status: [];
 };
 
 export class mpris extends EventEmitter<MprisEvents> {
     private io: dbusIO;
+    private players = new Map<string, mprisPlayer>();
+    private pendingPlayers = new Set<string>();
+    private removedDuringInit = new Set<string>();
 
     constructor(dbus: dbusIO) {
         super();
@@ -17,40 +27,93 @@ export class mpris extends EventEmitter<MprisEvents> {
         await this.io.connect();
         const client = new dbusClient({ io: this.io });
         const infc = await client.getMetaInterface();
-        infc.onNameOwnerChanged((name) => {
-            if (name.startsWith("org.mpris.MediaPlayer2.")) {
-                this.emitNewPlayer(name);
+        await infc.onNameOwnerChanged((name, _oldOwner, newOwner) => {
+            if (!name.startsWith("org.mpris.MediaPlayer2.")) return;
+            if (newOwner) {
+                if (this.players.has(name)) this.removePlayer(name);
+                void this.emitNewPlayer(name);
+            } else {
+                this.removePlayer(name);
             }
         });
-        infc.ListNames().then(([m]) => {
-            for (const name of m) {
+        void infc.ListNames().then(([names]) => {
+            for (const name of names) {
                 if (name.startsWith("org.mpris.MediaPlayer2.")) {
-                    this.emitNewPlayer(name);
+                    void this.emitNewPlayer(name);
                 }
             }
         });
     }
+
+    getPlayers() {
+        return Array.from(this.players.values());
+    }
+
     private async emitNewPlayer(name: string) {
-        const player = new mprisPlayer(this.io);
-        await player.init(name);
-        this.emit("new-player", player);
+        if (this.players.has(name) || this.pendingPlayers.has(name)) return;
+        this.pendingPlayers.add(name);
+        try {
+            const player = new mprisPlayer(this.io);
+            await player.init(name);
+            if (this.removedDuringInit.delete(name)) {
+                player.destroy();
+                return;
+            }
+            this.players.set(name, player);
+            this.emit("new-player", player);
+        } finally {
+            this.pendingPlayers.delete(name);
+        }
+    }
+
+    private removePlayer(name: string) {
+        if (this.pendingPlayers.has(name)) {
+            this.removedDuringInit.add(name);
+            return;
+        }
+        const player = this.players.get(name);
+        if (!player) return;
+        player.destroy();
+        this.players.delete(name);
+        this.emit("remove-player", name);
     }
 }
 
-export class mprisPlayer {
+export class mprisPlayer extends EventEmitter<MprisPlayerEvents> {
     private dbusClient: dbusClient;
     private root: dbusInterface | undefined;
     private player: dbusInterface | undefined;
     private name: string = "";
+    private ready = false;
+    private changedUnsub?: () => void;
+
     constructor(dbus: dbusIO) {
+        super();
         this.dbusClient = new dbusClient({ io: dbus });
     }
     async init(name: string) {
+        if (this.ready) return;
         this.name = name;
         const service = await this.dbusClient.getService(name);
         const c = await service.getObject("/org/mpris/MediaPlayer2");
         this.root = await c.getInterface("org.mpris.MediaPlayer2");
         this.player = await c.getInterface("org.mpris.MediaPlayer2.Player");
+        this.changedUnsub = await this.getPlayer().propertiesChanged((changedProperties) => {
+            this.emit("changed", changedProperties);
+            if ("Metadata" in changedProperties) this.emit("meta");
+            if ("PlaybackStatus" in changedProperties) this.emit("status");
+        });
+        this.ready = true;
+    }
+    destroy() {
+        this.changedUnsub?.();
+        this.changedUnsub = undefined;
+        this.ready = false;
+        this.root = undefined;
+        this.player = undefined;
+        this.removeAllListeners("changed");
+        this.removeAllListeners("meta");
+        this.removeAllListeners("status");
     }
     private getPlayer() {
         if (!this.player) throw new Error("init first");
@@ -129,17 +192,9 @@ export class mprisPlayer {
         }
     }
     onMetaChange(callback: () => unknown) {
-        this.getPlayer().propertiesChanged((changed) => {
-            if ("Metadata" in changed) {
-                callback();
-            }
-        });
+        return this.on("meta", callback);
     }
     onStatusChange(callback: () => unknown) {
-        this.getPlayer().propertiesChanged((changed) => {
-            if ("PlaybackStatus" in changed) {
-                callback();
-            }
-        });
+        return this.on("status", callback);
     }
 }

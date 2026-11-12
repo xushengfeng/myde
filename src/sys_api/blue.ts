@@ -1,11 +1,23 @@
 import { dbusClient, type dbusInterface, type dbusIO } from "myde-dbus";
+import { EventEmitter } from "../event-emitter/event-emitter";
 
-export class blue {
+export type BlueEvents = {
+    "adapter-changed": [changedProperties: Record<string, unknown>];
+    "device-added": [device: blueDevice];
+    "device-removed": [path: string];
+};
+
+export type BlueDeviceEvents = {
+    changed: [changedProperties: Record<string, unknown>];
+};
+
+export class blue extends EventEmitter<BlueEvents> {
     private dbus: dbusIO;
     private client: dbusClient;
     private devices = new Map<string, blueDevice>();
 
     constructor(dbus: dbusIO) {
+        super();
         this.dbus = dbus;
         this.client = new dbusClient({ io: dbus });
     }
@@ -14,8 +26,10 @@ export class blue {
         await this.dbus.connect();
         const s = await this.client.getService("org.bluez");
         const adapter = await s.getObject("/org/bluez/hci0");
-        // 获取 Adapter1 接口本身有副作用（建立接口代理），返回值未用到
-        await adapter.getInterface("org.bluez.Adapter1");
+        const adapterIface = await adapter.getInterface("org.bluez.Adapter1");
+        await adapterIface.propertiesChanged((changedProperties) => {
+            this.emit("adapter-changed", changedProperties);
+        });
 
         const objects = await (await this.client.getService("org.bluez")).getObject("/");
         const introspectable = await objects.getInterface("org.freedesktop.DBus.ObjectManager");
@@ -34,18 +48,21 @@ export class blue {
         const objectManager = await (await this.client.getService("org.bluez")).getObject("/");
         const objManagerIface = await objectManager.getInterface("org.freedesktop.DBus.ObjectManager");
 
-        objManagerIface.on<"oa{sa{sv}}">("InterfacesAdded", async (path, interfaces) => {
-            if (interfaces["org.bluez.Device1"]) {
-                const device = new blueDevice(this.client, path);
-                await device.init();
-                this.devices.set(path, device);
-            }
+        await objManagerIface.on<"oa{sa{sv}}">("InterfacesAdded", async (path, interfaces) => {
+            if (!interfaces["org.bluez.Device1"] || this.devices.has(path)) return;
+            const device = new blueDevice(this.client, path);
+            await device.init();
+            this.devices.set(path, device);
+            this.emit("device-added", device);
         });
 
-        objManagerIface.on<"oas">("InterfacesRemoved", async (path, interfaces) => {
-            if (interfaces.includes("org.bluez.Device1")) {
-                this.devices.delete(path);
-            }
+        await objManagerIface.on<"oas">("InterfacesRemoved", (path, interfaces) => {
+            if (!interfaces.includes("org.bluez.Device1")) return;
+            const device = this.devices.get(path);
+            if (!device) return;
+            device.destroy();
+            this.devices.delete(path);
+            this.emit("device-removed", path);
         });
     }
 
@@ -91,20 +108,35 @@ export class blue {
     }
 }
 
-export class blueDevice {
+export class blueDevice extends EventEmitter<BlueDeviceEvents> {
     private client: dbusClient;
     private path: string;
     // @ts-expect-error
     private infc: dbusInterface;
+    private ready = false;
+    private changedUnsub?: () => void;
 
     constructor(client: dbusClient, path: string) {
+        super();
         this.client = client;
         this.path = path;
     }
 
     async init() {
+        if (this.ready) return;
         const o = await (await this.client.getService("org.bluez")).getObject(this.path);
         this.infc = await o.getInterface("org.bluez.Device1");
+        this.changedUnsub = await this.infc.propertiesChanged((changedProperties) => {
+            this.emit("changed", changedProperties);
+        });
+        this.ready = true;
+    }
+
+    destroy() {
+        this.changedUnsub?.();
+        this.changedUnsub = undefined;
+        this.ready = false;
+        this.removeAllListeners("changed");
     }
 
     async getName() {

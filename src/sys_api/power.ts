@@ -1,11 +1,22 @@
 import { dbusClient, type dbusInterface, type dbusIO } from "myde-dbus";
+import { EventEmitter } from "../event-emitter/event-emitter";
 
-export class power {
+export type PowerEvents = {
+    "device-added": [device: powerDevice];
+    "device-removed": [path: string];
+};
+
+export type PowerDeviceEvents = {
+    changed: [changedProperties: Record<string, unknown>];
+};
+
+export class power extends EventEmitter<PowerEvents> {
     private dbus: dbusIO;
     private client: dbusClient;
     private devices = new Map<string, powerDevice>();
 
     constructor(dbus: dbusIO) {
+        super();
         this.dbus = dbus;
         this.client = new dbusClient({ io: dbus });
     }
@@ -23,14 +34,19 @@ export class power {
             this.devices.set(path, device);
         }
 
-        infc.on<"o">("DeviceAdded", async (path) => {
+        await infc.on<"o">("DeviceAdded", async (path) => {
+            if (this.devices.has(path)) return;
             const device = new powerDevice(this.client, path);
             await device.init();
             this.devices.set(path, device);
-            // todo emit
+            this.emit("device-added", device);
         });
-        infc.on<"o">("DeviceRemoved", async (path) => {
+        await infc.on<"o">("DeviceRemoved", (path) => {
+            const device = this.devices.get(path);
+            if (!device) return;
+            device.destroy();
             this.devices.delete(path);
+            this.emit("device-removed", path);
         });
     }
     getDevices() {
@@ -38,24 +54,37 @@ export class power {
     }
 }
 
-export class powerDevice {
+export class powerDevice extends EventEmitter<PowerDeviceEvents> {
     private client: dbusClient;
     path: string;
     // @ts-expect-error
     private infc: dbusInterface;
+    private ready = false;
+    private changedUnsub?: () => void;
     constructor(client: dbusClient, path: string) {
+        super();
         this.client = client;
         this.path = path;
     }
     async init() {
+        if (this.ready) return;
         const o = await (await this.client.getService("org.freedesktop.UPower")).getObject(this.path);
         this.infc = await o.getInterface("org.freedesktop.UPower.Device");
+        this.changedUnsub = await this.infc.propertiesChanged((changedProperties) => {
+            this.emit("changed", changedProperties);
+        });
+        this.ready = true;
+    }
+    destroy() {
+        this.changedUnsub?.();
+        this.changedUnsub = undefined;
+        this.ready = false;
+        this.removeAllListeners("changed");
     }
     async getPercentage() {
         const per = await this.infc.get<"d">("Percentage");
         return per[0];
     }
-    // todo on change
     async getState() {
         const state = await this.infc.get<"u">("State");
         switch (state[0]) {

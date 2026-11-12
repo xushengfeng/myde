@@ -93,9 +93,13 @@ const stat = await fs.stat("file.txt"); // { size, mtime, isFile, isDirectory }
 
 mpris，获取正在播放的媒体相关信息，并控制播放暂停等
 
+播放器出现/退出会发出 `new-player` / `remove-player`；单个播放器的元数据和播放状态变化可通过 `onMetaChange` / `onStatusChange` 订阅
+
 ### notification
 
 通知
+
+新通知发出 `new`，用户或应用关闭通知时发出 `closed`，通知操作被触发时发出 `action`。桌面关闭通知用 `close(id, reason)`，触发操作事件用 `invokeAction(id, actionKey)`
 
 ### portal
 
@@ -139,17 +143,25 @@ portal.on("fileChooser.request", async (req) => {
 
 拖盘
 
+托盘项新增/移除发出 `new` / `remove`，菜单变化发出 `menuUpdate`，图标、标题等属性变化发出 `changed`
+
 ### power
 
 电量获取，包括笔记本电池、蓝牙设备电源等
+
+监听 UPower 的 `PropertiesChanged` 和 `DeviceAdded`/`DeviceRemoved`：设备属性变化时 `powerDevice` 发出 `changed`，设备增减时 `power` 发出 `device-added`/`device-removed`，桌面可据此实时刷新电量
 
 ### blue
 
 蓝牙设备，包括显示连接设备、记住的设备、设备连接断开
 
+适配器属性变化发出 `adapter-changed`，设备属性变化发出 `changed`，设备增减发出 `device-added`/`device-removed`
+
 ### network
 
 主要查看无线网络连接名称，包括设备连接和断开，还没有开发新连接
+
+NetworkManager 属性变化发出 `changed`；无线设备属性、接入点增减和接入点属性变化分别发出对应事件
 
 ### volume
 

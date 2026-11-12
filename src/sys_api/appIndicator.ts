@@ -5,11 +5,23 @@ import { EventEmitter } from "../event-emitter/event-emitter";
 import { getDesktopIcon } from "./application";
 import { dbusMenu } from "./menu";
 
+export type TrayEvents = {
+    new: [name: string];
+    remove: [name: string];
+    menuUpdate: [];
+    changed: [name: string];
+};
+
+export type TrayItemEvents = {
+    menuUpdate: [];
+    changed: [];
+};
+
 export class tray {
     // private sniHost: dbusServer; // todo 实现watcher
     private dbus: dbusIO;
     private sniWatcher: dbusClient;
-    ev = new EventEmitter<{ new: [string]; remove: [string]; menuUpdate: [] }>();
+    ev = new EventEmitter<TrayEvents>();
     tarysService = new Map<string, trayItem>();
 
     constructor(dbus: dbusIO) {
@@ -28,20 +40,28 @@ export class tray {
             const item = new trayItem(name, this.dbus);
             await item.init();
             this.tarysService.set(name, item);
-            item.ev.on("menuUpdate", () => this.ev.emit("menuUpdate"));
+            this.bindItem(name, item);
         }
-        infc.on<"s">("StatusNotifierItemRegistered", async (name) => {
+        await infc.on<"s">("StatusNotifierItemRegistered", async (name) => {
+            if (this.tarysService.has(name)) return;
             const item = new trayItem(name, this.dbus);
             await item.init();
             this.tarysService.set(name, item);
+            this.bindItem(name, item);
             this.ev.emit("new", name);
-            item.ev.on("menuUpdate", () => this.ev.emit("menuUpdate"));
         });
-        infc.on<"s">("StatusNotifierItemUnregistered", async (name) => {
-            console.log("remove tray", name);
+        await infc.on<"s">("StatusNotifierItemUnregistered", (name) => {
+            const item = this.tarysService.get(name);
+            if (!item) return;
+            item.destroy();
             this.tarysService.delete(name);
             this.ev.emit("remove", name);
         });
+    }
+
+    private bindItem(name: string, item: trayItem) {
+        item.ev.on("menuUpdate", () => this.ev.emit("menuUpdate"));
+        item.ev.on("changed", () => this.ev.emit("changed", name));
     }
 }
 
@@ -51,7 +71,8 @@ export class trayItem {
     private menuPath: dbusMenu | undefined;
     // @ts-expect-error
     private mainInterface: dbusInterface;
-    ev = new EventEmitter<{ menuUpdate: [] }>();
+    private unsubs: (() => void)[] = [];
+    ev = new EventEmitter<TrayItemEvents>();
     constructor(path: string, io: dbusIO) {
         this.client = new dbusClient({ io });
         this.path = path;
@@ -64,6 +85,14 @@ export class trayItem {
         const trayItemObj = await serviceClient.getObject(objPath);
         const infc = await trayItemObj.getInterface("org.kde.StatusNotifierItem");
         this.mainInterface = infc;
+
+        const changed = () => this.ev.emit("changed");
+        this.unsubs.push(await infc.propertiesChanged(changed));
+        for (const signal of ["NewIcon", "NewTitle", "NewToolTip", "NewAttentionIcon"]) {
+            this.unsubs.push(await infc.on(signal, changed));
+        }
+        this.unsubs.push(await infc.on<"s">("NewStatus", changed));
+
         try {
             const menuPath = (await infc.get<"o">("Menu"))[0];
             if (menuPath) {
@@ -76,6 +105,14 @@ export class trayItem {
         } catch (error) {
             console.warn("tray Menu property not available:", error);
         }
+    }
+    destroy() {
+        for (const unsub of this.unsubs) unsub();
+        this.unsubs = [];
+        this.menuPath?.destroy();
+        this.menuPath = undefined;
+        this.ev.removeAllListeners("menuUpdate");
+        this.ev.removeAllListeners("changed");
     }
     async title() {
         return (await this.mainInterface.get<"s">("Title"))[0];

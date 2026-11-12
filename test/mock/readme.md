@@ -316,6 +316,8 @@ device.setTrusted(true);
 device.setName("NewName");
 ```
 
+setter 会触发设备的 `changed` 事件；管理器添加/移除设备会触发 `device-added`/`device-removed`，`setPowered` 会触发 `adapter-changed`。
+
 ### MockNetworkManager
 
 ```typescript
@@ -345,6 +347,8 @@ manager.setActiveConnection({
 });
 ```
 
+网络状态变化会触发 `changed`；设备增减、接入点增减和接入点属性变化也会分别触发对应事件。
+
 ### MockPowerManager
 
 ```typescript
@@ -365,6 +369,8 @@ manager.addDevice(battery);
 battery.setPercentage(50);
 battery.setState("Charging");
 ```
+
+`MockPowerDevice` 的 setter 会触发 `changed` 事件，`addDevice`/`removeDevice` 会触发 `device-added`/`device-removed` 事件，可用于调试桌面电量实时刷新。
 
 ### MockNotificationManager
 
@@ -397,6 +403,12 @@ const mock = manager.createMock();
 mock.on("new", (data) => {
     console.log("新通知:", data);
 });
+mock.on("closed", (id, reason) => {
+    console.log("通知关闭:", id, reason);
+});
+mock.on("action", (id, actionKey) => {
+    console.log("通知操作:", id, actionKey);
+});
 ```
 
 ### MockMprisManager
@@ -426,6 +438,9 @@ manager.addPlayer(player);
 const mock = manager.createMock();
 mock.on("new-player", (p) => {
     console.log("新播放器:", p);
+});
+mock.on("remove-player", (name) => {
+    console.log("播放器退出:", name);
 });
 
 // 移除播放器

@@ -15,7 +15,10 @@ import {
 import { AnimationGear, timingFunction } from "myde-ui";
 import type { DesktopIconConfig, InputManager, UniInputEvent, WinHandle } from "../../../src/desktop-api";
 import { InputEventCodes } from "../../../src/input_codes/types";
+import type { blueDevice } from "../../../src/sys_api/blue";
 import type { MenuItem } from "../../../src/sys_api/menu";
+import type { wifiDevice } from "../../../src/sys_api/network";
+import type { powerDevice } from "../../../src/sys_api/power";
 import { TouchpadInput } from "../../../src/utils/touchpad";
 import { Cursor } from "./cursor";
 import { getIconXEl } from "./icon";
@@ -1692,37 +1695,61 @@ MSysApi.power
     .then(async () => {
         const power = MSysApi.power;
         const registry = rawRegistry;
-        await power.init();
 
-        // 获取初始电量数据
-        let batteryPercentage = 0;
-        for (const t of power.getDevices()) {
-            if ((await t.getPowerSupply()) && ((await t.getType()) === "Battery" || (await t.getType()) === "Ups")) {
-                batteryPercentage = await t.getPercentage();
-                break;
+        const updateBattery = async () => {
+            let batteryPercentage = 0;
+            for (const device of power.getDevices()) {
+                if (
+                    (await device.getPowerSupply()) &&
+                    ((await device.getType()) === "Battery" || (await device.getType()) === "Ups")
+                ) {
+                    batteryPercentage = await device.getPercentage();
+                    break;
+                }
             }
-        }
-        registry.setData("power.battery", batteryPercentage);
+            registry.setData("power.battery", batteryPercentage);
+        };
 
-        // TODO: 监听属性变化并调用 registry.setData("power.battery", newValue)
+        const updateDeviceList = () => {
+            registry.setData(
+                "power.devices",
+                power.getDevices().map((device) => `power.devices.${device.path}` as id<"power.devices[]">),
+            );
+        };
 
-        registry.setData(
-            "power.devices",
-            power.getDevices().map((device) => `power.devices.${device.path}` as id<"power.devices[]">),
-        );
-
-        // TODO: 监听设备添加/移除并调用 registry.setData("power.devices", newDevices)
-
-        // todo 监听
-        for (const device of power.getDevices()) {
+        const updateDevice = async (device: powerDevice) => {
             const name = (await device.getModel()) || "Unknown";
             const percentage = await device.getPercentage();
             const status = await device.getState();
 
             const id = `power.devices.${device.path}` as "power.devices[]";
-            // todo 可以绑定id<"power.devices[]">
             registry.setData(id, { name, percentage, status });
+        };
+
+        const watchDevice = (device: powerDevice) => {
+            device.on("changed", async () => {
+                await updateDevice(device);
+                await updateBattery();
+            });
+        };
+
+        power.on("device-added", async (device) => {
+            watchDevice(device);
+            updateDeviceList();
+            await updateDevice(device);
+            await updateBattery();
+        });
+        power.on("device-removed", async () => {
+            updateDeviceList();
+            await updateBattery();
+        });
+
+        updateDeviceList();
+        for (const device of power.getDevices()) {
+            watchDevice(device);
+            await updateDevice(device);
         }
+        await updateBattery();
     })
     .catch((e) => console.error("power init error", e));
 
@@ -1731,52 +1758,78 @@ MSysApi.network
     .then(async () => {
         const network = MSysApi.network;
         const registry = rawRegistry;
-        await network.init();
 
-        // 设置初始无线网络状态
+        const updateAccessPoints = async () => {
+            const wifiDevice = network.getWifiDevices()[0];
+            if (!wifiDevice) {
+                registry.setData("wifi.accessPoints", []);
+                return;
+            }
+
+            const [aps, active] = await Promise.all([wifiDevice.getAccessPoints(), network.getActiveWifiConnection()]);
+            const connectedSsid = active?.id;
+            const ids: string[] = [];
+            const seen = new Set<string>();
+
+            for (const ap of aps) {
+                const ssid = await ap.getSsid();
+                if (!ssid || seen.has(ssid)) continue;
+                seen.add(ssid);
+                ids.push(ssid);
+                registry.setData(`wifi.accessPoints.${ssid}` as "wifi.accessPoints[]", {
+                    ssid,
+                    connected: ssid === connectedSsid,
+                });
+            }
+
+            if (connectedSsid && !seen.has(connectedSsid)) {
+                registry.setData(`wifi.accessPoints.${connectedSsid}` as "wifi.accessPoints[]", {
+                    ssid: connectedSsid,
+                    connected: true,
+                });
+            }
+
+            registry.setData(
+                "wifi.accessPoints",
+                (connectedSsid ? [connectedSsid, ...ids.filter((id) => id !== connectedSsid)] : ids).map(
+                    (id) => `wifi.accessPoints.${id}` as id<"wifi.accessPoints[]">,
+                ),
+            );
+        };
+
+        const watchDevice = (device: wifiDevice) => {
+            device.on("changed", () => {
+                void updateAccessPoints();
+            });
+            device.on("access-point-added", () => {
+                void updateAccessPoints();
+            });
+            device.on("access-point-removed", () => {
+                void updateAccessPoints();
+            });
+        };
+
         registry.setData("wifi.enabled", await network.isWirelessEnabled());
-
         registry.setSetCallback("wifi.enabled", (v) => network.setWirelessEnabled(v));
 
-        // TODO: 监听属性变化并调用 registry.setData("wifi.enabled", newValue)
-
-        const wifiDevice = network.getWifiDevices()[0];
-        if (!wifiDevice) return;
-
-        const aps = await wifiDevice.getAccessPoints();
-        let c = "";
-        const ids: string[] = [];
-        for (const ap of aps) {
-            const ssid = await ap.getSsid();
-            if (!ssid) continue;
-            if (await ap.isActive()) {
-                c = ssid;
-                continue;
+        network.on("changed", (changed) => {
+            if ("WirelessEnabled" in changed) {
+                registry.setData("wifi.enabled", Boolean(changed.WirelessEnabled));
             }
-            ids.push(ssid);
+            void updateAccessPoints();
+        });
+        network.on("device-added", (device) => {
+            watchDevice(device);
+            void updateAccessPoints();
+        });
+        network.on("device-removed", () => {
+            void updateAccessPoints();
+        });
+
+        for (const device of network.getWifiDevices()) {
+            watchDevice(device);
         }
-        registry.setData(
-            "wifi.accessPoints",
-            Array.from(new Set(c ? [c, ...ids] : ids)).map(
-                (i) => `wifi.accessPoints.${i}` as id<"wifi.accessPoints[]">,
-            ),
-        );
-
-        // TODO: 监听接入点变化并调用 registry.setData("wifi.accessPoints", newAccessPoints)
-
-        for (const ap of await wifiDevice.getAccessPoints()) {
-            const ssid = await ap.getSsid();
-            if (!ssid) continue;
-
-            // 获取初始接入点状态
-            const active = await network.getActiveWifiConnection();
-            registry.setData(`wifi.accessPoints.${ssid}` as "wifi.accessPoints[]", {
-                ssid: ssid,
-                connected: active?.id === ssid,
-            });
-
-            // TODO: 监听接入点状态变化并调用 registry.setData(...)
-        }
+        await updateAccessPoints();
     })
     .catch((e) => console.error("network init error", e));
 
@@ -1785,39 +1838,57 @@ MSysApi.blue
     .then(async () => {
         const blue = MSysApi.blue;
         const registry = rawRegistry;
-        await blue.init();
+
+        const updateDevice = async (device: blueDevice) => {
+            const address = await device.getAddress();
+            registry.setData(`blue.devices.${address}` as "blue.devices[]", {
+                name: await device.getName(),
+                connected: await device.isConnected(),
+            });
+        };
+
+        const updateDevices = async () => {
+            const connected: string[] = [];
+            const other: string[] = [];
+            for (const device of blue.getDevices()) {
+                await updateDevice(device);
+                if (!(await device.isTrusted())) continue;
+                const address = await device.getAddress();
+                if (await device.isConnected()) connected.push(address);
+                else other.push(address);
+            }
+            registry.setData(
+                "blue.devices",
+                connected.concat(other).map((i) => `blue.devices.${i}` as id<"blue.devices[]">),
+            );
+        };
+
+        const watchDevice = (device: blueDevice) => {
+            device.on("changed", () => {
+                void updateDevices();
+            });
+        };
 
         registry.setData("blue.power", await blue.isPowered());
         registry.setSetCallback("blue.power", (v) => blue.setPowered(v));
 
-        // TODO: 监听 D-Bus PropertiesChanged 并调用 registry.setData("blue.power", newValue)
-
-        const c: string[] = [];
-        const l: string[] = [];
-        // connect变化时也更新
-        for (const d of blue.getDevices()) {
-            if (await d.isTrusted()) {
-                if (await d.isConnected()) c.push(await d.getAddress());
-                else l.push(await d.getAddress());
+        blue.on("adapter-changed", (changed) => {
+            if ("Powered" in changed) {
+                registry.setData("blue.power", Boolean(changed.Powered));
             }
+        });
+        blue.on("device-added", (device) => {
+            watchDevice(device);
+            void updateDevices();
+        });
+        blue.on("device-removed", () => {
+            void updateDevices();
+        });
+
+        for (const device of blue.getDevices()) {
+            watchDevice(device);
         }
-        registry.setData(
-            "blue.devices",
-            c.concat(l).map((i) => `blue.devices.${i}` as id<"blue.devices[]">),
-        );
-
-        // TODO: 监听设备添加/移除并调用 registry.setData("blue.devices", newDevices)
-
-        for (const d of blue.getDevices()) {
-            const name = await d.getName();
-            const connected = await d.isConnected();
-            registry.setData(`blue.devices.${await d.getAddress()}` as "blue.devices[]", {
-                name,
-                connected,
-            });
-
-            // TODO: 监听设备状态变化并调用 registry.setData(...)
-        }
+        await updateDevices();
     })
     .catch((e) => console.error("blue init error", e));
 
@@ -1827,8 +1898,15 @@ MSysApi.notification
     .init()
     .then(() => {
         const registry = rawRegistry;
-        MSysApi.notification.on("new", (n) => {
-            const id = crypto.randomUUID();
+        const notification = MSysApi.notification;
+
+        const removeNotification = (id: number) => {
+            if (!notifications.delete(String(id))) return;
+            registry.setData("notification.list", Array.from(notifications.keys()) as id<"notification.list[]">[]);
+        };
+
+        notification.on("new", (n) => {
+            const id = String(n.id);
             notifications.set(id, { content: n.body, title: n.summary, id });
 
             registry.setData("notification.list", Array.from(notifications.keys()) as id<"notification.list[]">[]);
@@ -1838,15 +1916,18 @@ MSysApi.notification
                 content: n.body,
             });
             registry.setSetCallback(`notification.list.${id}.delete` as "notification.list[].delete", () => {
-                notifications.delete(id);
-                registry.setData("notification.list", Array.from(notifications.keys()) as id<"notification.list[]">[]);
-                return Promise.resolve();
+                return notification.close(n.id, 2).then(() => undefined);
             });
+        });
+
+        notification.on("closed", (id) => {
+            removeNotification(id);
         });
     })
     .catch((e) => console.error("notification init error", e));
 
 const mediaControl = new Set<string>();
+const mediaTimers = new Map<string, ReturnType<typeof setInterval>>();
 MSysApi.media
     .init()
     .then(() => {
@@ -1855,6 +1936,8 @@ MSysApi.media
 
         media.on("new-player", async (p) => {
             const serverName = p.getServerName();
+            const oldTimer = mediaTimers.get(serverName);
+            if (oldTimer) clearInterval(oldTimer);
             mediaControl.add(serverName);
             registry.setData("media.list", Array.from(mediaControl.keys()) as id<"media.list[]">[]);
             async function setData() {
@@ -1889,15 +1972,24 @@ MSysApi.media
                 return Promise.resolve();
             });
 
-            setInterval(() => {
+            const timer = setInterval(() => {
                 p.getCurrentTime().then((v) => {
                     registry.setData(registry.buildVarId("media.list[].currentTime", [serverName]), v);
                 });
             }, 100);
+            mediaTimers.set(serverName, timer);
             registry.setSetCallback(registry.buildVarId("media.list[].currentTime", [serverName]), (v) => {
                 p.setCurrentTime(v);
                 return Promise.resolve();
             });
+        });
+
+        media.on("remove-player", (name) => {
+            const timer = mediaTimers.get(name);
+            if (timer) clearInterval(timer);
+            mediaTimers.delete(name);
+            mediaControl.delete(name);
+            registry.setData("media.list", Array.from(mediaControl.keys()) as id<"media.list[]">[]);
         });
     })
     .catch((e) => console.error("media player init error", e));
@@ -1914,26 +2006,32 @@ MSysApi.tray.init().then(async () => {
         rawRegistry.setData("tray.list", Array.from(tray.tarysService.keys()) as id<"tray.list[]">[]);
     });
     async function bindData(k: string) {
-        const t = tray.tarysService.get(k);
-        if (!t) return;
-        rawRegistry.setData(rawRegistry.buildVarId("tray.list[]", [k]), {
-            icon:
-                (await t.getIcon({
-                    theme: setting.get("icon.theme"),
-                })) || "",
-            title: await t.title(),
-            itemIsMenu: await t.itemIsMenu(),
-        });
-        t.getMenu().then((menu) => {
+        const item = tray.tarysService.get(k);
+        if (!item) return;
+        const updateData = async () => {
+            rawRegistry.setData(rawRegistry.buildVarId("tray.list[]", [k]), {
+                icon:
+                    (await item.getIcon({
+                        theme: setting.get("icon.theme"),
+                    })) || "",
+                title: await item.title(),
+                itemIsMenu: await item.itemIsMenu(),
+            });
+        };
+        await updateData();
+        item.getMenu().then((menu) => {
             rawRegistry.setData(rawRegistry.buildVarId("tray.list[].menu", [k]), menu);
         });
-        t.ev.on("menuUpdate", async () => {
-            t.getMenu().then((menu) => {
+        item.ev.on("menuUpdate", async () => {
+            item.getMenu().then((menu) => {
                 rawRegistry.setData(rawRegistry.buildVarId("tray.list[].menu", [k]), menu);
             });
         });
+        item.ev.on("changed", () => {
+            void updateData();
+        });
         rawRegistry.setSetCallback(rawRegistry.buildVarId("tray.list[].active", [k]), () => {
-            t.activate();
+            item.activate();
             return Promise.resolve();
         });
     }
