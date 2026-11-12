@@ -174,6 +174,28 @@ describe("持久化", () => {
         expect(c.getId()).toBe(newId);
     });
 
+    it("startPairing 不等待信令连接就返回 pointId 和 pin", async () => {
+        const connect = new Connect({
+            adapter: () => ({
+                trustIdentity: true,
+                supportNativeEncryption: false,
+                init: () => new Promise<void>(() => {}),
+                connect: async () => {},
+                send: async () => {},
+                close: () => {},
+                onMessage: () => {},
+                onClose: () => {},
+                onError: () => {},
+            }),
+            storage: new MemoryConnectStorage(),
+        });
+        const session = await Promise.race([connect.startPairing(), sleep(100).then(() => undefined)]);
+        expect(session).toBeDefined();
+        if (!session) throw new Error("startPairing waited for signaling");
+        expect(session.pointId).toBeTruthy();
+        expect(session.pin).toMatch(/^\d{6}$/);
+    });
+
     it("重启后保留 id 和配对凭据", async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), "myde-connect-test-"));
         try {

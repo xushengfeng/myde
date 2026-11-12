@@ -126,6 +126,22 @@ function decodeBase64(value: string): Uint8Array {
     return data;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(message)), ms);
+        promise.then(
+            (value) => {
+                clearTimeout(timer);
+                resolve(value);
+            },
+            (error) => {
+                clearTimeout(timer);
+                reject(error);
+            },
+        );
+    });
+}
+
 export class Connect extends EventEmitter<ConnectEvents> {
     private adapter: () => SignalingAdapter;
     private storage: ConnectStorage;
@@ -528,7 +544,16 @@ export class Connect extends EventEmitter<ConnectEvents> {
     async startPairing(op?: { remember?: boolean }): Promise<PairingSession> {
         const defaultRemember = op?.remember ?? true;
         const connectId = crypto.randomUUID();
-        const { connect, trusted } = await this.createConnect(Connect.pointId(connectId));
+        const adapter = this.adapter();
+        const connect = new SConnect(adapter);
+        const trusted = adapter.trustIdentity;
+
+        // 先返回 pointId/PIN，信令连接在后台完成，避免 PeerJS 网络慢时界面一直“准备中”。
+        let initError: Error | undefined;
+        const ready = connect.init(Connect.pointId(connectId)).catch((error) => {
+            initError = error instanceof Error ? error : new Error(String(error));
+            this.emit("error", initError);
+        });
 
         let h: PairRequestHandler = () => {};
         connect.on("pairRequest", (rq) => {
@@ -555,6 +580,8 @@ export class Connect extends EventEmitter<ConnectEvents> {
         const session = {
             connect: async (remoteId: string, connectOp?: { remember?: boolean }): Promise<PairConnectResult> => {
                 const remember = connectOp?.remember ?? defaultRemember;
+                await withTimeout(ready, 15000, "信令服务器连接超时");
+                if (initError) throw initError;
                 const p = await connect.pairInit({ myDeviceId: connectId, remoteDeviceId: remoteId });
                 return {
                     remoteDeviceId: remoteId,
