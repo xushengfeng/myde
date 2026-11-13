@@ -60,6 +60,20 @@ impl Compositor {
                 renderer.set_input_enabled(enabled);
                 ServerResponse::InputState { enabled }
             }
+            ClientMessage::SetScreenPower { on, screen_index } => {
+                match renderer.set_screen_power(screen_index, on) {
+                    Ok(screens) => {
+                        // 有些后端（winit）不接受；有实际变化时请求下一帧上屏
+                        if !screens.is_empty() {
+                            self.invalidate();
+                        }
+                        ServerResponse::ScreenPower { on, screens }
+                    }
+                    Err(e) => ServerResponse::Error {
+                        message: e.to_string(),
+                    },
+                }
+            }
             ClientMessage::Ping => ServerResponse::Pong,
         }
     }

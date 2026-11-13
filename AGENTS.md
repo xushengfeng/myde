@@ -15,6 +15,7 @@ myde-wrap 是一个轻量级的 Rust Wayland 桌面合成器，专注于渲染�
 - 将处理后的矩形分别渲染到多个屏幕
 - 获取屏幕参数信息
 - 开启/关闭输入功能
+- 开启/关闭屏幕电源（DPMS，仅 DRM 后端）
 
 提供了更灵活的kiosk模式，应用可自由操纵屏幕渲染
 
@@ -70,6 +71,8 @@ cargo clippy
 
 应用通过环境变量`MYDE_WRAP_SOCKET`获取 Socket 路径，格式为`[4字节大端长度][JSON消息体]`。
 
+屏幕电源能力通过`MYDE_WRAP_SCREEN_POWER=1`广告给子进程；只有 DRM 后端会设置，winit 不设置，应用据此跳过`SetScreenPower`。
+
 ### 消息格式
 
 ```
@@ -120,6 +123,18 @@ cargo clippy
 {
     "type": "SetInputEnabled",
     "enabled": true
+}
+```
+
+#### 设置屏幕电源
+
+`screen_index` 缺省或为 `null` 表示所有屏幕。只在 DRM 后端生效，winit 后端忽略并返回空数组。
+
+```json
+{
+    "type": "SetScreenPower",
+    "on": false,
+    "screen_index": 0
 }
 ```
 
@@ -177,6 +192,18 @@ cargo clippy
 }
 ```
 
+#### 屏幕电源状态
+
+`screens` 为实际被接受的屏幕下标；winit 后端返回空数组。
+
+```json
+{
+    "type": "ScreenPower",
+    "on": false,
+    "screens": [0, 1]
+}
+```
+
 #### 心跳响应
 
 ```json
@@ -193,6 +220,12 @@ cargo clippy
     "message": "错误描述"
 }
 ```
+
+## TODO
+
+- 屏幕电源权限：当前直接操作 DRM connector，依赖 wrap 以 root 或 `video` 组运行并成为 DRM master；后续接入 libseat/logind 的 `TakeDevice`。DPMS 本身不需要额外权限。
+- VT 切换、热插拔、多 GPU 时的 DPMS 状态同步；退出前已强制把所有屏幕 DPMS 打开，避免恢复 fbcon 后黑屏。
+- winit 后端不支持屏幕电源（物理屏幕属于宿主桌面），收到 `SetScreenPower` 时忽略。
 
 ## 测试
 

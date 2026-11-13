@@ -96,6 +96,34 @@ struct DrmOutputData {
     smithay_output: Output,
 }
 
+/// 设置一个 DRM connector 的 DPMS 状态。
+///
+/// 直接设 connector 的 `DPMS` 属性，保留 CRTC 活跃状态，唤醒时仍可正常 page flip。
+/// 不使用 `DrmCompositor::clear()`：它会 reset CRTC/connector，适合 VT 切换，
+/// 但普通熄屏后直接 queue_frame 会因 CRTC 不活跃而失败。
+///
+/// TODO: 权限/VT/热插拔
+/// - 目前依赖 wrap 已能打开 `/dev/dri/card*` 并成为 DRM master（root 或 video 组）；
+///   后续可接 libseat/logind 的 TakeDevice，DPMS 本身不需要额外权限。
+/// - VT 切换、热插拔、多 GPU 时还需要同步 DPMS 状态。
+fn set_dpms(fd: &DrmDeviceFd, connector_handle: connector::Handle, on: bool) -> anyhow::Result<()> {
+    let props = fd.get_properties(connector_handle)?;
+    for (&prop, _) in props.iter() {
+        let info = fd.get_property(prop)?;
+        if info
+            .name()
+            .to_str()
+            .map(|name| name == "DPMS")
+            .unwrap_or(false)
+        {
+            // DRM_MODE_DPMS_ON = 0, DRM_MODE_DPMS_OFF = 3
+            fd.set_property(connector_handle, prop, if on { 0u64 } else { 3u64 })?;
+            return Ok(());
+        }
+    }
+    anyhow::bail!("connector {:?} 没有 DPMS 属性", connector_handle)
+}
+
 /// 启动前的 CRTC 状态（文本控制台/fbcon）。退出时用 `set_crtc` 原样恢复：
 /// smithay 的 `DrmDevice::drop` 是按属性快照恢复的，而 `DrmDevice::new` 里的
 /// reset 已经释放了原来的 MODE_ID blob，在部分驱动（如 xe）上会 EINVAL。
@@ -278,6 +306,8 @@ pub struct DrmBackend {
     last_content_generation: u64,
     /// 上次上屏时的屏幕配置代数
     last_config_generation: u64,
+    /// 上次实际下发的屏幕电源状态（true = 开）
+    last_screen_power: Vec<bool>,
     /// 启动前的显示状态（fbcon），退出时恢复
     saved_crtcs: Vec<SavedCrtc>,
     // device/device_fd 放在最后：字段按声明顺序 drop，必须等 compositor（surface）
@@ -313,6 +343,7 @@ impl DrmBackend {
             offscreen_size: None,
             last_content_generation: 0,
             last_config_generation: 0,
+            last_screen_power: Vec::new(),
             saved_crtcs: Vec::new(),
         }
     }
@@ -348,6 +379,51 @@ impl DrmBackend {
             }
         }
         all_ok
+    }
+
+    /// 按配置设置各输出的 DPMS，返回是否有关掉的屏幕被重新打开（需要强制重绘）。
+    fn apply_screen_power(&mut self, screen_power: &[bool]) -> bool {
+        let Some(fd) = self.device_fd.clone() else {
+            return false;
+        };
+        let mut woke = false;
+        for (index, output) in self.outputs.iter().enumerate() {
+            let on = screen_power.get(index).copied().unwrap_or(true);
+            let last = self.last_screen_power.get(index).copied().unwrap_or(true);
+            if on == last {
+                continue;
+            }
+            match set_dpms(&fd, output.connector, on) {
+                Ok(()) => {
+                    if self.last_screen_power.len() <= index {
+                        self.last_screen_power.resize(index + 1, true);
+                    }
+                    self.last_screen_power[index] = on;
+                    if on {
+                        woke = true;
+                    }
+                }
+                Err(e) => warn!(
+                    "屏幕 {} 设置 DPMS {} 失败: {}",
+                    index,
+                    if on { "on" } else { "off" },
+                    e
+                ),
+            }
+        }
+        woke
+    }
+
+    /// 退出前把所有 connector 的 DPMS 打开，避免恢复 fbcon 后仍是黑屏。
+    fn wake_all_displays(&self) {
+        let Some(fd) = self.device_fd.as_ref() else {
+            return;
+        };
+        for output in &self.outputs {
+            if let Err(e) = set_dpms(fd, output.connector, true) {
+                warn!("退出时打开屏幕 {:?} 失败: {}", output.connector, e);
+            }
+        }
     }
 }
 
@@ -642,6 +718,7 @@ void main() {
         self.renderer = Some(renderer);
         self.rotate_shader = Some(shader);
         self.saved_crtcs = initial_crtcs;
+        self.last_screen_power = vec![true; self.outputs.len()];
         info!(
             "已记录启动前显示状态（{} 个 CRTC），退出时用于恢复文本控制台",
             self.saved_crtcs.len()
@@ -664,6 +741,8 @@ void main() {
 
     fn shutdown(&mut self) {
         info!("退出：正在恢复启动前的显示状态");
+        // 如果之前关过屏，先把 DPMS 打开，否则恢复 fbcon 后仍然是黑的
+        self.wake_all_displays();
         // 顺序很重要：先丢 compositor/surface，其 Drop 会 clear_state 关掉我们
         // 设置的 CRTC；再恢复 fbcon。反过来的话恢复会被随后的 clear_state 覆盖
         self.compositors.clear();
@@ -749,8 +828,18 @@ void main() {
         configs: &[crate::renderer::ScreenConfig],
         canvas_size: Option<(u32, u32)>,
         config_generation: u64,
+        screen_power: &[bool],
     ) {
         self.frame_count += 1;
+
+        // 先把电源状态下发到硬件；从关到开时强制重绘一帧
+        let woke = self.apply_screen_power(screen_power);
+        let any_on = screen_power.is_empty() || screen_power.iter().any(|&on| on);
+        if !any_on {
+            // 全部关屏：不渲染、不发 frame 回调，客户端自然停在等待上；
+            // 打开屏幕时 woke 会触发一次完整重绘
+            return;
+        }
 
         // 内容坐标系原点 = 窗口内容（xdg window geometry）左上角（协议 rect 坐标系）。
         // offscreen_rect 为离屏画布矩形，app_rect 为应用内容范围（默认显示区域）
@@ -760,8 +849,9 @@ void main() {
 
         // 相对上一次上屏：客户端内容、屏幕配置、画布尺寸是否变化
         let offscreen_size_matches = !canvas_valid || self.offscreen_size == Some(canvas_now);
-        let content_changed =
-            state.content_generation != self.last_content_generation || !offscreen_size_matches;
+        let content_changed = woke
+            || state.content_generation != self.last_content_generation
+            || !offscreen_size_matches;
         let config_changed = config_generation != self.last_config_generation;
         let offscreen_ready = !canvas_valid || self.offscreen_texture.is_some();
 
@@ -886,8 +976,8 @@ void main() {
             .zip(self.compositors.iter_mut())
             .enumerate()
         {
-            // 该输出还在等上一帧翻页则跳过
-            if runtime.needs_vblank {
+            // 关掉的屏幕不渲染；该输出还在等上一帧翻页也跳过
+            if !screen_power.get(index).copied().unwrap_or(true) || runtime.needs_vblank {
                 continue;
             }
 

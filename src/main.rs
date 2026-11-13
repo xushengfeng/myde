@@ -187,6 +187,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let is_drm = backend.name() == "drm";
     info!("backend inited: {}", backend.name());
+    let screen_power_supported = is_drm;
 
     // Set WAYLAND_DISPLAY to our socket name, so child processes connect to myde-wrap
     // rather than the host compositor
@@ -243,6 +244,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if state.dmabuf_global.is_some() {
         envs.push(("MYDE_WRAP_DMABUF".to_string(), "1".to_string()));
     }
+    // 屏幕电源（DPMS）只在 DRM 后端可用；winit 显式置 0，避免继承到父进程的值
+    envs.retain(|(key, _)| key != "MYDE_WRAP_SCREEN_POWER");
+    envs.push((
+        "MYDE_WRAP_SCREEN_POWER".to_string(),
+        if screen_power_supported { "1" } else { "0" }.to_string(),
+    ));
 
     let child_stdio = || {
         if args.child_output == "null" {
@@ -298,7 +305,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 将Socket服务器添加到事件循环中
     let loop_handle = event_loop.handle();
     let socket_server = Arc::new(socket_server);
-    let renderer = Arc::new(Mutex::new(MyRenderer::new(backend.get_screens())));
+    let renderer = Arc::new(Mutex::new(MyRenderer::new(
+        backend.get_screens(),
+        screen_power_supported,
+    )));
     // 有脏内容需要上屏：socket 线程与事件循环线程共享
     let redraw = state.redraw.clone();
     let compositor = Arc::new(Compositor::new(renderer.clone(), redraw.clone()));

@@ -292,16 +292,23 @@ impl App {
             return;
         };
         // 取配置快照后立刻释放锁，不让锁跨越整轮 GL 渲染
-        let (configs, canvas_size, config_generation) = {
+        let (configs, canvas_size, config_generation, screen_power) = {
             let guard = renderer_cfg.blocking_lock();
             (
                 guard.get_screen_configs().to_vec(),
                 guard.get_canvas_size(),
                 guard.config_generation(),
+                guard.screen_power().to_vec(),
             )
         };
         self.redraw.store(false, Ordering::Release);
-        backend.render_space(self, &configs, canvas_size, config_generation);
+        backend.render_space(
+            self,
+            &configs,
+            canvas_size,
+            config_generation,
+            &screen_power,
+        );
     }
 
     /// DRM vblank：帧已扫描上屏。立即完成帧提交（归还 swapchain 槽位）、

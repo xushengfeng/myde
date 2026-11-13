@@ -81,6 +81,13 @@ pub enum ClientMessage {
     SetInputEnabled {
         enabled: bool,
     },
+    /// 设置屏幕电源（DPMS）。`screen_index` 缺省或为 null 表示所有屏幕。
+    /// 只在 DRM 后端生效，winit 后端忽略。
+    SetScreenPower {
+        on: bool,
+        #[serde(default)]
+        screen_index: Option<usize>,
+    },
     Ping,
 }
 
@@ -93,6 +100,8 @@ pub enum ServerResponse {
     RenderedToScreen { screen_index: usize },
     Screens { screens: Vec<ScreenInfo> },
     InputState { enabled: bool },
+    /// `screens` 为实际被接受的屏幕下标；winit 后端返回空数组
+    ScreenPower { on: bool, screens: Vec<usize> },
     Pong,
     Error { message: String },
 }

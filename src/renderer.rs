@@ -8,6 +8,10 @@ pub struct Renderer {
     transforms: Vec<Transform>,
     screens: Vec<ScreenInfo>,
     input_enabled: bool,
+    /// 每个屏幕的电源状态（true = 开）。只在 DRM 后端真正生效
+    screen_power: Vec<bool>,
+    /// 后端是否支持屏幕电源控制（winit 为 false）
+    screen_power_supported: bool,
     screen_configs: Vec<ScreenConfig>,
     /// 屏幕配置代数：任何影响上屏结果的配置变更都会递增。
     /// 渲染线程据此判断"仅配置变了"（只需重做上屏那一遍，离屏画布可复用）
@@ -24,8 +28,9 @@ pub struct ScreenConfig {
 }
 
 impl Renderer {
-    /// `screens` 应传入渲染后端的真实输出信息
-    pub fn new(screens: Vec<ScreenInfo>) -> Self {
+    /// `screens` 应传入渲染后端的真实输出信息；
+    /// `screen_power_supported` 由后端决定（DRM 为 true，winit 为 false）
+    pub fn new(screens: Vec<ScreenInfo>, screen_power_supported: bool) -> Self {
         info!("screens: {:?}", screens);
         if screens.is_empty() {
             info!("no output detected, using auto canvas");
@@ -35,6 +40,8 @@ impl Renderer {
             canvas_size: None,
             captured_rects: Vec::new(),
             transforms: vec![Transform { rotation: 0.0 }],
+            screen_power: vec![true; screens.len()],
+            screen_power_supported,
             screens,
             input_enabled: true,
             screen_configs: Vec::new(),
@@ -114,6 +121,31 @@ impl Renderer {
 
     pub fn set_input_enabled(&mut self, enabled: bool) {
         self.input_enabled = enabled;
+    }
+
+    /// 设置屏幕电源，返回实际接受的屏幕下标。
+    /// winit 后端不支持，返回空数组且不改变状态。
+    pub fn set_screen_power(
+        &mut self,
+        screen_index: Option<usize>,
+        on: bool,
+    ) -> anyhow::Result<Vec<usize>> {
+        if !self.screen_power_supported {
+            return Ok(Vec::new());
+        }
+        let targets = match screen_index {
+            Some(index) if index < self.screens.len() => vec![index],
+            Some(index) => return Err(anyhow::anyhow!("Invalid screen index: {}", index)),
+            None => (0..self.screens.len()).collect(),
+        };
+        for &index in &targets {
+            self.screen_power[index] = on;
+        }
+        Ok(targets)
+    }
+
+    pub fn screen_power(&self) -> &[bool] {
+        &self.screen_power
     }
 
     #[allow(dead_code)]

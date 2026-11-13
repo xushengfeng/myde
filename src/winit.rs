@@ -190,8 +190,9 @@ impl RenderBackend for WinitBackend {
         _configs: &[crate::renderer::ScreenConfig],
         _canvas_size: Option<(u32, u32)>,
         _config_generation: u64,
+        _screen_power: &[bool],
     ) {
         // Winit backend handles rendering through its own event loop (WinitEvent::Redraw)
-        // so this is a no-op here.
+        // so this is a no-op here. 屏幕电源也不支持：物理屏幕属于宿主桌面。
     }
 }

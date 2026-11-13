@@ -54,12 +54,15 @@ pub trait RenderBackend: Send {
     ///
     /// `config_generation` 为屏幕配置代数（见 [`crate::renderer::Renderer::config_generation`]），
     /// 用于区分"内容变了"与"仅配置变了"，从而跳过无谓的离屏重绘。
+    ///
+    /// `screen_power` 为每个输出是否开机（true = 开）；长度不足时按开处理。
     fn render_space(
         &mut self,
         _state: &mut App,
         _configs: &[ScreenConfig],
         _canvas_size: Option<(u32, u32)>,
         _config_generation: u64,
+        _screen_power: &[bool],
     ) {
         // Default implementation does nothing
     }
