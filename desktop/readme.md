@@ -624,6 +624,11 @@ enter/leave、剪贴板 selection 归属都跟它走。指针 hover **不**自�
 是选择器**不是广播**——同一事件发给多个 seat 会被客户端当成几把同步光标（点击双发、文本双打）。
 第二个光标（如远程协作者）就 `server.notify("input.pointer", handle, ev, "seat1")`。
 
+> 官方桌面有一个 Firefox 兼容回退：Firefox Nightly 的地址栏/select 弹层会给 `seat0` 的 pointer
+> 留下未释放的 grab，弹层之后 motion 不再更新光标。没有远程连接时，官方桌面把 Firefox 的
+> `move/down/up` 也镜像到 `seat1`；Firefox 会把两把 seat 上完全相同的按下/抬起去重，
+> 因此不会双击。其它客户端不镜像。
+
 ```typescript
 // x、y 相对该窗口的 xdg_surface 元素左上角（几何原点）
 server.notify("input.pointer", handle, { type: "move" | "down" | "up", x, y, button });

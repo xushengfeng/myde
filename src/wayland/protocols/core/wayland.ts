@@ -763,9 +763,10 @@ export const waylandCoreModule = defineModule({
     requests: {
         "wl_display.sync": (x, ctx) => {
             const callbackId = x.args.callback;
-            ctx.sendNow(ctx.client.displayId, "wl_display.delete_id", { id: callbackId });
-
+            // 先 done 再 delete_id：客户端收到 done 后才允许复用这个 id，
+            // 反序会让它把随后复用的同 id 回调误当成已完成。
             ctx.send(callbackId, "wl_callback.done", { callback_data: 0 });
+            ctx.send(ctx.client.displayId, "wl_display.delete_id", { id: callbackId });
         },
         "wl_display.get_registry": (x, ctx) => {
             const registryId = x.args.registry;
@@ -983,7 +984,9 @@ export const waylandCoreModule = defineModule({
         "wl_surface.frame": (x, ctx) => {
             const callbackId = x.args.callback;
             const surface = ctx.objects.get(x.id);
-            surface.data.pending.callback = callbackId;
+            const callbacks = surface.data.pending.callbacks ?? [];
+            callbacks.push(callbackId);
+            surface.data.pending.callbacks = callbacks;
         },
         "wl_surface.commit": async (x, ctx) => {
             const surfaceId = x.id;
@@ -1236,8 +1239,7 @@ export const waylandCoreModule = defineModule({
                 // 像素已经复制进合成器自己的画布，源 buffer 可以立刻还给客户端。
                 // frame callback 走 rAF 排队，把每个 surface 的提交节拍钉在桌面刷新率上。
                 if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
-                const callback = data.callback;
-                if (callback) scheduleFrameDone(ctx, surfaceId, callback);
+                for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
 
                 // 渲染之前交给扩展后处理（viewporter 的裁剪缩放）
                 const fcanvas = ctx.notify.frame(surfaceId, canvas, data);

@@ -1158,12 +1158,17 @@ function sendPointerEvent(
         handled.add(info.clientId);
         hit ??= { handle: info.handle, clientId: info.clientId };
 
-        server.server.notify("input.pointer", info.handle, {
-            type,
-            x: nx,
-            y: ny,
-            button: p.button,
-        });
+        const ev = { type, x: nx, y: ny, button: p.button };
+        server.server.notify("input.pointer", info.handle, ev);
+        // Firefox 的地址栏/select 弹层会给 seat0 的 pointer 留下未释放的 grab：
+        // 弹层关闭后 seat0 的 motion 不再更新光标，但同一客户端的 seat1 pointer 不受影响。
+        // Firefox 会把两把 seat 上完全相同的按下/抬起去重（实测一次点击只触发一次），
+        // 所以这里把 move/down/up 都镜像到 seat1，作为 Firefox Wayland 的兼容回退。
+        // 其它客户端（GTK 也绑两把 seat）不镜像，避免真的双击；远程会话活跃时也不镜像，
+        // 把 seat1 留给远程光标。
+        if (/firefox/i.test(info.appid) && connect.getActiveConnections().length === 0) {
+            server.server.notify("input.pointer", info.handle, ev, "seat1");
+        }
         if (type === "down") {
             viewData.focusWin(info.handle);
             ime?.pointerDown();

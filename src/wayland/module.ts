@@ -37,7 +37,8 @@ export type WaylandSurfaceData = {
     /** 客户端上报的 damage：合成时保留 damage 外的上一帧内容（surface / buffer 坐标） */
     damageList?: { x: number; y: number; width: number; height: number }[];
     damageBufferList?: { x: number; y: number; width: number; height: number }[];
-    callback?: WaylandObjectId2<"wl_callback">;
+    /** 一次 commit 可以挂多个 frame 回调；每个都要 done，漏掉会让客户端一直等 */
+    callbacks?: WaylandObjectId2<"wl_callback">[];
     /** 与 wl_region 模块声明的 rects 同形；此处内联以免 module.ts 反向依赖声明方 */
     inputRegion?: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
     viewport?: {
