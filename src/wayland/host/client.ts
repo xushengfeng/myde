@@ -621,7 +621,32 @@ export class WaylandClient implements Client {
         const xdgSurfaceId = this.windowXdgSurface(winId);
         if (xdgSurfaceId === undefined) return undefined;
         const rootSurface = this.ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
-        return this.getObject(rootSurface).data.canvas;
+        const root = this.ctx.core.surface.getWlSurface(rootSurface).frame ?? this.getObject(rootSurface).data.canvas;
+        // 子表面在 DOM 里由独立的 canvas 叠上去，缩略图必须自己合成；
+        // 只看根 surface 会得到 Firefox 那种「shadow 有、内容没有」的空窗口。
+        const children = this.ctx.core.subsurface.getChildrenDeep(rootSurface);
+        const drawables = children.flatMap(({ id, offsetRect }) => {
+            const frame = this.ctx.core.surface.getWlSurface(id).frame;
+            return frame === undefined ? [] : [{ frame, x: offsetRect.x, y: offsetRect.y }];
+        });
+        if (drawables.length === 0) return root;
+
+        let minX = 0;
+        let minY = 0;
+        let maxX = root.width;
+        let maxY = root.height;
+        for (const d of drawables) {
+            minX = Math.min(minX, d.x);
+            minY = Math.min(minY, d.y);
+            maxX = Math.max(maxX, d.x + d.frame.width);
+            maxY = Math.max(maxY, d.y + d.frame.height);
+        }
+        const canvas = new OffscreenCanvas(Math.max(1, maxX - minX), Math.max(1, maxY - minY));
+        const c2d = canvas.getContext("2d");
+        if (!c2d) return root;
+        c2d.drawImage(root, -minX, -minY);
+        for (const d of drawables) c2d.drawImage(d.frame, d.x - minX, d.y - minY);
+        return canvas;
     }
 
     async ping() {

@@ -500,10 +500,17 @@ export interface CursorApi {
 export interface SeatRecord {
     /** seat 名（registry 广播的第几个 `wl_seat` global：`seat0`/`seat1`…）；`input.*` 的 `seat` 参数按它选择 */
     name: string;
-    pointer?: WaylandObjectId2<"wl_pointer">;
-    keyboard?: WaylandObjectId2<"wl_keyboard">;
+    /**
+     * 该 seat 上全部 `wl_pointer` 资源。同一客户端可以在多份 registry 上重复 `get_pointer`
+     * （Firefox 会这么做），事件必须发给每一个，只留最后一个会让窗口收不到输入。
+     */
+    pointers: Set<WaylandObjectId2<"wl_pointer">>;
+    /** 同上，`wl_keyboard` 资源可能不止一个 */
+    keyboards: Set<WaylandObjectId2<"wl_keyboard">>;
     /** 指针焦点：该 seat 的 `wl_pointer` 已 enter 的 surface（leave/enter 的比较基线） */
     pointerFocus: SurfaceId | null;
+    /** 指针焦点内的最近坐标：后创建的 wl_pointer 补发 enter 时用 */
+    pointerPos: { x: number; y: number };
     /**
      * 键盘焦点：该 seat 的 `wl_keyboard` 已 enter 的 surface。
      * **由桌面 `window.focus`/`window.blur` 驱动**（hover 政策归桌面，wayland 内部不自作主张）；
