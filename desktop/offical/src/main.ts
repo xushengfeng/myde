@@ -956,6 +956,10 @@ function openSettingsWindow() {
         setConnectRemember: (targetId, remember) => connect.setRemember(targetId, remember),
         createConnectPairing,
         subscribeConnect,
+        restartDesktop: async () => {
+            const ok = await confirm("重启桌面会关闭所有窗口，继续？");
+            if (ok) location.reload();
+        },
         modalHost: root.el,
     });
     const content = settingsContent.el;

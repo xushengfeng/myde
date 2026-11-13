@@ -22,6 +22,8 @@ export type SettingsContentOptions = {
     setConnectRemember(targetId: string, remember: boolean): void;
     createConnectPairing(): Promise<PairingSession>;
     subscribeConnect(callback: () => void): () => void;
+    /** 重新载入桌面界面；不会重启 myde 进程，也不影响 myde-wrap */
+    restartDesktop(): void;
     /** 设置窗口根元素，弹窗挂在这里，避免覆盖整个桌面和光标 */
     modalHost: HTMLElement;
 };
@@ -520,6 +522,11 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
                             "窗口逻辑",
                             "设置窗口和 Wayland 客户端窗口使用同一套虚拟桌面、聚焦和关闭逻辑。",
                             txt("一致").style({ opacity: "0.6" }),
+                        ),
+                        settingRow(
+                            "重启桌面",
+                            "重新载入桌面界面，正在运行的窗口会被关闭。重新编译桌面实现后使用；不会重启 myde 进程。",
+                            dialogButton("重启桌面", true).on("click", () => op.restartDesktop()),
                         ),
                     ]);
             },
