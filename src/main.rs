@@ -329,8 +329,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // 为每个连接单独分配一个线程，长连接完全不干扰主循环
                 std::thread::spawn(move || {
                     info!("received new socket connection");
-                    // 这里不用设置太短的timeout，因为它在独立线程中，不会阻塞其他渲染逻辑
-                    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(5000)));
+                    // 控制连接是长连接：空闲是正常状态，不能因为一段时间没消息就断开。
+                    // 连接关闭由客户端断开或读写错误驱动。
                     loop {
                         match socket::read_message(&mut stream) {
                             Ok(msg) => {
@@ -342,8 +342,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                             Err(e) => {
-                                // Socket可能正常断开或超时
-                                tracing::debug!("Socket connection closed or timed out: {}", e);
+                                // Socket可能正常断开
+                                tracing::debug!("Socket connection closed: {}", e);
                                 break;
                             }
                         }
