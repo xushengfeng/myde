@@ -21,6 +21,12 @@ export interface Transform {
     rotation?: number;
 }
 
+export interface ScreenPowerResult {
+    on: boolean;
+    /** 实际被接受的屏幕下标；winit 后端为空 */
+    screens: number[];
+}
+
 interface DisplayMessage {
     type: string;
     [key: string]: unknown;
@@ -32,6 +38,9 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         new Map();
     private buffer: ArrayBuffer = new ArrayBuffer(0);
     private type: "desktop" | "window" = "window";
+    private features = new Set<string>();
+    private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+    private heartbeatBusy = false;
 
     setType(type: "desktop" | "window") {
         this.type = type;
@@ -41,11 +50,21 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         return this.type;
     }
 
-    async connect(op: { socketPath: string; mus: typeof import("myde-unix-socket") }): Promise<void> {
+    /** 当前 wrap 提供的能力，如 "screen-power" */
+    supports(feature: string): boolean {
+        return this.features.has(feature);
+    }
+
+    async connect(op: {
+        socketPath: string;
+        mus: typeof import("myde-unix-socket");
+        features?: string[];
+    }): Promise<void> {
         if (this.type !== "desktop") {
             return;
         }
 
+        this.features = new Set(op.features ?? []);
         const mus = op.mus;
         this.socket = new mus.USocket({ path: op.socketPath });
 
@@ -62,7 +81,35 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         this.socket.on("close", () => {
             console.log("Display socket closed");
             this.socket = null;
+            this.stopHeartbeat();
         });
+
+        this.startHeartbeat();
+    }
+
+    /**
+     * 控制连接是长连接，空闲时也要保活，兼容仍带读超时的 wrap。
+     * 上一次 Ping 未返回时跳过，避免响应类型互相覆盖。
+     */
+    private startHeartbeat() {
+        this.stopHeartbeat();
+        this.heartbeatTimer = setInterval(() => {
+            if (this.heartbeatBusy || !this.socket) return;
+            this.heartbeatBusy = true;
+            void this.ping()
+                .catch(() => {})
+                .finally(() => {
+                    this.heartbeatBusy = false;
+                });
+        }, 3000);
+    }
+
+    private stopHeartbeat() {
+        if (this.heartbeatTimer !== undefined) {
+            clearInterval(this.heartbeatTimer);
+            this.heartbeatTimer = undefined;
+        }
+        this.heartbeatBusy = false;
     }
 
     private handleData(data: Uint8Array): void {
@@ -113,6 +160,11 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
                     pending.resolve(data.screens as Screen[]);
                 } else if (type === "InputState") {
                     pending.resolve(data.enabled as boolean);
+                } else if (type === "ScreenPower") {
+                    pending.resolve({
+                        on: data.on as boolean,
+                        screens: data.screens as number[],
+                    } satisfies ScreenPowerResult);
                 } else {
                     pending.resolve(undefined);
                 }
@@ -210,6 +262,21 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         return (await this.sendWithResponse("SetInputEnabled", { enabled }, "InputState")) as boolean;
     }
 
+    /**
+     * 设置屏幕电源（DPMS）。仅在 DRM + 支持该能力的 wrap 下有效；
+     * `screenIndex` 缺省表示所有屏幕。
+     */
+    async setScreenPower(on: boolean, screenIndex?: number): Promise<ScreenPowerResult> {
+        if (this.type !== "desktop" || !this.supports("screen-power")) {
+            return { on, screens: [] };
+        }
+        return (await this.sendWithResponse(
+            "SetScreenPower",
+            { on, screen_index: screenIndex },
+            "ScreenPower",
+        )) as ScreenPowerResult;
+    }
+
     async ping(): Promise<void> {
         if (this.type !== "desktop") {
             return;
@@ -218,6 +285,7 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
     }
 
     disconnect(): void {
+        this.stopHeartbeat();
         if (this.socket) {
             this.socket.destroy();
             this.socket = null;

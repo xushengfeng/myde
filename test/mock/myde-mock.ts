@@ -1327,8 +1327,11 @@ function createMockDisplay(log: (...args: any[]) => void): MockType<display> {
         getType() {
             return "desktop" as const;
         },
-        async connect(_op: { socketPath: string; mus: any }) {
+        async connect(_op: { socketPath: string; mus: any; features?: string[] }) {
             log("display.connect", _op);
+        },
+        supports(feature: string) {
+            return feature === "screen-power";
         },
         async setWindowSize(_width: number, _height: number) {
             log("display.setWindowSize", _width, _height);
@@ -1342,6 +1345,10 @@ function createMockDisplay(log: (...args: any[]) => void): MockType<display> {
         async setInputEnabled(_enabled: boolean) {
             log("display.setInputEnabled", _enabled);
             return false;
+        },
+        async setScreenPower(on: boolean, screenIndex?: number) {
+            log("display.setScreenPower", on, screenIndex);
+            return { on, screens: [screenIndex ?? 0] };
         },
         async ping() {
             log("display.ping");

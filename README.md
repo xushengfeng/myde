@@ -65,7 +65,7 @@ myde --internal-portal
 
 ### 运行在主机上
 
-如果不想以窗口模式运行，需要使用[myde-wrap](https://github.com/xushengfeng/myde-wrap/tree/44c604138429c2ace27ed0af1a304d07b2fbddeb)项目，用`cargo build`编译后即可通过`./myde-wrap myde`运行，`myde`可以从release获取。
+如果不想以窗口模式运行，需要使用[myde-wrap](https://github.com/xushengfeng/myde-wrap/tree/2763e6d0347ff72a225fb5d39f9ef8c15edcd91d)项目，用`cargo build`编译后即可通过`./myde-wrap myde`运行，`myde`可以从release获取。
 
 release 的安装包已内置编译好的 `myde-wrap`；本地执行 `npm run build:myde-wrap` 编译后，`npm run pack`/`npm run dist` 打包时也会自动带上（没有编译过则不打包）。
 

@@ -45,7 +45,12 @@ async function loadDesktop(p: string) {
     myde.MSysApi.display = new display();
     myde.MSysApi.display.setType(urlParams.get("displayType") === "desktop" ? "desktop" : "window");
     if (myde.MSysApi.display.getType() === "desktop") {
-        await myde.MSysApi.display.connect({ socketPath: getEnv().MYDE_WRAP_SOCKET, mus });
+        const env = getEnv();
+        await myde.MSysApi.display.connect({
+            socketPath: env.MYDE_WRAP_SOCKET,
+            mus,
+            features: env.MYDE_WRAP_SCREEN_POWER === "1" ? ["screen-power"] : [],
+        });
     }
     myde.MSysApi.fs = new vfs(dirPath);
     myde.MSysApi.verifyUserPassword = async (password: string) => {

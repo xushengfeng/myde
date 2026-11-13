@@ -89,6 +89,21 @@ const stat = await fs.stat("file.txt"); // { size, mtime, isFile, isDirectory }
 
 设置系统关机、挂起等，锁屏自己实现
 
+### display
+
+桌面模式（`displayType=desktop`）下控制 wrap 的输出：
+
+```typescript
+// wrap 是否支持屏幕电源（只有 DRM 后端会设置 MYDE_WRAP_SCREEN_POWER）
+if (MSysApi.display.supports("screen-power")) {
+    // screenIndex 缺省表示所有屏幕；winit 后端返回 screens: []
+    await MSysApi.display.setScreenPower(false);
+    await MSysApi.display.setScreenPower(true);
+}
+```
+
+`setScreenPower` 走 DRM connector 的 DPMS，只关显示输出，不挂起系统。官方桌面在锁屏进入息屏状态时先铺黑并等一帧，再关 DPMS；任意输入唤醒时先开屏并吞掉该输入。
+
 ### media
 
 mpris，获取正在播放的媒体相关信息，并控制播放暂停等

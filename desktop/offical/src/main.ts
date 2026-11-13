@@ -1541,9 +1541,16 @@ state.on("lock", () => {
 });
 state.setState("normal");
 
-stateLock.on("xipin", ({ nextTrigger }) => {
-    lockScreenAnimate.moveTo("xipin");
-    lockScreen.on("click", () => nextTrigger("lock"), { once: true });
+stateLock.on("xipin", ({ nextTrigger, leave }) => {
+    // 息屏动画结束后再关 DPMS；动画被输入打断时不会执行
+    lockScreenAnimate.moveTo("xipin", undefined, () => {
+        void setScreenOff(true);
+    });
+    const onClick = () => nextTrigger("lock");
+    lockScreen.el.addEventListener("click", onClick, { once: true });
+    leave(() => {
+        lockScreen.el.removeEventListener("click", onClick);
+    });
 });
 
 const lock2xipinTimer = new Timer(30000);
@@ -1552,6 +1559,7 @@ lock2xipinTimer.on(() => {
 });
 stateLock.on("lock", ({ nextTrigger, leave }) => {
     lockScreenAnimate.moveTo("lockview");
+    void setScreenOff(false);
     lockScreen.on("click", () => nextTrigger("passwd"), { once: true });
     lock2xipinTimer.start();
     leave(() => {
@@ -1575,6 +1583,75 @@ stateLock.on("out", () => {
 
 stateLock.setState("out");
 
+// 关屏：先铺一层黑色并等它真正上屏，再让 wrap 关 DPMS；
+// 任意输入到来时先开屏并吞掉这次输入。
+const screenOffLayer = view().style({
+    position: "fixed",
+    top: 0,
+    left: 0,
+    width: "100vw",
+    height: "100vh",
+    background: "#000",
+    display: "none",
+    pointerEvents: "none",
+    zIndex: 9999,
+});
+
+type ScreenOffState = "on" | "requested" | "off";
+let screenOffState: ScreenOffState = "on";
+let screenOffSeq = 0;
+let screenOffQueue: Promise<void> = Promise.resolve();
+
+function nextPaint(): Promise<void> {
+    return new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+}
+
+/** 关屏/开屏：请求串行发送，避免同一个 ScreenPower 响应互相覆盖 */
+function setScreenOff(off: boolean): Promise<void> {
+    if (off) {
+        if (screenOffState !== "on") return screenOffQueue;
+        if (!MSysApi.display.supports("screen-power")) return screenOffQueue;
+        screenOffState = "requested";
+    } else {
+        if (screenOffState === "on") return screenOffQueue;
+        // 立即取消黑层，输入不需要等 socket 往返
+        screenOffState = "on";
+        screenOffLayer.style({ display: "none" });
+    }
+
+    const seq = ++screenOffSeq;
+    const apply = async () => {
+        if (off) {
+            if (seq !== screenOffSeq) return; // 排队期间已被输入唤醒
+            screenOffLayer.style({ display: "block" });
+            await nextPaint();
+            // 给 Chromium 一点时间把黑色提交给 wrap
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            if (seq !== screenOffSeq) return; // 等待期间已被输入唤醒
+            try {
+                const result = await MSysApi.display.setScreenPower(false);
+                if (seq !== screenOffSeq) return; // 关屏请求在途时被唤醒，后面排队的开屏会处理
+                if (result.screens.length === 0) throw new Error("wrap 未接受关屏");
+                screenOffState = "off";
+            } catch (e) {
+                console.warn("[screen] 关屏失败:", e);
+                screenOffState = "on";
+                screenOffLayer.style({ display: "none" });
+            }
+        } else {
+            try {
+                await MSysApi.display.setScreenPower(true);
+            } catch (e) {
+                console.warn("[screen] 开屏失败:", e);
+            }
+        }
+    };
+    screenOffQueue = screenOffQueue.then(apply, apply);
+    return screenOffQueue;
+}
+
 const cursorEl = view();
 // 候选窗覆盖层：在窗口/工具栏之上、锁屏和光标之下
 const imeOverlay = view().style({
@@ -1586,7 +1663,7 @@ const imeOverlay = view().style({
     pointerEvents: "none",
 });
 
-mainEl.add([bg, windowElWarp, toolsEl, imeOverlay, lockScreen, cursorEl]);
+mainEl.add([bg, windowElWarp, toolsEl, imeOverlay, lockScreen, cursorEl, screenOffLayer]);
 
 const windowEl = view()
     .style({
@@ -3185,6 +3262,12 @@ const inputApi = MSysApi.input;
 
 /** 分发：统一传入新 api（当前行为为模拟 DOM 事件） */
 function dispatchInput(e: UniInputEvent) {
+    if (screenOffState !== "on") {
+        // 用任意输入唤醒，唤醒这一下不交给应用；锁屏息屏时回到锁屏界面
+        void setScreenOff(false);
+        if (stateLock.getState() === "xipin") stateLock.setState("lock");
+        return;
+    }
     inputSim.emit(e);
 }
 
