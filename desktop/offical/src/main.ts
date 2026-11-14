@@ -1528,6 +1528,12 @@ const lockScreenAnimate = new AnimationGear({
     passwordShow: 0,
 });
 
+/**
+ * 从息屏唤醒时，DPMS ON 返回后面板真正出图还会晚一段时间。
+ * 默认 300ms 动画会在面板亮起前结束，看起来像没有动画。
+ */
+const WAKE_ANIMATION_DURATION = 1600;
+
 lockScreenAnimate.addState(
     "normal(out)",
     {
@@ -1608,7 +1614,8 @@ lock2xipinTimer.on(() => {
     stateLock.setState("xipin");
 });
 stateLock.on("lock", ({ nextTrigger, leave }) => {
-    lockScreenAnimate.moveTo("lockview");
+    const wakingFromXipin = lockScreenAnimate.currentStateName === "xipin";
+    lockScreenAnimate.moveTo("lockview", wakingFromXipin ? WAKE_ANIMATION_DURATION : undefined);
     void setScreenOff(false);
     lockScreen.on("click", () => nextTrigger("passwd"), { once: true });
     lock2xipinTimer.start();
