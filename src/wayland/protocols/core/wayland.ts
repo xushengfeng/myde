@@ -14,8 +14,13 @@ import type { WaylandName, WaylandObjectId, WaylandProtocol } from "../../utils/
 import { getEnumValue, tryX, waylandObjectId } from "../../utils/wayland-proto";
 
 const fs = require("node:fs") as typeof import("node:fs");
-const { convertDmabufToRgba, convertDmabufToTexture, getElectronPixelFormat } =
-    require("myde-drm") as typeof import("myde-drm");
+const {
+    convertDmabufToRgba,
+    convertDmabufToTexture,
+    convertShmToRgba,
+    convertShmToRgbaRegion,
+    getElectronPixelFormat,
+} = require("myde-drm") as typeof import("myde-drm");
 
 import { buildXkb } from "myde-xcb";
 import { newFd } from "../../utils/fd";
@@ -25,7 +30,17 @@ declare module "../../module" {
     interface WaylandDataRegistry {
         wl_shm_pool: { fd: number };
         wl_buffer:
-            | { type: "shm"; fd: number; offset: number; stride: number; imageData: ImageData }
+            | {
+                  type: "shm";
+                  fd: number;
+                  offset: number;
+                  stride: number;
+                  width: number;
+                  height: number;
+                  format: number;
+                  /** Reused RGBA output; avoids a new Buffer per commit. */
+                  frame?: { rgba: Buffer; imageData: ImageData };
+              }
             | {
                   type: "dmabuf";
                   planes: {
@@ -813,13 +828,14 @@ export const waylandCoreModule = defineModule({
         "wl_shm_pool.create_buffer": (x, ctx) => {
             const thisObj = ctx.objects.get(x.id);
             const buffer = ctx.objects.get(x.args.id);
-            const imageData = new ImageData(x.args.width, x.args.height);
             buffer.data = {
                 type: "shm",
                 fd: thisObj.data.fd,
                 offset: x.args.offset,
                 stride: x.args.stride,
-                imageData: imageData,
+                width: x.args.width,
+                height: x.args.height,
+                format: x.args.format,
             };
         },
         "wl_data_device_manager.create_data_source": (x, ctx) => {
@@ -1010,30 +1026,65 @@ export const waylandCoreModule = defineModule({
                 // （规范：客户端先不带 buffer 提交，合成器才回 configure，之后才允许 attach）
                 ctx.notify.commit(surfaceId, false);
             } else {
+                const damageList = [...(data.damageList || []), ...(data.damageBufferList || [])];
                 let image: ImageData | VideoFrame;
                 if (bufferObj.type === "shm") {
-                    image = bufferObj.imageData;
-
-                    const buffern = new Uint8ClampedArray(bufferObj.stride * image.height);
+                    let frame = bufferObj.frame;
+                    if (!frame) {
+                        const imageData = new ImageData(bufferObj.width, bufferObj.height);
+                        // 直接复用 ImageData 自己的像素内存，模块写进去后
+                        // putImageData 不需要再拷贝一遍。
+                        const rgba = Buffer.from(
+                            imageData.data.buffer as ArrayBuffer,
+                            imageData.data.byteOffset,
+                            imageData.data.byteLength,
+                        );
+                        frame = { rgba, imageData };
+                        bufferObj.frame = frame;
+                    }
                     try {
-                        fs.readSync(bufferObj.fd, buffern, 0, buffern.length, bufferObj.offset);
-                    } catch (error) {
-                        console.error("Error reading shm buffer:", error);
-                    }
-                    // todo 模块读取
-                    const rgba = new Uint8ClampedArray(image.width * image.height * 4);
-                    for (let y = 0; y < image.height; y++) {
-                        for (let x = 0; x < image.width; x++) {
-                            const ri = y * bufferObj.stride + x * 4;
-                            const i = (y * image.width + x) * 4;
-                            rgba[i] = buffern[ri + 2];
-                            rgba[i + 1] = buffern[ri + 1];
-                            rgba[i + 2] = buffern[ri];
-                            rgba[i + 3] = buffern[ri + 3];
+                        const options = {
+                            fd: bufferObj.fd,
+                            offset: bufferObj.offset,
+                            stride: bufferObj.stride,
+                            width: bufferObj.width,
+                            height: bufferObj.height,
+                            format: bufferObj.format,
+                        };
+                        // damage 是相对上一帧的变更区域：只转换这块，其余像素
+                        // 已经在 canvas 里，复用上次的 RGBA 输出即可。
+                        let region: { x: number; y: number; width: number; height: number } | null | undefined;
+                        if (damageList.length) {
+                            let minX = Number.POSITIVE_INFINITY;
+                            let minY = Number.POSITIVE_INFINITY;
+                            let maxX = Number.NEGATIVE_INFINITY;
+                            let maxY = Number.NEGATIVE_INFINITY;
+                            for (const damage of damageList) {
+                                const x0 = Math.max(0, Math.floor(damage.x));
+                                const y0 = Math.max(0, Math.floor(damage.y));
+                                const x1 = Math.min(bufferObj.width, Math.ceil(damage.x + damage.width));
+                                const y1 = Math.min(bufferObj.height, Math.ceil(damage.y + damage.height));
+                                if (x1 <= x0 || y1 <= y0) continue;
+                                minX = Math.min(minX, x0);
+                                minY = Math.min(minY, y0);
+                                maxX = Math.max(maxX, x1);
+                                maxY = Math.max(maxY, y1);
+                            }
+                            region =
+                                maxX > minX && maxY > minY
+                                    ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+                                    : null;
                         }
+                        if (region === undefined) {
+                            convertShmToRgba(options, frame.rgba);
+                        } else if (region !== null) {
+                            convertShmToRgbaRegion(options, frame.rgba, region);
+                        }
+                        image = frame.imageData;
+                    } catch (error) {
+                        console.error(`shm format 0x${bufferObj.format.toString(16)} conversion failed:`, error);
+                        image = new ImageData(bufferObj.width, bufferObj.height);
                     }
-
-                    image.data.set(rgba);
                 } else {
                     const modifierX = bufferObj.planes[0];
                     const modifier = (BigInt(modifierX.modifier_hi >>> 0) << 32n) | BigInt(modifierX.modifier_lo >>> 0);
@@ -1210,7 +1261,6 @@ export const waylandCoreModule = defineModule({
                 // buffer 已应用、像素尚未合成：交给扩展（xdg 在此按尺寸变化发 configure）
                 ctx.notify.commit(surfaceId, sizeChanged);
 
-                const damageList = [...(data.damageList || []), ...(data.damageBufferList || [])];
                 // damage 是「相对上一帧的变更区域」：组合器保留 damage 外的旧内容。
                 // 新 buffer 在 damage 外的像素可能是复用缓冲区的旧数据/未定义内容，
                 // 不能整帧覆盖，只能把 damage 区域贴到已有画布上。

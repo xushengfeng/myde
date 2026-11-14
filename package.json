@@ -31,7 +31,7 @@
         "dkh-ui": "^0.14.6",
         "ini": "^5.0.0",
         "myde-dbus": "^0.4.0",
-        "myde-drm": "^0.1.3",
+        "myde-drm": "^0.1.5",
         "myde-input": "^1.0.4",
         "msgpackr": "^1.11.0",
         "myde-pam-client": "^0.1.3",
