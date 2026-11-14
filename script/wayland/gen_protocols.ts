@@ -54,6 +54,13 @@ const supportedProtocols: Array<{
         ],
     },
     {
+        name: "fractional-scale-v1",
+        interfaces: [
+            { name: "wp_fractional_scale_manager_v1", version: 1 },
+            { name: "wp_fractional_scale_v1", version: 1 },
+        ],
+    },
+    {
         name: "presentation-time",
         interfaces: [
             { name: "wp_presentation", version: 2 },

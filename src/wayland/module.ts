@@ -9,7 +9,7 @@
  * `WaylandDataRegistry` 本身是空的：各协议状态由对应文件的 `declare module`
  * 声明合并进来（`protocols/core/region.ts` 是样板）。
  */
-import type { ServerNotifyMap } from "./api";
+import type { OutputInfo, ServerNotifyMap } from "./api";
 import type { wlSurfaceData } from "./protocols/core/wayland";
 import type { WaylandEnumObj, WaylandEventObj, WaylandInterfaces, WaylandRequestObj } from "./protocols/wayland-types";
 import type { renderTools } from "./render_tools";
@@ -41,6 +41,10 @@ export type WaylandSurfaceData = {
     callbacks?: WaylandObjectId2<"wl_callback">[];
     /** 与 wl_region 模块声明的 rects 同形；此处内联以免 module.ts 反向依赖声明方 */
     inputRegion?: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
+    /** `wl_surface.set_buffer_scale`，默认 1；buffer 像素 ÷ scale = surface 逻辑像素 */
+    bufferScale?: number;
+    /** `wl_surface.set_buffer_transform`，目前只按 normal 合成 */
+    bufferTransform?: number;
     viewport?: {
         source?: { x: number; y: number; width: number; height: number };
         destination?: { width: number; height: number };
@@ -129,7 +133,7 @@ export interface ProtocolModuleDef {
     requests?: RequestHandlers;
     /** 桌面命令的出口（`server.notify` → 本表），见 `ActionKey` */
     actions?: ActionHandlers;
-    hooks?: Partial<SurfaceHooks & SeatHooks & TextInputHooks>;
+    hooks?: Partial<SurfaceHooks & SeatHooks & TextInputHooks & OutputHooks>;
     /**
      * core 能力的提供者（`registry` 除外——那是 host 对全部 `globals` 的跨模块聚合）。
      * 域状态实例在自己文件里 `new`，装配知识只写在这里，host 不 import 任何协议的构造。
@@ -145,7 +149,7 @@ export interface ProtocolModule {
     globals: readonly ModuleGlobal[];
     requests: ReadonlyMap<RequestKey, NonNullable<RequestHandlers[RequestKey]>>;
     actions: ReadonlyMap<ActionKey, ActionFn>;
-    hooks: Partial<SurfaceHooks & SeatHooks & TextInputHooks>;
+    hooks: Partial<SurfaceHooks & SeatHooks & TextInputHooks & OutputHooks>;
     /** 见 `ProtocolModuleDef.core`；没有提供 core 能力的模块为 undefined */
     core?: (ctx: ModuleCtx) => Omit<CoreApi, "registry">;
     /** 见 `ProtocolModuleDef.domain` */
@@ -404,6 +408,14 @@ export interface SeatHooks {
     onFocus?(seat: string, surfaceId: SurfaceId | undefined, ctx: ModuleCtx): void;
 }
 
+/**
+ * 输出配置变化的通知：桌面调用 `server.outputs.set` 后，host 对每个连接扇出一次。
+ * 协议模块据此重发 `wl_output` / `preferred_*` 事件；不需要重新 map 窗口。
+ */
+export interface OutputHooks {
+    onOutput?(ctx: ModuleCtx): void;
+}
+
 export interface TextInputHooks {
     /**
      * 桌面注入文本（`input.text`）。仲裁状态在 `ctx.domain.textInput.owner`（core 的域），
@@ -491,8 +503,13 @@ export interface WindowsApi {
 }
 
 export interface CursorApi {
-    setSurface(id: SurfaceId, hotspot: { x: number; y: number }, frame?: OffscreenCanvas): void;
-    updateFrame(id: SurfaceId, frame: OffscreenCanvas): void;
+    setSurface(
+        id: SurfaceId,
+        hotspot: { x: number; y: number },
+        frame?: OffscreenCanvas,
+        size?: { width: number; height: number },
+    ): void;
+    updateFrame(id: SurfaceId, frame: OffscreenCanvas, size?: { width: number; height: number }): void;
     hide(id?: SurfaceId): void;
     setShape(shape: string): void;
     isCursorSurface(id: SurfaceId): boolean;
@@ -562,6 +579,8 @@ export interface ClientApi {
      * 由 `server.respond("surfaceBounds.request", …)` 注册，见 api.ts。
      */
     surfaceBounds(): { width: number; height: number } | undefined;
+    /** 当前输出配置（桌面用 `server.outputs.set` 写入，协议只读） */
+    output(): OutputInfo;
 }
 
 // ───────────────────────── handler 运行时上下文 ─────────────────────────

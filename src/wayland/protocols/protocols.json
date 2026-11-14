@@ -2695,6 +2695,69 @@
       ]
     }
   ],
+  "fractional-scale-v1": [
+    {
+      "name": "wp_fractional_scale_manager_v1",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "get_fractional_scale",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "wp_fractional_scale_v1",
+              "summary": "the new surface scale info interface id"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface",
+              "summary": "the surface"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "fractional_scale_exists": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "wp_fractional_scale_v1",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        }
+      ],
+      "event": [
+        {
+          "name": "preferred_scale",
+          "args": [
+            {
+              "name": "scale",
+              "type": "uint",
+              "summary": "the new preferred scale"
+            }
+          ]
+        }
+      ],
+      "enum": []
+    }
+  ],
   "presentation-time": [
     {
       "name": "wp_presentation",

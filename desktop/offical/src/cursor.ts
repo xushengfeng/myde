@@ -4,7 +4,13 @@ type cursorState =
     | { type: "default" }
     | { type: "hidden" }
     | { type: "shape"; shape: string }
-    | { type: "image"; canvas: OffscreenCanvas; hotspot: { x: number; y: number } };
+    | {
+          type: "image";
+          canvas: OffscreenCanvas;
+          hotspot: { x: number; y: number };
+          /** 桌面显示尺寸（已乘输出缩放）；缺省时按位图尺寸 */
+          size?: { width: number; height: number };
+      };
 
 // 形状光标的公共样式（与默认圆点一致），尺寸和圆角由各形状自己定义
 const shapeStyle = {
@@ -63,9 +69,15 @@ export class Cursor {
         this.apply(this.contentOf(clientId));
     }
 
-    /** 客户端surface图片光标，hotspot为热点相对图片左上角的偏移 */
-    setImage(clientId: string, canvas: OffscreenCanvas, hotspotX: number, hotspotY: number) {
-        this.clientUpdate(clientId, { type: "image", canvas, hotspot: { x: hotspotX, y: hotspotY } });
+    /** 客户端surface图片光标，hotspot/尺寸都是桌面显示坐标（已乘输出缩放） */
+    setImage(
+        clientId: string,
+        canvas: OffscreenCanvas,
+        hotspotX: number,
+        hotspotY: number,
+        size?: { width: number; height: number },
+    ) {
+        this.clientUpdate(clientId, { type: "image", canvas, hotspot: { x: hotspotX, y: hotspotY }, size });
     }
 
     /** 语义shape，wp_cursor_shape_device_v1.shape的枚举名 */
@@ -124,6 +136,9 @@ export class Cursor {
             const cel = ele("canvas");
             cel.attr({ width: state.canvas.width, height: state.canvas.height });
             cel.el.getContext("2d")?.drawImage(state.canvas, 0, 0);
+            if (state.size) {
+                cel.style({ width: `${state.size.width}px`, height: `${state.size.height}px` });
+            }
             return cel.style({
                 position: "absolute",
                 left: `-${state.hotspot.x}px`,
@@ -156,6 +171,12 @@ function isSameState(a: cursorState, b: cursorState): boolean {
     if (a.type !== b.type) return false;
     if (a.type === "shape" && b.type === "shape") return a.shape === b.shape;
     if (a.type === "image" && b.type === "image")
-        return a.canvas === b.canvas && a.hotspot.x === b.hotspot.x && a.hotspot.y === b.hotspot.y;
+        return (
+            a.canvas === b.canvas &&
+            a.hotspot.x === b.hotspot.x &&
+            a.hotspot.y === b.hotspot.y &&
+            a.size?.width === b.size?.width &&
+            a.size?.height === b.size?.height
+        );
     return true;
 }

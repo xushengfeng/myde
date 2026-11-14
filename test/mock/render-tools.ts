@@ -137,7 +137,7 @@ export class MockRenderTools implements renderTools {
     }
 
     setCursor(canvas: OffscreenCanvas | string | undefined, hotspotX: number, hotspotY: number): void {
-        this._on.onCursorUpdata?.(canvas, hotspotX, hotspotY);
+        this._on.onCursorUpdata?.(canvas, hotspotX, hotspotY, 1);
     }
 
     destroy(): void {

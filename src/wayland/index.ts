@@ -20,6 +20,7 @@ export type {
     Client,
     ClientLogConfig,
     CursorState,
+    OutputInfo,
     PointerCommand,
     Rect,
     ScrollCommand,

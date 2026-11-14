@@ -32,7 +32,13 @@ describe("协议模块注册", () => {
             .filter((m) => m.hooks.onFrame || m.hooks.onCommit || m.hooks.onDestroy)
             .map((m) => m.name)
             .sort();
-        expect(withHooks).toEqual(["presentation-time", "text-input-unstable-v3", "viewporter", "xdg-shell"]);
+        expect(withHooks).toEqual([
+            "fractional-scale-v1",
+            "presentation-time",
+            "text-input-unstable-v3",
+            "viewporter",
+            "xdg-shell",
+        ]);
     });
 
     it("registry 一次广播两把 wl_seat，onBind 按广播序命名 seat0/seat1", () => {
@@ -113,7 +119,7 @@ describe("桌面命令（actions）", () => {
         // per-seat：焦点、键盘、修饰键都挂在 SeatRecord 上
         const seat = {
             name: "seat0",
-            keyboard: 7 as WaylandObjectId2<"wl_keyboard">,
+            keyboards: new Set([7 as WaylandObjectId2<"wl_keyboard">]),
             keyboardFocus: 100 as unknown as SurfaceId,
             mods,
         } as unknown as SeatRecord;
@@ -131,6 +137,7 @@ describe("桌面命令（actions）", () => {
                     },
                 },
             },
+            objects: { has: () => true },
             sendNow: (id: number, event: string, args: Record<string, unknown>) => sent.push({ id, event, args }),
         } as unknown as ModuleCtx;
 

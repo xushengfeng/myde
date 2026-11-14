@@ -35,6 +35,8 @@ desktop（evdev）模式下触摸板事件由仓库的 `src/utils/touchpad.ts` �
 
 设置项：
 - 外观：`icon.theme` 应用图标主题
+- 显示：Wayland 客户端缩放 `desktop.scale`（100% / 125% / 150% / 175% / 200%）。缩放后 surface 逻辑坐标不变，
+  客户端 buffer 与窗口 DOM 尺寸按比例放大；桌面面板暂不缩放。winit 后端和普通窗口模式跟随宿主桌面，固定 1x
 - 输入法：候选窗预编辑 `ime.panelPreedit`（`auto` / `always` / `never`）
 - 互联：启用开关、本机 ID、已配对设备列表和忘记设备；添加设备时显示本机配对 ID/PIN，输入对方配对 ID/PIN 和是否记住
 - 窗口：新窗口居中，保存到 `desktop.centerWindows` 命名空间

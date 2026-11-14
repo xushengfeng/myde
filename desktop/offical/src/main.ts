@@ -44,6 +44,7 @@ import {
     WHEEL_STEP,
 } from "./input_evdev";
 import { Registry } from "./registry";
+import { ScreenManager } from "./screen";
 import { dynamicScrollList } from "./scroll-list";
 import { createSettingsContent, type ImePanelPreeditMode } from "./settings";
 import {
@@ -944,6 +945,9 @@ function openSettingsWindow() {
             desktopSetting.nset("centerWindows", enabled);
             windowCenterManager.setEnabled(enabled);
         },
+        getScale: () => screenManager.getScale(),
+        setScale: (scale) => screenManager.setScale(scale),
+        scaleFollowsHost: () => screenManager.scaleFollowsHost(),
         inputMethodAvailable: !!MSysApi.inputMethod,
         connectAvailable: !!myde.MConnect,
         getConnectEnabled,
@@ -1150,8 +1154,10 @@ function sendPointerEvent(
         if (handled.has(info.clientId)) continue;
         const rect = render.getXdgSurfaceEle(info.renderId)?.getBoundingClientRect();
         if (!rect) continue;
-        const nx = p.x - rect.left;
-        const ny = p.y - rect.top;
+        // DOM 是桌面物理 px；Wayland 坐标是 surface-local 逻辑 px
+        const scale = info.scale || 1;
+        const nx = (p.x - rect.left) / scale;
+        const ny = (p.y - rect.top) / scale;
         // 交给 wayland 的完整几何命中检测：popup 超出顶层窗口范围时也能命中
         // todo 指针离开窗口时下发 wl_pointer.leave（待 server 提供），见 xdg 域 hitTest 的未命中分支
         if (!server.server.windows.hitTest(info.handle, { x: nx, y: ny })) continue;
@@ -1192,15 +1198,17 @@ function sendScrollEvent(p: WheelEvent) {
         const rootEl = render.getXdgSurfaceEle(info.renderId);
         if (!rootEl) continue;
         const rect = rootEl.getBoundingClientRect();
-        const nx = p.x - rect.left;
-        const ny = p.y - rect.top;
+        const scale = info.scale || 1;
+        const nx = (p.x - rect.left) / scale;
+        const ny = (p.y - rect.top) / scale;
         if (!server.server.windows.hitTest(info.handle, { x: nx, y: ny })) continue;
         handled.add(info.clientId);
 
+        // wl_pointer.axis 的单位是 surface-local，桌面滚轮的 CSS px 要除回逻辑
         server.server.notify("input.scroll", info.handle, {
-            deltaX: p.deltaX,
-            deltaY: p.deltaY,
-            deltaZ: p.deltaZ,
+            deltaX: p.deltaX / scale,
+            deltaY: p.deltaY / scale,
+            deltaZ: p.deltaZ / scale,
         });
     }
 }
@@ -1226,6 +1234,7 @@ const desktopSetting = MSetting.init({
     nameSpace: "desktop",
     defaultNsSetting: {
         centerWindows: true,
+        scale: 1,
     },
 });
 
@@ -1262,10 +1271,36 @@ const server = MSysApi.server({ render });
 // 提前启动 xwayland-satellite；每次启动应用前再 await 一次，崩溃后也能重新拉起。
 void server.startXwayland();
 
-// 桌面可用空间
+/** 屏幕信息 + 客户端缩放；缩放写入设置并同步给 wayland server。 */
+const screenManager = new ScreenManager({
+    display: MSysApi.display,
+    getScaleSetting: () => {
+        const value = desktopSetting.nget("scale");
+        return typeof value === "number" ? value : 1;
+    },
+    setScaleSetting: (scale) => desktopSetting.nset("scale", scale),
+    applyOutput: (output) => server.server.outputs.set(output),
+    onScaleChanged: () => {
+        // server 已更新窗口 DOM 尺寸；最大化窗口要用新的逻辑可用区重新 configure
+        requestAnimationFrame(() => {
+            for (const info of server.server.windows.list()) {
+                if (!info.states.maximized) continue;
+                const scale = screenManager.getScale();
+                server.server.notify("window.maximize", info.handle, {
+                    width: Math.max(1, Math.floor(windowEl.el.offsetWidth / scale)),
+                    height: Math.max(1, Math.floor(windowEl.el.offsetHeight / scale)),
+                });
+            }
+        });
+    },
+});
+void screenManager.init().catch((e) => console.error("[screen] 初始化失败", e));
+
+// 桌面可用空间（surface-local 逻辑尺寸）
 server.server.respond("surfaceBounds.request", () => {
     const rect = windowEl.el.getBoundingClientRect();
-    return { width: rect.width, height: rect.height };
+    const scale = screenManager.getScale();
+    return { width: rect.width / scale, height: rect.height / scale };
 });
 
 server.server.on("client.opened", (clientId) => {
@@ -1279,25 +1314,29 @@ server.server.on("client.closed", (clientId) => {
  * 桌面已应用的窗口状态。`window.changed` 是合并事件（rect/states/title/appid 任一变化），
  * 靠这份本地快照差分出「客户端请求 resize / maximize」。
  */
-const appliedState = new Map<WinHandle, { w: number; h: number; maximized: boolean }>();
+const appliedState = new Map<WinHandle, { w: number; h: number; maximized: boolean; scale: number }>();
 
 server.server.on("window.created", (info) => {
     console.log(`Client ${info.clientId} created window ${info.handle}`, info.renderId);
     const wid = info.handle;
-    appliedState.set(wid, { w: info.rect.w, h: info.rect.h, maximized: false });
+    appliedState.set(wid, { w: info.rect.w, h: info.rect.h, maximized: false, scale: info.scale });
 
     const v = viewData.newView();
     viewData.moveWinToView(wid, v);
     // biome-ignore lint/style/noNonNullAssertion: 刚刚创建的，一定有
     const winEl = render.getXdgSurfaceEle(info.renderId)!;
+    pack(winEl).style({
+        width: `${info.rect.w * info.scale}px`,
+        height: `${info.rect.h * info.scale}px`,
+    });
     const closeBtn = createWindowCloseButton({
-        size: 24,
+        size: 24 * info.scale,
         scale: 1 / VIEW_ALL_SCALE,
         onClick: () => server.server.notify("window.close", wid),
     }).style({
         position: "absolute",
-        top: "4px",
-        right: "4px",
+        top: `${4 * info.scale}px`,
+        right: `${4 * info.scale}px`,
         display: viewAllShowing ? "flex" : "none",
     });
     closeBtn.addInto(winEl);
@@ -1366,14 +1405,15 @@ server.server.on("window.changed", (info) => {
     if (!applied) return;
     const winEl = render.getXdgSurfaceEle(info.renderId);
 
-    // 尺寸变化（来自 xdg_surface.set_window_geometry）
-    if (applied.w !== info.rect.w || applied.h !== info.rect.h) {
+    // 尺寸变化（来自 xdg_surface.set_window_geometry）或输出缩放变化
+    if (applied.w !== info.rect.w || applied.h !== info.rect.h || applied.scale !== info.scale) {
         applied.w = info.rect.w;
         applied.h = info.rect.h;
+        applied.scale = info.scale;
         if (winEl) {
             pack(winEl).style({
-                width: `${info.rect.w}px`,
-                height: `${info.rect.h}px`,
+                width: `${info.rect.w * info.scale}px`,
+                height: `${info.rect.h * info.scale}px`,
             });
             if (windowCenterManager.isEnabled() && !windowCenterManager.isPaused(info.handle)) {
                 windowCenterManager.centerWindow(info.handle);
@@ -1386,21 +1426,25 @@ server.server.on("window.changed", (info) => {
         applied.maximized = info.states.maximized;
         if (!winEl) return;
         if (info.states.maximized) {
-            const width = windowEl.el.offsetWidth;
-            const height = windowEl.el.offsetHeight;
+            const widthPx = windowEl.el.offsetWidth;
+            const heightPx = windowEl.el.offsetHeight;
             pack(winEl).style({
-                width: `${width}px`,
-                height: `${height}px`,
+                width: `${widthPx}px`,
+                height: `${heightPx}px`,
                 left: "0px",
                 top: "0px",
             });
-            server.server.notify("window.maximize", info.handle, { width, height });
+            server.server.notify("window.maximize", info.handle, {
+                width: Math.max(1, Math.floor(widthPx / info.scale)),
+                height: Math.max(1, Math.floor(heightPx / info.scale)),
+            });
         } else {
+            // 恢复尺寸是 surface 逻辑尺寸；DOM 按输出缩放放大
             const width = 800;
             const height = 600;
             pack(winEl).style({
-                width: `${width}px`,
-                height: `${height}px`,
+                width: `${width * info.scale}px`,
+                height: `${height * info.scale}px`,
                 left: "0px",
                 top: "0px",
             });
@@ -3505,7 +3549,14 @@ server.server.on("cursor.changed", (clientId, state) => {
     if (!server.server.clients.get(clientId)) return;
     if (state.kind === "hidden") cursor.hide(clientId);
     else if (state.kind === "shape") cursor.setShape(clientId, state.shape);
-    else if (state.canvas) cursor.setImage(clientId, state.canvas, state.hotspot.x, state.hotspot.y);
+    else if (state.canvas) {
+        // 光标 surface 的尺寸/热点是逻辑坐标；显示时乘输出缩放
+        const scale = screenManager.getScale();
+        cursor.setImage(clientId, state.canvas, state.hotspot.x * scale, state.hotspot.y * scale, {
+            width: state.size.width * scale,
+            height: state.size.height * scale,
+        });
+    }
 });
 
 // ── 输入聚合层：evdev（input api）设备接入 ────────────────────────────────────────────────────────
@@ -3876,18 +3927,6 @@ if (MSysApi.display.getType() === "desktop" && inputApi?.isInitialized()) {
     console.log(`[input] use evdev native input (${inputApi.getAccessMode?.() ?? "unknown"})`);
 } else {
     console.log("[input] use dom input");
-}
-
-const display = MSysApi.display;
-if (display.getType() === "desktop") {
-    console.log("render type desktop");
-
-    display.getScreens().then((s) => {
-        console.log("screen", JSON.stringify(s));
-        const x = s[0];
-        display.setWindowSize(x.width, x.height);
-        display.renderToScreen(0, { x: 0, y: 0, width: x.width, height: x.height });
-    });
 }
 
 MSysApi.getDesktopEntries().then((e) => {

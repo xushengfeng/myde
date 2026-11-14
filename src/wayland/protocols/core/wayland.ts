@@ -1,5 +1,5 @@
 import { InputEventCodes } from "../../../input_codes/types";
-import type { PointerCommand, ScrollCommand } from "../../api";
+import type { OutputInfo, PointerCommand, ScrollCommand } from "../../api";
 import {
     type BindMsg,
     defineModule,
@@ -11,7 +11,7 @@ import {
 } from "../../module";
 import type { renderTools } from "../../render_tools";
 import type { WaylandName, WaylandObjectId, WaylandProtocol } from "../../utils/wayland-binary";
-import { getEnumValue, tryX, waylandObjectId } from "../../utils/wayland-proto";
+import { getEnumName, getEnumValue, tryX, waylandObjectId } from "../../utils/wayland-proto";
 
 const fs = require("node:fs") as typeof import("node:fs");
 const {
@@ -117,6 +117,49 @@ function enterBoundOutputs(ctx: ModuleCtx, surface: SurfaceId) {
     for (const output of ctx.domain.output.outputs) {
         ctx.send(surface, "wl_surface.enter", { output });
     }
+}
+
+/** 整数 scale：向客户端建议的 buffer 倍率，向上取整保证不损失像素。 */
+function integerScale(scale: number): number {
+    return Math.max(1, Math.ceil(scale - 1e-9));
+}
+
+/** 发送当前输出状态；同一批事件用 done 收尾（由协议版本过滤低版本事件）。 */
+function sendOutputState(outputId: WaylandObjectId2<"wl_output">, output: OutputInfo, send: ModuleCtx["send"]) {
+    send(outputId, "wl_output.name", { name: output.name });
+    send(outputId, "wl_output.description", { description: output.description });
+    send(outputId, "wl_output.mode", {
+        width: output.mode.width,
+        height: output.mode.height,
+        refresh: output.mode.refresh,
+        flags: getEnumValue("wl_output.mode", ["current", "preferred"]),
+    });
+    send(outputId, "wl_output.geometry", {
+        x: 0,
+        y: 0,
+        physical_width: output.physicalSize?.width ?? 0,
+        physical_height: output.physicalSize?.height ?? 0,
+        make: "",
+        model: "",
+        subpixel: getEnumValue("wl_output.subpixel", "unknown"),
+        transform: getEnumValue("wl_output.transform", output.transform),
+    });
+    send(outputId, "wl_output.scale", { factor: integerScale(output.scale) });
+    send(outputId, "wl_output.done", {});
+}
+
+/**
+ * 通知 surface 的输出缩放偏好。
+ * 支持分数的客户端会从 wp_fractional_scale_v1 拿到精确值；这里给只认整数的客户端。
+ */
+function sendPreferredScale(ctx: ModuleCtx, surface: SurfaceId, output: OutputInfo, send: ModuleCtx["send"]) {
+    const version = ctx.client.protoVersions.get("wl_surface") ?? 0;
+    if (version < 6) return;
+    const factor = integerScale(output.scale);
+    send(surface, "wl_surface.preferred_buffer_scale", { factor });
+    send(surface, "wl_surface.preferred_buffer_transform", {
+        transform: getEnumValue("wl_output.transform", "normal"),
+    });
 }
 
 /**
@@ -269,8 +312,12 @@ export class wlSurfaceData {
         return this.wl_surface[id];
     }
     renderWlSurface(id: WaylandObjectId2<"wl_surface">, canvas: OffscreenCanvas) {
-        this.wl_surface[id].frame = canvas;
-        this.render.renderCanvas(canvas, this.idScope(id));
+        const surface = this.wl_surface[id];
+        surface.frame = canvas;
+        this.render.renderCanvas(canvas, this.idScope(id), {
+            logicalWidth: surface.size.w,
+            logicalHeight: surface.size.h,
+        });
     }
     destroyWlSurface(id: WaylandObjectId2<"wl_surface">) {
         delete this.wl_surface[id];
@@ -721,6 +768,20 @@ export const waylandCoreModule = defineModule({
         output: () => ({ outputs: new Set(), surfaces: new Set() }),
         commitPacing: () => ({ pending: new Map(), raf: false }),
     },
+    hooks: {
+        /** 桌面改了输出/缩放：重发 wl_output 状态和 surface 的整数缩放偏好。 */
+        onOutput: (ctx) => {
+            const output = ctx.client.output();
+            for (const outputId of ctx.domain.output.outputs) {
+                if (!ctx.objects.has(outputId)) continue;
+                sendOutputState(outputId, output, ctx.sendNow);
+            }
+            for (const surface of ctx.domain.output.surfaces) {
+                if (!ctx.objects.has(surface)) continue;
+                sendPreferredScale(ctx, surface, output, ctx.sendNow);
+            }
+        },
+    },
     globals: [
         {
             name: "wl_shm",
@@ -746,31 +807,13 @@ export const waylandCoreModule = defineModule({
             name: "wl_output",
             onBind: (msg, ctx) => {
                 const id = msg.id as WaylandObjectId2<"wl_output">;
-                ctx.send(id, "wl_output.name", { name: "output0" });
-                ctx.send(id, "wl_output.description", { description: "Output 0" });
-                ctx.send(id, "wl_output.mode", {
-                    width: 1920,
-                    height: 1080,
-                    refresh: 120000,
-                    flags: getEnumValue("wl_output.mode", ["current", "preferred"]),
-                });
-                ctx.send(id, "wl_output.geometry", {
-                    x: 0,
-                    y: 0,
-                    physical_width: 344,
-                    physical_height: 194,
-                    make: "",
-                    model: "",
-                    subpixel: getEnumValue("wl_output.subpixel", "unknown"),
-                    transform: getEnumValue("wl_output.transform", "normal"),
-                });
-                ctx.send(id, "wl_output.scale", { factor: 1 });
-                ctx.send(id, "wl_output.done", {});
                 // 记录绑定，并把已存在的 surface 关联到该 output（客户端可能在 output 之后才建窗口）
                 const outputId = id as WaylandObjectId2<"wl_output">;
                 ctx.domain.output.outputs.add(outputId);
+                sendOutputState(outputId, ctx.client.output(), ctx.send);
                 for (const surface of ctx.domain.output.surfaces) {
                     ctx.send(surface, "wl_surface.enter", { output: outputId });
+                    sendPreferredScale(ctx, surface, ctx.client.output(), ctx.send);
                 }
             },
         },
@@ -817,6 +860,7 @@ export const waylandCoreModule = defineModule({
             ctx.core.surface.addWlSurface(surfaceId);
             ctx.domain.output.surfaces.add(surfaceId);
             enterBoundOutputs(ctx, surfaceId);
+            sendPreferredScale(ctx, surfaceId, ctx.client.output(), ctx.send);
         },
         "wl_compositor.create_region"(msg, ctx) {
             ctx.objects.setData(msg.args.id, { rects: [] });
@@ -975,6 +1019,25 @@ export const waylandCoreModule = defineModule({
             // attach(nil)：显式解绑，commit 后 unmap（与「本次没有 attach」不同）
             surface.data.pending.buffer = bufferId ? { id: bufferId } : null;
         },
+        "wl_surface.set_buffer_scale": (x, ctx) => {
+            if (x.args.scale <= 0) {
+                ctx.postError("wl_surface", x.id, "invalid_scale", "Buffer scale must be greater than 0");
+                return;
+            }
+            ctx.objects.get(x.id).data.pending.bufferScale = x.args.scale;
+        },
+        "wl_surface.set_buffer_transform": (x, ctx) => {
+            const name = getEnumName("wl_output.transform", x.args.transform);
+            if (name === undefined) {
+                ctx.postError("wl_surface", x.id, "invalid_transform", "Invalid buffer transform");
+                return;
+            }
+            if (name !== "normal") {
+                // 旋转/翻转暂不参与合成；保留状态，避免客户端因未实现而被打断
+                console.warn(`wl_surface.set_buffer_transform: unsupported transform ${name}`);
+            }
+            ctx.objects.get(x.id).data.pending.bufferTransform = x.args.transform;
+        },
         "wl_surface.damage": (x, ctx) => {
             const surface = ctx.objects.get(x.id);
             const damageList = surface.data.pending.damageList || [];
@@ -1026,7 +1089,43 @@ export const waylandCoreModule = defineModule({
                 // （规范：客户端先不带 buffer 提交，合成器才回 configure，之后才允许 attach）
                 ctx.notify.commit(surfaceId, false);
             } else {
-                const damageList = [...(data.damageList || []), ...(data.damageBufferList || [])];
+                // surface 逻辑尺寸与 buffer 坐标的换算：
+                // k = buffer_scale；viewport.source 是 surface 坐标，乘 k 后落到 buffer 像素；
+                // destination 是逻辑尺寸（分数缩放时 buffer 保持高分辨率，只改显示尺寸）。
+                const current = surface.data.current;
+                const bufferScale = current.bufferScale ?? 1;
+                const viewport = current.viewport;
+                const bufferW = bufferObj.width;
+                const bufferH = bufferObj.height;
+                const extentW = bufferW / bufferScale;
+                const extentH = bufferH / bufferScale;
+                const source = viewport?.source;
+                const logicalW = Math.max(1, viewport?.destination?.width ?? source?.width ?? extentW);
+                const logicalH = Math.max(1, viewport?.destination?.height ?? source?.height ?? extentH);
+                const crop = source
+                    ? {
+                          x: source.x * bufferScale,
+                          y: source.y * bufferScale,
+                          w: source.width * bufferScale,
+                          h: source.height * bufferScale,
+                      }
+                    : { x: 0, y: 0, w: bufferW, h: bufferH };
+                const damageScaleX = crop.w / logicalW;
+                const damageScaleY = crop.h / logicalH;
+                const damageList: { x: number; y: number; width: number; height: number }[] = [];
+                for (const damage of data.damageList ?? []) {
+                    // damage 是 surface 坐标：先落到 crop 区域，再换到 buffer 像素
+                    damageList.push({
+                        x: crop.x + damage.x * damageScaleX,
+                        y: crop.y + damage.y * damageScaleY,
+                        width: damage.width * damageScaleX,
+                        height: damage.height * damageScaleY,
+                    });
+                }
+                for (const damage of data.damageBufferList ?? []) {
+                    // damage_buffer 已经是 buffer 坐标
+                    damageList.push(damage);
+                }
                 let image: ImageData | VideoFrame;
                 if (bufferObj.type === "shm") {
                     let frame = bufferObj.frame;
@@ -1243,38 +1342,34 @@ export const waylandCoreModule = defineModule({
                         }
                     }
                 }
-                let width = 0,
-                    height = 0;
-                if (image instanceof VideoFrame) {
-                    width = image.codedWidth;
-                    height = image.codedHeight;
-                } else {
-                    width = image.width;
-                    height = image.height;
-                }
-                const sizeChanged = width !== canvas.width || height !== canvas.height;
+                const sizeChanged = bufferW !== canvas.width || bufferH !== canvas.height;
                 if (sizeChanged) {
-                    canvas.width = width;
-                    canvas.height = height;
-                    ctx.core.surface.updateWlSurfaceSize(surfaceId, width, height);
+                    canvas.width = bufferW;
+                    canvas.height = bufferH;
                 }
+                // surface 的逻辑尺寸与 buffer 尺寸是两回事：viewport destination 变化时
+                // buffer 可能完全没变，但窗口/命中检测尺寸必须更新。
+                ctx.core.surface.updateWlSurfaceSize(surfaceId, logicalW, logicalH);
                 // buffer 已应用、像素尚未合成：交给扩展（xdg 在此按尺寸变化发 configure）
                 ctx.notify.commit(surfaceId, sizeChanged);
 
                 // damage 是「相对上一帧的变更区域」：组合器保留 damage 外的旧内容。
                 // 新 buffer 在 damage 外的像素可能是复用缓冲区的旧数据/未定义内容，
                 // 不能整帧覆盖，只能把 damage 区域贴到已有画布上。
-                // todo damage 与 damage_buffer 坐标系不同；当前 buffer_scale=1、无 transform
-                // 时直接合并，之后支持缩放/变换时要分别转换。
                 if (damageList.length) {
                     for (const damage of damageList) {
-                        const dw = Math.min(canvas.width, damage.width);
-                        const dh = Math.min(canvas.height, damage.height);
+                        const dx = Math.max(0, Math.floor(damage.x));
+                        const dy = Math.max(0, Math.floor(damage.y));
+                        const x1 = Math.min(canvas.width, Math.ceil(damage.x + damage.width));
+                        const y1 = Math.min(canvas.height, Math.ceil(damage.y + damage.height));
+                        const dw = x1 - dx;
+                        const dh = y1 - dy;
+                        if (dw <= 0 || dh <= 0) continue;
                         if (image instanceof VideoFrame) {
                             // VideoFrame 走 source-over，先清掉 damage 区域，透明像素才是替换
-                            c2d.clearRect(damage.x, damage.y, dw, dh);
-                            c2d.drawImage(image, damage.x, damage.y, dw, dh, damage.x, damage.y, dw, dh);
-                        } else c2d.putImageData(image, 0, 0, damage.x, damage.y, dw, dh);
+                            c2d.clearRect(dx, dy, dw, dh);
+                            c2d.drawImage(image, dx, dy, dw, dh, dx, dy, dw, dh);
+                        } else c2d.putImageData(image, 0, 0, dx, dy, dw, dh);
                     }
                 } else {
                     // 没有 damage 的提交（少见）：按整帧处理
@@ -1296,7 +1391,7 @@ export const waylandCoreModule = defineModule({
                 ctx.core.surface.renderWlSurface(surfaceId, fcanvas);
 
                 // 只有当前光标surface才推送光标，隐藏后commit不应重新显示
-                ctx.cursor.updateFrame(surfaceId, fcanvas);
+                ctx.cursor.updateFrame(surfaceId, fcanvas, { width: logicalW, height: logicalH });
             }
         },
         "wl_surface.destroy": (x, ctx) => {
@@ -1407,11 +1502,11 @@ export const waylandCoreModule = defineModule({
                 ctx.postError("wl_pointer", x.id, "role", "Surface already has another role");
                 return;
             }
-            ctx.cursor.setSurface(
-                surfaceId,
-                { x: x.args.hotspot_x, y: x.args.hotspot_y },
-                ctx.core.surface.getWlSurface(surfaceId).frame,
-            );
+            const cursorSurface = ctx.core.surface.getWlSurface(surfaceId);
+            ctx.cursor.setSurface(surfaceId, { x: x.args.hotspot_x, y: x.args.hotspot_y }, cursorSurface.frame, {
+                width: cursorSurface.size.w,
+                height: cursorSurface.size.h,
+            });
         },
         "wl_region.add"(msg, ctx) {
             ctx.objects.getData(msg.id).rects.push({ ...msg.args, type: "+" });

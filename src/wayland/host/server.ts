@@ -17,7 +17,16 @@ const usocket = require("myde-unix-socket") as typeof import("myde-unix-socket")
 
 import type { UServer, USocket } from "myde-unix-socket";
 import { EventEmitter } from "../../event-emitter/event-emitter";
-import type { Client, CursorState, ServerEvents, ServerNotifyMap, ServerRequests, WindowInfo, WinHandle } from "../api";
+import type {
+    Client,
+    CursorState,
+    OutputInfo,
+    ServerEvents,
+    ServerNotifyMap,
+    ServerRequests,
+    WindowInfo,
+    WinHandle,
+} from "../api";
 import type { ActionArgs, WaylandWinId } from "../module";
 import { assertModuleConflicts } from "../protocols/index";
 import type { renderTools } from "../render_tools";
@@ -37,6 +46,37 @@ interface WindowEntry {
 
 function waylandName(name: number): WaylandName {
     return name as WaylandName;
+}
+
+/** 未配置输出前的默认值，保持与旧行为一致（1x、1920×1080、120Hz）。 */
+const DEFAULT_OUTPUT: OutputInfo = {
+    name: "output0",
+    description: "Output 0",
+    mode: { width: 1920, height: 1080, refresh: 120000 },
+    scale: 1,
+    transform: "normal",
+};
+
+function normalizeOutput(output: OutputInfo): OutputInfo {
+    const scale = Number.isFinite(output.scale) && output.scale > 0 ? output.scale : 1;
+    const width = Number.isFinite(output.mode.width) ? Math.max(1, Math.round(output.mode.width)) : 1920;
+    const height = Number.isFinite(output.mode.height) ? Math.max(1, Math.round(output.mode.height)) : 1080;
+    const refresh = Number.isFinite(output.mode.refresh) ? Math.max(0, Math.round(output.mode.refresh)) : 120000;
+    return {
+        name: output.name || DEFAULT_OUTPUT.name,
+        description: output.description || output.name || DEFAULT_OUTPUT.description,
+        mode: { width, height, refresh },
+        scale,
+        transform: output.transform ?? "normal",
+        ...(output.physicalSize
+            ? {
+                  physicalSize: {
+                      width: Math.max(0, Math.round(output.physicalSize.width)),
+                      height: Math.max(0, Math.round(output.physicalSize.height)),
+                  },
+              }
+            : {}),
+    };
 }
 
 /**
@@ -70,6 +110,28 @@ class WaylandServer {
     private windowTable = new Map<WinHandle, WindowEntry>();
     private handlesByClient = new Map<string, Set<WinHandle>>();
     private nextHandle = 1;
+    /** 当前输出配置（单屏；多屏时扩展为列表） */
+    private output: OutputInfo = DEFAULT_OUTPUT;
+
+    /**
+     * 输出配置。桌面启动、分辨率或缩放变化时调用 `set`；
+     * server 会把 `wl_output.scale` / `preferred_buffer_scale` / fractional 的
+     * `preferred_scale` 重发给客户端，并按新 scale 重设窗口 DOM 尺寸。
+     */
+    outputs = {
+        get: (): OutputInfo => this.output,
+        set: (output: OutputInfo): void => {
+            const next = normalizeOutput(output);
+            this.output = next;
+            this.render.setScale?.(next.scale);
+            for (const client of this.rawClients.values()) client.applyOutput();
+            // 窗口的逻辑 rect 不变，但显示尺寸变了；桌面需要更新输入换算和窗口 chrome
+            for (const handle of this.windowTable.keys()) {
+                const info = this.windowInfo(handle);
+                if (info) this.emitEvent("window.changed", info);
+            }
+        },
+    };
 
     /** 全部窗口的快照 */
     windows = {
@@ -237,6 +299,7 @@ class WaylandServer {
             appid: entry.client.getAppid() ?? "",
             title: record?.title ?? "",
             rect: entry.client.windowRect(entry.winId) ?? { x: 0, y: 0, w: 0, h: 0 },
+            scale: this.output.scale,
             states: {
                 activated: record?.actived ?? false,
                 maximized: record?.maximized ?? false,
@@ -305,6 +368,7 @@ class WaylandServer {
 
         const host: ClientHost = {
             surfaceBounds: () => this.requestSync("surfaceBounds.request"),
+            output: () => this.output,
             cursorChanged: (state) => this.emitEvent("cursor.changed", clientId, state),
         };
         const client = new WaylandClient({ id: clientId, socket, render: this.render, host });

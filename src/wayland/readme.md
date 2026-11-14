@@ -43,6 +43,12 @@
     - wp_viewporter
     - wp_viewport
 
+- fractional-scale-v1
+    - wp_fractional_scale_manager_v1
+    - wp_fractional_scale_v1
+    - 与 `wl_surface.set_buffer_scale` / `wl_output.scale` 配合：surface 仍是逻辑坐标，
+      buffer 按 `preferred_scale / 120` 放大，窗口 DOM 尺寸按输出 scale 放大。
+
 - text-input-unstable-v1
     - zwp_text_input_v1 部分
     - zwp_text_input_manager_v1
@@ -68,6 +74,10 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
   `input.pointer|scroll|key|text` 末尾可带 `seat`（缺省 `"seat0"`，选择器语义、不广播）：
   桌面喂第二把光标（如远程协作者）时传 `"seat1"`。
 - **应答**：`server.respond("surfaceBounds.request", () => ({ width, height }))`
+- **输出**：`server.outputs.get()` / `server.outputs.set({ name, mode, scale, transform })`。
+  `scale` 是桌面显示倍率：`WindowInfo.rect` 仍是 surface 逻辑尺寸，桌面显示尺寸 = `rect × scale`；
+  输入坐标要反向除回 `scale`。修改后 server 会重发 `wl_output`、`preferred_*` 与 fractional
+  `preferred_scale`，并按新 scale 重设窗口 DOM 尺寸。
 
 桌面不接触 Wayland 对象 id：所有命令按全局 `WinHandle` 下发，由 `host/server.ts` 反查
 `(client, winId)`。`server.clients` 只留给连接生命周期与调试。用法见 `desktop/readme.md` 的「Wayland 服务器」。

@@ -1,5 +1,5 @@
 import type { USocket } from "myde-unix-socket";
-import type { Client, ClientLogConfig, CursorState, Rect, TextInputState } from "../api";
+import type { Client, ClientLogConfig, CursorState, OutputInfo, Rect, TextInputState } from "../api";
 import type {
     ActionArgs,
     ActionFn,
@@ -65,6 +65,7 @@ const frameHooks = protocolModules.flatMap((m) => (m.hooks.onFrame ? [m.hooks.on
 const destroyHooks = protocolModules.flatMap((m) => (m.hooks.onDestroy ? [m.hooks.onDestroy] : []));
 const focusHooks = protocolModules.flatMap((m) => (m.hooks.onFocus ? [m.hooks.onFocus] : []));
 const textInputHooks = protocolModules.flatMap((m) => (m.hooks.onTextInput ? [m.hooks.onTextInput] : []));
+const outputHooks = protocolModules.flatMap((m) => (m.hooks.onOutput ? [m.hooks.onOutput] : []));
 
 /** 桌面命令（`server.notify`）→ 协议模块的 `actions`，与请求分发表同构 */
 const actionHandlers = new Map<ActionKey, ActionFn>(protocolModules.flatMap((m) => [...m.actions]));
@@ -75,6 +76,8 @@ const actionHandlers = new Map<ActionKey, ActionFn>(protocolModules.flatMap((m) 
 export interface ClientHost {
     /** 桌面提供的可用空间（同步；xdg_surface.get_toplevel 要填 configure_bounds） */
     surfaceBounds(): { width: number; height: number } | undefined;
+    /** 当前输出配置（桌面调用 `server.outputs.set` 写入） */
+    output(): OutputInfo;
     /** 光标状态变化，server 转成 `cursor.changed` 事件 */
     cursorChanged(state: CursorState): void;
 }
@@ -274,6 +277,7 @@ export class WaylandClient implements Client {
                 protoVersions: this.protoVersions,
                 emit: this.emit.bind(this),
                 surfaceBounds: () => this.host.surfaceBounds(),
+                output: () => this.host.output(),
             },
             scene: this.render,
         };
@@ -337,6 +341,11 @@ export class WaylandClient implements Client {
                 return false;
             },
         };
+    }
+
+    /** 输出配置变化（桌面 `server.outputs.set`）：扇出给各协议模块重发输出相关事件。 */
+    applyOutput(): void {
+        for (const hook of outputHooks) hook(this.ctx);
     }
 
     /**

@@ -25,36 +25,28 @@ export const viewporterModule = defineModule({
          * 收缩就是靠 set_source 裁掉旧内容，读 pending 会让第二次之后的裁剪丢失。
          */
         onFrame: (surfaceId, canvas, _pending, ctx) => {
-            const viewport = ctx.objects.get(surfaceId).data.current.viewport;
-            if (!viewport || !(viewport.destination || viewport.source)) return;
-            const { source, destination } = viewport;
-            let dwidth = 1;
-            let dheight = 1;
-            if (!destination && source) {
-                dwidth = source.width;
-                dheight = source.height;
-            } else if (destination) {
-                dwidth = destination.width;
-                dheight = destination.height;
-            }
-            if (
-                source &&
-                (source.x < 0 ||
-                    source.y < 0 ||
-                    source.x + source.width > canvas.width ||
-                    source.y + source.height > canvas.height)
-            ) {
+            const data = ctx.objects.get(surfaceId).data.current;
+            const viewport = data.viewport;
+            const source = viewport?.source;
+            if (!source) return;
+            // source 是 surface-local 坐标（已过 buffer_scale），落到 buffer 像素要乘回去。
+            // destination 只决定显示尺寸，由 core 记录为 surface 逻辑尺寸；不能在这里
+            // 把画布缩到 destination，否则分数缩放会丢掉客户端的 1.5x/2x 像素。
+            const bufferScale = data.bufferScale ?? 1;
+            const sx = source.x * bufferScale;
+            const sy = source.y * bufferScale;
+            const sw = source.width * bufferScale;
+            const sh = source.height * bufferScale;
+            if (sx < 0 || sy < 0 || sx + sw > canvas.width || sy + sh > canvas.height) {
                 // set_source 可能发生在对应 buffer attach 之前；当前 canvas 还是旧尺寸。
                 // 等新 buffer commit 后再裁剪，避免 drawImage 越界抛异常。
                 return canvas;
             }
-            const ncanvas = new OffscreenCanvas(dwidth, dheight);
+            const width = Math.max(1, Math.round(sw));
+            const height = Math.max(1, Math.round(sh));
+            const ncanvas = new OffscreenCanvas(width, height);
             const sctx = ncanvas.getContext("2d");
-            if (source) {
-                sctx?.drawImage(canvas, source.x, source.y, source.width, source.height, 0, 0, dwidth, dheight);
-            } else {
-                sctx?.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, dwidth, dheight);
-            }
+            sctx?.drawImage(canvas, sx, sy, sw, sh, 0, 0, width, height);
             return ncanvas;
         },
     },

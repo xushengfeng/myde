@@ -2,6 +2,7 @@ import type { ProtocolModule } from "../module";
 import { waylandCoreModule } from "./core/wayland";
 import { cursorShapeModule } from "./ext/cursor_shape";
 import { dmabufModule } from "./ext/dmabuf";
+import { fractionalScaleModule } from "./ext/fractional_scale";
 import { presentationModule } from "./ext/presentation";
 import { textInputV1Module } from "./ext/text_input_v1";
 import { textInputV3Module } from "./ext/text_input_v3";
@@ -17,6 +18,7 @@ import { xdgShellModule } from "./ext/xdg_shell";
 export const protocolModules: readonly ProtocolModule[] = [
     waylandCoreModule,
     viewporterModule,
+    fractionalScaleModule,
     cursorShapeModule,
     dmabufModule,
     presentationModule,

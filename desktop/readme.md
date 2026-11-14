@@ -541,13 +541,15 @@ interface WindowInfo {
     appid: string;
     title: string;
     rect: { x: number; y: number; w: number; h: number };
+    scale: number; // 输出缩放：显示尺寸 = rect × scale，输入坐标 = 桌面坐标 ÷ scale
     states: { activated: boolean; maximized: boolean; minimized: boolean };
     renderId: string; // render.getXdgSurfaceEle(info.renderId)
 }
 ```
 
-`rect` 的 `w`/`h` 是客户端 `set_window_geometry` 声明的尺寸；`x`/`y` 是 surface 局部的几何偏移，
+`rect` 的 `w`/`h` 是客户端 `set_window_geometry` 声明的 **surface 逻辑尺寸**；`x`/`y` 是 surface 局部的几何偏移，
 **不是屏幕位置**（摆放由桌面负责，渲染时几何原点即窗口元素左上角）。
+桌面显示尺寸是 `rect × scale`：渲染侧会按 scale 放大窗口 DOM，桌面输入转发前要除回 scale。
 命中检测用 `server.windows.hitTest(handle, p)`（窗口元素的局部坐标）：它包含 popup 树、subsurface
 与 input region，popup 超出顶层窗口范围时也能命中；只比较 `rect` 会漏掉超出的 popup。
 
@@ -662,11 +664,37 @@ server.notify("clipboard.offer", handle); // 获得焦点时把剪贴板 offer �
 
 ### 桌面提供可用空间
 
-注册一次即可（server 在 `xdg_surface.get_toplevel` 的同步 handler 里取值，所以必须同步返回）：
+注册一次即可（server 在 `xdg_surface.get_toplevel` 的同步 handler 里取值，所以必须同步返回）。
+参数是 **surface 逻辑尺寸**，高 DPI 下要用物理视口除以 `scale`：
 
 ```typescript
-server.respond("surfaceBounds.request", () => ({ width: window.innerWidth, height: window.innerHeight }));
+server.respond("surfaceBounds.request", () => ({
+    width: window.innerWidth / scale,
+    height: window.innerHeight / scale,
+}));
 ```
+
+### 输出与缩放
+
+桌面把屏幕模式与客户端缩放交给 server：
+
+```typescript
+server.outputs.set({
+    name: "eDP-1",
+    description: "eDP-1",
+    mode: { width: 3840, height: 2160, refresh: 60000 }, // 物理像素，refresh 单位 mHz
+    scale: 2, // 1 surface 逻辑 px = 2 桌面物理 px
+    transform: "normal",
+});
+```
+
+server 会据此发送 `wl_output.mode/geometry/scale`、`wl_surface.preferred_buffer_scale`，
+并让支持分数的客户端通过 `wp_fractional_scale_v1` 拿到精确值。修改 scale 不需要重连客户端：
+客户端按新偏好重绘，渲染侧同时把窗口 DOM 尺寸按 `rect × scale` 重设。
+
+默认 `scale = 1`；不调用 `outputs.set` 时保持旧行为（1920×1080、1x）。
+myde-wrap 的 winit 后端（屏幕名 `winit`）以及普通窗口模式由宿主桌面负责缩放，
+desktop 应把 `scale` 固定为 1，避免再叠一层内部缩放。
 
 ### 连接
 

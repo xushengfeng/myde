@@ -39,6 +39,26 @@ export interface Size {
     height: number;
 }
 
+// ───────────────────────── 输出 / 缩放 ─────────────────────────
+
+/**
+ * 一块输出的配置（当前单屏，后续多屏按列表扩展）。
+ *
+ * 坐标关系：桌面 CSS px = surface-local 逻辑 px × `scale`。
+ * `mode` 是硬件像素；`scale` 是逻辑到物理的倍率（可分数）。
+ */
+export interface OutputInfo {
+    name: string;
+    description: string;
+    /** 物理模式，硬件像素；refresh 单位 mHz */
+    mode: { width: number; height: number; refresh: number };
+    /** 1 surface-local px 对应多少物理 px，允许 1.25 / 1.5 等 */
+    scale: number;
+    transform: "normal" | "90" | "180" | "270";
+    /** 物理尺寸（mm），未知时省略 */
+    physicalSize?: Size;
+}
+
 /**
  * 一次自包含的窗口快照：`window.created` / `window.changed` 与查询接口共用。
  * 字段全部自包含，桌面拿到即可用，无需反查 client、无需拼 id。
@@ -60,6 +80,11 @@ export interface WindowInfo {
      * 只比较这个 `rect` 会漏掉超出窗口的 popup。
      */
     rect: Rect;
+    /**
+     * 该窗口所在输出的缩放。桌面显示尺寸 = `rect` × `scale`（surface 逻辑 → 桌面 CSS/物理 px）。
+     * 输入坐标要反向换算：surface 坐标 = 桌面坐标 ÷ `scale`。
+     */
+    scale: number;
     states: WindowStates;
     /** 渲染侧不透明 id：`render.getXdgSurfaceEle(info.renderId)` */
     renderId: string;
@@ -81,6 +106,8 @@ export type CursorState =
           hotspot: { x: number; y: number };
           /** 该 surface 最近一次合成的帧；还没提交过帧时为 undefined，桌面应保留上一张 */
           canvas?: OffscreenCanvas;
+          /** 光标的 surface-local 逻辑尺寸；桌面显示尺寸 = size × 输出 scale */
+          size: Size;
       };
 
 // ───────────────────────── 文本输入 ─────────────────────────

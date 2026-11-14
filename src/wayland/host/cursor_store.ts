@@ -1,4 +1,4 @@
-import type { CursorState } from "../api";
+import type { CursorState, Size } from "../api";
 import type { SurfaceId } from "../module";
 import type { renderTools } from "../render_tools";
 
@@ -36,11 +36,16 @@ export class CursorStore {
     }
 
     /** wl_pointer.set_cursor(surface, hotspot)：热点立即生效，之后的 commit 沿用 */
-    setSurface(id: SurfaceId, hotspot: { x: number; y: number }, frame?: OffscreenCanvas): void {
+    setSurface(
+        id: SurfaceId,
+        hotspot: { x: number; y: number },
+        frame?: OffscreenCanvas,
+        size: Size = { width: 0, height: 0 },
+    ): void {
         const canvas = frame ? snapshotCanvas(frame) : undefined;
         this.#state = canvas
-            ? { kind: "image", surfaceId: id, hotspot, canvas }
-            : { kind: "image", surfaceId: id, hotspot };
+            ? { kind: "image", surfaceId: id, hotspot, canvas, size }
+            : { kind: "image", surfaceId: id, hotspot, size };
         if (canvas) {
             // surface 已有内容时立即更新光标，不需要等下一次 commit
             this.#render.setCursor(canvas, hotspot.x, hotspot.y);
@@ -52,11 +57,17 @@ export class CursorStore {
      * 当前光标 surface 提交了新帧。
      * 只有仍在充当光标的那张 surface 才推送 —— 隐藏/切换之后 commit 不应重新显示。
      */
-    updateFrame(id: SurfaceId, frame: OffscreenCanvas): void {
+    updateFrame(id: SurfaceId, frame: OffscreenCanvas, size?: Size): void {
         const s = this.#state;
         if (s.kind !== "image" || s.surfaceId !== id) return;
         const canvas = snapshotCanvas(frame);
-        this.#state = { kind: "image", surfaceId: id, hotspot: s.hotspot, canvas };
+        this.#state = {
+            kind: "image",
+            surfaceId: id,
+            hotspot: s.hotspot,
+            canvas,
+            size: size ?? s.size,
+        };
         this.#render.setCursor(canvas, s.hotspot.x, s.hotspot.y);
         this.#onChanged?.(this.#state);
     }

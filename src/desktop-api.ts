@@ -119,6 +119,7 @@ export type {
 export type {
     Client,
     CursorState,
+    OutputInfo,
     PointerCommand,
     Rect,
     renderTools,

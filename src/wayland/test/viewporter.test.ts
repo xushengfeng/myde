@@ -99,7 +99,7 @@ describe("wp_viewport", () => {
         expect(postError).not.toHaveBeenCalled();
     });
 
-    it("destination 参与缩放且持续生效；unset 后恢复整幅", () => {
+    it("destination 只改逻辑尺寸，不降低合成画布分辨率；unset 后恢复整幅", () => {
         const { ctx, surface, commit } = createCtx();
         get_viewport({ id: 2, args: { id: 2, surface: 1 } } as never, ctx as never);
         set_source({ id: 2, args: { x: 0, y: 0, width: 334, height: 187 } } as never, ctx as never);
@@ -108,13 +108,14 @@ describe("wp_viewport", () => {
         // 同一 commit 前的 set_source/set_destination 必须都保留
         expect(surface.current.viewport?.source).toEqual({ x: 0, y: 0, width: 334, height: 187 });
         expect(surface.current.viewport?.destination).toEqual({ width: 200, height: 100 });
+        // onFrame 只按 source 在 buffer 分辨率裁剪；destination 交给 core 记录逻辑尺寸
         const scaled = onFrame(
             1 as never,
             { width: 768, height: 512 } as never,
             {} as never,
             ctx as never,
         ) as unknown as FakeOffscreenCanvas;
-        expect([scaled.width, scaled.height]).toEqual([200, 100]);
+        expect([scaled.width, scaled.height]).toEqual([334, 187]);
 
         set_source({ id: 2, args: { x: -1, y: -1, width: -1, height: -1 } } as never, ctx as never);
         set_destination({ id: 2, args: { width: -1, height: -1 } } as never, ctx as never);

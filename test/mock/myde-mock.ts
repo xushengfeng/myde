@@ -62,6 +62,8 @@ export interface MockWindowInfo {
     appid: string;
     title: string;
     rect: { x: number; y: number; w: number; h: number };
+    /** 输出缩放：桌面显示尺寸 = rect × scale */
+    scale: number;
     states: { activated: boolean; maximized: boolean; minimized: boolean };
     renderId: string;
 }
@@ -94,6 +96,17 @@ export interface MockWaylandServer {
         hitTest(handle: string, p: { x: number; y: number }): boolean;
     };
     cursor: { get(clientId: string): unknown };
+    /** 输出配置（单屏 mock） */
+    outputs: {
+        get(): {
+            name: string;
+            description: string;
+            mode: { width: number; height: number; refresh: number };
+            scale: number;
+            transform: "normal";
+        };
+        set(output: { scale: number }): void;
+    };
     /** 造窗口：分配全局 handle 并发出 `window.created` */
     openWindow(op: { clientId: string; winId?: string; renderId: string; width?: number; height?: number }): string;
     closeWindow(handle: string): void;
@@ -252,6 +265,13 @@ export function createMockServer(): MockWaylandServer {
     };
     const key = (clientId: string, winId: string) => `${clientId}|${winId}`;
     const changed = (info: MockWindowInfo) => dispatch("window.changed", info);
+    let output = {
+        name: "output0",
+        description: "Output 0",
+        mode: { width: 1920, height: 1080, refresh: 60000 },
+        scale: 1,
+        transform: "normal" as const,
+    };
 
     const server: MockWaylandServer = {
         socketDir: "/tmp/mock",
@@ -275,6 +295,16 @@ export function createMockServer(): MockWaylandServer {
             },
         },
         cursor: { get: (clientId) => (clients.has(clientId) ? "default" : undefined) },
+        outputs: {
+            get: () => output,
+            set(next) {
+                output = { ...output, ...next };
+                for (const info of infos.values()) {
+                    info.scale = output.scale;
+                    changed(info);
+                }
+            },
+        },
         openWindow(op) {
             const handle = `w${nextHandle++}`;
             const info: MockWindowInfo = {
@@ -283,6 +313,7 @@ export function createMockServer(): MockWaylandServer {
                 appid: clients.get(op.clientId)?.getAppid() ?? "",
                 title: "",
                 rect: { x: 0, y: 0, w: op.width ?? 0, h: op.height ?? 0 },
+                scale: output.scale,
                 states: { activated: false, maximized: false, minimized: false },
                 renderId: op.renderId,
             };

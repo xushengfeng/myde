@@ -12,6 +12,11 @@ export type SettingsContentOptions = {
     setImePanelPreedit(mode: ImePanelPreeditMode): void;
     getCenterWindows(): boolean;
     setCenterWindows(enabled: boolean): void;
+    /** Wayland 客户端/窗口缩放（1 = 100%） */
+    getScale(): number;
+    setScale(scale: number): void;
+    /** winit / 普通窗口模式跟随宿主缩放，不提供额外缩放 */
+    scaleFollowsHost(): boolean;
     inputMethodAvailable: boolean;
     connectAvailable: boolean;
     getConnectEnabled(): boolean;
@@ -113,7 +118,7 @@ function createToggle(get: () => boolean, set: (value: boolean) => void) {
     return track;
 }
 
-function createSegmented<T extends string>(
+function createSegmented<T extends string | number>(
     options: { name: string; value: T }[],
     get: () => T,
     set: (value: T) => void,
@@ -359,6 +364,37 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
                         sectionTitle("外观", "调整桌面的显示方式。"),
                         settingRow("图标主题", "应用图标的主题名称，修改后重新打开应用列表或桌面后生效。", themeInput),
                         settingRow("壁纸", "当前使用默认桌面自带壁纸。", txt("默认").style({ opacity: "0.6" })),
+                    ]);
+            },
+        },
+        {
+            id: "display",
+            name: "显示",
+            build: () => {
+                const control = op.scaleFollowsHost()
+                    ? txt("跟随宿主桌面").style({ opacity: "0.7" })
+                    : createSegmented(
+                          [
+                              { name: "100%", value: 1 },
+                              { name: "125%", value: 1.25 },
+                              { name: "150%", value: 1.5 },
+                              { name: "175%", value: 1.75 },
+                              { name: "200%", value: 2 },
+                          ],
+                          op.getScale,
+                          op.setScale,
+                      );
+                return view("y")
+                    .style({ gap: px(sSize2.padding + 8) })
+                    .add([
+                        sectionTitle("显示", "Wayland 客户端与窗口的缩放。"),
+                        settingRow(
+                            "客户端缩放",
+                            op.scaleFollowsHost()
+                                ? "winit / 窗口模式由宿主桌面负责缩放，myde 内部固定 1x。"
+                                : "按比例渲染 Wayland 应用窗口；桌面面板暂不缩放。",
+                            control,
+                        ),
                     ]);
             },
         },
