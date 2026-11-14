@@ -5,13 +5,19 @@
 import type { DeviceInfo, InputDevice } from "myde-input";
 import { EventEmitter } from "../event-emitter/event-emitter";
 import { InputEventCodes } from "../input_codes/types";
+import { absRange } from "../input_map/abs";
 
-/** 轻触（tap）允许的最长接触时间 */
-export const TAP_TIMEOUT = 300;
-/** 轻触允许的最大位移，超过就当成移动/滚动 */
-export const TAP_MOVE = 16;
-/** 轻触后再次按下，在这个时间窗内移动会进入拖拽 */
-export const DRAG_TIMEOUT = 300;
+// 与 libinput 的触摸板轻触/拖拽一致（COSMIC、KWin 都直接交给 libinput）：
+// 接触后 180ms 内抬起且位移不超过 1.3mm 才算轻触；轻触在抬起时只发按下，
+// 等拖拽窗口过去再发抬起；随后第二下按住移动就是拖拽。
+/** 轻触允许的最长接触时间 */
+export const TAP_TIMEOUT = 180;
+/** 轻触允许的最大位移（毫米，按设备分辨率换算） */
+export const TAP_MOVE_MM = 1.3;
+/** 轻触后第二下按住，在这个时间窗内移动/保持都进入拖拽 */
+export const DRAG_TIMEOUT = 180;
+/** 设备没报分辨率时按 libinput 的默认 DPI 折算（单位/毫米） */
+const DEFAULT_UNITS_PER_MM = 1000 / 25.4;
 /** 双指滚动量相对手指位移的比例（自然滚动：内容跟随手指） */
 export const SCROLL_GAIN = 1;
 
@@ -51,19 +57,20 @@ export interface TouchpadInputOptions {
     now?(): number;
 }
 
-/** 一个接触点，坐标为视口像素 */
+/** 一个接触点，坐标为视口像素；raw 是设备原始值，用于按毫米判断轻触位移 */
 interface TouchContact {
     x: number;
     y: number;
     /** X/Y 是否都收到过坐标（MT 的 X、Y 分两个事件到达） */
     hasX: boolean;
     hasY: boolean;
-    /** 本轮接触的起点，用于判断轻触 */
-    startX: number;
-    startY: number;
     /** 上一帧坐标，用于计算位移 */
     prevX?: number;
     prevY?: number;
+    rawX?: number;
+    rawY?: number;
+    startRawX?: number;
+    startRawY?: number;
     /** 本帧抬起，sync 后删除 */
     released: boolean;
 }
@@ -80,7 +87,6 @@ type TouchpadAction =
 /** 把一台触摸板设备的 input api 事件封装成 TouchpadEvents */
 export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     private readonly options: TouchpadInputOptions;
-    private readonly now: () => number;
     private readonly hasTrackingId: boolean;
     private readonly alwaysTouching: boolean;
 
@@ -91,6 +97,11 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     /** fallback 建立前先记住最近一次坐标 */
     private lastX: number | undefined;
     private lastY: number | undefined;
+    private lastRawX: number | undefined;
+    private lastRawY: number | undefined;
+    /** 设备原始单位 / 毫米，没有分辨率时用 libinput 的默认 DPI */
+    private readonly unitsPerMmX: number;
+    private readonly unitsPerMmY: number;
 
     private slot = 0;
     private btnTouch = false;
@@ -98,15 +109,20 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     private readonly physicalDown = new Set<number>();
 
     private roundActive = false;
-    private roundStart = 0;
     private roundMaxFingers = 0;
-    private roundMoved = 0;
-    private roundHadButton = false;
-    /** 这一轮是上一次轻触后的第二下，移动超过阈值就变成拖拽 */
-    private roundCanDrag = false;
-    private dragging = false;
-    /** 上一次单指轻触的时间，用于开启拖拽窗口 */
-    private tapArmedAt: number | undefined;
+    /**
+     * libinput 触摸板轻触状态机：
+     * idle → touch（接触，等抬手/超时）
+     * touch → hold（超时未抬起，不点击）/ moving（超过位移阈值，移动光标）
+     * touch 抬起 → tapped（已按下，等第二下或拖拽窗口结束）
+     * tapped 第二下 → second（等移动/超时），移动/超时 → dragging
+     * second 快速抬起 → 双击；dragging 抬起 → 抬起按键
+     */
+    private phase: "idle" | "touch" | "hold" | "moving" | "tapped" | "second" | "dragging" = "idle";
+    /** 已经按下、还没抬起的键 */
+    private pressedButton: number | undefined;
+    /** touch 超时 / tapped 窗口 / second 判断 / dragWait 锁定 */
+    private timer: ReturnType<typeof setTimeout> | undefined;
     /** 当前三指及以上手势的手指数，0 表示没有 */
     private multiFingers = 0;
     /** 是否正在双指滚动，手指数量变化时补一次 scrollEnd */
@@ -118,9 +134,18 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     constructor(dev: InputDevice, info: DeviceInfo, options: TouchpadInputOptions) {
         super();
         this.options = options;
-        this.now = options.now ?? (() => performance.now());
         this.hasTrackingId = info.capabilities.absAxes.includes(InputEventCodes.ABS_MT_TRACKING_ID);
         this.alwaysTouching = !hasTouchpadTouchSignal(info.capabilities.keyCodes);
+        const xCode = info.capabilities.absAxes.includes(InputEventCodes.ABS_MT_POSITION_X)
+            ? InputEventCodes.ABS_MT_POSITION_X
+            : InputEventCodes.ABS_X;
+        const yCode = info.capabilities.absAxes.includes(InputEventCodes.ABS_MT_POSITION_Y)
+            ? InputEventCodes.ABS_MT_POSITION_Y
+            : InputEventCodes.ABS_Y;
+        const resX = absRange(info, xCode)?.resolution ?? 0;
+        const resY = absRange(info, yCode)?.resolution ?? 0;
+        this.unitsPerMmX = resX > 0 ? resX : DEFAULT_UNITS_PER_MM;
+        this.unitsPerMmY = resY > 0 ? resY : DEFAULT_UNITS_PER_MM;
         dev.on("absolute", (code, value) => this.absolute(code, value));
         dev.on("key", (code, value) => this.key(code, value));
         dev.on("sync", () => this.flush());
@@ -128,39 +153,44 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
 
     private flush(): void {
         const actions = this.pending.splice(0);
-        const now = this.now();
-        const contacts = this.activeContacts();
+        // 抬起的那一帧也可能带着最后一小段位移，位移要用包含已抬起的全部接触点算
+        const { active: contacts, all } = this.activeContacts();
         const count = this.fingerCount(contacts);
 
-        if (!this.roundActive && count > 0) this.startRound(count, now);
-        if (this.roundActive) {
-            this.roundMaxFingers = Math.max(this.roundMaxFingers, count);
-            this.roundMoved = Math.max(this.roundMoved, this.maxMove(contacts));
-        }
+        if (!this.roundActive && count > 0) this.startRound(count);
+        if (this.roundActive) this.roundMaxFingers = Math.max(this.roundMaxFingers, count);
+
         // 双指滚动在手指数量变化（抬手、加入第三根）时结束
         if (this.scrolling && count !== 2) {
             this.scrolling = false;
             actions.push({ type: "scrollEnd" });
         }
 
-        const { dx, dy } = this.consumeMove(contacts);
+        // 按住左键时落下第二根手指：结束按键，交给多指手势（避免左键卡住）
+        if (this.roundActive && count >= 2 && this.pressedButton !== undefined) {
+            this.unpress(actions);
+            this.phase = "moving";
+        }
+
+        const { dx, dy } = this.consumeMove(all);
         const ignoreAbs = this.options.ignoreAbs?.() ?? false;
+        const movedBeyondTap = this.exceedsTapMove(all);
 
         if (this.roundActive) {
-            // 第二下按住后移动，进入拖拽（先按下左键再走位移）
-            if (this.roundCanDrag && !this.dragging && count === 1 && this.roundMoved > TAP_MOVE) {
-                this.roundCanDrag = false;
-                this.dragging = true;
-                actions.push({ type: "button", action: "down", button: 0 });
-            }
-            // 拖拽中又落下第二根手指：结束拖拽，避免左键卡住
-            if (this.dragging && count !== 1) {
-                this.dragging = false;
-                actions.push({ type: "button", action: "up", button: 0 });
+            if (movedBeyondTap) {
+                if (this.phase === "touch" || this.phase === "hold") {
+                    this.cancelTimer();
+                    this.phase = "moving";
+                } else if (this.phase === "second") {
+                    // 第二下移动超过阈值：接上按住的左键进入拖拽
+                    this.cancelTimer();
+                    this.phase = "dragging";
+                }
             }
 
             if (dx !== 0 || dy !== 0) {
-                if (count === 1) {
+                // 抬起的那一帧也可能带着最后一小段位移：单指接触（含本帧抬起）照发 move
+                if (count === 1 || (count === 0 && all.length === 1)) {
                     if (!ignoreAbs) actions.push({ type: "move", dx, dy });
                 } else if (count === 2) {
                     // 自然滚动：内容跟随手指，手指上移对应内容向下滚
@@ -186,7 +216,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             }
         }
 
-        if (this.roundActive && count === 0) this.finishRound(now, actions);
+        if (this.roundActive && count === 0) this.finishRound(actions);
 
         for (const action of actions) {
             if (action.type === "button") this.emit("button", action.action, action.button);
@@ -251,38 +281,50 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         if (button === undefined) return;
         if (value === 1) {
             this.physicalDown.add(button);
-            if (this.roundActive) this.roundHadButton = true;
-            this.pending.push({ type: "button", action: "down", button });
+            if (this.pressedButton === button) {
+                // 轻触/拖拽已经按下这个键，物理按下并入，不重复发送
+                this.cancelTimer();
+            } else {
+                // 物理按下取代正在判断的轻触，避免同一次接触又合成点击
+                if (this.phase === "touch" || this.phase === "hold" || this.phase === "moving") {
+                    this.cancelTimer();
+                    this.phase = "moving";
+                }
+                this.pending.push({ type: "button", action: "down", button });
+            }
         } else if (value === 0) {
             this.physicalDown.delete(button);
+            if (this.pressedButton === button) {
+                // 这次按下由轻触/拖拽发起，物理抬起负责结束它
+                this.cancelTimer();
+                this.pressedButton = undefined;
+                this.phase = "idle";
+            }
             this.pending.push({ type: "button", action: "up", button });
         }
     }
 
     private newContact(): TouchContact {
-        return { x: 0, y: 0, hasX: false, hasY: false, startX: 0, startY: 0, released: false };
+        return { x: 0, y: 0, hasX: false, hasY: false, released: false };
     }
 
-    /** 当前按下的接触点（含本帧已抬起但还没清理的） */
-    private activeContacts(): TouchContact[] {
-        const list: TouchContact[] = [];
-        for (const c of this.contacts.values()) if (!c.released) list.push(c);
-
+    /** 当前接触点：active 不含本帧抬起的，all 含（用于把最后一帧位移也算上） */
+    private activeContacts(): { active: TouchContact[]; all: TouchContact[] } {
         if (!this.hasTrackingId) {
             if (!this.touching()) {
                 if (this.fallback) this.fallback.released = true;
             } else if (!this.fallback) {
                 this.fallback = this.newContact();
                 if (this.lastX !== undefined && this.lastY !== undefined) {
-                    this.placeFallback(this.lastX, this.lastY);
+                    this.placeFallback(this.lastX, this.lastY, this.lastRawX, this.lastRawY);
                 }
             }
         }
-        if (this.fallback) {
-            if (this.fallback.released) this.fallback = undefined;
-            else list.push(this.fallback);
-        }
-        return list;
+        const all = [...this.contacts.values()];
+        if (this.fallback) all.push(this.fallback);
+        const active = all.filter((c) => !c.released);
+        if (this.fallback?.released) this.fallback = undefined;
+        return { active, all };
     }
 
     /** 没有 tracking id 时的接触状态 */
@@ -306,21 +348,28 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     private updateFallback(isX: boolean, code: number, value: number): void {
         const x = this.options.mapX(code, value);
         const y = this.options.mapY(code, value);
-        if (isX && x !== undefined) this.lastX = x;
-        if (!isX && y !== undefined) this.lastY = y;
+        if (isX) {
+            if (x !== undefined) this.lastX = x;
+            this.lastRawX = value;
+        } else {
+            if (y !== undefined) this.lastY = y;
+            this.lastRawY = value;
+        }
         if (this.fallback) this.setPos(this.fallback, isX, code, value);
     }
 
-    private placeFallback(x: number, y: number): void {
+    private placeFallback(x: number, y: number, rawX?: number, rawY?: number): void {
         if (!this.fallback) return;
         this.fallback.hasX = true;
         this.fallback.hasY = true;
         this.fallback.x = x;
         this.fallback.y = y;
-        this.fallback.startX = x;
-        this.fallback.startY = y;
         this.fallback.prevX = x;
         this.fallback.prevY = y;
+        this.fallback.rawX = rawX;
+        this.fallback.rawY = rawY;
+        this.fallback.startRawX = rawX;
+        this.fallback.startRawY = rawY;
     }
 
     private setPos(contact: TouchContact, isX: boolean, code: number, value: number): void {
@@ -328,20 +377,34 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         if (pos === undefined) return;
         if (isX) {
             contact.x = pos;
+            contact.rawX = value;
             if (!contact.hasX) {
                 contact.hasX = true;
-                contact.startX = pos;
+                contact.startRawX = value;
                 // 第一个坐标不作为位移，避免从 0 跳到真实位置
                 contact.prevX = pos;
             }
         } else {
             contact.y = pos;
+            contact.rawY = value;
             if (!contact.hasY) {
                 contact.hasY = true;
-                contact.startY = pos;
+                contact.startRawY = value;
                 contact.prevY = pos;
             }
         }
+    }
+
+    /** 任一接触点从按下处移动超过 1.3mm（按设备分辨率折算） */
+    private exceedsTapMove(contacts: TouchContact[]): boolean {
+        for (const c of contacts) {
+            if (c.rawX === undefined || c.startRawX === undefined) continue;
+            const dx = (c.rawX - c.startRawX) / this.unitsPerMmX;
+            const dy =
+                c.rawY !== undefined && c.startRawY !== undefined ? (c.rawY - c.startRawY) / this.unitsPerMmY : 0;
+            if (Math.hypot(dx, dy) > TAP_MOVE_MM) return true;
+        }
+        return false;
     }
 
     /** 所有接触点相对上一帧的位移之和；返回平均到每个接触点的位移 */
@@ -371,47 +434,126 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         return { dx: dx / n, dy: dy / n };
     }
 
-    private maxMove(contacts: TouchContact[]): number {
-        let max = 0;
-        for (const c of contacts) {
-            if (!c.hasX || !c.hasY) continue;
-            max = Math.max(max, Math.hypot(c.x - c.startX, c.y - c.startY));
-        }
-        return max;
-    }
-
-    private startRound(count: number, now: number): void {
+    private startRound(count: number): void {
         this.roundActive = true;
-        this.roundStart = now;
         this.roundMaxFingers = count;
-        this.roundMoved = 0;
-        this.roundHadButton = this.physicalDown.size > 0;
-        this.roundCanDrag = count === 1 && this.tapArmedAt !== undefined && now - this.tapArmedAt <= DRAG_TIMEOUT;
-        this.tapArmedAt = undefined;
+        switch (this.phase) {
+            case "tapped":
+                // 轻触后的第二下：按下保持，忽略这一下的 down，等移动/超时决定拖拽或双击
+                this.cancelTimer();
+                this.phase = "second";
+                this.schedule(TAP_TIMEOUT, () => {
+                    if (this.phase === "second") this.phase = "dragging";
+                });
+                break;
+            default:
+                this.phase = "touch";
+                this.schedule(TAP_TIMEOUT, () => {
+                    if (this.phase === "touch") this.phase = "hold";
+                });
+                break;
+        }
     }
 
-    private finishRound(now: number, actions: TouchpadAction[]): void {
-        if (this.dragging) {
-            this.dragging = false;
-            actions.push({ type: "button", action: "up", button: 0 });
-        } else if (!this.roundHadButton && now - this.roundStart <= TAP_TIMEOUT && this.roundMoved <= TAP_MOVE) {
-            const button = this.tapButton(this.roundMaxFingers);
-            if (button !== undefined) {
-                actions.push({ type: "button", action: "down", button });
-                actions.push({ type: "button", action: "up", button });
-                // 单指轻触后短时间再按住并移动 → 拖拽
-                if (button === 0) this.tapArmedAt = now;
+    private finishRound(actions: TouchpadAction[]): void {
+        switch (this.phase) {
+            case "touch": {
+                const button = this.tapButton(this.roundMaxFingers);
+                if (button === 0) {
+                    // 单指轻触：按下，等第二下拖拽或拖拽窗口结束
+                    this.press(actions);
+                    this.phase = "tapped";
+                    this.schedule(DRAG_TIMEOUT, () => {
+                        if (this.phase === "tapped") this.releaseDirect();
+                    });
+                } else if (button !== undefined) {
+                    // 双指/三指轻触直接点击
+                    actions.push({ type: "button", action: "down", button });
+                    actions.push({ type: "button", action: "up", button });
+                    this.phase = "idle";
+                } else {
+                    this.phase = "idle";
+                }
+                break;
             }
+            case "second":
+                // 第二下快速抬起：双击，先结束上一次点击再按下本次
+                this.unpress(actions);
+                this.press(actions);
+                this.phase = "tapped";
+                this.schedule(DRAG_TIMEOUT, () => {
+                    if (this.phase === "tapped") this.releaseDirect();
+                });
+                break;
+            case "dragging":
+                // 手指抬起，结束拖拽
+                this.release(actions);
+                break;
+            default:
+                this.phase = "idle";
+                break;
         }
 
         this.roundActive = false;
-        this.roundCanDrag = false;
-        this.roundMoved = 0;
         this.roundMaxFingers = 0;
         this.multiFingers = 0;
         this.scrolling = false;
         this.contacts.clear();
         this.fallback = undefined;
+    }
+
+    /** 按下左键 */
+    private press(actions: TouchpadAction[]): void {
+        actions.push({ type: "button", action: "down", button: 0 });
+        this.pressedButton = 0;
+    }
+
+    /** 抬起按键并回到 idle */
+    private release(actions: TouchpadAction[]): void {
+        this.cancelTimer();
+        const button = this.pressedButton;
+        this.pressedButton = undefined;
+        this.phase = "idle";
+        if (button !== undefined && !this.physicalDown.has(button)) {
+            actions.push({ type: "button", action: "up", button });
+        }
+    }
+
+    /** 只在没有物理按键接管时抬起 */
+    private releaseDirect(): void {
+        this.cancelTimer();
+        const button = this.pressedButton;
+        this.pressedButton = undefined;
+        this.phase = "idle";
+        if (button !== undefined && !this.physicalDown.has(button)) {
+            this.emit("button", "up", button);
+        }
+    }
+
+    /** 只清按键，调用方决定下一个 phase（双击/多指切换） */
+    private unpress(actions: TouchpadAction[]): void {
+        this.cancelTimer();
+        const button = this.pressedButton;
+        this.pressedButton = undefined;
+        if (button !== undefined && !this.physicalDown.has(button)) {
+            actions.push({ type: "button", action: "up", button });
+        }
+    }
+
+    private schedule(delay: number, fn: () => void): void {
+        this.cancelTimer();
+        const timer = setTimeout(() => {
+            this.timer = undefined;
+            fn();
+        }, delay);
+        (timer as { unref?: () => void }).unref?.();
+        this.timer = timer;
+    }
+
+    private cancelTimer(): void {
+        if (this.timer === undefined) return;
+        clearTimeout(this.timer);
+        this.timer = undefined;
     }
 
     private tapButton(fingers: number): number | undefined {
