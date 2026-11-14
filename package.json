@@ -1,6 +1,6 @@
 {
     "name": "myde-drm",
-    "version": "0.1.3",
+    "version": "0.1.4",
     "description": "Convert DRM dma-buf pixel formats (XRGB, XBGR, RGBX, BGRX, ...) for Electron on GPU or CPU",
     "type": "module",
     "packageManager": "pnpm@12.14.0",
