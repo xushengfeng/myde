@@ -33,6 +33,7 @@ import {
     MockBlueManager, MockBlueDevice,
     MockNetworkManager, MockWifiDevice, MockAccessPoint,
     MockPowerManager, MockPowerDevice,
+    MockLidManager,
     MockNotificationManager,
     MockMprisManager, MockMprisPlayer,
     MockVolumeManager, MockAudioDevice, MockAudioStream,
@@ -42,6 +43,7 @@ import {
 const blueManager = new MockBlueManager(console.log);
 const networkManager = new MockNetworkManager(console.log);
 const powerManager = new MockPowerManager(console.log);
+const lidManager = new MockLidManager(console.log);
 const notificationManager = new MockNotificationManager(console.log);
 const mprisManager = new MockMprisManager(console.log);
 
@@ -50,6 +52,7 @@ setupMydeMock({
     blueManager,
     networkManager,
     powerManager,
+    lidManager,
     notificationManager,
     mprisManager,
     volumeManager,
@@ -68,6 +71,10 @@ networkManager.addWifiDevice(wifiDev);
 // 动态添加电源设备
 const battery = new MockPowerDevice("/org/freedesktop/UPower/devices/battery1", 75, "Discharging", false, "Battery", "Laptop Battery");
 powerManager.addDevice(battery);
+
+// 模拟合盖/开盖
+lidManager.setClosed(true);
+lidManager.setClosed(false);
 
 // 动态发送通知
 notificationManager.sendNotification({
@@ -141,6 +148,7 @@ interface MockConfig {
     blueManager?: MockBlueManager;      // 蓝牙管理器
     networkManager?: MockNetworkManager; // 网络管理器
     powerManager?: MockPowerManager;    // 电源管理器
+    lidManager?: MockLidManager;        // 合盖状态管理器
     notificationManager?: MockNotificationManager; // 通知管理器
     mprisManager?: MockMprisManager;    // MPRIS管理器
     volumeManager?: MockVolumeManager;  // 音量管理器
@@ -165,6 +173,7 @@ interface MockConfig {
 | `notification` | ✅ | 支持动态发送通知 |
 | `tray` | ✅ | init/tarysService |
 | `power` | ✅ | 支持动态添加/删除设备 |
+| `lid` | ✅ | `setClosed()` 模拟合盖/开盖 |
 | `blue` | ✅ | 支持动态添加/删除设备 |
 | `network` | ✅ | 支持动态添加/删除WiFi设备和接入点 |
 | `volume` | ✅ | 支持动态添加/删除音频设备和流 |

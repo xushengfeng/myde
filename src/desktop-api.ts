@@ -13,6 +13,7 @@ import { getEnv } from "./sys_api/env";
 import { vfs } from "./sys_api/fs";
 import type { inputMethod } from "./sys_api/input_method";
 import type { inputSim } from "./sys_api/input_sim";
+import type { lid } from "./sys_api/lid";
 import { setPowerState } from "./sys_api/login";
 import type { mpris } from "./sys_api/mpris";
 import type { network } from "./sys_api/network";
@@ -35,6 +36,7 @@ export const _myde = {
         server,
         fs: new vfs("/"),
         login: setPowerState,
+        lid: undefined as unknown as lid,
         media: undefined as unknown as mpris,
         notification: undefined as unknown as notification,
         verifyUserPassword: async (_password: string) => {

@@ -9,6 +9,7 @@ import type { TrayEvents, TrayItemEvents, tray } from "../../src/sys_api/appIndi
 import type { BlueDeviceEvents, BlueEvents, blue } from "../../src/sys_api/blue";
 import type { display, Rect, Transform } from "../../src/sys_api/display";
 import { inputSim } from "../../src/sys_api/input_sim";
+import type { LidEvents, lid } from "../../src/sys_api/lid";
 import type { MenuItem } from "../../src/sys_api/menu";
 import type { MprisEvents, mpris } from "../../src/sys_api/mpris";
 import type { AccessPointEvents, NetworkEvents, network, WifiDeviceEvents } from "../../src/sys_api/network";
@@ -142,6 +143,8 @@ export interface MockConfig {
     networkManager?: MockNetworkManager;
     /** 电源管理器 */
     powerManager?: MockPowerManager;
+    /** 合盖状态管理器 */
+    lidManager?: MockLidManager;
     /** 通知管理器 */
     notificationManager?: MockNotificationManager;
     /** MPRIS管理器 */
@@ -985,6 +988,55 @@ function createMockPower(log: (...args: any[]) => void): MockType<power> {
     return manager.createMock();
 }
 
+export class MockLidManager {
+    private closed = false;
+    private emitter = createMockEventEmitter<LidEvents>();
+    private log: (...args: any[]) => void;
+
+    constructor(log: (...args: any[]) => void) {
+        this.log = log;
+    }
+
+    /** 模拟合盖/开盖 */
+    setClosed(closed: boolean) {
+        if (this.closed === closed) return;
+        this.closed = closed;
+        this.log("lid.setClosed", closed);
+        this.emitter.emit("changed", closed);
+    }
+
+    createMock(): MockType<lid> {
+        const manager = this;
+        return {
+            async init() {
+                manager.log("lid.init");
+            },
+            isClosed() {
+                return manager.closed;
+            },
+            isReady() {
+                return true;
+            },
+            destroy() {},
+            on: manager.emitter.on.bind(manager.emitter),
+            off: manager.emitter.off.bind(manager.emitter),
+            once: manager.emitter.once.bind(manager.emitter),
+            emit: manager.emitter.emit.bind(manager.emitter),
+            waitFor: manager.emitter.waitFor.bind(manager.emitter),
+            removeAllListeners: manager.emitter.removeAllListeners.bind(manager.emitter),
+            listenerCount: manager.emitter.listenerCount.bind(manager.emitter),
+            hasListeners: manager.emitter.hasListeners.bind(manager.emitter),
+            respond: manager.emitter.respond.bind(manager.emitter),
+            request: manager.emitter.request.bind(manager.emitter),
+        };
+    }
+}
+
+function createMockLid(log: (...args: any[]) => void): MockType<lid> {
+    const manager = new MockLidManager(log);
+    return manager.createMock();
+}
+
 export class MockBlueDevice extends EventEmitter<BlueDeviceEvents> {
     private path: string;
     private name: string;
@@ -1620,6 +1672,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         blueManager,
         networkManager,
         powerManager,
+        lidManager,
         notificationManager,
         mprisManager,
         trayManager,
@@ -1686,6 +1739,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         login: (state: "suspend" | "hibernate" | "shutdown" | "restart") => {
             log("login", state);
         },
+        lid: lidManager ? lidManager.createMock() : createMockLid(log),
         media: mprisManager ? mprisManager.createMock() : createMockMedia(log),
         notification: notificationManager ? notificationManager.createMock() : createMockNotification(log),
         verifyUserPassword: async (_password: string) => {

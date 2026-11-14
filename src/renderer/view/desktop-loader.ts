@@ -15,6 +15,7 @@ import { getEnv } from "../../sys_api/env";
 import { vfs } from "../../sys_api/fs";
 import { inputMethod } from "../../sys_api/input_method";
 import { inputSim } from "../../sys_api/input_sim";
+import { lid } from "../../sys_api/lid";
 import { mpris } from "../../sys_api/mpris";
 import { network } from "../../sys_api/network";
 import { notification } from "../../sys_api/notification";
@@ -84,6 +85,7 @@ async function loadDesktop(p: string) {
     myde.MSysApi.notification = new notification(await newDBusIO());
     myde.MSysApi.tray = new tray(await newDBusIO());
     myde.MSysApi.power = new power(await newDBusIO(true));
+    myde.MSysApi.lid = new lid(await newDBusIO(true));
     myde.MSysApi.blue = new blue(await newDBusIO(true));
     myde.MSysApi.network = new network(await newDBusIO(true));
     myde.MSysApi.volume = new volumeControl();

@@ -77,6 +77,7 @@ interface ControlNode {
 // RegistrySchema 定义所有键值对类型
 interface RegistrySchema {
     "power.battery": number;
+    "power.lidClosed": boolean;
     "power.devices": id<"power.devices[]">[];
     "power.devices[]": {
         name: string;
@@ -1632,6 +1633,18 @@ stateLock.on("out", () => {
 
 stateLock.setState("out");
 
+/** 合盖：未锁屏先锁屏，锁屏界面已显示时直接息屏（与电源键的两段操作一致） */
+function handleLidClosed() {
+    if (state.getState() === "normal") state.setState("lock");
+    if (stateLock.getState() === "passwd") stateLock.setState("lock");
+    if (stateLock.getState() === "lock") stateLock.setState("xipin");
+}
+
+/** 开盖：合盖息屏后回到锁屏界面，不直接返回桌面 */
+function handleLidOpened() {
+    if (stateLock.getState() === "xipin") stateLock.setState("lock");
+}
+
 // 关屏：先铺一层黑色并等它真正上屏，再让 wrap 关 DPMS；
 // 任意输入到来时先开屏并吞掉这次输入。
 const screenOffLayer = view().style({
@@ -2000,6 +2013,20 @@ MSysApi.power
         await updateBattery();
     })
     .catch((e) => console.error("power init error", e));
+
+MSysApi.lid
+    .init()
+    .then(() => {
+        console.log("[lid] ready, closed =", MSysApi.lid.isClosed());
+        const updateLid = (closed: boolean) => {
+            rawRegistry.setData("power.lidClosed", closed);
+            if (closed) handleLidClosed();
+            else handleLidOpened();
+        };
+        updateLid(MSysApi.lid.isClosed());
+        MSysApi.lid.on("changed", updateLid);
+    })
+    .catch((e) => console.warn("[lid] init error", e));
 
 MSysApi.network
     .init()

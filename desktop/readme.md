@@ -89,6 +89,20 @@ const stat = await fs.stat("file.txt"); // { size, mtime, isFile, isDirectory }
 
 设置系统关机、挂起等，锁屏自己实现
 
+### lid
+
+笔记本合盖状态，来自 logind 的 `org.freedesktop.login1.Manager.LidClosed`：
+
+```typescript
+await MSysApi.lid.init();
+MSysApi.lid.isClosed(); // 当前是否合盖
+MSysApi.lid.on("changed", (closed) => {
+    // closed=true 合盖，false 开盖
+});
+```
+
+没有合盖开关的机器始终为 `false`。logind 的 `HandleLidSwitch` 默认可能是 `suspend`，桌面要自己处理合盖时需把 `HandleLidSwitch`（以及 `HandleLidSwitchDocked` / `HandleLidSwitchExternalPower`）设为 `ignore`，否则 logind 会在事件之后挂起系统。官方桌面收到合盖后锁屏并熄屏，开盖回到锁屏界面。
+
 ### display
 
 桌面模式（`displayType=desktop`）下控制 wrap 的输出：
