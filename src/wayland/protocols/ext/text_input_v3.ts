@@ -115,7 +115,10 @@ export const textInputV3Module = defineModule({
                     cursor_end: 0,
                 });
             }
-            // 双缓冲事件在done时生效，serial为客户端commit计数
+            // 双缓冲事件在done时生效，serial为客户端commit计数。
+            // done 只随本模块主动发出的 preedit/commit 走：客户端的 commit 请求只用来提交它
+            // 自己的状态，不能顺手回一个 done——done 会让客户端用它待应用的输入事件（此时为空）
+            // 覆盖当前预编辑，表现为合成内容闪一下又消失。
             ctx.sendNow(owner.id, "zwp_text_input_v3.done", { serial: t.commitCount });
         },
     },
@@ -187,8 +190,9 @@ export const textInputV3Module = defineModule({
             t.current = { ...t.pending };
             // change_cause只作用于本次commit，应用后重置
             t.pending.textChangeCause = "input_method";
+            // 只记录计数供 done 的 serial 使用：这里不回应 done，否则客户端会用空的
+            // 待应用输入事件清掉正在显示的预编辑（见 onTextInput 的说明）
             t.commitCount++;
-            ctx.sendNow(x.id, "zwp_text_input_v3.done", { serial: t.commitCount });
         },
     },
 });

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { InputEventCodes } from "../../input_codes/types";
 import { initWaylandProtocols } from "../host/server";
-import type { ModuleCtx, SeatRecord, SurfaceId, WaylandObjectId2, WaylandWinId } from "../module";
+import type { ModuleCtx, SeatRecord, SurfaceId, TextInputV3Data, WaylandObjectId2, WaylandWinId } from "../module";
 import { waylandProtocolsNameMap } from "../utils/wayland-proto";
 import { waylandCoreModule } from "./core/wayland";
 import { cursorShapeModule } from "./ext/cursor_shape";
+import { textInputV3Module } from "./ext/text_input_v3";
 import { assertModuleConflicts, protocolModules } from "./index";
 
 function handler(key: string) {
@@ -206,5 +207,67 @@ describe("cursor-shape 模块", () => {
 
         expect(shapeCalls).toHaveLength(0);
         expect(errors).toHaveLength(1);
+    });
+});
+
+describe("text-input-unstable-v3 模块", () => {
+    const state = () => ({
+        enabled: false,
+        surroundingText: { text: "", cursor: 0, anchor: 0 },
+        textChangeCause: "input_method" as const,
+        contentHint: 0,
+        contentPurpose: 0,
+        cursorRect: null,
+    });
+
+    function setup(commitCount = 3) {
+        const sent: { id: number; event: string; args: Record<string, unknown> }[] = [];
+        const data: TextInputV3Data = {
+            seat: "seat0",
+            entered: true,
+            commitCount,
+            current: { ...state(), enabled: true },
+            pending: state(),
+        };
+        const ctx = {
+            domain: {
+                textInput: { owner: { protocol: "v3", id: 10 } },
+                textInputV3: { focus: new Map<string, SurfaceId | null>(), m: new Map([[10, data]]) },
+            },
+            objects: { has: () => true },
+            sendNow: (id: number, event: string, args: Record<string, unknown>) => sent.push({ id, event, args }),
+        } as unknown as ModuleCtx;
+        const request = (key: string) => {
+            const h = textInputV3Module.requests.get(key as never);
+            if (!h) throw new Error(`未声明 ${key}`);
+            return h;
+        };
+        return { sent, data, ctx, request };
+    }
+
+    it("预编辑带 done 一次性下发，serial 用客户端 commit 计数", () => {
+        const { sent, ctx } = setup(3);
+
+        textInputV3Module.hooks.onTextInput?.("seat0", "ni", true, ctx);
+
+        expect(sent.map((s) => s.event)).toEqual(["zwp_text_input_v3.preedit_string", "zwp_text_input_v3.done"]);
+        expect(sent[0].args).toMatchObject({ text: "ni", cursor_begin: 2, cursor_end: 2 });
+        expect(sent[1].args).toMatchObject({ serial: 3 });
+    });
+
+    it("客户端 commit 只更新状态、不回 done（回 done 会让客户端清掉正在显示的预编辑）", () => {
+        const { sent, data, ctx, request } = setup(3);
+
+        request("zwp_text_input_v3.set_cursor_rectangle")(msg(10, { x: 1, y: 2, width: 3, height: 4 }), ctx);
+        data.pending.enabled = data.current.enabled;
+        request("zwp_text_input_v3.commit")(msg(10, {}), ctx);
+
+        expect(sent).toEqual([]);
+        expect(data.current.cursorRect).toEqual({ x: 1, y: 2, width: 3, height: 4 });
+        expect(data.commitCount).toBe(4);
+
+        // 下一次真正下发预编辑时，done 才带着新的 serial 一起到达
+        textInputV3Module.hooks.onTextInput?.("seat0", "ning", true, ctx);
+        expect(sent.at(-1)).toMatchObject({ event: "zwp_text_input_v3.done", args: { serial: 4 } });
     });
 });
