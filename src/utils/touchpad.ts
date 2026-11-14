@@ -30,6 +30,8 @@ export type TouchpadEvents = {
     move: [dx: number, dy: number];
     /** 双指滚动量 */
     scroll: [deltaX: number, deltaY: number];
+    /** 双指滚动结束（抬手或手指数量变化），用于给客户端补 axis_stop */
+    scrollEnd: [];
     /** 三指及以上开始移动（官方桌面未订阅，留给其他桌面做多指手势） */
     multiStart: [fingers: number];
     /** 三指及以上移动量 */
@@ -44,7 +46,7 @@ export interface TouchpadInputOptions {
     /** abs 轴 → 视口像素；量程缺失返回 undefined */
     mapX(code: number, value: number): number | undefined;
     mapY(code: number, value: number): number | undefined;
-    /** 伴随鼠标节点在出事件时，绝对坐标不能再用（避免双倍移动） */
+    /** 伴随鼠标节点在出事件时，绝对坐标不能再用（避免双倍移动；滚动仍用触摸板 ABS） */
     ignoreAbs?(): boolean;
     now?(): number;
 }
@@ -69,6 +71,7 @@ interface TouchContact {
 type TouchpadAction =
     | { type: "move"; dx: number; dy: number }
     | { type: "scroll"; deltaX: number; deltaY: number }
+    | { type: "scrollEnd" }
     | { type: "multiStart"; fingers: number }
     | { type: "multiMove"; fingers: number; dx: number; dy: number }
     | { type: "multiEnd"; fingers: number }
@@ -106,6 +109,8 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     private tapArmedAt: number | undefined;
     /** 当前三指及以上手势的手指数，0 表示没有 */
     private multiFingers = 0;
+    /** 是否正在双指滚动，手指数量变化时补一次 scrollEnd */
+    private scrolling = false;
 
     /** 物理按键在帧末统一发出 */
     private pending: TouchpadAction[] = [];
@@ -132,6 +137,11 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             this.roundMaxFingers = Math.max(this.roundMaxFingers, count);
             this.roundMoved = Math.max(this.roundMoved, this.maxMove(contacts));
         }
+        // 双指滚动在手指数量变化（抬手、加入第三根）时结束
+        if (this.scrolling && count !== 2) {
+            this.scrolling = false;
+            actions.push({ type: "scrollEnd" });
+        }
 
         const { dx, dy } = this.consumeMove(contacts);
         const ignoreAbs = this.options.ignoreAbs?.() ?? false;
@@ -149,11 +159,12 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 actions.push({ type: "button", action: "up", button: 0 });
             }
 
-            if (!ignoreAbs && (dx !== 0 || dy !== 0)) {
+            if (dx !== 0 || dy !== 0) {
                 if (count === 1) {
-                    actions.push({ type: "move", dx, dy });
+                    if (!ignoreAbs) actions.push({ type: "move", dx, dy });
                 } else if (count === 2) {
                     // 自然滚动：内容跟随手指，手指上移对应内容向下滚
+                    this.scrolling = true;
                     actions.push({
                         type: "scroll",
                         deltaX: dx === 0 ? 0 : -dx * SCROLL_GAIN,
@@ -180,6 +191,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         for (const action of actions) {
             if (action.type === "button") this.emit("button", action.action, action.button);
             else if (action.type === "scroll") this.emit("scroll", action.deltaX, action.deltaY);
+            else if (action.type === "scrollEnd") this.emit("scrollEnd");
             else if (action.type === "multiStart") this.emit("multiStart", action.fingers);
             else if (action.type === "multiMove") this.emit("multiMove", action.fingers, action.dx, action.dy);
             else if (action.type === "multiEnd") this.emit("multiEnd", action.fingers);
@@ -397,6 +409,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         this.roundMoved = 0;
         this.roundMaxFingers = 0;
         this.multiFingers = 0;
+        this.scrolling = false;
         this.contacts.clear();
         this.fallback = undefined;
     }

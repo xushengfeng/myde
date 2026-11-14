@@ -17,6 +17,12 @@ export type SettingsContentOptions = {
     setScale(scale: number): void;
     /** winit / 普通窗口模式跟随宿主缩放，不提供额外缩放 */
     scaleFollowsHost(): boolean;
+    /** 触摸板双指滚动速度倍率（1 = 1:1 跟随手指） */
+    getTouchpadScrollGain(): number;
+    setTouchpadScrollGain(gain: number): void;
+    /** 触摸板自然滚动（内容跟随手指） */
+    getNaturalScroll(): boolean;
+    setNaturalScroll(enabled: boolean): void;
     inputMethodAvailable: boolean;
     connectAvailable: boolean;
     getConnectEnabled(): boolean;
@@ -394,6 +400,38 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
                                 ? "winit / 窗口模式由宿主桌面负责缩放，myde 内部固定 1x。"
                                 : "按比例渲染 Wayland 应用窗口；桌面面板暂不缩放。",
                             control,
+                        ),
+                    ]);
+            },
+        },
+        {
+            id: "scroll",
+            name: "滚动",
+            build: () => {
+                return view("y")
+                    .style({ gap: px(sSize2.padding + 8) })
+                    .add([
+                        sectionTitle("滚动", "触摸板双指滚动的速度与方向。"),
+                        settingRow(
+                            "触摸板速度",
+                            "双指滚动默认按手指位移 1:1 滚动；应用窗口和桌面界面共用同一倍率。",
+                            createSegmented(
+                                [
+                                    { name: "0.5×", value: 0.5 },
+                                    { name: "0.75×", value: 0.75 },
+                                    { name: "1×", value: 1 },
+                                    { name: "1.5×", value: 1.5 },
+                                    { name: "2×", value: 2 },
+                                    { name: "3×", value: 3 },
+                                ],
+                                op.getTouchpadScrollGain,
+                                op.setTouchpadScrollGain,
+                            ),
+                        ),
+                        settingRow(
+                            "自然滚动",
+                            "开启时内容跟随手指移动；关闭后方向相反，接近传统滚轮。",
+                            createToggle(op.getNaturalScroll, op.setNaturalScroll),
                         ),
                     ]);
             },

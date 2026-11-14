@@ -10,7 +10,7 @@ import { testRunnerApp } from "../../test_runner/test_runner";
  * 两个跨环境的事实要在测试里显式处理，而不是硬编码：
  * 1. `ev.x/y` 相对**窗口几何原点**，几何里还含着 CSD 标题栏（几何 640x480 − 视口 640x404），
  *    所以页面坐标 = 注入坐标 − (几何宽−视口宽, 几何高−视口高)。两边的尺寸都现取。
- * 2. `wl_pointer.axis` 的数值单位与 DOM wheel 不同（本环境 120 → 1440），
+ * 2. `wl_pointer.axis` 的数值单位与 DOM wheel 不同（滚轮一格在 `axis` 里是 10、在 DOM 里是约 120），
  *    只断言方向与轴，不断言绝对值。
  *
  * 注意 `testRunnerApp` 的回调是 `script.toString()` 后拼进桌面脚本里求值的，

@@ -327,7 +327,7 @@ inputSim.emit({ kind: "key", type: "up", code: 30, source: "evdev" });
 
 统一输入事件：
 
-- `UniPointerEvent`：`kind: "pointer"`，`type: "move" | "down" | "up" | "wheel"`，`x`/`y`（视口坐标），`button?`（down/up，0左 1中 2右），`pointerType?`（"mouse"/"touch"/"pen"），`pointerId?`，`isPrimary?`（同一指针类型中的主指针，缺省 true；多指触摸只有第一根为 true），`deltaX?`/`deltaY?`/`deltaMode?`（wheel），`target?`（指定派发目标，缺省按坐标命中测试）
+- `UniPointerEvent`：`kind: "pointer"`，`type: "move" | "down" | "up" | "wheel"`，`x`/`y`（视口坐标），`button?`（down/up，0左 1中 2右），`pointerType?`（"mouse"/"touch"/"pen"），`pointerId?`，`isPrimary?`（同一指针类型中的主指针，缺省 true；多指触摸只有第一根为 true），`deltaX?`/`deltaY?`/`deltaMode?`（wheel），`wheelSource?`（"wheel"/"finger"/"continuous"）、`value120X?`/`value120Y?`（高精度滚轮刻度，1/120 格）、`scrollEnd?`（连续滚动抬手），`target?`（指定派发目标，缺省按坐标命中测试）
 - `UniKeyEvent`：`kind: "key"`，`type: "down" | "up"`，`code`（evdev 键码），`webCode?`（DOM `KeyboardEvent.code`，缺省由 evdev 码反查），`key?`（DOM `KeyboardEvent.key`，缺省按美式布局 + 修饰键推导），`repeat?`，`target?`（缺省为当前聚焦元素）
 - `source`："dom"（DOM 原生事件）或 "evdev"（input api），聚合层用它区分/去重来源
 
@@ -342,7 +342,7 @@ inputSim.emit({ kind: "key", type: "up", code: 30, source: "evdev" });
 
 聚合层参考实现见 `desktop/offical`：`main.ts` 的"输入聚合层"完成聚合/融合/分发——window capture 捕获真实 DOM 事件（只收 `isTrusted`，合成事件不回流防环）归一化，`useEvdevDevice` 解码 input api 事件（EV_SYN 帧合并、相对位移积分、绝对轴小数映射、滚轮换算、按键分流，判定/换算工具在 `input_evdev.ts`），统一传入本 api；来源只以 `source` 标记保留类型数据，不做去重。
 
-触摸板（`type === "touchpad"`）的绝对坐标**不直接映射到屏幕**，只用来计算相邻帧位移；`BTN_TOUCH` 只表示手指接触、不是点击（点击走 `BTN_LEFT`）。仓库的 `src/utils/touchpad.ts` 把设备事件封装成 `move`/`scroll`/`button` 语义事件：单指轻触左键、双指轻触右键、三指轻触中键、双指自然滚动、轻触后再次按住移动进入拖拽；物理按键按下的那一轮不合成轻触。三指及以上移动不发滚动，而是单独发 `multiStart`/`multiMove`/`multiEnd`，官方桌面不订阅。MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪接触点，没有 tracking id 的旧设备用 `BTN_TOOL_*` 手指数兜底。触摸板常带一个同 `phys` 的伴随鼠标节点，如果那个相对通道真的在出事件，则忽略触摸板的绝对位移，避免双倍移动。
+触摸板（`type === "touchpad"`）的绝对坐标**不直接映射到屏幕**，只用来计算相邻帧位移；`BTN_TOUCH` 只表示手指接触、不是点击（点击走 `BTN_LEFT`）。仓库的 `src/utils/touchpad.ts` 把设备事件封装成 `move`/`scroll`/`scrollEnd`/`button` 语义事件：单指轻触左键、双指轻触右键、三指轻触中键、双指自然滚动、轻触后再次按住移动进入拖拽；物理按键按下的那一轮不合成轻触。双指滚动是连续滚动，转发给 Wayland 时要带 `source: "finger"`（不发离散步进），手指数量变化时发 `scrollEnd` 让客户端补 `axis_stop`。三指及以上移动不发滚动，而是单独发 `multiStart`/`multiMove`/`multiEnd`，官方桌面不订阅。MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪接触点，没有 tracking id 的旧设备用 `BTN_TOOL_*` 手指数兜底。触摸板常带一个同 `phys` 的伴随鼠标节点，如果那个相对通道真的在出事件，则忽略触摸板的绝对位移，避免双倍移动。
 
 触屏（`type === "touchscreen"`）的绝对坐标直接映射到视口，MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪每个接触点：一根手指对应一个 `pointerId`，各自产生独立的 down/move/up，第一根按下的手指 `isPrimary` 为 true。没有 tracking id 的旧设备退回单指 `BTN_TOUCH` 路径。统一输入事件的 `pointerType` 为 `"touch"`，`inputSim` 合成 `PointerEvent` 时保留 `pointerType`/`pointerId`/`isPrimary`，UI 只监听 pointer 事件即可同时响应鼠标、触摸板和触屏，多指手势由交互层处理。
 
@@ -648,7 +648,13 @@ enter/leave、剪贴板 selection 归属都跟它走。指针 hover **不**自�
 ```typescript
 // x、y 相对该窗口的 xdg_surface 元素左上角（几何原点）
 server.notify("input.pointer", handle, { type: "move" | "down" | "up", x, y, button });
-server.notify("input.scroll", handle, { deltaX, deltaY, deltaZ });
+// 滚轮（source 缺省 wheel）：delta 按桌面 px，一格 100px；
+// value120 是高精度滚轮刻度（1/120 格），不填时按 delta 换算
+server.notify("input.scroll", handle, { deltaX, deltaY, deltaZ, value120X, value120Y });
+// 触摸板/连续滚动：delta 是 surface-local 像素，只发连续 axis；
+// 自然滚动带 relativeDirection，抬手时发 stop 结束滚动序列（客户端据此收尾/惯性）
+server.notify("input.scroll", handle, { deltaX, deltaY, deltaZ: 0, source: "finger", relativeDirection: "inverted" });
+server.notify("input.scroll", handle, { deltaX: 0, deltaY: 0, deltaZ: 0, source: "finger", relativeDirection: "inverted", stop: true });
 // mapKeyCode 转换过来的
 server.notify("input.key", handle, keyCode, "pressed" | "released");
 // 输入法文本（preedit为true表示合成中的预编辑），统一走该入口，
@@ -665,6 +671,8 @@ const ti = await server.request("textInput.get", handle);
 
 发送门槛（没到门槛就静默丢弃，不报错）：`input.key` 只在**该 seat 有键盘焦点**时下发、
 `input.scroll` 只在该 seat 有指针焦点时下发——所以**先 `window.focus` 再注入按键**。
+
+触摸板连续滚动按规范只发 `axis`（连续、无离散步进）；`axis_value120` 是滚轮通道，只随 `wheel` 发送。滚轮的高精度事件可以同帧发 `axis` + `axis_value120`（v8+）或 `axis` + `axis_discrete`（v5-7）。自然滚动通过 `axis_relative_direction`（v9）告诉客户端物理方向。客户端之间轴值换算差异（Chromium 的 ×12、GTK3/Firefox 的 ÷10×40 等）属于客户端行为，官方桌面只提供全局/触摸板速度倍率，不按 appid 改轴值。
 
 键盘与剪贴板是**连接级**的：同一客户端有多个窗口时按 `clientId` 去重后再发，否则会重复收键。
 剪贴板回填也按 `clientId`（事件里带下来的那个），不走 handle：
@@ -720,7 +728,7 @@ server.on("client.opened", (clientId) => {
 
 ## 输入处理
 
-推荐用聚合层统一输入：捕获 DOM 原生事件（只收 `isTrusted`，合成事件不回流）与 input api（evdev）事件，区分来源、融合（evdev EV_SYN 帧合并、相对位移积分、绝对轴映射、滚轮换算）后传给 `MSysApi.inputSim` 模拟 DOM 事件，下面的转发处理照旧消费 DOM 事件即可（两种输入来源走同一条路径）。`desktop/offical/src/main.ts` 的"输入聚合层"是完整参考实现。
+推荐用聚合层统一输入：捕获 DOM 原生事件（只收 `isTrusted`，合成事件不回流）与 input api（evdev）事件，区分来源、融合（evdev EV_SYN 帧合并、相对位移积分、绝对轴映射、滚轮换算）后传给 `MSysApi.inputSim` 模拟 DOM 事件。滚轮/触摸板建议在聚合层**直接用统一输入事件的字段转发**给窗口，因为模拟成 DOM `WheelEvent` 会丢掉 `wheelSource`（滚轮还是触摸板）和高精度刻度；其它事件继续消费 DOM 事件即可（两种输入来源走同一条路径）。`desktop/offical/src/main.ts` 的"输入聚合层"是完整参考实现。
 
 ```typescript
 function windowAtPoint(p) {
@@ -761,6 +769,7 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("wheel", (e) => {
     const info = windowAtPoint(e);
     if (!info) return;
+    // 真实触摸板的 DOM wheel 是像素连续滚动，应标 finger；滚轮按缺省 wheel 处理
     server.notify("input.scroll", info.handle, { deltaX: e.deltaX, deltaY: e.deltaY, deltaZ: e.deltaZ });
 });
 ```

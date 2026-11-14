@@ -119,7 +119,7 @@ npx vitest run src/wayland/test/pointer.test.ts
 
 客户端与几何坐标的换算（`pointer.test.ts` 的做法）：`ev.x/y` 相对**窗口几何原点**，几何里还含着 CSD 标题栏，
 所以「页面坐标 = 注入坐标 − (几何宽−视口宽, 几何高−视口高)」，两个尺寸都在运行时现取，不写死。
-`wl_pointer.axis` 与 DOM wheel 的数值单位也不同（本环境 120 → 1440），只断言方向与所在轴。
+`wl_pointer.axis` 与 DOM wheel 的数值单位也不同（滚轮一格在 `axis` 里是 10、在 DOM 里是约 120），只断言方向与所在轴。
 
 剪贴板的顺序坑（`clipboard.test.ts`）：客户端自己持有剪贴板时，粘贴直接吃本地缓存、不会向合成器发
 `wl_data_offer.receive`，所以「桌面回填」的用例必须排在客户端复制**之前**；复制的文案用 `input.text` 打进去，

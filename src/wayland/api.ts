@@ -156,9 +156,31 @@ export interface PointerCommand {
 }
 
 export interface ScrollCommand {
+    /** 滚动量，按桌面 CSS px；滚轮来源约定一格 100px */
     deltaX: number;
     deltaY: number;
     deltaZ: number;
+    /**
+     * 滚动来源，缺省 `wheel`：
+     * - `wheel`：鼠标滚轮，发离散步进（`axis_value120` / `axis_discrete`）
+     * - `finger`：触摸板双指等连续滚动，只发连续 `axis`，不发离散值
+     * - `continuous`：其它连续滚动，同 `finger`
+     */
+    source?: "wheel" | "finger" | "continuous";
+    /**
+     * 高精度滚轮的离散步数，单位 1/120 格（`wl_pointer.axis_value120` 的单位）。
+     * 只有 `wheel` 使用；缺省按 `delta` 每 100px 一格换算。
+     * 不随窗口 `scale` 变化（是物理刻度，不是 surface 坐标）。
+     */
+    value120X?: number;
+    value120Y?: number;
+    /** 连续滚动结束（触摸板抬手）；为 true 时发 `axis_stop`，此时 delta 可为 0 */
+    stop?: boolean;
+    /**
+     * 物理方向与 axis 方向的关系（v9 的 `axis_relative_direction`）。
+     * 自然滚动下手指方向与内容方向相反，传 `inverted`；缺省不发送。
+     */
+    relativeDirection?: "identical" | "inverted";
 }
 
 // ───────────────────────── server 级事件 ─────────────────────────

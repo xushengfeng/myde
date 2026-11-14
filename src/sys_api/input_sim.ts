@@ -34,6 +34,13 @@ export interface UniPointerEvent {
     deltaY?: number;
     /** wheel 单位（0像素 1行 2页），默认像素 */
     deltaMode?: number;
+    /** wheel 来源：滚轮带离散步进，触摸板等为连续滚动；缺省按滚轮 */
+    wheelSource?: "wheel" | "finger" | "continuous";
+    /** 高精度滚轮的离散步数（1/120 格），不随窗口 scale 变化；缺省按 delta 换算 */
+    value120X?: number;
+    value120Y?: number;
+    /** 连续滚动结束（触摸板抬手）；只用于结束滚动序列，不再模拟 DOM wheel */
+    scrollEnd?: boolean;
     /** 指定派发目标，缺省按坐标命中测试 */
     target?: unknown;
 }

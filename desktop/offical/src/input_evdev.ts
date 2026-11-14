@@ -21,7 +21,7 @@ export const BTN_TO_BUTTON: Record<number, number> = {
 
 // DOM 滚动一行约 100px，scroll-list 也用 |delta|>=100 识别鼠标滚轮
 export const WHEEL_STEP = 100;
-// 高精度滚轮每格 120 单位
+// 高精度滚轮每格 120 单位（1/120 格即 Wayland 的 value120），这里换算成像素
 export const HI_RES_SCALE = WHEEL_STEP / 120;
 
 // abs 值统一为小数（MInputMap.absPosMapping），这里按视口映射（需要坐标时再映射）

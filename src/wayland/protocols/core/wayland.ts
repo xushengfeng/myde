@@ -657,53 +657,100 @@ function sendKey(ctx: ModuleCtx, seat: SeatRecord, key: number, state: "pressed"
 }
 
 /**
- * 滚轮注入（发给这一把 seat 的全部 pointer；没有指针焦点说明指针不在任何窗口上，丢弃）。
+ * 滚动注入（发给这一把 seat 的全部 pointer；没有指针焦点说明指针不在任何窗口上，丢弃）。
  *
- * 除 `axis` 外还要发与客户端版本对应的离散步进（v8+ 用 `axis_value120`，v5-7 用 `axis_discrete`）：
- * 部分客户端只认离散步进，单发连续值 `axis` 会导致滚轮完全无效。
- * `ScrollCommand` 的 delta 按 DOM 像素处理，直接用作 value120 与客户端约 1:1（120 ≈ 一格）。
+ * 滚轮和触摸板必须分开编码：
+ * - `wheel`：一格 = `delta` 100px（桌面约定）+ `value120` 120。`axis` 按 Wayland 惯例
+ *   一格发 10 surface-local px，同时按客户端版本发 `axis_value120`（v8+）或
+ *   `axis_discrete`（v5-7）。高精度滚轮两种事件可以同帧一起发（KWin 也这么做）。
+ * - `finger` / `continuous`：`axis` 就是 surface-local 像素，连续且无离散步进；
+ *   按协议不生成 `axis_discrete` / `axis_value120`（触摸板没有滚轮格）。
+ *
+ * v9 起可带 `axis_relative_direction`，告诉客户端物理手指方向与 axis 方向是否相反
+ * （自然滚动），供音量滑块之类控件校正方向。
+ *
+ * 连续滚动结束（`stop`）补 `axis_stop`，客户端据此结束滚动序列并启动惯性。
  */
 function sendScroll(ctx: ModuleCtx, seat: SeatRecord, ev: ScrollCommand): void {
     const pointers = [...seat.pointers].filter((id) => ctx.objects.has(id));
     if (pointers.length === 0 || seat.pointerFocus === null) return;
+    const source = ev.source ?? "wheel";
     const { deltaX, deltaY } = ev;
-    if (deltaX === 0 && deltaY === 0) return;
+    const stop = ev.stop === true;
+    if (!stop && deltaX === 0 && deltaY === 0) return;
     const pointerVersion = ctx.client.protoVersions.get("wl_pointer") ?? 0;
+    // 一格滚轮在桌面 delta 里是 100px，在 Wayland axis 里是 10px、在 value120 里是 120
+    const axisPerPx = 10 / 100;
+    const value120PerPx = 120 / 100;
     for (const pointer of pointers) {
         if (pointerVersion >= 5) {
             ctx.sendNow(pointer, "wl_pointer.axis_source", {
-                axis_source: getEnumValue("wl_pointer.axis_source", "wheel"),
+                axis_source: getEnumValue("wl_pointer.axis_source", source),
             });
         }
-        const sendAxis = (axis: "horizontal_scroll" | "vertical_scroll", value: number) => {
+        const sendAxis = (
+            axis: "horizontal_scroll" | "vertical_scroll",
+            delta: number,
+            /** 调用方给的高精度滚轮值；缺省按 delta 换算 */
+            value120: number | undefined,
+        ) => {
+            if (delta === 0) return;
             const axisValue = getEnumValue("wl_pointer.axis", axis);
-            // axis_discrete 必须紧跟在同一 frame 的 axis 之前
-            if (pointerVersion >= 5 && pointerVersion < 8) {
-                const discrete = Math.round(value / 120);
-                if (discrete !== 0) {
-                    ctx.sendNow(pointer, "wl_pointer.axis_discrete", {
-                        axis: axisValue,
-                        discrete,
-                    });
-                }
+            // axis_relative_direction 与 axis 同帧、紧跟其前
+            if (pointerVersion >= 9 && ev.relativeDirection !== undefined) {
+                ctx.sendNow(pointer, "wl_pointer.axis_relative_direction", {
+                    axis: axisValue,
+                    direction: getEnumValue("wl_pointer.axis_relative_direction", ev.relativeDirection),
+                });
             }
-            ctx.sendNow(pointer, "wl_pointer.axis", {
-                time: Date.now(),
-                axis: axisValue,
-                value,
-            });
-            if (pointerVersion >= 8) {
-                const value120 = Math.round(value);
-                if (value120 !== 0) {
-                    ctx.sendNow(pointer, "wl_pointer.axis_value120", {
-                        axis: axisValue,
-                        value120,
-                    });
+            if (source === "wheel") {
+                const steps120 = value120 ?? delta * value120PerPx;
+                if (pointerVersion >= 5 && pointerVersion < 8) {
+                    // axis_discrete 必须紧跟在同一 frame 的 axis 之前
+                    const discrete = Math.round(steps120 / 120);
+                    if (discrete !== 0) {
+                        ctx.sendNow(pointer, "wl_pointer.axis_discrete", {
+                            axis: axisValue,
+                            discrete,
+                        });
+                    }
+                } else if (pointerVersion >= 8) {
+                    // 高精度滚轮：value120 与 axis 同帧，value120 在前（与 KWin 一致）
+                    const steps = Math.round(steps120);
+                    if (steps !== 0) {
+                        ctx.sendNow(pointer, "wl_pointer.axis_value120", {
+                            axis: axisValue,
+                            value120: steps,
+                        });
+                    }
                 }
+                ctx.sendNow(pointer, "wl_pointer.axis", {
+                    time: Date.now(),
+                    axis: axisValue,
+                    value: delta * axisPerPx,
+                });
+            } else {
+                // 连续滚动：axis 直接是 surface-local 像素，不带离散步进
+                ctx.sendNow(pointer, "wl_pointer.axis", {
+                    time: Date.now(),
+                    axis: axisValue,
+                    value: delta,
+                });
             }
         };
-        if (deltaX !== 0) sendAxis("horizontal_scroll", deltaX);
-        if (deltaY !== 0) sendAxis("vertical_scroll", deltaY);
+        sendAxis("horizontal_scroll", deltaX, ev.value120X);
+        sendAxis("vertical_scroll", deltaY, ev.value120Y);
+        // 连续滚动结束（触摸板抬手）。客户端按自己滚动的轴处理，两个轴都发一遍。
+        if (stop && source !== "wheel" && pointerVersion >= 5) {
+            ctx.sendNow(pointer, "wl_pointer.axis_stop", {
+                time: Date.now(),
+                axis: getEnumValue("wl_pointer.axis", "horizontal_scroll"),
+            });
+            ctx.sendNow(pointer, "wl_pointer.axis_stop", {
+                time: Date.now(),
+                axis: getEnumValue("wl_pointer.axis", "vertical_scroll"),
+            });
+        }
         ctx.sendNow(pointer, "wl_pointer.frame", {});
     }
 }

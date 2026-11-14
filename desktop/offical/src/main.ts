@@ -16,6 +16,7 @@ import { AnimationGear, timingFunction } from "myde-ui";
 import type {
     ConnectConnection,
     DesktopIconConfig,
+    DeviceInfo,
     InputManager,
     UniInputEvent,
     WinHandle,
@@ -949,6 +950,16 @@ function openSettingsWindow() {
         getScale: () => screenManager.getScale(),
         setScale: (scale) => screenManager.setScale(scale),
         scaleFollowsHost: () => screenManager.scaleFollowsHost(),
+        getTouchpadScrollGain: () => touchpadScrollGain,
+        setTouchpadScrollGain: (gain) => {
+            touchpadScrollGain = gain;
+            desktopSetting.nset("touchpadScrollGain", gain);
+        },
+        getNaturalScroll: () => naturalScroll,
+        setNaturalScroll: (enabled) => {
+            naturalScroll = enabled;
+            desktopSetting.nset("naturalScroll", enabled);
+        },
         inputMethodAvailable: !!MSysApi.inputMethod,
         connectAvailable: !!myde.MConnect,
         getConnectEnabled,
@@ -1190,8 +1201,26 @@ function sendPointerEvent(
     return hit;
 }
 
-function sendScrollEvent(p: WheelEvent) {
+/** `input.scroll` 需要的字段；real DOM WheelEvent 与统一输入事件都能直接用 */
+type ScrollInput = {
+    x: number;
+    y: number;
+    deltaX?: number;
+    deltaY?: number;
+    deltaMode?: number;
+    wheelSource?: "wheel" | "finger" | "continuous";
+    value120X?: number;
+    value120Y?: number;
+    scrollEnd?: boolean;
+    /** 已命中的 DOM 目标；缺省按坐标取（和 inputSim 的命中测试一致） */
+    target?: unknown;
+};
+
+function sendScrollEvent(p: ScrollInput) {
     if (viewAllShowing) return;
+    // 只转发落在窗口层（windowEl）上的滚动；面板/任务栏/IME 候选窗等桌面 UI 不转发
+    const target = p.target ?? document.elementFromPoint(p.x, p.y);
+    if (!(target instanceof Node) || !windowEl.el.contains(target)) return;
     if (internalWindowUnderPoint(p.x, p.y)) return;
     const handled = new Set<string>();
     for (const info of server.server.windows.list()) {
@@ -1205,11 +1234,24 @@ function sendScrollEvent(p: WheelEvent) {
         if (!server.server.windows.hitTest(info.handle, { x: nx, y: ny })) continue;
         handled.add(info.clientId);
 
-        // wl_pointer.axis 的单位是 surface-local，桌面滚轮的 CSS px 要除回逻辑
+        // 行/页模式先换算成像素；触摸板的 delta 本身就是像素
+        const unit = p.deltaMode === 1 ? 40 : p.deltaMode === 2 ? window.innerHeight : 1;
+        const deltaX = (p.deltaX ?? 0) * unit;
+        const deltaY = (p.deltaY ?? 0) * unit;
+        const source = p.wheelSource ?? "wheel";
+
+        // wl_pointer.axis 的单位是 surface-local，桌面滚轮的 CSS px 要除回逻辑；
+        // value120 是物理滚轮刻度，不随窗口 scale 变化
         server.server.notify("input.scroll", info.handle, {
-            deltaX: p.deltaX / scale,
-            deltaY: p.deltaY / scale,
-            deltaZ: p.deltaZ / scale,
+            deltaX: deltaX / scale,
+            deltaY: deltaY / scale,
+            deltaZ: 0,
+            source,
+            value120X: p.value120X ?? (source === "wheel" ? deltaX * 1.2 : undefined),
+            value120Y: p.value120Y ?? (source === "wheel" ? deltaY * 1.2 : undefined),
+            stop: p.scrollEnd,
+            // 触摸板按自然滚动时，手指方向和 axis 方向相反；滚轮不在这里翻转
+            relativeDirection: source !== "wheel" && naturalScroll ? "inverted" : "identical",
         });
     }
 }
@@ -1236,8 +1278,16 @@ const desktopSetting = MSetting.init({
     defaultNsSetting: {
         centerWindows: true,
         scale: 1,
+        /** 触摸板双指滚动的速度倍率 */
+        touchpadScrollGain: 1,
+        /** 触摸板自然滚动（内容跟随手指） */
+        naturalScroll: true,
     },
 });
+
+// 滚轮在每帧回调里都会读到，缓存设置避免每次同步读配置文件
+let touchpadScrollGain = desktopSetting.nget("touchpadScrollGain") ?? 1;
+let naturalScroll = desktopSetting.nget("naturalScroll") ?? true;
 
 windowCenterManager.setEnabled(desktopSetting.nget("centerWindows"));
 
@@ -3351,6 +3401,12 @@ function dispatchInput(e: UniInputEvent) {
         if (stateLock.getState() === "xipin") stateLock.setState("lock");
         return;
     }
+    // 滚轮/触摸板：先按窗口几何命中转发给 Wayland 客户端，再模拟 DOM 事件给桌面 UI。
+    // 源信息（触摸板连续滚动、高精度刻度）随统一事件带下来，不能等模拟成 DOM WheelEvent 再取。
+    if (e.kind === "pointer" && e.type === "wheel") {
+        sendScrollEvent(e);
+        if (e.scrollEnd) return;
+    }
     inputSim.emit(e);
 }
 
@@ -3571,10 +3627,6 @@ body.on("keyup", (e) => {
     server.server.notify("input.key", handle, MInputMap.mapKeyCode(e.code), "released");
 });
 
-windowEl.on("wheel", (e) => {
-    sendScrollEvent(e);
-});
-
 const cursor = new Cursor(cursorEl);
 
 // 光标形态改由 server 事件下发（renderToolsOn.onCursorUpdata 保留给渲染侧，语义相同）
@@ -3605,6 +3657,12 @@ function useEvdevDevice(
     path: string,
     /** phys → 最近一次相对位移时间，用来识别触摸板的伴随鼠标节点 */
     relativeActivity: Map<string, number>,
+    /** 触摸板设备的 phys 集合：伴随鼠标节点的滚轮是触摸板手势的重复上报 */
+    touchpadPhys: Set<string>,
+    /** phys → 最近一次触摸板 ABS 滚动时间 */
+    lastTouchpadScroll: Map<string, number>,
+    /** 正在滚动的触摸板 phys */
+    touchpadScrolling: Set<string>,
 ) {
     const dev = input.getDevice(path);
     if (!dev) return;
@@ -3628,6 +3686,9 @@ function useEvdevDevice(
     let moved = false;
     let wheelX = 0;
     let wheelY = 0;
+    // 高精度滚轮刻度（1/120 格），与像素 delta 分开累积；不随窗口缩放
+    let wheelValueX = 0;
+    let wheelValueY = 0;
     const frameKeys: { code: number; value: number }[] = [];
 
     // ── 触摸板：设备事件交给 utils/touchpad 封装，绝对坐标只用于算位移和手指数 ──
@@ -3695,13 +3756,33 @@ function useEvdevDevice(
         });
     });
     touchpadInput?.on("scroll", (deltaX, deltaY) => {
+        if (info.phys) {
+            lastTouchpadScroll.set(info.phys, performance.now());
+            touchpadScrolling.add(info.phys);
+        }
+        const sign = naturalScroll ? 1 : -1;
         emit({
             kind: "pointer",
             type: "wheel",
             x: pointerPos.x,
             y: pointerPos.y,
-            deltaX,
-            deltaY,
+            deltaX: deltaX * sign * touchpadScrollGain,
+            deltaY: deltaY * sign * touchpadScrollGain,
+            wheelSource: "finger",
+            source: "evdev",
+        });
+    });
+    touchpadInput?.on("scrollEnd", () => {
+        if (info.phys) touchpadScrolling.delete(info.phys);
+        emit({
+            kind: "pointer",
+            type: "wheel",
+            x: pointerPos.x,
+            y: pointerPos.y,
+            deltaX: 0,
+            deltaY: 0,
+            wheelSource: "finger",
+            scrollEnd: true,
             source: "evdev",
         });
     });
@@ -3783,11 +3864,17 @@ function useEvdevDevice(
                 touchContacts.delete(slot);
             }
         }
-        if (wheelX || wheelY) {
+        if (wheelX || wheelY || wheelValueX || wheelValueY) {
             const deltaX = wheelX;
             const deltaY = wheelY;
+            const value120X = wheelValueX;
+            const value120Y = wheelValueY;
             wheelX = 0;
             wheelY = 0;
+            wheelValueX = 0;
+            wheelValueY = 0;
+            // 触摸板即使通过相对滚轮通道上报，也是连续滚动，不能发离散步进
+            const wheelSource = touchpad ? "finger" : "wheel";
             emit({
                 kind: "pointer",
                 type: "wheel",
@@ -3795,6 +3882,9 @@ function useEvdevDevice(
                 y: pointerPos.y,
                 deltaX,
                 deltaY,
+                wheelSource,
+                value120X: wheelSource === "wheel" ? value120X : undefined,
+                value120Y: wheelSource === "wheel" ? value120Y : undefined,
                 source: "evdev",
             });
         }
@@ -3829,12 +3919,38 @@ function useEvdevDevice(
     dev.on("relative", (code, value) => {
         // 相对设备出过事件：同 phys 的触摸板绝对坐标视为伴随鼠标通道的重复上报
         if (!touchpad && info.phys) relativeActivity.set(info.phys, performance.now());
+        // 触摸板的伴随鼠标节点也会报滚轮；ABS 路径正在滚动时它是重复上报，
+        // 丢掉它，让触摸板统一走 finger/axis（和 KDE/libinput 的行为一致）
+        const wheelCode =
+            code === InputEventCodes.REL_WHEEL_HI_RES ||
+            code === InputEventCodes.REL_HWHEEL_HI_RES ||
+            code === InputEventCodes.REL_WHEEL ||
+            code === InputEventCodes.REL_HWHEEL;
+        if (
+            wheelCode &&
+            !touchpad &&
+            info.phys !== undefined &&
+            touchpadPhys.has(info.phys) &&
+            (touchpadScrolling.has(info.phys) ||
+                performance.now() - (lastTouchpadScroll.get(info.phys) ?? -Infinity) < 200)
+        ) {
+            return;
+        }
         if (code === InputEventCodes.REL_X) dx += value;
         else if (code === InputEventCodes.REL_Y) dy += value;
-        else if (code === InputEventCodes.REL_WHEEL_HI_RES) wheelY += -value * HI_RES_SCALE;
-        else if (code === InputEventCodes.REL_HWHEEL_HI_RES) wheelX += value * HI_RES_SCALE;
-        else if (code === InputEventCodes.REL_WHEEL && !hiResWheel) wheelY += -value * WHEEL_STEP;
-        else if (code === InputEventCodes.REL_HWHEEL && !hiResWheel) wheelX += value * WHEEL_STEP;
+        else if (code === InputEventCodes.REL_WHEEL_HI_RES) {
+            wheelY += -value * HI_RES_SCALE;
+            wheelValueY += -value;
+        } else if (code === InputEventCodes.REL_HWHEEL_HI_RES) {
+            wheelX += value * HI_RES_SCALE;
+            wheelValueX += value;
+        } else if (code === InputEventCodes.REL_WHEEL && !hiResWheel) {
+            wheelY += -value * WHEEL_STEP;
+            wheelValueY += -value * 120;
+        } else if (code === InputEventCodes.REL_HWHEEL && !hiResWheel) {
+            wheelX += value * WHEEL_STEP;
+            wheelValueX += value * 120;
+        }
     });
     dev.on("absolute", (code, value) => {
         if (!abs) return;
@@ -3944,11 +4060,40 @@ function useEvdevDevice(
 function useEvdevInput(input: InputManager, emit: (e: UniInputEvent) => void, pointerPos: InputPointerPos) {
     // phys → 最近一次相对位移时间：触摸板与它的伴随鼠标节点共用
     const relativeActivity = new Map<string, number>();
+    // 触摸板 phys：伴随鼠标节点的滚轮是同一手势的重复上报
+    const touchpadPhys = new Set<string>();
+    // phys → 最近一次触摸板 ABS 滚动时间
+    const lastTouchpadScroll = new Map<string, number>();
+    // 正在滚动的触摸板 phys：伴随鼠标节点的滚轮此时是重复上报
+    const touchpadScrolling = new Set<string>();
+    const registerTouchpadPhys = (info: DeviceInfo) => {
+        if (info.phys && isTouchpad(info)) touchpadPhys.add(info.phys);
+    };
     for (const info of input.getDevices()) {
-        useEvdevDevice(input, emit, pointerPos, info.path, relativeActivity);
+        registerTouchpadPhys(info);
+        useEvdevDevice(
+            input,
+            emit,
+            pointerPos,
+            info.path,
+            relativeActivity,
+            touchpadPhys,
+            lastTouchpadScroll,
+            touchpadScrolling,
+        );
     }
     input.on("deviceAdded", (info) => {
-        useEvdevDevice(input, emit, pointerPos, info.path, relativeActivity);
+        registerTouchpadPhys(info);
+        useEvdevDevice(
+            input,
+            emit,
+            pointerPos,
+            info.path,
+            relativeActivity,
+            touchpadPhys,
+            lastTouchpadScroll,
+            touchpadScrolling,
+        );
     });
 }
 
