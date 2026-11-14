@@ -5,6 +5,8 @@
 Electron 的 `sharedTexture.importSharedTexture` 只接受 `bgra`、`rgba`、`rgbaf16`、`nv12`、`nv16`、`p010le`。Chromium 内部其实认识 XRGB/XBGR，但 JS 接口没有暴露，而且 XRGB/XBGR 的 alpha 字节是未定义的。本模块把这些格式补上：
 - **GPU 路径（默认）**：用 EGL 导入源 dmabuf，着色器做通道重排/补 alpha，渲染到新的 ARGB8888 GBM dmabuf，再交给 `importSharedTexture`。像素不回到 CPU，也不经过 `putImageData`。
 - **CPU 路径（回退）**：mmap 源 dmabuf，Rust 里重排成 RGBA `Buffer`，适合没有 DRM render node、EGL 初始化失败或驱动不能导入该 dmabuf 的情况。
+- **每帧不等待 GPU**：EGL 上下文、着色器、FBO 和纹理首次创建后复用，每帧只新建导出用的 GBM buffer 和 EGLImage；绘制后 `glFlush` 提交，依赖 dma-buf 隐式 fence 与 Electron 的导入/合成同步，避免 `glFinish` 阻塞合成线程。
+- **同步兜底**：如果某个驱动对隐式 fence 支持不好（出现旧帧/花屏），设置 `MYDE_DRM_GPU_FINISH=1`，转换函数会改回每帧 `glFinish` 等待 GPU 完成。
 - Rust 原生实现（neon），TypeScript 包装，vite 构建，pnpm 管理
 - 只支持 **LINEAR** modifier（当前 myde 的 dmabuf feedback 只广播 modifier 0）
 - 只处理单 plane 的 32 位 RGB(A) 格式；NV12/NV16/P010 请继续走 Electron 原生的 `importSharedTexture`
@@ -141,7 +143,31 @@ const image = new ImageData(
 );
 ```
 
-`convertShmToRgba` 在 Rust 里用 `pread` 读取 fd（memfd、`shm_open` 文件或普通文件均可），再按 `format` 重排成 RGBA，长度同样是 `width * height * 4`。`format` 直接用 `wl_shm_pool.create_buffer` 里的值：wl_shm 的 `argb8888`/`xrgb8888` 是历史遗留的 0/1，模块会映射到对应 DRM fourcc，其余值本身就是 DRM fourcc。文件比 `offset + stride * height` 短时，多出来的像素按透明黑处理。它不要求 fd 是 dma-buf，也不接受 modifier。
+每帧复用同一块输出可以避免分配：
+
+```ts
+// 每个 wl_buffer 保存一份，首次提交时按 width * height * 4 分配
+const rgba = (buffer.rgba ??= Buffer.allocUnsafe(buffer.width * buffer.height * 4));
+const imageData = (buffer.imageData ??= new ImageData(
+    new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength),
+    buffer.width,
+    buffer.height,
+));
+
+// 返回的就是传入的 rgba
+convertShmToRgba({ fd: poolFd, offset, stride, width, height, format }, rgba);
+c2d.putImageData(imageData, 0, 0);
+```
+
+`convertShmToRgba` 优先 mmap 整个 pool（文件足够大时），映射会按 `(st_dev, st_ino)` 缓存（最多 8 个 pool），不会每帧重新建立页表；文件比 `offset + stride * height` 短时才回退到 `pread`，多出来的像素按透明黑处理。`format` 直接用 `wl_shm_pool.create_buffer` 里的值：wl_shm 的 `argb8888`/`xrgb8888` 是历史遗留的 0/1，模块会映射到对应 DRM fourcc，其余值本身就是 DRM fourcc。它不要求 fd 是 dma-buf，也不接受 modifier。ARGB8888/XRGB8888 走 SSE2 的 32 位换字节快路径，ARGB 保留 alpha，XRGB 补 255。
+
+如果一次提交只有局部变化，可以只转换 damage 区域：
+
+```ts
+convertShmToRgbaRegion(options, rgba, { x: 100, y: 80, width: 320, height: 200 });
+```
+
+输出仍是整帧 Buffer，区域外的像素保持不变。myde 会把 `damage`/`damage_buffer` 合并成包围盒后调用它，所以终端光标、局部刷新这类场景不再每帧转换整个画面。
 
 ### 5. 只查询格式
 
@@ -158,6 +184,31 @@ getFormatInfo(DRM_FORMAT.XRGB8888);
 isSupportedFormat(DRM_FORMAT.XRGB8888); // true
 needsConversion(DRM_FORMAT.ARGB8888); // false
 ```
+
+## 性能打点
+
+GPU 转换默认开启分阶段计时：每 60 次转换汇总一次 avg/max，单次总耗时 ≥4ms 的帧会额外打印一行明细，方便抓偶发尖峰。输出走 stderr。
+
+```bash
+pnpm dev                                      # 默认：每 60 帧汇总
+MYDE_DRM_GPU_TRACE=1 pnpm dev                 # 每帧打印
+MYDE_DRM_GPU_TRACE=120 pnpm dev               # 每 120 帧汇总
+MYDE_DRM_GPU_TRACE=0 pnpm dev                 # 关闭
+```
+
+阶段：
+
+| 阶段         | 含义                                                                                             |
+| ------------ | ------------------------------------------------------------------------------------------------ |
+| `current`    | `eglMakeCurrent`（已经 current 时接近 0）                                                        |
+| `gbm_create` | `gbm_bo_create`，每帧新分配导出 buffer                                                           |
+| `gbm_fd`     | `gbm_bo_get_fd` 导出 dma-buf fd                                                                  |
+| `images`     | 创建源/目标（以及 alpha）EGLImage                                                                |
+| `bind`       | `glEGLImageTargetTexture2DOES` 绑定到复用的纹理                                                  |
+| `fbo`        | 绑定 FBO 和 `glCheckFramebufferStatus`                                                           |
+| `draw`       | `glDrawArrays` + 提交；默认只 `glFlush`，设置 `MYDE_DRM_GPU_FINISH=1` 时才包含 `glFinish` 的等待 |
+| `unbind`     | 解绑 FBO/纹理/程序                                                                               |
+| `recycle`    | 销毁两帧前的 EGLImage                                                                            |
 
 ## 格式表
 

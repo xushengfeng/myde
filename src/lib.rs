@@ -2,6 +2,7 @@ mod gpu;
 
 use neon::prelude::*;
 use neon::types::buffer::TypedArray;
+use std::cell::RefCell;
 use std::ffi::c_void;
 
 // ---------------------------------------------------------------- DRM formats
@@ -160,28 +161,238 @@ impl Drop for DmaBufMapping {
     }
 }
 
+/// Read-only mapping of a wl_shm pool. No dma-buf sync is involved.
+struct MappedRegion {
+    ptr: *mut c_void,
+    len: usize,
+}
+
+impl MappedRegion {
+    fn new(fd: i32, len: usize) -> Result<Self, String> {
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        if ptr == libc::MAP_FAILED {
+            return Err(format!(
+                "mmap(fd={fd}, len={len}) failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(Self { ptr, len })
+    }
+}
+
+impl Drop for MappedRegion {
+    fn drop(&mut self) {
+        unsafe {
+            libc::munmap(self.ptr, self.len);
+        }
+    }
+}
+
+struct FdStat {
+    dev: u64,
+    ino: u64,
+    size: u64,
+}
+
+/// Size and identity reported by the kernel for `fd`.
+fn fd_stat(fd: i32) -> Option<FdStat> {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let stat = unsafe { stat.assume_init() };
+    Some(FdStat {
+        dev: stat.st_dev as u64,
+        ino: stat.st_ino as u64,
+        size: u64::try_from(stat.st_size).ok()?,
+    })
+}
+
+struct ShmMapping {
+    dev: u64,
+    ino: u64,
+    len: usize,
+    region: MappedRegion,
+}
+
+/// A wl_shm pool stays mapped across frames, so touching its pages does not
+/// re-fault every commit. The inode identity keeps the cache safe when a new
+/// pool gets a recycled fd number; a cached mapping keeps the old inode alive,
+/// so it cannot be reused for a different file.
+const SHM_MAPPING_CACHE_SIZE: usize = 8;
+
+thread_local! {
+    static SHM_MAPPINGS: RefCell<Vec<ShmMapping>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Run `f` with a mapping that covers `needed` bytes of `fd`, or return `None`
+/// when the pool is too small (caller falls back to `pread`).
+fn with_shm_mapping<R>(fd: i32, needed: usize, f: impl FnOnce(&MappedRegion) -> R) -> Option<R> {
+    let stat = fd_stat(fd)?;
+    if needed == 0 || stat.size < needed as u64 {
+        return None;
+    }
+
+    SHM_MAPPINGS.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        if let Some(index) = cache
+            .iter()
+            .position(|entry| entry.dev == stat.dev && entry.ino == stat.ino)
+        {
+            if cache[index].len < needed {
+                cache[index].region = MappedRegion::new(fd, needed).ok()?;
+                cache[index].len = needed;
+            }
+            return Some(f(&cache[index].region));
+        }
+
+        let region = MappedRegion::new(fd, needed).ok()?;
+        if cache.len() >= SHM_MAPPING_CACHE_SIZE {
+            cache.remove(0);
+        }
+        let index = cache.len();
+        cache.push(ShmMapping {
+            dev: stat.dev,
+            ino: stat.ino,
+            len: needed,
+            region,
+        });
+        Some(f(&cache[index].region))
+    })
+}
+
 // ---------------------------------------------------------------- conversion
 
-fn convert_pixels(
+/// B G R A/X -> R G B A for four pixels at a time. SSE2 is part of the
+/// x86_64 baseline, so no runtime detection is needed.
+#[cfg(target_arch = "x86_64")]
+unsafe fn swap_argb_sse2(
     src: &[u8],
     dst: &mut [u8],
     width: usize,
     height: usize,
-    stride: usize,
+    src_stride: usize,
+    dst_stride: usize,
+    opaque: bool,
+) {
+    use std::arch::x86_64::*;
+
+    let keep_ga = _mm_set1_epi32(0xFF00_FF00u32 as i32);
+    let mask_r = _mm_set1_epi32(0x00FF_0000);
+    let mask_b = _mm_set1_epi32(0x0000_00FF);
+    let mask_a = _mm_set1_epi32(0xFF00_0000u32 as i32);
+
+    for y in 0..height {
+        let src_row = src.as_ptr().add(y * src_stride);
+        let dst_row = dst.as_mut_ptr().add(y * dst_stride);
+        let mut x = 0usize;
+        while x + 4 <= width {
+            let value = _mm_loadu_si128(src_row.add(x * 4).cast::<__m128i>());
+            let swapped = _mm_or_si128(
+                _mm_or_si128(
+                    _mm_and_si128(value, keep_ga),
+                    _mm_srli_epi32::<16>(_mm_and_si128(value, mask_r)),
+                ),
+                _mm_slli_epi32::<16>(_mm_and_si128(value, mask_b)),
+            );
+            let swapped = if opaque {
+                _mm_or_si128(swapped, mask_a)
+            } else {
+                swapped
+            };
+            _mm_storeu_si128(dst_row.add(x * 4).cast::<__m128i>(), swapped);
+            x += 4;
+        }
+        while x < width {
+            let value = (src_row.add(x * 4) as *const u32).read_unaligned();
+            let mut swapped = (value & 0xFF00_FF00)
+                | ((value & 0x00FF_0000) >> 16)
+                | ((value & 0x0000_00FF) << 16);
+            if opaque {
+                swapped |= 0xFF00_0000;
+            }
+            (dst_row.add(x * 4) as *mut u32).write_unaligned(swapped);
+            x += 1;
+        }
+    }
+}
+
+fn convert_pixels_strided(
+    src: &[u8],
+    dst: &mut [u8],
+    width: usize,
+    height: usize,
+    src_stride: usize,
+    dst_stride: usize,
     info: &FormatInfo,
 ) {
     let row_bytes = width * 4;
 
     // ABGR8888 is already R G B A in memory.
-    if info.r == 0 && info.g == 1 && info.b == 2 && info.a == Some(3) && stride == row_bytes {
-        dst.copy_from_slice(&src[..row_bytes * height]);
+    if info.r == 0 && info.g == 1 && info.b == 2 && info.a == Some(3) {
+        if src_stride == row_bytes && dst_stride == row_bytes {
+            dst.copy_from_slice(&src[..row_bytes * height]);
+            return;
+        }
+        for y in 0..height {
+            let src_start = y * src_stride;
+            let dst_start = y * dst_stride;
+            dst[dst_start..dst_start + row_bytes]
+                .copy_from_slice(&src[src_start..src_start + row_bytes]);
+        }
         return;
     }
 
+    // ARGB8888 / XRGB8888: memory is B G R A/X, output is R G B A. Swapping
+    // the outer bytes as u32 is much friendlier to auto-vectorization than
+    // the per-channel loop below.
+    if info.r == 2 && info.g == 1 && info.b == 0 && matches!(info.a, Some(3) | None) {
+        let opaque = info.a.is_none();
+        #[cfg(target_arch = "x86_64")]
+        {
+            // SAFETY: the caller guarantees both slices cover the region and
+            // SSE2 is guaranteed on x86_64.
+            unsafe {
+                swap_argb_sse2(src, dst, width, height, src_stride, dst_stride, opaque);
+            }
+            return;
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            for y in 0..height {
+                let src_row = y * src_stride;
+                let dst_row = y * dst_stride;
+                for x in 0..width {
+                    let i = src_row + x * 4;
+                    let o = dst_row + x * 4;
+                    let value = u32::from_ne_bytes([src[i], src[i + 1], src[i + 2], src[i + 3]]);
+                    let mut swapped = (value & 0xFF00_FF00)
+                        | ((value & 0x00FF_0000) >> 16)
+                        | ((value & 0x0000_00FF) << 16);
+                    if opaque {
+                        swapped |= 0xFF00_0000;
+                    }
+                    dst[o..o + 4].copy_from_slice(&swapped.to_ne_bytes());
+                }
+            }
+            return;
+        }
+    }
+
     for y in 0..height {
-        let src_start = y * stride;
+        let src_start = y * src_stride;
+        let dst_start = y * dst_stride;
         let src_row = &src[src_start..src_start + row_bytes];
-        let dst_row = &mut dst[y * row_bytes..(y + 1) * row_bytes];
+        let dst_row = &mut dst[dst_start..dst_start + row_bytes];
 
         let (src_pixels, _) = src_row.as_chunks::<4>();
         let (dst_pixels, _) = dst_row.as_chunks_mut::<4>();
@@ -196,6 +407,17 @@ fn convert_pixels(
             };
         }
     }
+}
+
+fn convert_pixels(
+    src: &[u8],
+    dst: &mut [u8],
+    width: usize,
+    height: usize,
+    stride: usize,
+    info: &FormatInfo,
+) {
+    convert_pixels_strided(src, dst, width, height, stride, width * 4, info);
 }
 
 // --------------------------------------------------------------- Neon glue
@@ -251,13 +473,13 @@ struct ConvertRequest {
     info: FormatInfo,
 }
 
-fn parse_convert_request(cx: &mut FunctionContext) -> NeonResult<ConvertRequest> {
-    let fd = arg_u32(cx, 0, "fd")? as i32;
-    let offset = arg_u64(cx, 1, "offset")?;
-    let stride = arg_u32(cx, 2, "stride")? as usize;
-    let width = arg_u32(cx, 3, "width")? as usize;
-    let height = arg_u32(cx, 4, "height")? as usize;
-    let format = arg_u32(cx, 5, "format")?;
+fn parse_convert_request(cx: &mut FunctionContext, base: usize) -> NeonResult<ConvertRequest> {
+    let fd = arg_u32(cx, base, "fd")? as i32;
+    let offset = arg_u64(cx, base + 1, "offset")?;
+    let stride = arg_u32(cx, base + 2, "stride")? as usize;
+    let width = arg_u32(cx, base + 3, "width")? as usize;
+    let height = arg_u32(cx, base + 4, "height")? as usize;
+    let format = arg_u32(cx, base + 5, "format")?;
 
     if width == 0 || height == 0 {
         return cx.throw_error("width and height must be greater than zero");
@@ -307,7 +529,7 @@ fn output_len(request: &ConvertRequest) -> Result<usize, String> {
 }
 
 fn js_convert_dmabuf_to_rgba(mut cx: FunctionContext) -> JsResult<JsBuffer> {
-    let request = parse_convert_request(&mut cx)?;
+    let request = parse_convert_request(&mut cx, 0)?;
 
     let mapped_len = match (request.stride.checked_mul(request.height))
         .and_then(|value| value.checked_add(request.offset))
@@ -392,44 +614,189 @@ fn read_at(fd: i32, offset: usize, dst: &mut [u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn js_convert_shm_to_rgba(mut cx: FunctionContext) -> JsResult<JsBuffer> {
-    let request = parse_convert_request(&mut cx)?;
+struct Region {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+}
 
-    let src_len = match request.stride.checked_mul(request.height) {
-        Some(value) => value,
-        None => return cx.throw_error("buffer size overflows usize"),
-    };
-    if src_len == 0 {
-        return cx.throw_error("buffer size must be greater than zero");
+fn convert_shm_region_into(
+    request: &ConvertRequest,
+    region: Region,
+    dst: &mut [u8],
+) -> Result<(), String> {
+    if region.width == 0 || region.height == 0 {
+        return Ok(());
+    }
+    let x_end = region
+        .x
+        .checked_add(region.width)
+        .ok_or_else(|| "region x overflows".to_string())?;
+    let y_end = region
+        .y
+        .checked_add(region.height)
+        .ok_or_else(|| "region y overflows".to_string())?;
+    if x_end > request.width || y_end > request.height {
+        return Err(format!(
+            "region {}x{}+{}+{} is outside the {}x{} buffer",
+            region.width, region.height, region.x, region.y, request.width, request.height
+        ));
     }
 
+    let out_len = output_len(request)?;
+    if dst.len() < out_len {
+        return Err(format!(
+            "output buffer is too small: {} < {out_len}",
+            dst.len()
+        ));
+    }
+
+    let row_bytes = region
+        .width
+        .checked_mul(4)
+        .ok_or_else(|| "region width is too large".to_string())?;
+    let src_len = region
+        .height
+        .checked_sub(1)
+        .and_then(|rows| rows.checked_mul(request.stride))
+        .and_then(|bytes| bytes.checked_add(row_bytes))
+        .ok_or_else(|| "region source size overflows".to_string())?;
+    let src_offset = region
+        .y
+        .checked_mul(request.stride)
+        .and_then(|offset| offset.checked_add(region.x.checked_mul(4)?))
+        .and_then(|offset| offset.checked_add(request.offset))
+        .ok_or_else(|| "region source offset overflows".to_string())?;
+    let needed = request
+        .offset
+        .checked_add(
+            request
+                .stride
+                .checked_mul(request.height)
+                .ok_or_else(|| "buffer size overflows usize".to_string())?,
+        )
+        .ok_or_else(|| "buffer size overflows usize".to_string())?;
+    let dst_offset = region
+        .y
+        .checked_mul(request.width)
+        .and_then(|pixels| pixels.checked_add(region.x))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| "region destination offset overflows".to_string())?;
+    let dst_stride = request
+        .width
+        .checked_mul(4)
+        .ok_or_else(|| "destination stride overflows".to_string())?;
+
+    let dst_region = &mut dst[dst_offset..];
+    let mapped = with_shm_mapping(request.fd, needed, |mapping| {
+        // SAFETY: the mapping covers the whole buffer, and the region is
+        // inside it.
+        let src = unsafe {
+            std::slice::from_raw_parts((mapping.ptr as *const u8).add(src_offset), src_len)
+        };
+        convert_pixels_strided(
+            src,
+            dst_region,
+            region.width,
+            region.height,
+            request.stride,
+            dst_stride,
+            &request.info,
+        );
+    });
+    if mapped.is_none() {
+        let mut src = vec![0u8; src_len];
+        read_at(request.fd, src_offset, &mut src)?;
+        convert_pixels_strided(
+            &src,
+            dst_region,
+            region.width,
+            region.height,
+            request.stride,
+            dst_stride,
+            &request.info,
+        );
+    }
+    Ok(())
+}
+
+fn convert_shm_into(request: &ConvertRequest, dst: &mut [u8]) -> Result<(), String> {
+    convert_shm_region_into(
+        request,
+        Region {
+            x: 0,
+            y: 0,
+            width: request.width,
+            height: request.height,
+        },
+        dst,
+    )
+}
+
+fn js_convert_shm_to_rgba(mut cx: FunctionContext) -> JsResult<JsBuffer> {
+    let request = parse_convert_request(&mut cx, 0)?;
     let out_len = match output_len(&request) {
         Ok(value) => value,
         Err(error) => return cx.throw_error(error),
     };
 
-    let ConvertRequest {
-        fd,
-        offset,
-        stride,
-        width,
-        height,
-        info,
-        ..
-    } = request;
-
-    let mut src = vec![0u8; src_len];
-    if let Err(error) = read_at(fd, offset, &mut src) {
+    let mut buffer = cx.buffer(out_len)?;
+    let result = {
+        let dst = buffer.as_mut_slice(&mut cx);
+        convert_shm_into(&request, dst)
+    };
+    if let Err(error) = result {
         return cx.throw_error(error);
     }
 
-    let mut buffer = cx.buffer(out_len)?;
-    {
-        let dst = buffer.as_mut_slice(&mut cx);
-        convert_pixels(&src, dst, width, height, stride, &info);
+    Ok(buffer)
+}
+
+/// Like `convertShmToRgba`, but writes into a caller-owned Buffer.
+fn js_convert_shm_to_rgba_into(mut cx: FunctionContext) -> JsResult<JsBuffer> {
+    let mut out = cx.argument::<JsBuffer>(0)?;
+    let request = parse_convert_request(&mut cx, 1)?;
+
+    let result = {
+        let dst = out.as_mut_slice(&mut cx);
+        convert_shm_into(&request, dst)
+    };
+    if let Err(error) = result {
+        return cx.throw_error(error);
     }
 
-    Ok(buffer)
+    Ok(out)
+}
+
+/// Like `convertShmToRgbaInto`, but only converts one region of a full-frame
+/// output buffer. The region must be inside the buffer.
+fn js_convert_shm_to_rgba_region(mut cx: FunctionContext) -> JsResult<JsBuffer> {
+    let mut out = cx.argument::<JsBuffer>(0)?;
+    let request = parse_convert_request(&mut cx, 1)?;
+    let x = arg_u32(&mut cx, 7, "x")? as usize;
+    let y = arg_u32(&mut cx, 8, "y")? as usize;
+    let width = arg_u32(&mut cx, 9, "regionWidth")? as usize;
+    let height = arg_u32(&mut cx, 10, "regionHeight")? as usize;
+
+    let result = {
+        let dst = out.as_mut_slice(&mut cx);
+        convert_shm_region_into(
+            &request,
+            Region {
+                x,
+                y,
+                width,
+                height,
+            },
+            dst,
+        )
+    };
+    if let Err(error) = result {
+        return cx.throw_error(error);
+    }
+
+    Ok(out)
 }
 
 fn js_convert_dmabuf_to_texture(mut cx: FunctionContext) -> JsResult<JsValue> {
@@ -475,6 +842,8 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("needsConversion", js_needs_conversion)?;
     cx.export_function("convertDmabufToRgba", js_convert_dmabuf_to_rgba)?;
     cx.export_function("convertShmToRgba", js_convert_shm_to_rgba)?;
+    cx.export_function("convertShmToRgbaInto", js_convert_shm_to_rgba_into)?;
+    cx.export_function("convertShmToRgbaRegion", js_convert_shm_to_rgba_region)?;
     cx.export_function("convertDmabufToTexture", js_convert_dmabuf_to_texture)?;
     Ok(())
 }

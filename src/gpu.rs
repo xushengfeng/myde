@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsRawFd, IntoRawFd, OwnedFd, RawFd};
+use std::time::{Duration, Instant};
 
 use gbm::AsRaw;
 use glow::HasContext;
@@ -60,6 +61,8 @@ void main() {
 
 struct ProgramInfo {
     program: glow::Program,
+    u_tex: Option<glow::UniformLocation>,
+    u_alpha: Option<glow::UniformLocation>,
 }
 
 struct Programs {
@@ -156,6 +159,163 @@ pub struct ConvertedTexture {
     pub modifier: u64,
 }
 
+const GPU_STAGE_COUNT: usize = 9;
+const GPU_STAGE_NAMES: [&str; GPU_STAGE_COUNT] = [
+    "current",
+    "gbm_create",
+    "gbm_fd",
+    "images",
+    "bind",
+    "fbo",
+    "draw",
+    "unbind",
+    "recycle",
+];
+/// Print a per-frame breakdown when one conversion takes at least this long.
+const GPU_TRACE_SLOW_MS: f64 = 4.0;
+
+#[derive(Default)]
+struct StageStats {
+    sum: Duration,
+    max: Duration,
+}
+
+/// Timing summary. By default it aggregates every 60 frames and prints each
+/// frame that takes at least [`GPU_TRACE_SLOW_MS`]. `MYDE_DRM_GPU_TRACE` can
+/// override the period (`1` = every frame, `0` = disabled).
+struct GpuTrace {
+    period: u32,
+    frames: u32,
+    total_sum: Duration,
+    total_max: Duration,
+    stages: [StageStats; GPU_STAGE_COUNT],
+}
+
+impl GpuTrace {
+    fn default_period() -> u32 {
+        60
+    }
+
+    fn from_env() -> Option<Self> {
+        let period = match std::env::var_os("MYDE_DRM_GPU_TRACE") {
+            Some(value) => {
+                let value = value.to_string_lossy();
+                let value = value.trim();
+                if value.is_empty() || value == "0" {
+                    return None;
+                }
+                value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|period| *period > 0)
+                    .unwrap_or(1)
+            }
+            None => Self::default_period(),
+        };
+        Some(Self::new(period))
+    }
+
+    fn new(period: u32) -> Self {
+        Self {
+            period,
+            frames: 0,
+            total_sum: Duration::ZERO,
+            total_max: Duration::ZERO,
+            stages: std::array::from_fn(|_| StageStats::default()),
+        }
+    }
+
+    fn record(
+        &mut self,
+        width: u32,
+        height: u32,
+        total: Duration,
+        stages: [Duration; GPU_STAGE_COUNT],
+    ) {
+        self.frames += 1;
+        self.total_sum += total;
+        self.total_max = self.total_max.max(total);
+        for (index, duration) in stages.into_iter().enumerate() {
+            self.stages[index].sum += duration;
+            self.stages[index].max = self.stages[index].max.max(duration);
+        }
+
+        let total_ms = total.as_secs_f64() * 1000.0;
+        if self.period > 1 && total_ms >= GPU_TRACE_SLOW_MS {
+            eprintln!(
+                "myde-drm gpu slow frame {width}x{height} total={total_ms:.3}ms {}",
+                format_stages(&stages)
+            );
+        }
+
+        if self.frames < self.period {
+            return;
+        }
+        let frames = self.frames as f64;
+        let total_avg = self.total_sum.as_secs_f64() * 1000.0 / frames;
+        let total_max = self.total_max.as_secs_f64() * 1000.0;
+        let mut text = String::new();
+        for (index, stats) in self.stages.iter().enumerate() {
+            let avg = stats.sum.as_secs_f64() * 1000.0 / frames;
+            let max = stats.max.as_secs_f64() * 1000.0;
+            text.push_str(&format!(" {} {avg:.3}/{max:.3}", GPU_STAGE_NAMES[index]));
+        }
+        eprintln!(
+            "myde-drm gpu trace {width}x{height} x{}: total avg={total_avg:.3} max={total_max:.3} |{text} (avg/max ms)",
+            self.frames
+        );
+        self.frames = 0;
+        self.total_sum = Duration::ZERO;
+        self.total_max = Duration::ZERO;
+        for stats in &mut self.stages {
+            *stats = StageStats::default();
+        }
+    }
+}
+
+fn format_stages(stages: &[Duration; GPU_STAGE_COUNT]) -> String {
+    let mut text = String::new();
+    for (index, duration) in stages.iter().enumerate() {
+        text.push_str(&format!(
+            " {}={:.3}",
+            GPU_STAGE_NAMES[index],
+            duration.as_secs_f64() * 1000.0
+        ));
+    }
+    text
+}
+
+struct StageTimer {
+    start: Option<Instant>,
+    last: Option<Instant>,
+}
+
+impl StageTimer {
+    fn new(enabled: bool) -> Self {
+        let now = enabled.then(Instant::now);
+        Self {
+            start: now,
+            last: now,
+        }
+    }
+
+    #[inline]
+    fn mark(&mut self) -> Duration {
+        match self.last {
+            Some(last) => {
+                let now = Instant::now();
+                self.last = Some(now);
+                now.saturating_duration_since(last)
+            }
+            None => Duration::ZERO,
+        }
+    }
+
+    fn total(&self) -> Duration {
+        self.start.map(|start| start.elapsed()).unwrap_or_default()
+    }
+}
+
 struct GpuContext {
     egl: egl::DynamicInstance<egl::EGL1_5>,
     display: egl::Display,
@@ -167,6 +327,23 @@ struct GpuContext {
     vao: glow::VertexArray,
     _vbo: glow::Buffer,
     fbo: glow::Framebuffer,
+    /// Textures are reused across frames; each frame re-binds a fresh EGLImage.
+    dst_texture: glow::Texture,
+    src_texture: glow::Texture,
+    alpha_texture: glow::Texture,
+    /// Images from the previous frame. They stay alive until the textures have
+    /// been re-bound, so an in-flight frame never loses its EGLImage.
+    previous_images: Vec<egl::Image>,
+    /// Images from two frames ago. Destroyed only after a full frame has
+    /// passed since their textures were re-specified.
+    older_images: Vec<egl::Image>,
+    /// Whether `alpha_texture` still points at an EGLImage. Cleared by
+    /// replacing its storage when a frame has no separate alpha plane.
+    alpha_has_image: bool,
+    /// `MYDE_DRM_GPU_FINISH=1` waits for the GPU in the converter, for drivers
+    /// where implicit dma-buf fences are not reliable.
+    wait_for_completion: bool,
+    trace: Option<GpuTrace>,
 }
 
 impl GpuContext {
@@ -235,16 +412,18 @@ impl GpuContext {
         let image_target: EglImageTargetTexture = unsafe { std::mem::transmute(address) };
 
         let programs = unsafe {
+            let make = |fragment_source: &str| {
+                let program = link_program(&gl, fragment_source)?;
+                Ok::<ProgramInfo, String>(ProgramInfo {
+                    program,
+                    u_tex: gl.get_uniform_location(program, "u_tex"),
+                    u_alpha: gl.get_uniform_location(program, "u_alpha"),
+                })
+            };
             Programs {
-                opaque: ProgramInfo {
-                    program: link_program(&gl, FRAGMENT_OPAQUE)?,
-                },
-                same_alpha: ProgramInfo {
-                    program: link_program(&gl, FRAGMENT_SAME_ALPHA)?,
-                },
-                other_alpha: ProgramInfo {
-                    program: link_program(&gl, FRAGMENT_OTHER_ALPHA)?,
-                },
+                opaque: make(FRAGMENT_OPAQUE)?,
+                same_alpha: make(FRAGMENT_SAME_ALPHA)?,
+                other_alpha: make(FRAGMENT_OTHER_ALPHA)?,
             }
         };
 
@@ -276,6 +455,14 @@ impl GpuContext {
                 .map_err(|error| format!("create FBO failed: {error:?}"))?
         };
 
+        let (dst_texture, src_texture, alpha_texture) = unsafe {
+            (
+                create_empty_texture(&gl)?,
+                create_empty_texture(&gl)?,
+                create_empty_texture(&gl)?,
+            )
+        };
+
         eprintln!("myde-drm: GPU path ready ({})", unsafe {
             gl.get_parameter_string(glow::RENDERER)
         });
@@ -291,11 +478,20 @@ impl GpuContext {
             vao,
             _vbo: vbo,
             fbo,
+            dst_texture,
+            src_texture,
+            alpha_texture,
+            previous_images: Vec::new(),
+            older_images: Vec::new(),
+            alpha_has_image: false,
+            wait_for_completion: std::env::var_os("MYDE_DRM_GPU_FINISH")
+                .is_some_and(|value| value != "0" && !value.is_empty()),
+            trace: GpuTrace::from_env(),
         })
     }
 
     fn convert(
-        &self,
+        &mut self,
         width: u32,
         height: u32,
         format: u32,
@@ -308,9 +504,15 @@ impl GpuContext {
         if stride < width.saturating_mul(4) {
             return Err(format!("stride {stride} is smaller than width * 4"));
         }
-        self.egl
-            .make_current(self.display, None, None, Some(self.context))
-            .map_err(|error| format!("eglMakeCurrent failed: {error:?}"))?;
+        let mut timer = StageTimer::new(self.trace.is_some());
+        let current = self.egl.get_current_context() == Some(self.context)
+            && self.egl.get_current_display() == Some(self.display);
+        if !current {
+            self.egl
+                .make_current(self.display, None, None, Some(self.context))
+                .map_err(|error| format!("eglMakeCurrent failed: {error:?}"))?;
+        }
+        let stage_current = timer.mark();
 
         let buffer = self
             .gbm
@@ -321,26 +523,36 @@ impl GpuContext {
                 gbm::BufferObjectFlags::LINEAR | gbm::BufferObjectFlags::RENDERING,
             )
             .map_err(|error| format!("gbm_bo_create failed: {error}"))?;
+        let stage_gbm_create = timer.mark();
         let dst_stride = buffer.stride();
         let dst_offset = buffer.offset(0);
         let dst_modifier = u64::from(buffer.modifier());
         let dst_fd: OwnedFd = buffer
             .fd()
             .map_err(|error| format!("gbm_bo_get_fd failed: {error}"))?;
+        let stage_gbm_fd = timer.mark();
 
-        let mut resources = FrameResources::new(self);
-
-        let dst_image = resources.add_image(self.create_image(ImageDesc {
-            width,
-            height,
-            fourcc: DRM_FORMAT_ARGB8888,
-            fd: dst_fd.as_raw_fd(),
-            offset: dst_offset,
-            stride: dst_stride,
-            modifier: dst_modifier,
-        })?);
-        let src_image = resources.add_image(
-            self.create_image(ImageDesc {
+        let mut images: Vec<egl::Image> = Vec::with_capacity(3);
+        let mut stage_images = Duration::ZERO;
+        let mut stage_bind = Duration::ZERO;
+        let mut stage_fbo = Duration::ZERO;
+        let mut stage_draw = Duration::ZERO;
+        let mut stage_unbind = Duration::ZERO;
+        let mut bound = false;
+        let mut alpha_has_image = self.alpha_has_image;
+        let detach_alpha = !matches!(spec.alpha, AlphaMode::Other) && self.alpha_has_image;
+        let outcome: Result<(), String> = (|| {
+            let dst_image = self.create_image(ImageDesc {
+                width,
+                height,
+                fourcc: DRM_FORMAT_ARGB8888,
+                fd: dst_fd.as_raw_fd(),
+                offset: dst_offset,
+                stride: dst_stride,
+                modifier: dst_modifier,
+            })?;
+            images.push(dst_image);
+            let src_image = self.create_image(ImageDesc {
                 width,
                 height,
                 fourcc: spec.fourcc,
@@ -350,80 +562,153 @@ impl GpuContext {
                     .ok_or_else(|| "source offset overflows".to_string())?,
                 stride,
                 modifier: 0,
-            })?,
-        );
-        let alpha_image = if matches!(spec.alpha, AlphaMode::Other) {
-            Some(resources.add_image(self.create_image(ImageDesc {
-                width,
-                height,
-                fourcc: DRM_FORMAT_ABGR8888,
-                fd,
-                offset,
-                stride,
-                modifier: 0,
-            })?))
-        } else {
-            None
-        };
-
-        unsafe {
-            self.gl.bind_vertex_array(Some(self.vao));
-            self.gl.viewport(0, 0, width as i32, height as i32);
-
-            let dst_texture = resources.add_texture(self.make_texture(dst_image)?);
-            self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
-            self.gl.framebuffer_texture_2d(
-                glow::FRAMEBUFFER,
-                glow::COLOR_ATTACHMENT0,
-                glow::TEXTURE_2D,
-                Some(dst_texture),
-                0,
-            );
-            let status = self.gl.check_framebuffer_status(glow::FRAMEBUFFER);
-            if status != glow::FRAMEBUFFER_COMPLETE {
-                return Err(format!("incomplete framebuffer: 0x{status:x}"));
-            }
-
-            let src_texture = resources.add_texture(self.make_texture(src_image)?);
-            let program = match spec.alpha {
-                AlphaMode::Opaque => &self.programs.opaque,
-                AlphaMode::Same => &self.programs.same_alpha,
-                AlphaMode::Other => &self.programs.other_alpha,
+            })?;
+            images.push(src_image);
+            let alpha_image = if matches!(spec.alpha, AlphaMode::Other) {
+                let image = self.create_image(ImageDesc {
+                    width,
+                    height,
+                    fourcc: DRM_FORMAT_ABGR8888,
+                    fd,
+                    offset,
+                    stride,
+                    modifier: 0,
+                })?;
+                images.push(image);
+                Some(image)
+            } else {
+                None
             };
+            stage_images = timer.mark();
 
-            self.gl.use_program(Some(program.program));
-            self.gl.active_texture(glow::TEXTURE0);
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(src_texture));
-            self.gl.uniform_1_i32(
+            unsafe {
+                self.gl.active_texture(glow::TEXTURE0);
                 self.gl
-                    .get_uniform_location(program.program, "u_tex")
-                    .as_ref(),
-                0,
-            );
-
-            if let Some(alpha_image) = alpha_image {
-                self.gl.active_texture(glow::TEXTURE1);
-                let alpha_texture = resources.add_texture(self.make_texture(alpha_image)?);
-                self.gl.bind_texture(glow::TEXTURE_2D, Some(alpha_texture));
-                self.gl.uniform_1_i32(
+                    .bind_texture(glow::TEXTURE_2D, Some(self.dst_texture));
+                (self.image_target)(glow::TEXTURE_2D, dst_image.as_ptr() as *const c_void);
+                self.gl
+                    .bind_texture(glow::TEXTURE_2D, Some(self.src_texture));
+                (self.image_target)(glow::TEXTURE_2D, src_image.as_ptr() as *const c_void);
+                if let Some(alpha_image) = alpha_image {
                     self.gl
-                        .get_uniform_location(program.program, "u_alpha")
-                        .as_ref(),
-                    1,
+                        .bind_texture(glow::TEXTURE_2D, Some(self.alpha_texture));
+                    (self.image_target)(glow::TEXTURE_2D, alpha_image.as_ptr() as *const c_void);
+                    alpha_has_image = true;
+                } else if detach_alpha {
+                    // Drop the last alpha image reference so it can be
+                    // destroyed two frames later.
+                    self.gl
+                        .bind_texture(glow::TEXTURE_2D, Some(self.alpha_texture));
+                    self.gl.tex_image_2d(
+                        glow::TEXTURE_2D,
+                        0,
+                        glow::RGBA as i32,
+                        1,
+                        1,
+                        0,
+                        glow::RGBA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelUnpackData::Slice(Some(&[0, 0, 0, 0])),
+                    );
+                    alpha_has_image = false;
+                }
+                bound = true;
+                stage_bind = timer.mark();
+
+                self.gl.bind_vertex_array(Some(self.vao));
+                self.gl.viewport(0, 0, width as i32, height as i32);
+                self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
+                self.gl.framebuffer_texture_2d(
+                    glow::FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    glow::TEXTURE_2D,
+                    Some(self.dst_texture),
+                    0,
                 );
+                let status = self.gl.check_framebuffer_status(glow::FRAMEBUFFER);
+                if status != glow::FRAMEBUFFER_COMPLETE {
+                    return Err(format!("incomplete framebuffer: 0x{status:x}"));
+                }
+                stage_fbo = timer.mark();
+
+                let program = match spec.alpha {
+                    AlphaMode::Opaque => &self.programs.opaque,
+                    AlphaMode::Same => &self.programs.same_alpha,
+                    AlphaMode::Other => &self.programs.other_alpha,
+                };
+                self.gl.use_program(Some(program.program));
+                self.gl.active_texture(glow::TEXTURE0);
+                self.gl
+                    .bind_texture(glow::TEXTURE_2D, Some(self.src_texture));
+                self.gl.uniform_1_i32(program.u_tex.as_ref(), 0);
+
+                if alpha_image.is_some() {
+                    self.gl.active_texture(glow::TEXTURE1);
+                    self.gl
+                        .bind_texture(glow::TEXTURE_2D, Some(self.alpha_texture));
+                    self.gl.uniform_1_i32(program.u_alpha.as_ref(), 1);
+                }
+
+                self.gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+                // Submit the draw now. Electron imports the dmabuf right after
+                // this returns, and the kernel fence attached on flush carries
+                // the dependency; glFinish would only stall the compositor.
+                if self.wait_for_completion {
+                    self.gl.finish();
+                } else {
+                    self.gl.flush();
+                }
+                #[cfg(test)]
+                self.gl.finish();
+                stage_draw = timer.mark();
+
+                self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                self.gl.bind_texture(glow::TEXTURE_2D, None);
+                self.gl.use_program(None);
+                stage_unbind = timer.mark();
             }
+            Ok(())
+        })();
 
-            self.gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
-            self.gl.finish();
-
-            self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            self.gl.bind_texture(glow::TEXTURE_2D, None);
-            self.gl.use_program(None);
+        if let Err(error) = outcome {
+            if bound {
+                self.alpha_has_image = alpha_has_image;
+                destroy_images(&self.egl, self.display, &mut self.older_images);
+                self.older_images = std::mem::replace(&mut self.previous_images, images);
+            } else {
+                destroy_images(&self.egl, self.display, &mut images);
+            }
+            return Err(error);
         }
+        self.alpha_has_image = alpha_has_image;
 
-        drop(resources);
+        // The textures now reference `images`; images from two frames ago are
+        // no longer referenced by any texture.
+        destroy_images(&self.egl, self.display, &mut self.older_images);
+        self.older_images = std::mem::replace(&mut self.previous_images, images);
+        let stage_recycle = timer.mark();
+
         drop(buffer);
         let raw_fd = dst_fd.into_raw_fd();
+
+        if let Some(trace) = self.trace.as_mut() {
+            trace.record(
+                width,
+                height,
+                timer.total(),
+                [
+                    stage_current,
+                    stage_gbm_create,
+                    stage_gbm_fd,
+                    stage_images,
+                    stage_bind,
+                    stage_fbo,
+                    stage_draw,
+                    stage_unbind,
+                    stage_recycle,
+                ],
+            );
+        }
 
         Ok(ConvertedTexture {
             fd: raw_fd,
@@ -471,74 +756,43 @@ impl GpuContext {
                 .map_err(|error| format!("eglCreateImage failed: {error:?}"))
         }
     }
-
-    unsafe fn make_texture(&self, image: egl::Image) -> Result<glow::Texture, String> {
-        let texture = self
-            .gl
-            .create_texture()
-            .map_err(|error| format!("create texture failed: {error:?}"))?;
-        self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-        self.gl.tex_parameter_i32(
-            glow::TEXTURE_2D,
-            glow::TEXTURE_MIN_FILTER,
-            glow::NEAREST as i32,
-        );
-        self.gl.tex_parameter_i32(
-            glow::TEXTURE_2D,
-            glow::TEXTURE_MAG_FILTER,
-            glow::NEAREST as i32,
-        );
-        self.gl.tex_parameter_i32(
-            glow::TEXTURE_2D,
-            glow::TEXTURE_WRAP_S,
-            glow::CLAMP_TO_EDGE as i32,
-        );
-        self.gl.tex_parameter_i32(
-            glow::TEXTURE_2D,
-            glow::TEXTURE_WRAP_T,
-            glow::CLAMP_TO_EDGE as i32,
-        );
-        (self.image_target)(glow::TEXTURE_2D, image.as_ptr() as *const c_void);
-        Ok(texture)
-    }
 }
 
-struct FrameResources<'a> {
-    context: &'a GpuContext,
-    images: Vec<egl::Image>,
-    textures: Vec<glow::Texture>,
+unsafe fn create_empty_texture(gl: &glow::Context) -> Result<glow::Texture, String> {
+    let texture = gl
+        .create_texture()
+        .map_err(|error| format!("create texture failed: {error:?}"))?;
+    gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+    gl.tex_parameter_i32(
+        glow::TEXTURE_2D,
+        glow::TEXTURE_MIN_FILTER,
+        glow::NEAREST as i32,
+    );
+    gl.tex_parameter_i32(
+        glow::TEXTURE_2D,
+        glow::TEXTURE_MAG_FILTER,
+        glow::NEAREST as i32,
+    );
+    gl.tex_parameter_i32(
+        glow::TEXTURE_2D,
+        glow::TEXTURE_WRAP_S,
+        glow::CLAMP_TO_EDGE as i32,
+    );
+    gl.tex_parameter_i32(
+        glow::TEXTURE_2D,
+        glow::TEXTURE_WRAP_T,
+        glow::CLAMP_TO_EDGE as i32,
+    );
+    Ok(texture)
 }
 
-impl<'a> FrameResources<'a> {
-    fn new(context: &'a GpuContext) -> Self {
-        Self {
-            context,
-            images: Vec::new(),
-            textures: Vec::new(),
-        }
-    }
-
-    fn add_image(&mut self, image: egl::Image) -> egl::Image {
-        self.images.push(image);
-        image
-    }
-
-    fn add_texture(&mut self, texture: glow::Texture) -> glow::Texture {
-        self.textures.push(texture);
-        texture
-    }
-}
-
-impl Drop for FrameResources<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            for texture in self.textures.drain(..) {
-                self.context.gl.delete_texture(texture);
-            }
-        }
-        for image in self.images.drain(..) {
-            let _ = self.context.egl.destroy_image(self.context.display, image);
-        }
+fn destroy_images(
+    egl: &egl::DynamicInstance<egl::EGL1_5>,
+    display: egl::Display,
+    images: &mut Vec<egl::Image>,
+) {
+    for image in images.drain(..) {
+        let _ = egl.destroy_image(display, image);
     }
 }
 
@@ -735,5 +989,19 @@ mod tests {
             libc::munmap(ptr, converted.size as usize);
             libc::close(converted.fd);
         }
+
+        // Switching away from a format with a separate alpha plane must detach
+        // the cached alpha image without crashing.
+        let again = convert(
+            source_fd.as_raw_fd(),
+            0,
+            stride,
+            width,
+            height,
+            crate::DRM_FORMAT_ARGB8888,
+        )
+        .unwrap()
+        .unwrap();
+        unsafe { libc::close(again.fd) };
     }
 }

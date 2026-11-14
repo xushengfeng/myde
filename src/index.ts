@@ -33,6 +33,28 @@ interface NativeModule {
         format: number,
     ): Buffer;
     convertShmToRgba(fd: number, offset: number, stride: number, width: number, height: number, format: number): Buffer;
+    convertShmToRgbaInto(
+        out: Buffer,
+        fd: number,
+        offset: number,
+        stride: number,
+        width: number,
+        height: number,
+        format: number,
+    ): Buffer;
+    convertShmToRgbaRegion(
+        out: Buffer,
+        fd: number,
+        offset: number,
+        stride: number,
+        width: number,
+        height: number,
+        format: number,
+        x: number,
+        y: number,
+        regionWidth: number,
+        regionHeight: number,
+    ): Buffer;
     convertDmabufToTexture(
         fd: number,
         offset: number,
@@ -251,19 +273,30 @@ export interface ConvertShmToRgbaOptions {
 /**
  * Read a wl_shm buffer and return tightly packed RGBA pixels.
  *
- * The fd is read with `pread`, so it can be a memfd, a `shm_open` file or any
- * regular file; it does not need to be a dma-buf. The returned Buffer has
- * `width * height * 4` bytes, ready for
- * `new ImageData(new Uint8ClampedArray(buffer), width, height)`.
+ * The pool is mmap'ed when it is large enough, so memfd, `shm_open` files and
+ * regular files all work without a dma-buf round trip. An undersized pool
+ * falls back to `pread`, and bytes beyond the end of the file stay transparent
+ * black.
+ *
+ * Pass a `Buffer` as `into` to reuse the same output memory every frame
+ * (avoiding a fresh `width * height * 4` allocation); it is returned as-is.
  *
  * Only the 32-bit RGB formats listed in the README are supported. Pass the
- * `format` from `wl_shm_pool.create_buffer` unchanged. Bytes beyond the end of
- * the file are treated as transparent black, matching an undersized wl_shm
- * pool.
+ * `format` from `wl_shm_pool.create_buffer` unchanged.
  *
- * @throws if the format cannot be converted, or stride/offset are invalid.
+ * @throws if the format cannot be converted, stride/offset are invalid, or
+ *         `into` is not exactly `width * height * 4` bytes.
  */
-export function convertShmToRgba(options: ConvertShmToRgbaOptions): Buffer {
+interface ValidatedShm {
+    width: number;
+    height: number;
+    fd: number;
+    stride: number;
+    offset: number;
+    format: number;
+}
+
+function validateShm(options: ConvertShmToRgbaOptions): ValidatedShm {
     const { width, height, fd, stride } = options;
     assertPositiveInt(width, "width");
     assertPositiveInt(height, "height");
@@ -274,7 +307,80 @@ export function convertShmToRgba(options: ConvertShmToRgbaOptions): Buffer {
     if (!Number.isSafeInteger(offset) || offset < 0) {
         throw new Error("offset must be a non-negative safe integer");
     }
-    return native.convertShmToRgba(fd, offset, stride, width, height, normalizeShmFormat(options.format));
+    return { width, height, fd, stride, offset, format: normalizeShmFormat(options.format) };
+}
+
+function outputSize(width: number, height: number): number {
+    const size = width * height * 4;
+    if (!Number.isSafeInteger(size)) {
+        throw new Error("output size overflows a safe integer");
+    }
+    return size;
+}
+
+export function convertShmToRgba(options: ConvertShmToRgbaOptions, into?: Buffer): Buffer {
+    const { width, height, fd, stride, offset, format } = validateShm(options);
+
+    if (into !== undefined) {
+        if (!Buffer.isBuffer(into)) {
+            throw new Error("into must be a Buffer");
+        }
+        const size = outputSize(width, height);
+        if (into.byteLength !== size) {
+            throw new Error(`into must be exactly ${size} bytes, got ${into.byteLength}`);
+        }
+        return native.convertShmToRgbaInto(into, fd, offset, stride, width, height, format);
+    }
+    return native.convertShmToRgba(fd, offset, stride, width, height, format);
+}
+
+export interface ShmRegion {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+/**
+ * Convert only `region` of a wl_shm buffer into a full-frame `into` Buffer.
+ *
+ * The returned Buffer is the same full-frame buffer; pixels outside `region`
+ * are left untouched. This lets a compositor convert only the damage area,
+ * reusing the previous RGBA contents for everything else.
+ */
+export function convertShmToRgbaRegion(options: ConvertShmToRgbaOptions, into: Buffer, region: ShmRegion): Buffer {
+    const { width, height, fd, stride, offset, format } = validateShm(options);
+    if (!Buffer.isBuffer(into)) {
+        throw new Error("into must be a Buffer");
+    }
+    const size = outputSize(width, height);
+    if (into.byteLength !== size) {
+        throw new Error(`into must be exactly ${size} bytes, got ${into.byteLength}`);
+    }
+    assertPositiveInt(region.x, "region.x", true);
+    assertPositiveInt(region.y, "region.y", true);
+    assertPositiveInt(region.width, "region.width", true);
+    assertPositiveInt(region.height, "region.height", true);
+    if (region.x + region.width > width || region.y + region.height > height) {
+        throw new Error(
+            `region ${region.width}x${region.height}+${region.x}+${region.y} is outside the ${width}x${height} buffer`,
+        );
+    }
+    if (region.width === 0 || region.height === 0) return into;
+
+    return native.convertShmToRgbaRegion(
+        into,
+        fd,
+        offset,
+        stride,
+        width,
+        height,
+        format,
+        region.x,
+        region.y,
+        region.width,
+        region.height,
+    );
 }
 
 /**

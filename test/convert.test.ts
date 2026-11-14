@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
     convertDmabufToRgba,
     convertShmToRgba,
+    convertShmToRgbaRegion,
     DRM_FORMAT,
     getElectronPixelFormat,
     getFormatInfo,
@@ -255,6 +256,78 @@ describe("convertShmToRgba", () => {
 
         const xrgb = writePlane(DRM_FORMAT.XRGB8888, CASES[4].encode, [[1, 2, 3, 0]], 1, 1, 4, 0);
         expect(Array.from(convertShm(xrgb, { width: 1, height: 1, format: 1, stride: 4 }))).toEqual([1, 2, 3, 255]);
+    });
+
+    it("writes into a caller-provided Buffer", () => {
+        const width = 2;
+        const height = 2;
+        const pixels = PIXELS.slice(0, width * height);
+        const path = writePlane(DRM_FORMAT.ARGB8888, CASES[0].encode, pixels, width, height, 8, 0);
+        const fd = openSync(path, "r");
+        const out = Buffer.allocUnsafe(width * height * 4);
+        try {
+            const returned = convertShmToRgba({ fd, width, height, format: DRM_FORMAT.ARGB8888, stride: 8 }, out);
+            expect(returned).toBe(out);
+        } finally {
+            closeSync(fd);
+        }
+        const expected = pixels.flatMap(([r, g, b, a]) => [r, g, b, a]);
+        expect(Array.from(out)).toEqual(expected);
+    });
+
+    it("rejects a wrong-sized output Buffer", () => {
+        const path = writePlane(DRM_FORMAT.ARGB8888, CASES[0].encode, [[1, 2, 3, 4]], 1, 1, 4, 0);
+        const fd = openSync(path, "r");
+        try {
+            expect(() =>
+                convertShmToRgba({ fd, width: 1, height: 1, format: DRM_FORMAT.ARGB8888, stride: 4 }, Buffer.alloc(3)),
+            ).toThrow(/exactly 4 bytes/);
+        } finally {
+            closeSync(fd);
+        }
+    });
+
+    it("converts only the requested region", () => {
+        const width = 3;
+        const height = 2;
+        const stride = width * 4 + 8;
+        const pixels = PIXELS.slice(0, width * height);
+        const path = writePlane(DRM_FORMAT.ARGB8888, CASES[0].encode, pixels, width, height, stride, 16);
+        const fd = openSync(path, "r");
+        const out = Buffer.alloc(width * height * 4, 0xaa);
+        try {
+            convertShmToRgbaRegion({ fd, width, height, format: DRM_FORMAT.ARGB8888, stride, offset: 16 }, out, {
+                x: 1,
+                y: 1,
+                width: 2,
+                height: 1,
+            });
+        } finally {
+            closeSync(fd);
+        }
+
+        const expected = Buffer.alloc(width * height * 4, 0xaa);
+        for (const x of [1, 2]) {
+            const [r, g, b, a] = pixels[width + x];
+            expected.set([r, g, b, a], (width + x) * 4);
+        }
+        expect(Array.from(out)).toEqual(Array.from(expected));
+    });
+
+    it("rejects a region outside the buffer", () => {
+        const path = writePlane(DRM_FORMAT.ARGB8888, CASES[0].encode, [[1, 2, 3, 4]], 1, 1, 4, 0);
+        const fd = openSync(path, "r");
+        try {
+            expect(() =>
+                convertShmToRgbaRegion(
+                    { fd, width: 1, height: 1, format: DRM_FORMAT.ARGB8888, stride: 4 },
+                    Buffer.alloc(4),
+                    { x: 1, y: 0, width: 1, height: 1 },
+                ),
+            ).toThrow(/outside/);
+        } finally {
+            closeSync(fd);
+        }
     });
 
     it("treats a short pool as transparent black", () => {
