@@ -123,6 +123,9 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     private pressedButton: number | undefined;
     /** touch 超时 / tapped 窗口 / second 判断 / dragWait 锁定 */
     private timer: ReturnType<typeof setTimeout> | undefined;
+    /** touch/second 判定期间先不移动光标，攒下的位移在确认是移动/拖拽时一次补上 */
+    private suppressedMoveX = 0;
+    private suppressedMoveY = 0;
     /** 当前三指及以上手势的手指数，0 表示没有 */
     private multiFingers = 0;
     /** 是否正在双指滚动，手指数量变化时补一次 scrollEnd */
@@ -142,10 +145,20 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         const yCode = info.capabilities.absAxes.includes(InputEventCodes.ABS_MT_POSITION_Y)
             ? InputEventCodes.ABS_MT_POSITION_Y
             : InputEventCodes.ABS_Y;
-        const resX = absRange(info, xCode)?.resolution ?? 0;
-        const resY = absRange(info, yCode)?.resolution ?? 0;
-        this.unitsPerMmX = resX > 0 ? resX : DEFAULT_UNITS_PER_MM;
-        this.unitsPerMmY = resY > 0 ? resY : DEFAULT_UNITS_PER_MM;
+        const rangeX = absRange(info, xCode);
+        const rangeY = absRange(info, yCode);
+        // libinput：没有分辨率时按 69x50mm 的触摸板估算（不是默认鼠标 DPI）
+        // 有些设备只在 ABS_X/ABS_Y 上报分辨率，或者反过来；任一有效就用
+        const resX =
+            (rangeX && rangeX.resolution > 1 ? rangeX.resolution : 0) ||
+            (absRange(info, InputEventCodes.ABS_X)?.resolution ?? 0);
+        const resY =
+            (rangeY && rangeY.resolution > 1 ? rangeY.resolution : 0) ||
+            (absRange(info, InputEventCodes.ABS_Y)?.resolution ?? 0);
+        this.unitsPerMmX =
+            resX > 0 ? resX : rangeX && rangeX.max > rangeX.min ? (rangeX.max - rangeX.min) / 69 : DEFAULT_UNITS_PER_MM;
+        this.unitsPerMmY =
+            resY > 0 ? resY : rangeY && rangeY.max > rangeY.min ? (rangeY.max - rangeY.min) / 50 : DEFAULT_UNITS_PER_MM;
         dev.on("absolute", (code, value) => this.absolute(code, value));
         dev.on("key", (code, value) => this.key(code, value));
         dev.on("sync", () => this.flush());
@@ -172,7 +185,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             this.phase = "moving";
         }
 
-        const { dx, dy } = this.consumeMove(all);
+        let { dx, dy } = this.consumeMove(all);
         const ignoreAbs = this.options.ignoreAbs?.() ?? false;
         const movedBeyondTap = this.exceedsTapMove(all);
 
@@ -188,9 +201,25 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 }
             }
 
+            // 判定期间先别移动光标：轻触的按下点要落在最初接触的位置，不能带上抖动位移
+            const decidingMotion = this.phase === "touch" || this.phase === "second";
+            const single = count === 1 || (count === 0 && all.length === 1);
+            if (single && decidingMotion) {
+                this.suppressedMoveX += dx;
+                this.suppressedMoveY += dy;
+                dx = 0;
+                dy = 0;
+            } else if (single && (this.suppressedMoveX !== 0 || this.suppressedMoveY !== 0)) {
+                // 确认是移动/拖拽：把判定期间攒下的位移一次补上
+                dx += this.suppressedMoveX;
+                dy += this.suppressedMoveY;
+                this.suppressedMoveX = 0;
+                this.suppressedMoveY = 0;
+            }
+
             if (dx !== 0 || dy !== 0) {
                 // 抬起的那一帧也可能带着最后一小段位移：单指接触（含本帧抬起）照发 move
-                if (count === 1 || (count === 0 && all.length === 1)) {
+                if (single) {
                     if (!ignoreAbs) actions.push({ type: "move", dx, dy });
                 } else if (count === 2) {
                     // 自然滚动：内容跟随手指，手指上移对应内容向下滚
@@ -443,7 +472,10 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 this.cancelTimer();
                 this.phase = "second";
                 this.schedule(TAP_TIMEOUT, () => {
-                    if (this.phase === "second") this.phase = "dragging";
+                    if (this.phase !== "second") return;
+                    this.phase = "dragging";
+                    // 第二下被判成拖拽后，把判定期间攒的位移补出去，客户端才不会把按下+抬起当成点击
+                    this.flushSuppressedMove();
                 });
                 break;
             default:
@@ -486,7 +518,8 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 });
                 break;
             case "dragging":
-                // 手指抬起，结束拖拽
+                // 手指抬起，结束拖拽；先补上还没发出的位移
+                this.flushSuppressedMove();
                 this.release(actions);
                 break;
             default:
@@ -498,6 +531,8 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         this.roundMaxFingers = 0;
         this.multiFingers = 0;
         this.scrolling = false;
+        this.suppressedMoveX = 0;
+        this.suppressedMoveY = 0;
         this.contacts.clear();
         this.fallback = undefined;
     }
@@ -548,6 +583,16 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         }, delay);
         (timer as { unref?: () => void }).unref?.();
         this.timer = timer;
+    }
+
+    /** 把判定期间攒下的位移直接补发（定时器/结束拖拽时用，没有 actions 上下文） */
+    private flushSuppressedMove(): void {
+        if (this.suppressedMoveX === 0 && this.suppressedMoveY === 0) return;
+        const dx = this.suppressedMoveX;
+        const dy = this.suppressedMoveY;
+        this.suppressedMoveX = 0;
+        this.suppressedMoveY = 0;
+        this.emit("move", dx, dy);
     }
 
     private cancelTimer(): void {

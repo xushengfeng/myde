@@ -36,14 +36,22 @@ export function testRunnerRaw(js: string) {
     delete env.ELECTRON_RUN_AS_NODE;
     delete env.ELECTRON_NO_ATTACH_CONSOLE;
 
+    const testEnv: NodeJS.ProcessEnv = {
+        ...env,
+        desktop: tmpPath,
+        nodeModule: "on",
+        testMode: "on",
+    };
+    // 测试实例走 X11/软件渲染，避免和正在运行的 Wayland 桌面抢 GPU/显示连接
+    if (env.DISPLAY) {
+        testEnv.ELECTRON_OZONE_PLATFORM_HINT = "x11";
+        testEnv.XDG_SESSION_TYPE = "x11";
+        delete testEnv.WAYLAND_DISPLAY;
+    }
+
     const runtime = child_process.spawn("npx", ["electron-vite", "--ignoreConfigWarning", "preview"], {
         stdio: "pipe",
-        env: {
-            ...env,
-            desktop: tmpPath,
-            nodeModule: "on",
-            testMode: "on",
-        },
+        env: testEnv,
         cwd: getProjectRoot(),
     });
     const out: unknown[] = [];
@@ -140,6 +148,9 @@ export function testRunnerApp(
 
         const p = serverX.runApp(`${__dirname.replace("/out/renderer", "")}/${appPath}`);
         p.stdout.on("data", (data) => {
+            ipcRenderer.send("test", { type: "applog", data: data.toString() });
+        });
+        p.stderr.on("data", (data) => {
             ipcRenderer.send("test", { type: "applog", data: data.toString() });
         });
     });

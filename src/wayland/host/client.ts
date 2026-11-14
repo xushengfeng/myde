@@ -430,7 +430,11 @@ export class WaylandClient implements Client {
             const useOp = this.opa.isOp(x);
 
             if (x.op.isDestructor) {
-                this.deleteObj(x.id);
+                // 客户端创建的 id 才需要回 delete_id；服务端 new_id（0xff...）由 server 分配，
+                // 客户端销毁后只删本地对象，不能再给它发 delete_id，否则会收到 unknown id 协议错误
+                // 服务端 new_id 从 0xff000000 开始
+                if (x.id < 0xff000000) this.deleteObj(x.id);
+                else this.objects.delete(x.id);
             }
 
             if (!useOp && !x.op.isDestructor) {

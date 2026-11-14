@@ -132,6 +132,9 @@ const useInternalPortal = process.env.MYDE_INTERNAL_PORTAL === "1" || process.ar
 
 if (isTestMode) {
     dev = false;
+    // 测试实例与正在运行的 myde 隔离；ozone 平台由 test_runner 在启动前用环境变量选择
+    app.setPath("userData", path.join(os.tmpdir(), `myde-test-${process.pid}`));
+    app.commandLine.appendSwitch("allow-file-access-from-files");
 }
 
 const runAsDesktop = Boolean(process.env.runAsDesktop);

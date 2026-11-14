@@ -120,18 +120,21 @@ describe("wl_data_device drag-and-drop", () => {
         expect(enter.args).toMatchObject({ surface: 10, x: 5, y: 5 });
         expect(events(sent, "wl_data_device.data_offer")).toHaveLength(1);
         expect(events(sent, "wl_data_offer.offer")[0].args.mime_type).toBe("text/plain;charset=utf-8");
+        expect(events(sent, "wl_data_offer.source_actions")[0].args.source_actions).toBe(1);
 
         action(ctx, "input.pointer", 20, [{ type: "move", x: 7, y: 8, button: 0 }]);
         expect(events(sent, "wl_data_device.motion")[0].args).toMatchObject({ x: 7, y: 8 });
 
         action(ctx, "input.pointer", 20, [{ type: "up", x: 7, y: 8, button: 0 }]);
         expect(events(sent, "wl_data_device.drop")).toHaveLength(1);
+        expect(events(sent, "wl_data_offer.action")[0].args.dnd_action).toBe(1);
         expect(events(sent, "wl_data_source.dnd_drop_performed")).toHaveLength(1);
 
         const offerId = enter.args.id as number;
         const { fd } = newFd("");
         request(ctx, "wl_data_offer.receive", offerId, { mime_type: "text/plain;charset=utf-8", fd });
         expect(events(sent, "wl_data_source.send")[0].args.mime_type).toBe("text/plain;charset=utf-8");
+        request(ctx, "wl_data_offer.finish", offerId, {});
         expect(events(sent, "wl_data_source.dnd_finished")).toHaveLength(1);
     });
 

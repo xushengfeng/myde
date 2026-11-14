@@ -68,6 +68,11 @@ declare module "../../module" {
             drag?: boolean;
             /** 目标客户端 accept 的 mime */
             accepted?: string;
+            /** 目标通过 set_actions 声明的动作 */
+            targetActions?: number;
+            preferredAction?: number;
+            /** 协商后的动作（v3 的 action 事件） */
+            selectedAction?: number;
         };
         wl_data_device: { seatName: string };
     }
@@ -597,10 +602,13 @@ function updatePointerFocus(ctx: ModuleCtx, seat: SeatRecord, hit: HitTestResult
 
 /** 指针事件注入（发给这一把 seat 的全部 pointer）：坐标已由 hitTest 归一到 surface 局部 */
 function sendPointer(ctx: ModuleCtx, seat: SeatRecord, ev: PointerCommand, hit: HitTestResult): void {
-    // 先同步 DnD（drop 要在按钮抬起之前到客户端），再发普通 pointer 事件
-    if (ctx.domain.dataDevice.drag) updateDrag(ctx, ev.type, hit);
+    // 移动先同步 DnD；抬起时先发 wl_pointer.button（和 KWin 一样），再结束拖拽发 drop
+    if (ev.type === "move" && ctx.domain.dataDevice.drag) updateDrag(ctx, "move", hit);
     const pointers = [...seat.pointers].filter((id) => ctx.objects.has(id));
-    if (pointers.length === 0) return;
+    if (pointers.length === 0) {
+        if (ev.type === "up" && ctx.domain.dataDevice.drag) updateDrag(ctx, "up", hit);
+        return;
+    }
     const { x: nx, y: ny } = hit;
     seat.pointerPos = { x: nx, y: ny };
     if (ev.type === "move") {
@@ -628,6 +636,7 @@ function sendPointer(ctx: ModuleCtx, seat: SeatRecord, ev: PointerCommand, hit: 
         });
         ctx.sendNow(pointer, "wl_pointer.frame", {});
     }
+    if (ev.type === "up" && ctx.domain.dataDevice.drag) updateDrag(ctx, "up", hit);
 }
 
 /**
@@ -787,8 +796,17 @@ function clearSelection(ctx: ModuleCtx, seatName: string): void {
         });
 }
 
-/** wl_data_device_manager.dnd_action 的 copy（v3 事件；低版本由 host 按 since 丢弃） */
+/** wl_data_device_manager.dnd_action 的 copy/move（v3 事件；低版本由 host 按 since 丢弃） */
 const DND_ACTION_COPY = getEnumValue("wl_data_device_manager.dnd_action", "copy") ?? 1;
+const DND_ACTION_MOVE = getEnumValue("wl_data_device_manager.dnd_action", "move") ?? 2;
+
+/** 在 source 支持的动作里选目标首选的动作，否则 copy */
+function chooseDndAction(sourceActions: number, targetActions: number, preferred: number): number {
+    if (preferred !== 0 && (preferred & targetActions) !== 0 && (preferred & sourceActions) !== 0) return preferred;
+    if ((sourceActions & DND_ACTION_COPY) !== 0) return DND_ACTION_COPY;
+    if ((sourceActions & DND_ACTION_MOVE) !== 0) return DND_ACTION_MOVE;
+    return DND_ACTION_COPY;
+}
 
 type DataDrag = NonNullable<ModuleCtx["domain"]["dataDevice"]["drag"]>;
 
@@ -807,6 +825,7 @@ function sendDragEnter(ctx: ModuleCtx, drag: DataDrag, surface: SurfaceId, x: nu
     ctx.objects.setData(offerId, { mimeTypes: [...src.data.offers], sourceId: drag.sourceId, drag: true });
     ctx.sendNow(drag.dataDeviceId, "wl_data_device.data_offer", { id: offerId });
     for (const mime of src.data.offers) ctx.sendNow(offerId, "wl_data_offer.offer", { mime_type: mime });
+    ctx.sendNow(offerId, "wl_data_offer.source_actions", { source_actions: src.data.actions ?? DND_ACTION_COPY });
     const serial = ctx.domain.seat.nextSerial();
     ctx.sendNow(drag.dataDeviceId, "wl_data_device.enter", { serial, surface, x, y, id: offerId });
     drag.offerId = offerId;
@@ -827,11 +846,16 @@ function finishDrag(ctx: ModuleCtx): void {
     const drag = ctx.domain.dataDevice.drag;
     if (!drag) return;
     ctx.domain.dataDevice.drag = undefined;
+    const offer = drag.offerId !== undefined ? ctx.objects.getOption(drag.offerId) : undefined;
+    const action = offer?.data?.selectedAction ?? DND_ACTION_COPY;
+    if (drag.offerId !== undefined) {
+        ctx.sendNow(drag.offerId, "wl_data_offer.action", { dnd_action: action });
+    }
     ctx.sendNow(drag.dataDeviceId, "wl_data_device.drop", {});
     if (!ctx.objects.has(drag.sourceId)) return;
-    ctx.sendNow(drag.sourceId, "wl_data_source.action", { dnd_action: DND_ACTION_COPY });
+    ctx.sendNow(drag.sourceId, "wl_data_source.action", { dnd_action: action });
     ctx.sendNow(drag.sourceId, "wl_data_source.dnd_drop_performed", {});
-    // 目标可能不同步发起 receive；超时兜底发送 dnd_finished
+    // dnd_finished 要等目标 receive/finish 数据后由目标触发；客户端不按时 finish 时兜底
     const timer = setTimeout(() => finishDragSource(ctx, drag.sourceId), 500);
     (timer as { unref?: () => void }).unref?.();
     ctx.domain.dataDevice.dragFinish = { sourceId: drag.sourceId, timer };
@@ -1065,7 +1089,21 @@ export const waylandCoreModule = defineModule({
         },
         "wl_data_source.set_actions": (x, ctx) => {
             const src = ctx.objects.getOption(x.id);
-            if (src) src.data.actions = x.args.dnd_actions;
+            if (!src) return;
+            src.data.actions = x.args.dnd_actions;
+            const drag = ctx.domain.dataDevice.drag;
+            if (drag?.sourceId !== x.id || drag.offerId === undefined) return;
+            ctx.sendNow(drag.offerId, "wl_data_offer.source_actions", { source_actions: x.args.dnd_actions });
+            const offer = ctx.objects.getOption(drag.offerId);
+            if (!offer) return;
+            const action = chooseDndAction(
+                x.args.dnd_actions,
+                offer.data.targetActions ?? 0,
+                offer.data.preferredAction ?? 0,
+            );
+            offer.data.selectedAction = action;
+            ctx.sendNow(drag.offerId, "wl_data_offer.action", { dnd_action: action });
+            ctx.sendNow(x.id, "wl_data_source.action", { dnd_action: action });
         },
         "wl_data_source.destroy": (x, ctx) => {
             if (ctx.domain.dataDevice.drag?.sourceId === x.id) ctx.domain.dataDevice.drag = undefined;
@@ -1103,11 +1141,32 @@ export const waylandCoreModule = defineModule({
             const offer = ctx.objects.getOption(x.id);
             if (offer) offer.data.accepted = x.args.mime_type;
         },
-        "wl_data_offer.set_actions": () => {
-            // 目标支持的动作；我们只提供 copy，不需要额外处理
+        "wl_data_offer.set_actions": (x, ctx) => {
+            const offer = ctx.objects.getOption(x.id);
+            if (!offer?.data?.drag) return;
+            offer.data.targetActions = x.args.dnd_actions;
+            offer.data.preferredAction = x.args.preferred_action;
+            const src = offer.data.sourceId !== undefined ? ctx.objects.getOption(offer.data.sourceId) : undefined;
+            const action = chooseDndAction(
+                src?.data.actions ?? DND_ACTION_COPY,
+                x.args.dnd_actions,
+                x.args.preferred_action ?? 0,
+            );
+            offer.data.selectedAction = action;
+            ctx.sendNow(x.id, "wl_data_offer.action", { dnd_action: action });
+            if (src && offer.data.sourceId !== undefined) {
+                ctx.sendNow(offer.data.sourceId, "wl_data_source.action", { dnd_action: action });
+            }
         },
         "wl_data_offer.finish": (x, ctx) => {
-            // 目标声明拖拽数据处理完了，给 source 补 dnd_finished
+            // 目标声明拖拽数据处理完了，给 source 发 dnd_finished
+            const offer = ctx.objects.getOption(x.id);
+            if (offer?.data?.drag && offer.data.sourceId !== undefined) {
+                finishDragSource(ctx, offer.data.sourceId);
+            }
+        },
+        "wl_data_offer.destroy": (x, ctx) => {
+            // 有的客户端不调 finish，直接销毁 offer；也当作数据处理完
             const offer = ctx.objects.getOption(x.id);
             if (offer?.data?.drag && offer.data.sourceId !== undefined) {
                 finishDragSource(ctx, offer.data.sourceId);
@@ -1125,7 +1184,6 @@ export const waylandCoreModule = defineModule({
                     const srcId = offer.data.sourceId;
                     if (srcId !== undefined && ctx.objects.has(srcId)) {
                         ctx.sendNow(srcId, "wl_data_source.send", { mime_type: mime, fd });
-                        finishDragSource(ctx, srcId);
                     }
                 } finally {
                     try {

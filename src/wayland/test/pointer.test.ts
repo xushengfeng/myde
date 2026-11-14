@@ -76,7 +76,7 @@ describe("pointer", () => {
     it("move 命中象限、三键按下/抬起、滚轮、光标", { timeout: 20000 }, async () => {
         const appJs = `
 module.exports = ({ createWindow }) => {
-    createWindow({ js: __filename, width: 640, height: 480 });
+    createWindow({ js: __filename, width: 640, height: 480, frame: false });
 };
 if (typeof document !== "undefined") {
     document.title = "myde-pointer-test";

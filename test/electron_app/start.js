@@ -65,6 +65,8 @@ if (!process.versions.electron) {
 } else {
     // ========== electron 环境: 执行用户脚本 ==========
     const { app, BrowserWindow } = require("electron");
+    // e2e 客户端跑在软件渲染下，避免测试机 GPU/DRM 与正在运行的桌面冲突
+    app.disableHardwareAcceleration();
 
     const userScript = process.argv[2];
     if (!userScript) {
@@ -119,6 +121,7 @@ if (!process.versions.electron) {
         const win = new BrowserWindow({
             width: opts.width || 1200,
             height: opts.height || 800,
+            ...(opts.frame === false ? { frame: false } : {}),
             webPreferences: {
                 nodeIntegration: true,
                 contextIsolation: false,

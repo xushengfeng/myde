@@ -126,10 +126,13 @@ npx vitest run src/wayland/test/pointer.test.ts
 空选择走的读取分支不会 emit `clipboard.copy`。
 
 拖拽（DnD）目前只支持**同一 client 内**：`start_drag` 时目标 surface 必须在本客户端对象表里，否则给
-`wl_data_source.cancelled`。流程是 `data_offer` + `offer` → `enter` → 指针移动时 `motion` → 抬起时 `drop` +
-`action` + `dnd_drop_performed`；目标 `wl_data_offer.receive` 的 fd 通过 `wl_data_source.send` 转给 source，
-随后补 `dnd_finished`。跨 client 拖拽需要桌面侧全局 pointer 事件，暂未接入。
-单测见 `protocols/core/data_device.test.ts`。
+`wl_data_source.cancelled`。流程是 `data_offer` + `offer` + `source_actions` → `enter` → 指针移动时 `motion` → 抬起时
+`wl_pointer.button` 后发 `offer.action` + `drop`，再给 source 发 `action` + `dnd_drop_performed`；
+目标的 `wl_data_offer.receive` fd 通过 `wl_data_source.send` 转给 source，随后补 `dnd_finished`。
+`wl_data_offer.set_actions` / `wl_data_source.set_actions` 会协商 copy/move（优先目标 preferred action），
+漏发 action 时部分客户端会取消 drop。跨 client 拖拽需要桌面侧全局 pointer 事件，暂未接入。
+单测见 `protocols/core/data_device.test.ts`；真实 Chromium 的选区拖动见 `test/text_drag.test.ts`，
+轻触 FSM 到选区拖动的链路见 `test/tap_drag.test.ts`。
 
 ## 新增协议指南
 
