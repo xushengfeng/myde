@@ -105,8 +105,8 @@ npx vitest run src/wayland/test/pointer.test.ts
 
 写法上的四个硬约束（踩过一遍，违反基本跑不起来）：
 
-1. **必须串行**：都用默认 socket 名 `my-wayland-server-0`，后启动的 `setupSocket` 会 unlink 掉前一个的 socket，
-   见 `vitest.config.ts` 的 `fileParallelism: false`。
+1. **socket 名每次实例唯一**：`WaylandServer` 默认用 `uniqueSocketName("my-wayland-server")`（pid + 随机后缀），
+   多实例不会互相 unlink 或连错服务端；客户端从 `server.socketName` 取 `WAYLAND_DISPLAY`。
 2. **`testRunnerApp` 的回调是 `script.toString()` 拼进桌面脚本里求值的**：访问不到本文件的模块作用域，
    计划与常量要写在**回调体内**，再用 `runner.sendData()` 带出来给外层断言（回调里要的工具函数同理，
    比如 `mapKeyCode` 只能在回调外校验回调内写死的键码）。
@@ -234,5 +234,5 @@ export const exampleModule = defineModule({
   桌面 `window.focus` / `window.blur`（blur 只清**自己拥有**的焦点，所以全量 focus+blur 循环与顺序无关）。
   xdg 的 `actived` 是另一条独立的轴，规范对 `configure(activated)` 与 `wl_keyboard.enter` 的顺序无要求。
   `wl_surface.destroy` 只**静默清**焦点槽（不能向已销毁对象发事件），text-input 经 `onDestroy` 收敛。
-- **模块级副作用要加环境守卫**：`utils/shared_texture.ts` 会注册 electron 接收端并建 unix socket，
-  纯 node 环境没有 electron。
+- **模块级副作用要加环境守卫**：`utils/shared_texture.ts` 会注册 electron 接收端并连主进程的 unix socket
+  （路径来自 `MYDE_SHARED_TEXTURE_SOCKET`），纯 node 环境没有 electron。

@@ -1,3 +1,5 @@
+import { uniqueSocketPath } from "../socket-name";
+
 const child_process = require("node:child_process") as typeof import("node:child_process");
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
@@ -36,7 +38,7 @@ let current: InternalPortalHandle | undefined;
 export async function startInternalPortal(opts: InternalPortalOptions): Promise<InternalPortalHandle> {
     stopInternalPortal();
 
-    const socketPath = path.join(opts.runtimeDir, `myde-internal-bus-${process.pid}`);
+    const socketPath = uniqueSocketPath(opts.runtimeDir, "myde-internal-bus");
     const busAddress = `unix:path=${socketPath}`;
     fs.rmSync(socketPath, { force: true });
 

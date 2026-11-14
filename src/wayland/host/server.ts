@@ -17,6 +17,7 @@ const usocket = require("myde-unix-socket") as typeof import("myde-unix-socket")
 
 import type { UServer, USocket } from "myde-unix-socket";
 import { EventEmitter } from "../../event-emitter/event-emitter";
+import { uniqueSocketName } from "../../socket-name";
 import type {
     Client,
     CursorState,
@@ -99,7 +100,7 @@ class WaylandServer {
     private syncResponders = new Map<keyof ServerRequests, (...args: any[]) => any>();
 
     socketDir = "/tmp";
-    socketName = "my-wayland-server-0";
+    socketName = uniqueSocketName("my-wayland-server");
     private socketPath: string;
     private server: UServer | null = null;
     private render: renderTools;

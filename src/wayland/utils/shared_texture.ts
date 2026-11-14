@@ -52,5 +52,7 @@ sharedTexture?.setSharedTextureReceiver?.(async (cb, id) => {
 /**
  * 与主进程约定的共享纹理通道。只在 electron 渲染进程里建——纯 node 环境
  * （协议模块单测会 import 到这张模块图）没有对面，建了也只是连接失败。
+ * 路径由主进程按实例生成并放进 `MYDE_SHARED_TEXTURE_SOCKET`，避免多实例互连。
  */
-const ipc = sharedTexture ? new usocket.USocket({ path: "/tmp/myde.sock" }) : undefined;
+const ipcPath = process.env.MYDE_SHARED_TEXTURE_SOCKET;
+const ipc = sharedTexture && ipcPath ? new usocket.USocket({ path: ipcPath }) : undefined;

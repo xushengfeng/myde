@@ -1,8 +1,10 @@
 /// <reference types="vite/client" />
 
-import { closeSync } from "node:fs";
+import { closeSync, rmSync } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { app, BrowserWindow, globalShortcut, ipcMain, nativeTheme, sharedTexture } from "electron";
+import { uniqueSocketPath } from "../socket-name";
 import { startInternalPortal, stopInternalPortal } from "./internal_portal";
 
 const run_path = path.join(path.resolve(__dirname, ""), "../../");
@@ -156,7 +158,10 @@ app.on("will-quit", () => {
     globalShortcut.unregisterAll();
 });
 
-const ipcPath = path.join("/tmp", "myde.sock");
+// 每个实例独立的共享纹理通道：固定名字会让第二个实例的渲染进程连到第一个
+// 实例的主进程，纹理被送进错误的窗口。路径通过环境变量传给渲染进程。
+const ipcPath = uniqueSocketPath(process.env.XDG_RUNTIME_DIR || os.tmpdir(), "myde-shared", ".sock");
+process.env.MYDE_SHARED_TEXTURE_SOCKET = ipcPath;
 
 // 临时诊断日志：主进程 shared texture 回调链路。崩溃后文件保留，便于定位。
 const sharedLogPath = "/tmp/myde-shared.log";
@@ -192,6 +197,11 @@ app.on("child-process-gone", (_e, details) => sharedLog(`child-process-gone ${JS
 
 const server = new mus.UServer();
 server.listen(ipcPath);
+app.on("will-quit", () => {
+    try {
+        rmSync(ipcPath, { force: true });
+    } catch {}
+});
 server.on("connection", (socket) => {
     sharedLog("connection");
     // 消息格式：[4字节大端长度][JSON]，fd 走 SCM_RIGHTS。Unix stream 会把多次
