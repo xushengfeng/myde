@@ -59,7 +59,17 @@ declare module "../../module" {
 }
 declare module "../../module" {
     interface WaylandDataRegistry {
-        wl_data_source: { offers: string[] };
+        wl_data_source: { offers: string[]; actions?: number };
+        wl_data_offer: {
+            mimeTypes: string[];
+            /** 拖拽时指向发起 source；剪贴板 offer 没有 */
+            sourceId?: WaylandObjectId2<"wl_data_source">;
+            /** 这个 offer 属于 drag-and-drop，不是剪贴板 selection */
+            drag?: boolean;
+            /** 目标客户端 accept 的 mime */
+            accepted?: string;
+        };
+        wl_data_device: { seatName: string };
     }
 }
 
@@ -87,6 +97,16 @@ declare module "../../module" {
         dataDevice: {
             devices?: DataDevices;
             pendingPaste?: { offerId: WaylandObjectId; fd: number; mime: string; timeout: NodeJS.Timeout };
+            /** 同 client 的 drag-and-drop 会话（跨 client 暂不支持，start_drag 会取消） */
+            drag?: {
+                dataDeviceId: WaylandObjectId2<"wl_data_device">;
+                sourceId: WaylandObjectId2<"wl_data_source">;
+                seatName: string;
+                surface: SurfaceId;
+                offerId?: WaylandObjectId2<"wl_data_offer">;
+            };
+            /** drop 后等目标 receive 取数据；超时或 receive 后补 dnd_finished */
+            dragFinish?: { sourceId: WaylandObjectId2<"wl_data_source">; timer: NodeJS.Timeout };
         };
         /**
          * text-input v1/v3 的仲裁槽（后 activate/enable 者持有）：core 只当中立槽位，不解释 zwp_* 事件——
@@ -577,6 +597,8 @@ function updatePointerFocus(ctx: ModuleCtx, seat: SeatRecord, hit: HitTestResult
 
 /** 指针事件注入（发给这一把 seat 的全部 pointer）：坐标已由 hitTest 归一到 surface 局部 */
 function sendPointer(ctx: ModuleCtx, seat: SeatRecord, ev: PointerCommand, hit: HitTestResult): void {
+    // 先同步 DnD（drop 要在按钮抬起之前到客户端），再发普通 pointer 事件
+    if (ctx.domain.dataDevice.drag) updateDrag(ctx, ev.type, hit);
     const pointers = [...seat.pointers].filter((id) => ctx.objects.has(id));
     if (pointers.length === 0) return;
     const { x: nx, y: ny } = hit;
@@ -765,12 +787,80 @@ function clearSelection(ctx: ModuleCtx, seatName: string): void {
         });
 }
 
+/** wl_data_device_manager.dnd_action 的 copy（v3 事件；低版本由 host 按 since 丢弃） */
+const DND_ACTION_COPY = getEnumValue("wl_data_device_manager.dnd_action", "copy") ?? 1;
+
+type DataDrag = NonNullable<ModuleCtx["domain"]["dataDevice"]["drag"]>;
+
 /**
- * offer 剪贴板给本客户端——**跟随键盘焦点**：不指定 seat 时只发给「本客户端正持有键盘焦点」的
- * 那些 seat 的 data_device（selection 归聚焦者所有，见 wayland.xml 对 selection 的说明）。
- * 若一个都还没聚焦（桌面 `clipboard.offer` 调得比 `window.focus` 早），退回发给全部 data_device，
- * 与旧的「全发」行为等价。
+ * 发起/切换拖拽目标：先给目标 data_device 发 data_offer + offer，再发 enter。
+ * 目前只支持同 client（目标 surface 必须在本客户端对象表里），跨 client 会取消。
  */
+function sendDragEnter(ctx: ModuleCtx, drag: DataDrag, surface: SurfaceId, x: number, y: number): void {
+    const src = ctx.objects.getOption(drag.sourceId);
+    if (!src) {
+        cancelDrag(ctx);
+        return;
+    }
+    if (drag.offerId !== undefined) ctx.sendNow(drag.dataDeviceId, "wl_data_device.leave", {});
+    const offerId = ctx.objects.create("wl_data_offer");
+    ctx.objects.setData(offerId, { mimeTypes: [...src.data.offers], sourceId: drag.sourceId, drag: true });
+    ctx.sendNow(drag.dataDeviceId, "wl_data_device.data_offer", { id: offerId });
+    for (const mime of src.data.offers) ctx.sendNow(offerId, "wl_data_offer.offer", { mime_type: mime });
+    const serial = ctx.domain.seat.nextSerial();
+    ctx.sendNow(drag.dataDeviceId, "wl_data_device.enter", { serial, surface, x, y, id: offerId });
+    drag.offerId = offerId;
+    drag.surface = surface;
+}
+
+/** drop 后目标取完数据（或超时）再给 source 补 dnd_finished */
+function finishDragSource(ctx: ModuleCtx, sourceId: WaylandObjectId2<"wl_data_source">): void {
+    const finish = ctx.domain.dataDevice.dragFinish;
+    if (!finish || finish.sourceId !== sourceId) return;
+    clearTimeout(finish.timer);
+    ctx.domain.dataDevice.dragFinish = undefined;
+    if (ctx.objects.has(sourceId)) ctx.sendNow(sourceId, "wl_data_source.dnd_finished", {});
+}
+
+/** 指针在目标上松开：drop + action + dnd_drop_performed */
+function finishDrag(ctx: ModuleCtx): void {
+    const drag = ctx.domain.dataDevice.drag;
+    if (!drag) return;
+    ctx.domain.dataDevice.drag = undefined;
+    ctx.sendNow(drag.dataDeviceId, "wl_data_device.drop", {});
+    if (!ctx.objects.has(drag.sourceId)) return;
+    ctx.sendNow(drag.sourceId, "wl_data_source.action", { dnd_action: DND_ACTION_COPY });
+    ctx.sendNow(drag.sourceId, "wl_data_source.dnd_drop_performed", {});
+    // 目标可能不同步发起 receive；超时兜底发送 dnd_finished
+    const timer = setTimeout(() => finishDragSource(ctx, drag.sourceId), 500);
+    (timer as { unref?: () => void }).unref?.();
+    ctx.domain.dataDevice.dragFinish = { sourceId: drag.sourceId, timer };
+}
+
+function cancelDrag(ctx: ModuleCtx): void {
+    const drag = ctx.domain.dataDevice.drag;
+    if (!drag) return;
+    ctx.domain.dataDevice.drag = undefined;
+    ctx.sendNow(drag.dataDeviceId, "wl_data_device.leave", {});
+    if (ctx.objects.has(drag.sourceId)) ctx.sendNow(drag.sourceId, "wl_data_source.cancelled", {});
+}
+
+/** 把指针事件同步到进行中的拖拽；目标离开本 client 时取消 */
+function updateDrag(ctx: ModuleCtx, type: "move" | "down" | "up", hit: HitTestResult): void {
+    const drag = ctx.domain.dataDevice.drag;
+    if (!drag) return;
+    if (!ctx.objects.has(hit.surface)) {
+        cancelDrag(ctx);
+        return;
+    }
+    if (type === "move") {
+        if (hit.surface !== drag.surface) sendDragEnter(ctx, drag, hit.surface, hit.x, hit.y);
+        else ctx.sendNow(drag.dataDeviceId, "wl_data_device.motion", { time: Date.now(), x: hit.x, y: hit.y });
+    } else if (type === "up") {
+        finishDrag(ctx);
+    }
+}
+
 function offerTo(ctx: ModuleCtx, seatName?: string): void {
     const devices = ctx.domain.dataDevice.devices;
     if (!devices) {
@@ -933,10 +1023,63 @@ export const waylandCoreModule = defineModule({
             const src = ctx.objects.get(x.args.id);
             src.data = { offers: [] };
         },
+        "wl_data_device.start_drag": (x, ctx) => {
+            const sourceId = waylandObjectId(x.args.source, "wl_data_source");
+            // 没有数据源的拖拽（窗口移动等）不在 core 里处理
+            if (!sourceId) return;
+            const seatName = ctx.objects.getOption(x.id)?.data?.seatName ?? "seat0";
+            const seat = ctx.domain.seat.byName(seatName);
+            if (!seat) {
+                ctx.sendNow(sourceId, "wl_data_source.cancelled", {});
+                return;
+            }
+            const surface = seat.pointerFocus ?? x.args.origin;
+            if (!surface || !ctx.objects.has(surface)) {
+                // 跨 client 拖拽暂不支持：取消，让客户端正常退出 drag 状态
+                ctx.sendNow(sourceId, "wl_data_source.cancelled", {});
+                return;
+            }
+            const previousFinish = ctx.domain.dataDevice.dragFinish;
+            if (previousFinish) finishDragSource(ctx, previousFinish.sourceId);
+            const pointerPos = seat.pointerFocus ? seat.pointerPos : { x: 0, y: 0 };
+            const drag = {
+                dataDeviceId: x.id,
+                sourceId,
+                seatName,
+                surface,
+                offerId: undefined as WaylandObjectId2<"wl_data_offer"> | undefined,
+            };
+            ctx.domain.dataDevice.drag = drag;
+            sendDragEnter(ctx, drag, surface, pointerPos.x, pointerPos.y);
+        },
+        "wl_data_device.release": (x, ctx) => {
+            const devices = ctx.domain.dataDevice.devices;
+            for (const set of devices?.values() ?? []) set.delete(x.id);
+            const drag = ctx.domain.dataDevice.drag;
+            if (drag?.dataDeviceId === x.id) {
+                ctx.domain.dataDevice.drag = undefined;
+                if (ctx.objects.has(drag.sourceId)) {
+                    ctx.sendNow(drag.sourceId, "wl_data_source.cancelled", {});
+                }
+            }
+        },
+        "wl_data_source.set_actions": (x, ctx) => {
+            const src = ctx.objects.getOption(x.id);
+            if (src) src.data.actions = x.args.dnd_actions;
+        },
+        "wl_data_source.destroy": (x, ctx) => {
+            if (ctx.domain.dataDevice.drag?.sourceId === x.id) ctx.domain.dataDevice.drag = undefined;
+            const finish = ctx.domain.dataDevice.dragFinish;
+            if (finish?.sourceId === x.id) {
+                clearTimeout(finish.timer);
+                ctx.domain.dataDevice.dragFinish = undefined;
+            }
+        },
         "wl_data_device_manager.get_data_device": (x, ctx) => {
             const ddId = x.args.id;
             // 按所属 seat 归组：selection 归该 seat 的键盘焦点所有（跟随键盘焦点）
             const seatName = ctx.domain.seat.get(x.args.seat)?.name ?? "seat0";
+            ctx.objects.setData(ddId, { seatName });
             const devices: DataDevices = ctx.domain.dataDevice.devices ?? new Map();
             let set = devices.get(seatName);
             if (set === undefined) {
@@ -950,12 +1093,49 @@ export const waylandCoreModule = defineModule({
             const src = ctx.objects.get(x.id);
             if (!src) return;
             src.data.offers.push(x.args.mime_type);
+            const drag = ctx.domain.dataDevice.drag;
+            if (drag?.sourceId === x.id && drag.offerId !== undefined) {
+                ctx.sendNow(drag.offerId, "wl_data_offer.offer", { mime_type: x.args.mime_type });
+            }
             console.log(`wl_data_source#${x.id} offer ${x.args.mime_type}`);
+        },
+        "wl_data_offer.accept": (x, ctx) => {
+            const offer = ctx.objects.getOption(x.id);
+            if (offer) offer.data.accepted = x.args.mime_type;
+        },
+        "wl_data_offer.set_actions": () => {
+            // 目标支持的动作；我们只提供 copy，不需要额外处理
+        },
+        "wl_data_offer.finish": (x, ctx) => {
+            // 目标声明拖拽数据处理完了，给 source 补 dnd_finished
+            const offer = ctx.objects.getOption(x.id);
+            if (offer?.data?.drag && offer.data.sourceId !== undefined) {
+                finishDragSource(ctx, offer.data.sourceId);
+            }
         },
         "wl_data_offer.receive": (x, ctx) => {
             const offerId = x.id;
             const mime = x.args.mime_type;
             const fd = x.args.fd;
+
+            // drag-and-drop：把目标端 fd 转给 source 写入；同一 client 内 source 就在本对象表里
+            const offer = ctx.objects.getOption(offerId);
+            if (offer?.data?.drag) {
+                try {
+                    const srcId = offer.data.sourceId;
+                    if (srcId !== undefined && ctx.objects.has(srcId)) {
+                        ctx.sendNow(srcId, "wl_data_source.send", { mime_type: mime, fd });
+                        finishDragSource(ctx, srcId);
+                    }
+                } finally {
+                    try {
+                        fs.closeSync(fd);
+                    } catch {
+                        // ignore
+                    }
+                }
+                return;
+            }
 
             // fallback: compositor-local paste flow – keep pendingPaste and emit paste for external handler
             if (ctx.domain.dataDevice.pendingPaste) {

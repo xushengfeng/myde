@@ -684,6 +684,11 @@ server.on("clipboard.pasteRequested", (clientId) => {
 server.notify("clipboard.offer", handle); // 获得焦点时把剪贴板 offer 给该客户端
 ```
 
+拖拽（drag-and-drop）走 Wayland 的 `wl_data_device.start_drag`：目前支持**同一客户端内**拖动，客户端用
+`wl_data_source.offer` 声明的 mime 会成为 `wl_data_offer`，指针移动时发 `wl_data_device.motion`，抬手发
+`drop`/`dnd_drop_performed`/`dnd_finished`；目标 `wl_data_offer.receive` 的 fd 由 core 转给 source 写回。
+目标 surface 不在本客户端时发 `wl_data_source.cancelled`，跨客户端拖拽尚未接入。
+
 ### 桌面提供可用空间
 
 注册一次即可（server 在 `xdg_surface.get_toplevel` 的同步 handler 里取值，所以必须同步返回）。

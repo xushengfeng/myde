@@ -16,9 +16,9 @@
     - wl_keyboard 还没有 repeat
     - wl_output 只是硬编码，还没有添加硬件处理
     - wl_region
-    - wl_data_device 部分
+    - wl_data_device 部分（selection + 同 client drag-and-drop）
     - wl_data_device_manager 部分
-    - wl_data_offer 部分
+    - wl_data_offer 部分（selection / drag offer）
     - wl_data_source 部分
     - wl_subcompositor
     - wl_subsurface 部分
@@ -124,6 +124,12 @@ npx vitest run src/wayland/test/pointer.test.ts
 剪贴板的顺序坑（`clipboard.test.ts`）：客户端自己持有剪贴板时，粘贴直接吃本地缓存、不会向合成器发
 `wl_data_offer.receive`，所以「桌面回填」的用例必须排在客户端复制**之前**；复制的文案用 `input.text` 打进去，
 空选择走的读取分支不会 emit `clipboard.copy`。
+
+拖拽（DnD）目前只支持**同一 client 内**：`start_drag` 时目标 surface 必须在本客户端对象表里，否则给
+`wl_data_source.cancelled`。流程是 `data_offer` + `offer` → `enter` → 指针移动时 `motion` → 抬起时 `drop` +
+`action` + `dnd_drop_performed`；目标 `wl_data_offer.receive` 的 fd 通过 `wl_data_source.send` 转给 source，
+随后补 `dnd_finished`。跨 client 拖拽需要桌面侧全局 pointer 事件，暂未接入。
+单测见 `protocols/core/data_device.test.ts`。
 
 ## 新增协议指南
 
