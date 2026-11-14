@@ -242,13 +242,22 @@ fn js_needs_conversion(mut cx: FunctionContext) -> JsResult<JsBoolean> {
     Ok(cx.boolean(drm_format_name(format).is_some() && electron_pixel_format(format).is_none()))
 }
 
-fn js_convert_dmabuf_to_rgba(mut cx: FunctionContext) -> JsResult<JsBuffer> {
-    let fd = arg_u32(&mut cx, 0, "fd")? as i32;
-    let offset = arg_u64(&mut cx, 1, "offset")?;
-    let stride = arg_u32(&mut cx, 2, "stride")? as usize;
-    let width = arg_u32(&mut cx, 3, "width")? as usize;
-    let height = arg_u32(&mut cx, 4, "height")? as usize;
-    let format = arg_u32(&mut cx, 5, "format")?;
+struct ConvertRequest {
+    fd: i32,
+    offset: usize,
+    stride: usize,
+    width: usize,
+    height: usize,
+    info: FormatInfo,
+}
+
+fn parse_convert_request(cx: &mut FunctionContext) -> NeonResult<ConvertRequest> {
+    let fd = arg_u32(cx, 0, "fd")? as i32;
+    let offset = arg_u64(cx, 1, "offset")?;
+    let stride = arg_u32(cx, 2, "stride")? as usize;
+    let width = arg_u32(cx, 3, "width")? as usize;
+    let height = arg_u32(cx, 4, "height")? as usize;
+    let format = arg_u32(cx, 5, "format")?;
 
     if width == 0 || height == 0 {
         return cx.throw_error("width and height must be greater than zero");
@@ -279,7 +288,29 @@ fn js_convert_dmabuf_to_rgba(mut cx: FunctionContext) -> JsResult<JsBuffer> {
         Err(_) => return cx.throw_error("offset is too large for this platform"),
     };
 
-    let mapped_len = match (stride.checked_mul(height)).and_then(|value| value.checked_add(offset))
+    Ok(ConvertRequest {
+        fd,
+        offset,
+        stride,
+        width,
+        height,
+        info,
+    })
+}
+
+fn output_len(request: &ConvertRequest) -> Result<usize, String> {
+    request
+        .width
+        .checked_mul(request.height)
+        .and_then(|value| value.checked_mul(4))
+        .ok_or_else(|| "output size overflows usize".to_string())
+}
+
+fn js_convert_dmabuf_to_rgba(mut cx: FunctionContext) -> JsResult<JsBuffer> {
+    let request = parse_convert_request(&mut cx)?;
+
+    let mapped_len = match (request.stride.checked_mul(request.height))
+        .and_then(|value| value.checked_add(request.offset))
     {
         Some(value) => value,
         None => return cx.throw_error("buffer size overflows usize"),
@@ -288,10 +319,20 @@ fn js_convert_dmabuf_to_rgba(mut cx: FunctionContext) -> JsResult<JsBuffer> {
         return cx.throw_error("buffer size must be greater than zero");
     }
 
-    let out_len = match (width.checked_mul(height)).and_then(|value| value.checked_mul(4)) {
-        Some(value) => value,
-        None => return cx.throw_error("output size overflows usize"),
+    let out_len = match output_len(&request) {
+        Ok(value) => value,
+        Err(error) => return cx.throw_error(error),
     };
+
+    let ConvertRequest {
+        fd,
+        offset,
+        stride,
+        width,
+        height,
+        info,
+        ..
+    } = request;
 
     let mapping = match DmaBufMapping::new(fd, mapped_len) {
         Ok(mapping) => mapping,
@@ -308,6 +349,84 @@ fn js_convert_dmabuf_to_rgba(mut cx: FunctionContext) -> JsResult<JsBuffer> {
     {
         let dst = buffer.as_mut_slice(&mut cx);
         convert_pixels(src, dst, width, height, stride, &info);
+    }
+
+    Ok(buffer)
+}
+
+/// Read `dst.len()` bytes at `offset` with `pread`.
+///
+/// The fd may be a memfd, a `shm_open` file or any regular file. A short file
+/// leaves the remaining bytes as they are (zeroed by the caller), matching the
+/// way an undersized wl_shm pool is treated as transparent.
+fn read_at(fd: i32, offset: usize, dst: &mut [u8]) -> Result<(), String> {
+    let mut offset =
+        i64::try_from(offset).map_err(|_| "offset is too large for this platform".to_string())?;
+    let mut done = 0usize;
+    while done < dst.len() {
+        let request = dst.len() - done;
+        let bytes = unsafe {
+            libc::pread(
+                fd,
+                dst[done..].as_mut_ptr().cast::<c_void>(),
+                request,
+                offset,
+            )
+        };
+        if bytes < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(format!("reading fd {fd} failed: {error}"));
+        }
+        if bytes == 0 {
+            break;
+        }
+        let bytes = bytes as usize;
+        done += bytes;
+        offset = offset
+            .checked_add(bytes as i64)
+            .ok_or_else(|| "offset overflows i64".to_string())?;
+    }
+    Ok(())
+}
+
+fn js_convert_shm_to_rgba(mut cx: FunctionContext) -> JsResult<JsBuffer> {
+    let request = parse_convert_request(&mut cx)?;
+
+    let src_len = match request.stride.checked_mul(request.height) {
+        Some(value) => value,
+        None => return cx.throw_error("buffer size overflows usize"),
+    };
+    if src_len == 0 {
+        return cx.throw_error("buffer size must be greater than zero");
+    }
+
+    let out_len = match output_len(&request) {
+        Ok(value) => value,
+        Err(error) => return cx.throw_error(error),
+    };
+
+    let ConvertRequest {
+        fd,
+        offset,
+        stride,
+        width,
+        height,
+        info,
+        ..
+    } = request;
+
+    let mut src = vec![0u8; src_len];
+    if let Err(error) = read_at(fd, offset, &mut src) {
+        return cx.throw_error(error);
+    }
+
+    let mut buffer = cx.buffer(out_len)?;
+    {
+        let dst = buffer.as_mut_slice(&mut cx);
+        convert_pixels(&src, dst, width, height, stride, &info);
     }
 
     Ok(buffer)
@@ -355,6 +474,7 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("isSupportedFormat", js_is_supported_format)?;
     cx.export_function("needsConversion", js_needs_conversion)?;
     cx.export_function("convertDmabufToRgba", js_convert_dmabuf_to_rgba)?;
+    cx.export_function("convertShmToRgba", js_convert_shm_to_rgba)?;
     cx.export_function("convertDmabufToTexture", js_convert_dmabuf_to_texture)?;
     Ok(())
 }

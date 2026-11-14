@@ -1,6 +1,6 @@
 # myde-drm
 
-把 Linux DRM dma-buf 的 32 位像素格式转换成 Electron 能导入的格式，供 Wayland 合成器（myde）在 Electron 不支持某些格式时使用。
+把 Linux DRM dma-buf 的 32 位像素格式转换成 Electron 能导入的格式，供 Wayland 合成器（myde）在 Electron 不支持某些格式时使用。也提供 wl_shm 共享内存缓冲区的读取和转换。
 
 Electron 的 `sharedTexture.importSharedTexture` 只接受 `bgra`、`rgba`、`rgbaf16`、`nv12`、`nv16`、`p010le`。Chromium 内部其实认识 XRGB/XBGR，但 JS 接口没有暴露，而且 XRGB/XBGR 的 alpha 字节是未定义的。本模块把这些格式补上：
 - **GPU 路径（默认）**：用 EGL 导入源 dmabuf，着色器做通道重排/补 alpha，渲染到新的 ARGB8888 GBM dmabuf，再交给 `importSharedTexture`。像素不回到 CPU，也不经过 `putImageData`。
@@ -120,7 +120,30 @@ ctx.putImageData(image, 0, 0);
 
 `convertDmabufToRgba` 返回的 Buffer 长度是 `width * height * 4`，行间没有 padding。
 
-### 4. 只查询格式
+### 4. wl_shm：读取共享内存并转成 RGBA Buffer
+
+```ts
+import { convertShmToRgba } from "myde-drm";
+
+const rgba = convertShmToRgba({
+    fd: poolFd, // wl_shm.create_pool 拿到的 fd
+    offset: buffer.offset,
+    stride: buffer.stride,
+    width: buffer.width,
+    height: buffer.height,
+    format: buffer.format, // wl_shm_pool.create_buffer 的 format，可原样传入
+});
+
+const image = new ImageData(
+    new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength),
+    buffer.width,
+    buffer.height,
+);
+```
+
+`convertShmToRgba` 在 Rust 里用 `pread` 读取 fd（memfd、`shm_open` 文件或普通文件均可），再按 `format` 重排成 RGBA，长度同样是 `width * height * 4`。`format` 直接用 `wl_shm_pool.create_buffer` 里的值：wl_shm 的 `argb8888`/`xrgb8888` 是历史遗留的 0/1，模块会映射到对应 DRM fourcc，其余值本身就是 DRM fourcc。文件比 `offset + stride * height` 短时，多出来的像素按透明黑处理。它不要求 fd 是 dma-buf，也不接受 modifier。
+
+### 5. 只查询格式
 
 ```ts
 import { getFormatInfo, isSupportedFormat, needsConversion } from "myde-drm";

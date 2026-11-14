@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
     convertDmabufToRgba,
+    convertShmToRgba,
     DRM_FORMAT,
     getElectronPixelFormat,
     getFormatInfo,
@@ -207,5 +208,75 @@ describe("convertDmabufToRgba", () => {
         } finally {
             closeSync(fd);
         }
+    });
+});
+
+describe("convertShmToRgba", () => {
+    function convertShm(
+        path: string,
+        options: { width: number; height: number; format: number; stride: number; offset?: number },
+    ): Buffer {
+        const fd = openSync(path, "r");
+        try {
+            return convertShmToRgba({ fd, ...options });
+        } finally {
+            closeSync(fd);
+        }
+    }
+
+    for (const { name, format, encode } of CASES) {
+        it(`converts ${name} to tightly packed RGBA`, () => {
+            const width = 3;
+            const height = 2;
+            const stride = width * 4 + 16;
+            const offset = 64;
+            const pixels = PIXELS.slice(0, width * height);
+            const path = writePlane(format, encode, pixels, width, height, stride, offset);
+
+            const rgba = convertShm(path, { width, height, format, stride, offset });
+
+            expect(rgba.length).toBe(width * height * 4);
+            const isOpaqueX = name.includes("X");
+            const expected = pixels.flatMap(([r, g, b, a]) => [r, g, b, isOpaqueX ? 255 : a]);
+            expect(Array.from(rgba)).toEqual(expected);
+        });
+    }
+
+    it("defaults the offset to zero", () => {
+        const path = writePlane(DRM_FORMAT.ARGB8888, CASES[0].encode, [[1, 2, 3, 4]], 1, 1, 4, 0);
+        expect(Array.from(convertShm(path, { width: 1, height: 1, format: DRM_FORMAT.ARGB8888, stride: 4 }))).toEqual([
+            1, 2, 3, 4,
+        ]);
+    });
+
+    it("maps the legacy wl_shm argb8888/xrgb8888 values", () => {
+        const argb = writePlane(DRM_FORMAT.ARGB8888, CASES[0].encode, [[1, 2, 3, 4]], 1, 1, 4, 0);
+        expect(Array.from(convertShm(argb, { width: 1, height: 1, format: 0, stride: 4 }))).toEqual([1, 2, 3, 4]);
+
+        const xrgb = writePlane(DRM_FORMAT.XRGB8888, CASES[4].encode, [[1, 2, 3, 0]], 1, 1, 4, 0);
+        expect(Array.from(convertShm(xrgb, { width: 1, height: 1, format: 1, stride: 4 }))).toEqual([1, 2, 3, 255]);
+    });
+
+    it("treats a short pool as transparent black", () => {
+        const path = join(directory, "short-pool.bin");
+        writeFileSync(path, Buffer.from([3, 2, 1, 255]));
+        const rgba = convertShm(path, { width: 2, height: 1, format: DRM_FORMAT.ARGB8888, stride: 8 });
+        expect(Array.from(rgba)).toEqual([1, 2, 3, 255, 0, 0, 0, 0]);
+    });
+
+    it("rejects a stride smaller than width * 4", () => {
+        const path = join(directory, "shm-stride.bin");
+        writeFileSync(path, Buffer.alloc(64));
+        expect(() => convertShm(path, { width: 4, height: 1, format: DRM_FORMAT.ARGB8888, stride: 8 })).toThrow(
+            /stride/,
+        );
+    });
+
+    it("rejects formats that are not 32-bit RGB", () => {
+        const path = join(directory, "shm-nv12.bin");
+        writeFileSync(path, Buffer.alloc(64));
+        expect(() => convertShm(path, { width: 2, height: 2, format: DRM_FORMAT.NV12, stride: 4 })).toThrow(
+            /not a 32-bit RGB format/,
+        );
     });
 });

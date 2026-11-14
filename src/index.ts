@@ -32,6 +32,7 @@ interface NativeModule {
         height: number,
         format: number,
     ): Buffer;
+    convertShmToRgba(fd: number, offset: number, stride: number, width: number, height: number, format: number): Buffer;
     convertDmabufToTexture(
         fd: number,
         offset: number,
@@ -228,6 +229,62 @@ export function convertDmabufToTexture(options: ConvertDmabufToRgbaOptions): Con
             closeSync(result.fd);
         },
     };
+}
+
+export interface ConvertShmToRgbaOptions {
+    width: number;
+    height: number;
+    /**
+     * wl_shm format value. The protocol's legacy `argb8888` (0) and `xrgb8888`
+     * (1) entries are mapped to their DRM fourcc; all other entries are
+     * already DRM fourcc values, see `DRM_FORMAT`.
+     */
+    format: number;
+    /** File descriptor of the wl_shm pool. The module never closes it. */
+    fd: number;
+    /** Byte offset of the buffer inside the pool. Defaults to 0. */
+    offset?: number;
+    /** Bytes per row, including padding. */
+    stride: number;
+}
+
+/**
+ * Read a wl_shm buffer and return tightly packed RGBA pixels.
+ *
+ * The fd is read with `pread`, so it can be a memfd, a `shm_open` file or any
+ * regular file; it does not need to be a dma-buf. The returned Buffer has
+ * `width * height * 4` bytes, ready for
+ * `new ImageData(new Uint8ClampedArray(buffer), width, height)`.
+ *
+ * Only the 32-bit RGB formats listed in the README are supported. Pass the
+ * `format` from `wl_shm_pool.create_buffer` unchanged. Bytes beyond the end of
+ * the file are treated as transparent black, matching an undersized wl_shm
+ * pool.
+ *
+ * @throws if the format cannot be converted, or stride/offset are invalid.
+ */
+export function convertShmToRgba(options: ConvertShmToRgbaOptions): Buffer {
+    const { width, height, fd, stride } = options;
+    assertPositiveInt(width, "width");
+    assertPositiveInt(height, "height");
+    assertPositiveInt(options.format, "format", true);
+    assertPositiveInt(fd, "fd", true);
+    assertPositiveInt(stride, "stride");
+    const offset = options.offset ?? 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+        throw new Error("offset must be a non-negative safe integer");
+    }
+    return native.convertShmToRgba(fd, offset, stride, width, height, normalizeShmFormat(options.format));
+}
+
+/**
+ * wl_shm's `argb8888` and `xrgb8888` entries predate the DRM fourcc values and
+ * are 0 and 1; every other entry uses the DRM fourcc directly.
+ */
+function normalizeShmFormat(format: number): number {
+    if (format === 0) return DRM_FORMAT.ARGB8888;
+    if (format === 1) return DRM_FORMAT.XRGB8888;
+    return format;
 }
 
 function validateDmabuf(options: ConvertDmabufToRgbaOptions): ValidatedDmabuf {
