@@ -827,6 +827,8 @@ serverX.stopXwayland();
 
 `getDesktopEntries()` 会把 `Exec=env LIBVA_DRIVER_NAME=iHD mpv` 里的 `env A=1` 前缀解析到 `env` 上，并把 `Exec` 还原成真正的命令。`runApp(exec, { env })` 把这些变量合并进子进程环境，放最后，同名变量以它为准。
 
+`runApp()` 启动的子进程会带上 `USER`/`LOGNAME`/`HOME` 等身份变量。以哪个用户启动由桌面进程自身身份决定，不依赖启动环境里的 `USER`：这样在应用内再启动的桌面（例如从 myde 原生模式的终端里启动窗口模式桌面）也能继续启动应用，而不会因为缺少 `USER` 退化成 root 导致 `spawn EPERM`。
+
 `startXwayland()` 会找一个空闲的 `:N`，启动 `xwayland-satellite :N`，等待 `/tmp/.X11-unix/XN` 出现；可用 `MYDE_XWAYLAND_SATELLITE` 指定 binary 路径。
 
 `runApp()` 会读取应用的 stdout/stderr，写入 `$XDG_STATE_HOME/myde/logs/apps/<可执行名>-<pid>.log`，每行带时间和 `[out]`/`[err]` 来源。管道必须被读取：应用写满 64 KiB 后会阻塞在 `write()`，看起来像窗口画面卡死。日志文件超过 10 MiB 会轮转，最多保留最近 50 份。

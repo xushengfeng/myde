@@ -1,5 +1,6 @@
 const child_process = require("node:child_process") as typeof import("node:child_process");
 const fs = require("node:fs") as typeof import("node:fs");
+const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 
 import { formatLogTime, getAppLogPath, pruneAppLogs, RotatingLogFile } from "../utils/log";
@@ -32,6 +33,44 @@ function languageFromLang(lang: string | undefined): string | undefined {
     return lang?.match(/^([a-zA-Z]{2,3}(?:_[a-zA-Z0-9]+)?)(?:[.@]|$)/)?.[1];
 }
 
+type Identity = { uid?: number; gid?: number; name?: string; home?: string };
+
+function lookupUser(name: string): Identity {
+    try {
+        const uid = Number(child_process.execFileSync("id", ["-u", name], { encoding: "utf8" }).trim());
+        const gid = Number(child_process.execFileSync("id", ["-g", name], { encoding: "utf8" }).trim());
+        return { uid: Number.isFinite(uid) ? uid : undefined, gid: Number.isFinite(gid) ? gid : undefined, name };
+    } catch {
+        return {};
+    }
+}
+
+/**
+ * 启动应用时用的用户身份。
+ *
+ * 必须以进程自身身份为准，不能只看 USER：应用内再启动桌面时（例如在 myde
+ * 原生模式的终端里跑窗口模式桌面），这个桌面的环境来自 runApp，可能没有
+ * USER。此时按 USER 退化成 root，会给非 root 进程设置 uid=0，spawn 直接
+ * EPERM。以 root 运行但环境指定了其他用户时，仍然降权到该用户。
+ */
+function resolveIdentity(env: Record<string, string>): Identity {
+    let self: Identity = {};
+    try {
+        const info = os.userInfo();
+        self = { uid: info.uid, gid: info.gid, name: info.username, home: info.homedir };
+    } catch {
+        // 某些容器里没有 passwd 记录；继续用环境变量兜底
+    }
+    if (self.uid === 0 && env.USER && env.USER !== "root") {
+        const target = lookupUser(env.USER);
+        if (target.uid !== undefined) return { ...target, home: self.home };
+    }
+    if (self.uid === undefined && env.USER) {
+        return { ...lookupUser(env.USER), home: env.HOME };
+    }
+    return self;
+}
+
 async function waitForXSocket(display: number, child: import("node:child_process").ChildProcess, timeout: number) {
     const socketPath = `/tmp/.X11-unix/X${display}`;
     const deadline = Date.now() + timeout;
@@ -46,9 +85,10 @@ async function waitForXSocket(display: number, child: import("node:child_process
 export function server(op: { dev?: boolean; render: renderTools }) {
     const env = getEnv();
     const server = createServer({ render: op.render, socketDir: env.XDG_RUNTIME_DIR || "/tmp" });
-    const user = env.USER || "root";
-    const uid = child_process.execSync(`id -u ${user}`).toString().trim();
-    const gid = child_process.execSync(`id -g ${user}`).toString().trim();
+    const identity = resolveIdentity(env);
+    const user = identity.name || env.USER || "root";
+    const uid = identity.uid;
+    const gid = identity.gid;
 
     let xwaylandDisplay: number | undefined;
     let xwaylandChild: import("node:child_process").ChildProcess | undefined;
@@ -56,7 +96,9 @@ export function server(op: { dev?: boolean; render: renderTools }) {
     let xwaylandWarned = false;
 
     const deEnv = {
-        HOME: env.HOME,
+        HOME: env.HOME || identity.home || "",
+        USER: user,
+        LOGNAME: user,
         LANG: env.LANG,
         LANGUAGE: env.LANGUAGE,
         PATH: env.PATH,
@@ -78,10 +120,7 @@ export function server(op: { dev?: boolean; render: renderTools }) {
             server: { socketDir: server.socketDir, socketName: server.socketName },
             xServerNum,
             env: extraEnv,
-            user: {
-                uid: Number.isNaN(Number(uid)) ? undefined : Number(uid),
-                gid: Number.isNaN(Number(gid)) ? undefined : Number(gid),
-            },
+            user: { uid, gid },
         });
     };
 
@@ -221,6 +260,8 @@ export function runApp(
         args: string[];
         deEnv: {
             HOME: string;
+            USER?: string;
+            LOGNAME?: string;
             LANG?: string;
             LANGUAGE?: string;
             WAYLAND_DEBUG?: string;
@@ -247,6 +288,8 @@ export function runApp(
         env: {
             HOME: op.deEnv.HOME,
             PATH: op.deEnv.PATH || "/usr/local/bin:/usr/bin:/bin",
+            ...(op.deEnv.USER ? { USER: op.deEnv.USER } : {}),
+            ...(op.deEnv.LOGNAME ? { LOGNAME: op.deEnv.LOGNAME } : {}),
             LANG: lang,
             ...(language ? { LANGUAGE: language } : {}),
             XDG_SESSION_TYPE: "wayland",
