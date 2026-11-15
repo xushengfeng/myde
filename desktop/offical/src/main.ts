@@ -629,6 +629,9 @@ const mousePos = { x: 0, y: 0 } as { x: number; y: number };
 /** 指针当前命中的客户端窗口；窗口关闭时据此立即清掉光标焦点 */
 let pointerTarget: { handle: WinHandle; clientId: string } | undefined;
 
+/** 正在用鼠标拖拽缩放的窗口 id；期间指针事件不转发给 Wayland 客户端 */
+let resizingWindowId: string | undefined;
+
 let viewAllShowing = false;
 
 class trigger {
@@ -855,6 +858,271 @@ function createWindowCloseButton(op: { size: number; scale?: number; onClick: ()
     return btn;
 }
 
+// ── 鼠标缩放窗口 ─────────────────────────────────────────────────────────────────────────────
+// 窗口四周铺一圈透明热区（8 个方向），按住后按鼠标位移改 DOM 尺寸；Wayland 客户端窗口再同步
+// window.setSize，让客户端按新尺寸重绘。窗口没有标题栏/边框，热区贴边覆盖在内容上。
+type ResizeEdge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+
+const RESIZE_EDGE_SIZE = 6;
+const RESIZE_CORNER_SIZE = 14;
+/** 最小窗口尺寸（逻辑 px，Wayland 窗口再按输出缩放换算成 CSS px） */
+const RESIZE_MIN_WIDTH = 200;
+const RESIZE_MIN_HEIGHT = 150;
+
+// 拖拽预览尺寸走样式表 !important：渲染层在客户端提交时会直接写 xdg surface 元素的 inline 宽高，
+// 普通 inline 样式会被它盖掉，加 !important 才能稳定显示桌面自己的预览，抬手后再摘掉属性
+addStyle({
+    "[data-resize-preview]": {
+        width: "var(--resize-preview-width) !important",
+        height: "var(--resize-preview-height) !important",
+    },
+});
+
+const resizeCursors: Record<ResizeEdge, string> = {
+    n: "ns-resize",
+    s: "ns-resize",
+    e: "ew-resize",
+    w: "ew-resize",
+    ne: "nesw-resize",
+    sw: "nesw-resize",
+    nw: "nwse-resize",
+    se: "nwse-resize",
+};
+
+/** 每个窗口的缩放热区；总览时隐藏，避免缩小后挡住窗口缩略图 */
+const windowResizeHandles = new Map<string, ElType<HTMLElement>[]>();
+/** 刚结束缩放、等客户端按新尺寸提交的窗口；期间 window.changed 不覆盖拖拽预览 */
+const resizeSettleTimers = new Map<string, number>();
+
+/** 指针下的热区形状；热区随窗口关闭/隐藏时用来恢复光标 */
+function syncResizeCursorAt(x = mousePos.x, y = mousePos.y) {
+    const under = document.elementFromPoint(x, y) as HTMLElement | null;
+    cursor.setLocalShape(under?.closest<HTMLElement>("[data-resize-cursor]")?.dataset.resizeCursor);
+}
+
+function removeResizeHandles(windowId: string) {
+    for (const handle of windowResizeHandles.get(windowId) ?? []) handle.remove();
+    windowResizeHandles.delete(windowId);
+    const timer = resizeSettleTimers.get(windowId);
+    if (timer !== undefined) {
+        clearTimeout(timer);
+        resizeSettleTimers.delete(windowId);
+    }
+    if (resizingWindowId === windowId) {
+        resizingWindowId = undefined;
+        syncResizeCursorAt();
+    } else if (resizingWindowId === undefined) {
+        // 非拖拽时热区被移除（窗口关闭/隐藏），指针下可能已经没有热区
+        syncResizeCursorAt();
+    }
+}
+
+/**
+ * 给窗口元素加一圈缩放热区。
+ * `wayland` 为 true 时，拖拽中通过 `window.setSize` 把逻辑尺寸下发给客户端；否则只改 DOM 尺寸
+ * （设置窗口这类桌面自己创建的窗口）。
+ */
+function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
+    removeResizeHandles(windowId);
+
+    const handles: ElType<HTMLElement>[] = [];
+    const edges: ResizeEdge[] = ["n", "s", "w", "e", "nw", "ne", "sw", "se"];
+    for (const edge of edges) {
+        const corner = edge.length === 2;
+        const size = corner ? RESIZE_CORNER_SIZE : RESIZE_EDGE_SIZE;
+        const handle = view()
+            .style({
+                position: "absolute",
+                zIndex: corner ? "10" : "9",
+                touchAction: "none",
+                cursor: resizeCursors[edge],
+                display: viewAllShowing ? "none" : "block",
+            })
+            .data({ "resize-cursor": resizeCursors[edge] });
+
+        // 贴边：竖边左右贯通到角热区，横边上下贯通，角热区最后添加且层级更高
+        if (edge.includes("n")) handle.style({ top: "0px" });
+        if (edge.includes("s")) handle.style({ bottom: "0px" });
+        if (edge.includes("w")) handle.style({ left: "0px" });
+        if (edge.includes("e")) handle.style({ right: "0px" });
+        if (edge === "n" || edge === "s") {
+            handle.style({ left: `${RESIZE_CORNER_SIZE}px`, right: `${RESIZE_CORNER_SIZE}px`, height: `${size}px` });
+        } else if (edge === "w" || edge === "e") {
+            handle.style({ top: `${RESIZE_CORNER_SIZE}px`, bottom: `${RESIZE_CORNER_SIZE}px`, width: `${size}px` });
+        } else {
+            handle.style({ width: `${size}px`, height: `${size}px` });
+        }
+
+        handle.on("pointerenter", () => {
+            if (viewAllShowing) return;
+            if (wayland && server.server.windows.get(windowId)?.states.maximized) return;
+            cursor.setLocalShape(resizeCursors[edge]);
+        });
+        handle.on("pointerleave", () => {
+            // 拖拽中指针会离开热区，缩放光标要保持到抬手
+            if (resizingWindowId === windowId) return;
+            cursor.setLocalShape(undefined);
+        });
+        handle.on("pointerdown", (e) => beginWindowResize(e, edge, el, windowId, wayland));
+
+        handle.addInto(el);
+        handles.push(handle);
+    }
+    windowResizeHandles.set(windowId, handles);
+}
+
+function beginWindowResize(e: PointerEvent, edge: ResizeEdge, el: HTMLElement, windowId: string, wayland: boolean) {
+    if (e.button !== 0 || e.isPrimary === false || viewAllShowing || resizingWindowId !== undefined) return;
+    const info = wayland ? server.server.windows.get(windowId) : undefined;
+    if (wayland && (!info || info.states.maximized)) return;
+
+    // 热区属于桌面覆盖层：阻止冒泡，窗口层的 down/up 就不会转发给客户端
+    e.stopPropagation();
+    e.preventDefault();
+    viewData.focusWin(windowId);
+    cursor.setLocalShape(resizeCursors[edge]);
+
+    // 手动调整过尺寸后不再自动居中，和拖动窗口一致
+    windowCenterManager.pauseCentering(windowId);
+    const settleTimer = resizeSettleTimers.get(windowId);
+    if (settleTimer !== undefined) {
+        clearTimeout(settleTimer);
+        resizeSettleTimers.delete(windowId);
+        // 上一次缩放的预览还压着客户端几何：先摘掉，新的拖拽从客户端实际尺寸开始
+        el.removeAttribute("data-resize-preview");
+        el.style.removeProperty("--resize-preview-width");
+        el.style.removeProperty("--resize-preview-height");
+    }
+
+    const scale = info?.scale || 1;
+    const parentRect = el.parentElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
+    const rect = el.getBoundingClientRect();
+    const start = {
+        left: rect.left - parentRect.left,
+        top: rect.top - parentRect.top,
+        width: rect.width,
+        height: rect.height,
+    };
+    const startX = e.clientX;
+    const startY = e.clientY;
+    // 逻辑尺寸按整数下发；DOM 尺寸是逻辑尺寸 × scale，避免缩放后窗口尺寸抖动
+    const minWidth = Math.ceil(RESIZE_MIN_WIDTH / scale) * scale;
+    const minHeight = Math.ceil(RESIZE_MIN_HEIGHT / scale) * scale;
+
+    resizingWindowId = windowId;
+
+    let rafId = 0;
+    let pendingSize: { width: number; height: number } | undefined;
+    let resized = false;
+
+    function flushSize() {
+        if (rafId) {
+            cancelAnimationFrame(rafId);
+            rafId = 0;
+        }
+        if (pendingSize) {
+            server.server.notify("window.setSize", windowId, pendingSize);
+            pendingSize = undefined;
+        }
+    }
+
+    function onPointerMove(ev: PointerEvent) {
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        let left = start.left;
+        let top = start.top;
+        let width = start.width;
+        let height = start.height;
+        if (edge.includes("e")) width += dx;
+        if (edge.includes("s")) height += dy;
+        if (edge.includes("w")) {
+            width -= dx;
+            left += dx;
+        }
+        if (edge.includes("n")) {
+            height -= dy;
+            top += dy;
+        }
+
+        if (width < minWidth) {
+            if (edge.includes("w")) left = start.left + start.width - minWidth;
+            width = minWidth;
+        }
+        if (height < minHeight) {
+            if (edge.includes("n")) top = start.top + start.height - minHeight;
+            height = minHeight;
+        }
+
+        if (wayland) {
+            const logicalWidth = Math.max(1, Math.round(width / scale));
+            const logicalHeight = Math.max(1, Math.round(height / scale));
+            width = logicalWidth * scale;
+            height = logicalHeight * scale;
+            pendingSize = { width: logicalWidth, height: logicalHeight };
+            // 指针事件可能远高于刷新率，configure 每帧最多发一次
+            if (!rafId) {
+                rafId = requestAnimationFrame(() => {
+                    rafId = 0;
+                    if (pendingSize) {
+                        server.server.notify("window.setSize", windowId, pendingSize);
+                        pendingSize = undefined;
+                    }
+                });
+            }
+        } else {
+            width = Math.round(width);
+            height = Math.round(height);
+        }
+
+        resized = true;
+        el.style.left = `${Math.round(left)}px`;
+        el.style.top = `${Math.round(top)}px`;
+        if (wayland) {
+            el.setAttribute("data-resize-preview", "");
+            el.style.setProperty("--resize-preview-width", `${width}px`);
+            el.style.setProperty("--resize-preview-height", `${height}px`);
+        } else {
+            el.style.width = `${width}px`;
+            el.style.height = `${height}px`;
+        }
+    }
+
+    function finish(ev?: PointerEvent) {
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", finish);
+        window.removeEventListener("pointercancel", finish);
+        if (wayland) {
+            flushSize();
+            if (resized) {
+                // 客户端按新尺寸 commit 之前，忽略中间 configure 的 window.changed 覆盖预览尺寸
+                const timer = window.setTimeout(() => {
+                    resizeSettleTimers.delete(windowId);
+                    const current = server.server.windows.get(windowId);
+                    const surfaceEl = current ? render.getXdgSurfaceEle(current.renderId) : undefined;
+                    if (current && surfaceEl) {
+                        // 摘掉预览，以客户端实际提交的几何为准（客户端可能夹到自己的最小/最大值）
+                        surfaceEl.removeAttribute("data-resize-preview");
+                        surfaceEl.style.removeProperty("--resize-preview-width");
+                        surfaceEl.style.removeProperty("--resize-preview-height");
+                        pack(surfaceEl).style({
+                            width: `${current.rect.w * current.scale}px`,
+                            height: `${current.rect.h * current.scale}px`,
+                        });
+                    }
+                }, 250);
+                resizeSettleTimers.set(windowId, timer);
+            }
+        }
+        resizingWindowId = undefined;
+        // 抬手时指针可能还停在热区上：按当前热区恢复缩放光标，否则回到客户端光标
+        syncResizeCursorAt(ev?.clientX ?? mousePos.x, ev?.clientY ?? mousePos.y);
+    }
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+}
+
 function viewAll(s: boolean) {
     windowElWarp.style({
         transition: "all 0.3s ease-in-out",
@@ -863,6 +1131,10 @@ function viewAll(s: boolean) {
     for (const btn of windowCloseButtons.values()) {
         btn.style({ display: s ? "flex" : "none" });
     }
+    for (const handles of windowResizeHandles.values()) {
+        for (const handle of handles) handle.style({ display: s ? "none" : "block" });
+    }
+    if (s) cursor.setLocalShape(undefined);
 }
 
 function addWindow(v: View, el: HTMLElement, windowId?: string) {
@@ -1030,6 +1302,7 @@ function openSettingsWindow() {
 
     internalWindows.set(SETTINGS_WINDOW_ID, { el: root, view: v, setActive, dispose: settingsContent.dispose });
     addWindow(v, root.el, SETTINGS_WINDOW_ID);
+    addResizeHandles(root.el, SETTINGS_WINDOW_ID, false);
     viewData.focusWin(SETTINGS_WINDOW_ID);
 }
 
@@ -1040,6 +1313,7 @@ function closeSettingsWindow() {
     internalWindows.delete(SETTINGS_WINDOW_ID);
     viewData.closeWin(SETTINGS_WINDOW_ID);
     windowCenterManager.removeWindow(SETTINGS_WINDOW_ID);
+    removeResizeHandles(SETTINGS_WINDOW_ID);
     entry.dispose?.();
     entry.el.remove();
 }
@@ -1154,6 +1428,11 @@ function sendPointerEvent(
         pointerTarget = undefined;
         return undefined;
     }
+    // 正在拖拽窗口边框缩放：指针归桌面热区，不转发给客户端（down 已被热区 stopPropagation）
+    if (resizingWindowId !== undefined) {
+        pointerTarget = undefined;
+        return undefined;
+    }
     // 桌面自己的 DOM 窗口盖在客户端窗口上时，指针事件只交给 DOM，不再转发给 Wayland
     if (internalWindowUnderPoint(p.x, p.y)) {
         pointerTarget = undefined;
@@ -1217,7 +1496,7 @@ type ScrollInput = {
 };
 
 function sendScrollEvent(p: ScrollInput) {
-    if (viewAllShowing) return;
+    if (viewAllShowing || resizingWindowId !== undefined) return;
     // 只转发落在窗口层（windowEl）上的滚动；面板/任务栏/IME 候选窗等桌面 UI 不转发
     const target = p.target ?? document.elementFromPoint(p.x, p.y);
     if (!(target instanceof Node) || !windowEl.el.contains(target)) return;
@@ -1393,6 +1672,7 @@ server.server.on("window.created", (info) => {
     closeBtn.addInto(winEl);
     windowCloseButtons.set(wid, closeBtn);
     addWindow(v, winEl, wid);
+    addResizeHandles(winEl, wid, true);
     viewData.focusWin(wid);
     server.server.notify("window.setBox", wid, { width: 800, height: 600 });
 });
@@ -1401,6 +1681,7 @@ server.server.on("window.closed", (wid) => {
     console.log(`window ${wid} closed`);
     appliedState.delete(wid);
     windowCloseButtons.delete(wid);
+    removeResizeHandles(wid);
     if (viewData.focusHandle === wid) viewData.blurAll();
     viewData.closeWin(wid);
     // 指针还停在刚关闭的窗口上时，立刻回到默认光标；
@@ -1461,7 +1742,9 @@ server.server.on("window.changed", (info) => {
         applied.w = info.rect.w;
         applied.h = info.rect.h;
         applied.scale = info.scale;
-        if (winEl) {
+        // 拖拽缩放期间 DOM 尺寸是桌面自己的预览，等客户端提交或超时后再以客户端几何为准
+        const previewingResize = resizingWindowId === info.handle || resizeSettleTimers.has(info.handle);
+        if (winEl && !previewingResize) {
             pack(winEl).style({
                 width: `${info.rect.w * info.scale}px`,
                 height: `${info.rect.h * info.scale}px`,

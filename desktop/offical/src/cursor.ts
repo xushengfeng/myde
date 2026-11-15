@@ -40,6 +40,8 @@ export class Cursor {
     private clientStates = new Map<string, cursorState>();
     /** 指针当前所在客户端的 id，undefined 表示在桌面上 */
     private clientId: string | undefined;
+    /** 桌面覆盖层（如窗口缩放热区）临时指定的光标形状，优先于客户端光标 */
+    private localShape: string | undefined;
 
     constructor(parent: ElType<HTMLElement>) {
         this.warpEl = view()
@@ -57,6 +59,13 @@ export class Cursor {
     /** 移动光标位置 */
     move(x: number, y: number) {
         this.warpEl.style({ left: `${x}px`, top: `${y}px` });
+    }
+
+    /** 桌面覆盖层指定的光标形状（如缩放热区的 ew-resize），传 undefined 取消 */
+    setLocalShape(shape: string | undefined) {
+        if (this.localShape === shape) return;
+        this.localShape = shape;
+        this.render();
     }
 
     /** 指针进入/离开客户端surface（软件窗口）
@@ -128,7 +137,9 @@ export class Cursor {
 
     /** 根据状态渲染光标内容，日后可在这里加入过渡动画 */
     private render() {
-        this.warpEl.clear().add(this.newContent(this.state));
+        // 桌面覆盖层的光标优先于客户端光标（缩放热区盖在窗口内容上）
+        const state = this.localShape === undefined ? this.state : ({ type: "shape", shape: this.localShape } as const);
+        this.warpEl.clear().add(this.newContent(state));
     }
 
     private newContent(state: cursorState): ElType<HTMLElement> {
@@ -151,7 +162,7 @@ export class Cursor {
         return this.newShape(state.type === "shape" ? state.shape : "default");
     }
 
-    /** 目前只支持default、pointer、text三种shape，其余回落到default */
+    /** 目前只支持default、pointer、text和缩放几种shape，其余回落到default */
     private newShape(shape: string): ElType<HTMLElement> {
         switch (shape) {
             case "pointer":
@@ -160,6 +171,27 @@ export class Cursor {
             case "text":
                 // 竖线
                 return view().style({ ...shapeStyle, width: "2px", height: "20px", borderRadius: "1px" });
+            // 窗口缩放：一根短线/斜线，方向对应可拖拽的边
+            case "ew-resize":
+                return view().style({ ...shapeStyle, width: "22px", height: "3px", borderRadius: "2px" });
+            case "ns-resize":
+                return view().style({ ...shapeStyle, width: "3px", height: "22px", borderRadius: "2px" });
+            case "nwse-resize":
+                return view().style({
+                    ...shapeStyle,
+                    width: "3px",
+                    height: "22px",
+                    borderRadius: "2px",
+                    transform: "translate(-50%, -50%) rotate(-45deg)",
+                });
+            case "nesw-resize":
+                return view().style({
+                    ...shapeStyle,
+                    width: "3px",
+                    height: "22px",
+                    borderRadius: "2px",
+                    transform: "translate(-50%, -50%) rotate(45deg)",
+                });
             default:
                 // 默认圆点
                 return view().style({ ...shapeStyle, width: "10px", height: "10px", borderRadius: "50%" });
