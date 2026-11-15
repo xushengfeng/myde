@@ -14,6 +14,23 @@ import type { WaylandName, WaylandObjectId, WaylandProtocol } from "../../utils/
 import { getEnumName, getEnumValue, tryX, waylandObjectId } from "../../utils/wayland-proto";
 
 const fs = require("node:fs") as typeof import("node:fs");
+
+/**
+ * myde-drm 的 GPU 转换在 glFlush 后就把新 GBM buffer 交给 Electron 导入，
+ * 依赖 dma-buf 隐式 fence 让导入方等到画完。驱动/时序不保证时会采样到还没写入的
+ * 新 buffer（整块透明），窗口就闪一帧透明。桌面模式默认用 glFinish：
+ * 宁可这一帧晚一点（掉帧），也不要把透明画面推到屏幕上。
+ * `MYDE_DRM_GPU_FINISH=0` 可恢复异步行为。
+ */
+try {
+    if (globalThis.location !== undefined) {
+        const displayType = new URLSearchParams(globalThis.location.search).get("displayType");
+        if (displayType === "desktop") process.env.MYDE_DRM_GPU_FINISH ||= "1";
+    }
+} catch {
+    // 纯 node 环境没有 location：保持 myde-drm 默认行为
+}
+
 const {
     convertDmabufToRgba,
     convertDmabufToTexture,
@@ -84,6 +101,8 @@ declare module "../../module" {
             canvas: OffscreenCanvas;
             current: WaylandSurfaceData;
             pending: WaylandSurfaceData;
+            /** 提交序号：异步导入完成时据此丢弃被新提交/解绑取代的旧帧 */
+            renderSeq?: number;
         };
     }
 }
@@ -1358,14 +1377,13 @@ export const waylandCoreModule = defineModule({
             const data = surface.data.pending;
             surface.data.current = Object.assign({}, surface.data.current, data);
             surface.data.pending = {};
-            const canvas = surface.data.canvas;
-            // biome-ignore lint/style/noNonNullAssertion: 忽略小概率
-            const c2d = canvas.getContext("2d")!;
             const buffer = data.buffer;
             const bufferId = buffer?.id;
             const bufferObj = ctx.objects.getOption(bufferId)?.data;
             if (buffer === null) {
-                // attach(nil) 的提交：surface 进入 unmap，上一帧必须从画面里撤掉
+                // attach(nil) 的提交：surface 进入 unmap，上一帧必须从画面里撤掉。
+                // 同时让还在异步导入的旧提交过期，避免解绑后又被画回来。
+                surface.data.renderSeq = (surface.data.renderSeq ?? 0) + 1;
                 unmapSurface(ctx, surfaceId);
                 ctx.cursor.hide(surfaceId);
                 ctx.notify.commit(surfaceId, false);
@@ -1374,6 +1392,9 @@ export const waylandCoreModule = defineModule({
                 // （规范：客户端先不带 buffer 提交，合成器才回 configure，之后才允许 attach）
                 ctx.notify.commit(surfaceId, false);
             } else {
+                // 本次提交带像素：序号用于识别异步导入完成前是否已被更新的像素提交取代
+                const seq = (surface.data.renderSeq ?? 0) + 1;
+                surface.data.renderSeq = seq;
                 // surface 逻辑尺寸与 buffer 坐标的换算：
                 // k = buffer_scale；viewport.source 是 surface 坐标，乘 k 后落到 buffer 像素；
                 // destination 是逻辑尺寸（分数缩放时 buffer 保持高分辨率，只改显示尺寸）。
@@ -1411,7 +1432,8 @@ export const waylandCoreModule = defineModule({
                     // damage_buffer 已经是 buffer 坐标
                     damageList.push(damage);
                 }
-                let image: ImageData | VideoFrame;
+                // 转换/导入失败时保持 undefined：宁可掉这一帧，也不画透明像素
+                let image: ImageData | VideoFrame | undefined;
                 if (bufferObj.type === "shm") {
                     let frame = bufferObj.frame;
                     if (!frame) {
@@ -1467,7 +1489,6 @@ export const waylandCoreModule = defineModule({
                         image = frame.imageData;
                     } catch (error) {
                         console.error(`shm format 0x${bufferObj.format.toString(16)} conversion failed:`, error);
-                        image = new ImageData(bufferObj.width, bufferObj.height);
                     }
                 } else {
                     const modifierX = bufferObj.planes[0];
@@ -1514,7 +1535,6 @@ export const waylandCoreModule = defineModule({
                                 `dmabuf format 0x${bufferObj.format.toString(16)} CPU conversion failed:`,
                                 error,
                             );
-                            image = new ImageData(new Uint8ClampedArray(4), 1, 1);
                         }
                     } else {
                         const pixelFormat = getElectronPixelFormat(bufferObj.format);
@@ -1603,35 +1623,61 @@ export const waylandCoreModule = defineModule({
                         } else if (converted) {
                             image = converted;
                         } else {
-                            const t = await importSharedTexture({
-                                textureInfo: {
-                                    handle: {
-                                        nativePixmap: {
-                                            planes: bufferObj.planes.map((p) => ({
-                                                stride: p.stride,
-                                                offset: p.offset,
-                                                size: p.stride * bufferObj.height,
-                                                fd: p.fd,
-                                            })),
-                                            modifier: modifier.toString(),
-                                            supportsZeroCopyWebGpuImport: true,
+                            try {
+                                const t = await importSharedTexture({
+                                    textureInfo: {
+                                        handle: {
+                                            nativePixmap: {
+                                                planes: bufferObj.planes.map((p) => ({
+                                                    stride: p.stride,
+                                                    offset: p.offset,
+                                                    size: p.stride * bufferObj.height,
+                                                    fd: p.fd,
+                                                })),
+                                                modifier: modifier.toString(),
+                                                supportsZeroCopyWebGpuImport: true,
+                                            },
                                         },
+                                        codedSize: { height: bufferObj.height, width: bufferObj.width },
+                                        pixelFormat: pixelFormat ?? "bgra",
                                     },
-                                    codedSize: { height: bufferObj.height, width: bufferObj.width },
-                                    pixelFormat: pixelFormat ?? "bgra",
-                                },
-                            });
-
-                            image = t.getVideoFrame();
-                            t.release();
+                                });
+                                image = t.getVideoFrame();
+                                t.release();
+                            } catch (error) {
+                                console.error(`dmabuf format 0x${bufferObj.format.toString(16)} import failed:`, error);
+                            }
                         }
                     }
                 }
+                // 异步导入期间 surface 可能已被解绑/销毁/被新提交接管：
+                // 这一帧已经过期或没有像素，丢掉它，保留画布上的上一帧。
+                const latest = ctx.objects.getOption(surfaceId);
+                if (!image || !latest || latest.data.renderSeq !== seq) {
+                    if (image instanceof VideoFrame) image.close();
+                    if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
+                    for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
+                    return;
+                }
+                let canvas = latest.data.canvas;
                 const sizeChanged = bufferW !== canvas.width || bufferH !== canvas.height;
                 if (sizeChanged) {
-                    canvas.width = bufferW;
-                    canvas.height = bufferH;
+                    // 给 canvas 设宽高会清空位图。新 buffer 的 damage 往往只覆盖变化区域，
+                    // 其余像素就变成透明（整窗闪透明）。先用上一帧铺满新尺寸，再让新帧覆盖：
+                    // 客户端重绘前最多是短暂变形，不会露出壁纸。
+                    const next = new OffscreenCanvas(bufferW, bufferH);
+                    const nextCtx = next.getContext("2d");
+                    if (nextCtx) {
+                        nextCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, bufferW, bufferH);
+                        canvas = next;
+                        latest.data.canvas = next;
+                    } else {
+                        canvas.width = bufferW;
+                        canvas.height = bufferH;
+                    }
                 }
+                // biome-ignore lint/style/noNonNullAssertion: 2d context 在 OffscreenCanvas 上必然可用
+                const c2d = canvas.getContext("2d")!;
                 // surface 的逻辑尺寸与 buffer 尺寸是两回事：viewport destination 变化时
                 // buffer 可能完全没变，但窗口/命中检测尺寸必须更新。
                 ctx.core.surface.updateWlSurfaceSize(surfaceId, logicalW, logicalH);

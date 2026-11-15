@@ -59,6 +59,21 @@
 
 v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧计，后激活者胜出（zwp_text_input_v1.activate / zwp_text_input_v3.enable 抢占），文本只发给持有对象，v3 的 enter/leave 跟随**该把 seat** 的键盘焦点（`get_text_input` 的 seat 参数记在 `TextInputV3Data.seat`，跨 seat 的输入直接忽略）。
 
+## 合成策略：宁可掉帧也不要透明
+
+窗口闪一帧透明比掉一帧显眼得多，所以像素链路上任何「不确定」都按丢帧处理：
+
+- **转换/导入失败**（shm/dmabuf 格式不支持、EGL 导入失败、fd 失效）只打日志并跳过本次提交的像素，
+  画布保留上一帧；同时照常 `wl_buffer.release` 和跑 frame callback，客户端不会卡住。
+- **canvas 尺寸变化**不清成透明：先把上一帧拉伸铺满新尺寸，再让新帧的 damage 覆盖。
+  客户端重绘前最多是短暂变形，不会露出壁纸。
+- **dmabuf 异步导入**期间若来了更新的像素提交或 `attach(nil)`，旧提交回来时按 surface 的
+  `renderSeq` 丢弃，避免旧帧覆盖新画面、也避免解绑后又被画回来。
+- **桌面模式**默认用 `MYDE_DRM_GPU_FINISH=1`：转换器 `glFinish` 后才把 GPU 转换出的
+  GBM buffer 交给 Electron 导入。转换器依赖 dma-buf 隐式 fence；驱动/时序不可靠时导入方会
+  采样到还没画完的 buffer（整块透明）。等完成会牺牲一点吞吐，但保证推上去的每帧都是完整的；
+  `MYDE_DRM_GPU_FINISH=0` 可恢复异步。
+
 ## 对外 API（桌面侧）
 
 桌面只从 `src/wayland/index.ts` 拿东西：`createServer({ render, socketDir })`、`Client` 接口、
