@@ -624,8 +624,21 @@ const tools = new Tools();
 // 全局记录当前鼠标坐标（与页面视口坐标系一致）
 const mousePos = { x: 0, y: 0 } as { x: number; y: number };
 
+type PointerHit = { handle: WinHandle; clientId: string };
+
 /** 指针当前命中的客户端窗口；窗口关闭时据此立即清掉光标焦点 */
-let pointerTarget: { handle: WinHandle; clientId: string } | undefined;
+let pointerTarget: PointerHit | undefined;
+
+/**
+ * 每个按下的指针归属：命中客户端时后续 move/up 都路由给它（Wayland 隐式 grab）；
+ * 按在桌面 UI 上时 `hit` 为空，这次指针序列不再漏给下面的客户端。
+ */
+type PointerRoute = { hit: PointerHit | undefined; buttons: Set<number> };
+const pointerRoutes = new Map<string, PointerRoute>();
+
+function pointerKey(p: PointerEvent) {
+    return `${p.pointerType || "mouse"}:${p.pointerId ?? 1}`;
+}
 
 /** 正在用鼠标拖拽缩放的窗口 id；期间指针事件不转发给 Wayland 客户端 */
 let resizingWindowId: string | undefined;
@@ -767,12 +780,22 @@ class Timer {
     }
 }
 
-function mouseMove(x: number, y: number) {
+function mouseMove(x: number, y: number, p?: PointerEvent) {
     // 更新全局鼠标坐标
     mousePos.x = x;
     mousePos.y = y;
     cursor.move(x, y);
-    const target = sendPointerEvent("move", new PointerEvent("pointermove", { clientX: x, clientY: y }));
+    // 保留指针身份，按下时的归属才能按 pointerId 对上（触屏多指各自独立）
+    const target = sendPointerEvent(
+        "move",
+        new PointerEvent("pointermove", {
+            clientX: x,
+            clientY: y,
+            pointerType: p?.pointerType || "mouse",
+            pointerId: p?.pointerId ?? 1,
+            isPrimary: p?.isPrimary ?? true,
+        }),
+    );
     // 指针移开surface或软件后恢复默认光标，重新进入时恢复对应客户端记忆的光标
     cursor.setSurfaceFocus(target?.clientId);
 }
@@ -831,20 +854,22 @@ const windowCloseButtons = new Map<WinHandle, ElType<HTMLButtonElement>>();
 
 /** 统一的窗口关闭按钮：白色圆底 + 叉号，压在任意窗口内容上都能看清 */
 function createWindowCloseButton(op: { size: number; scale?: number; onClick: () => void }) {
-    const btn = button(getIconXEl("cross", { size: Math.round(op.size * 0.55) })).style({
-        width: `${op.size}px`,
-        height: `${op.size}px`,
-        padding: "0",
-        border: "none",
-        borderRadius: "50%",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "rgba(255, 255, 255, 0.92)",
-        boxShadow: "0 1px 4px #00000055",
-        cursor: "pointer",
-        zIndex: "10",
-    });
+    const btn = button(getIconXEl("cross", { size: Math.round(op.size * 0.55) }))
+        .style({
+            width: `${op.size}px`,
+            height: `${op.size}px`,
+            padding: "0",
+            border: "none",
+            borderRadius: "50%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(255, 255, 255, 0.92)",
+            boxShadow: "0 1px 4px #00000055",
+            cursor: "pointer",
+            zIndex: "10",
+        })
+        .data({ "desktop-ui": "window-control" });
     if (op.scale) {
         btn.style({ transform: `scale(${op.scale})`, transformOrigin: "top right" });
     }
@@ -936,7 +961,7 @@ function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
                 cursor: resizeCursors[edge],
                 display: viewAllShowing ? "none" : "block",
             })
-            .data({ "resize-cursor": resizeCursors[edge] });
+            .data({ "resize-cursor": resizeCursors[edge], "desktop-ui": "resize-handle" });
 
         // 贴边：竖边左右贯通到角热区，横边上下贯通，角热区最后添加且层级更高
         if (edge.includes("n")) handle.style({ top: "0px" });
@@ -1413,30 +1438,26 @@ function loadAppIcon(
         .catch(() => {});
 }
 
-function internalWindowUnderPoint(x: number, y: number) {
-    const target = document.elementFromPoint(x, y) as HTMLElement | null;
-    return target?.closest<HTMLElement>("[data-internal-window]") ?? undefined;
+/**
+ * 指针目标是否属于桌面 UI（而不是 Wayland 客户端内容）。
+ * 工具栏弹窗、IME 候选窗、锁屏都在窗口层之外；内部窗口、窗口关闭按钮、缩放热区带标记。
+ */
+function isDesktopUiTarget(target: Element | null | undefined): boolean {
+    if (!target) return true;
+    if (!windowEl.el.contains(target)) return true;
+    return target.closest("[data-internal-window], [data-desktop-ui]") !== null;
 }
 
-function sendPointerEvent(
-    type: "move" | "down" | "up",
-    p: PointerEvent,
-): { handle: WinHandle; clientId: string } | undefined {
-    if (viewAllShowing) {
-        pointerTarget = undefined;
-        return undefined;
-    }
-    // 正在拖拽窗口边框缩放：指针归桌面热区，不转发给客户端（down 已被热区 stopPropagation）
-    if (resizingWindowId !== undefined) {
-        pointerTarget = undefined;
-        return undefined;
-    }
-    // 桌面自己的 DOM 窗口盖在客户端窗口上时，指针事件只交给 DOM，不再转发给 Wayland
-    if (internalWindowUnderPoint(p.x, p.y)) {
-        pointerTarget = undefined;
-        return undefined;
-    }
-    let hit: { handle: WinHandle; clientId: string } | undefined;
+function desktopUiUnderPoint(x: number, y: number, target?: EventTarget | null) {
+    return isDesktopUiTarget(target instanceof Element ? target : document.elementFromPoint(x, y));
+}
+
+/** 当前指针位置下命中的客户端窗口；被桌面 UI 盖住时为空 */
+function pointerHits(p: PointerEvent): PointerHit[] {
+    if (viewAllShowing || resizingWindowId !== undefined) return [];
+    if (desktopUiUnderPoint(p.x, p.y, p.target)) return [];
+
+    const hits: PointerHit[] = [];
     const handled = new Set<string>();
     for (const info of server.server.windows.list()) {
         // 每个客户端只处理第一个命中的窗口
@@ -1451,30 +1472,90 @@ function sendPointerEvent(
         // todo 指针离开窗口时下发 wl_pointer.leave（待 server 提供），见 xdg 域 hitTest 的未命中分支
         if (!server.server.windows.hitTest(info.handle, { x: nx, y: ny })) continue;
         handled.add(info.clientId);
-        hit ??= { handle: info.handle, clientId: info.clientId };
+        hits.push({ handle: info.handle, clientId: info.clientId });
+    }
+    return hits;
+}
 
-        const ev = { type, x: nx, y: ny, button: p.button };
-        server.server.notify("input.pointer", info.handle, ev);
-        // Firefox 的地址栏/select 弹层会给 seat0 的 pointer 留下未释放的 grab：
-        // 弹层关闭后 seat0 的 motion 不再更新光标，但同一客户端的 seat1 pointer 不受影响。
-        // Firefox 会把两把 seat 上完全相同的按下/抬起去重（实测一次点击只触发一次），
-        // 所以这里把 move/down/up 都镜像到 seat1，作为 Firefox Wayland 的兼容回退。
-        // 其它客户端（GTK 也绑两把 seat）不镜像，避免真的双击；远程会话活跃时也不镜像，
-        // 把 seat1 留给远程光标。
-        if (/firefox/i.test(info.appid) && connect.getActiveConnections().length === 0) {
-            server.server.notify("input.pointer", info.handle, ev, "seat1");
-        }
-        if (type === "down") {
-            viewData.focusWin(info.handle);
-            ime?.pointerDown();
-            for (const other of server.server.windows.list()) {
-                if (other.clientId === info.clientId && other.handle !== info.handle) {
-                    server.server.notify("window.blur", other.handle);
-                }
+function sendPointerTo(hit: PointerHit, type: "move" | "down" | "up", p: PointerEvent) {
+    const info = server.server.windows.get(hit.handle);
+    if (!info) return;
+    const rect = render.getXdgSurfaceEle(info.renderId)?.getBoundingClientRect();
+    if (!rect) return;
+    // DOM 是桌面物理 px；Wayland 坐标是 surface-local 逻辑 px
+    const scale = info.scale || 1;
+    const nx = (p.x - rect.left) / scale;
+    const ny = (p.y - rect.top) / scale;
+
+    const ev = { type, x: nx, y: ny, button: p.button };
+    server.server.notify("input.pointer", info.handle, ev);
+    // Firefox 的地址栏/select 弹层会给 seat0 的 pointer 留下未释放的 grab：
+    // 弹层关闭后 seat0 的 motion 不再更新光标，但同一客户端的 seat1 pointer 不受影响。
+    // Firefox 会把两把 seat 上完全相同的按下/抬起去重（实测一次点击只触发一次），
+    // 所以这里把 move/down/up 都镜像到 seat1，作为 Firefox Wayland 的兼容回退。
+    // 其它客户端（GTK 也绑两把 seat）不镜像，避免真的双击；远程会话活跃时也不镜像，
+    // 把 seat1 留给远程光标。
+    if (/firefox/i.test(info.appid) && connect.getActiveConnections().length === 0) {
+        server.server.notify("input.pointer", info.handle, ev, "seat1");
+    }
+    if (type === "down") {
+        viewData.focusWin(info.handle);
+        ime?.pointerDown();
+        for (const other of server.server.windows.list()) {
+            if (other.clientId === info.clientId && other.handle !== info.handle) {
+                server.server.notify("window.blur", other.handle);
             }
         }
     }
+}
+
+function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): PointerHit | undefined {
+    const key = pointerKey(p);
+
+    if (type === "down") {
+        let route = pointerRoutes.get(key);
+        let hit = route?.hit;
+        if (!route) {
+            // 第一次按下决定这次指针序列归谁：桌面 UI（hit 为空）或某个客户端窗口
+            const hits = pointerHits(p);
+            hit = hits[0];
+            route = { hit, buttons: new Set() };
+            pointerRoutes.set(key, route);
+            for (const h of hits) sendPointerTo(h, "down", p);
+        } else if (hit) {
+            // 已经归属某个客户端时，后续按键沿用同一个窗口（隐式 grab）
+            sendPointerTo(hit, "down", p);
+        }
+        route.buttons.add(p.button ?? 0);
+        pointerTarget = hit;
+        return hit;
+    }
+
+    if (type === "move") {
+        const route = pointerRoutes.get(key);
+        if (route) {
+            // 按住期间保持按下时的归属：从客户端开始的拖拽不会因为经过弹窗而断掉，
+            // 从桌面 UI 开始的按压也不会把 move 漏给下面的客户端
+            if (route.hit) sendPointerTo(route.hit, "move", p);
+            pointerTarget = route.hit;
+            return route.hit;
+        }
+        const hits = pointerHits(p);
+        for (const h of hits) sendPointerTo(h, "move", p);
+        pointerTarget = hits[0];
+        return hits[0];
+    }
+
+    const route = pointerRoutes.get(key);
+    if (!route) {
+        // 没有对应的按下（例如点击落在桌面 UI 上）：不能把抬起漏给客户端
+        return undefined;
+    }
+    const hit = route.hit;
+    if (hit) sendPointerTo(hit, "up", p);
     pointerTarget = hit;
+    route.buttons.delete(p.button ?? 0);
+    if (route.buttons.size === 0) pointerRoutes.delete(key);
     return hit;
 }
 
@@ -1496,9 +1577,13 @@ type ScrollInput = {
 function sendScrollEvent(p: ScrollInput) {
     if (viewAllShowing || resizingWindowId !== undefined) return;
     // 只转发落在窗口层（windowEl）上的滚动；面板/任务栏/IME 候选窗等桌面 UI 不转发
-    const target = p.target ?? document.elementFromPoint(p.x, p.y);
-    if (!(target instanceof Node) || !windowEl.el.contains(target)) return;
-    if (internalWindowUnderPoint(p.x, p.y)) return;
+    const target =
+        p.target instanceof Element
+            ? p.target
+            : p.target instanceof Node
+              ? p.target.parentElement
+              : document.elementFromPoint(p.x, p.y);
+    if (isDesktopUiTarget(target)) return;
     const handled = new Set<string>();
     for (const info of server.server.windows.list()) {
         if (handled.has(info.clientId)) continue;
@@ -1687,6 +1772,10 @@ server.server.on("window.closed", (wid) => {
     if (pointerTarget?.handle === wid) {
         pointerTarget = undefined;
         cursor.setSurfaceFocus(undefined);
+    }
+    // 按下时归属该窗口的指针序列不再有接收方，后续 move/up 留在桌面
+    for (const route of pointerRoutes.values()) {
+        if (route.hit?.handle === wid) route.hit = undefined;
     }
 });
 
@@ -3813,6 +3902,9 @@ const inputApi = MSysApi.input;
 function dispatchInput(e: UniInputEvent) {
     if (screenOffState !== "on") {
         // 用任意输入唤醒，唤醒这一下不交给应用；锁屏息屏时回到锁屏界面
+        // 被吞掉的按下/抬起不会成对到达，清掉指针归属避免一直停在某个客户端上
+        pointerRoutes.clear();
+        pointerTarget = undefined;
         void setScreenOff(false);
         if (stateLock.getState() === "xipin") stateLock.setState("lock");
         return;
@@ -3986,16 +4078,26 @@ function isSecondaryTouch(e: PointerEvent) {
 
 body.on("pointermove", (e) => {
     if (isSecondaryTouch(e)) return;
-    mouseMove(e.x, e.y);
+    mouseMove(e.x, e.y, e);
 });
-windowEl.on("pointerdown", (e) => {
-    if (isSecondaryTouch(e)) return;
-    sendPointerEvent("down", e);
-});
-windowEl.on("pointerup", (e) => {
-    if (isSecondaryTouch(e)) return;
-    sendPointerEvent("up", e);
-});
+// 指针按下/抬起在 window capture 统一处理：路由层不再局限于窗口元素，
+// 这样才能记录「按下在桌面 UI 上」的指针序列，避免抬起时漏给下面的客户端。
+window.addEventListener(
+    "pointerdown",
+    (e) => {
+        if (e.isTrusted || isSecondaryTouch(e)) return;
+        sendPointerEvent("down", e);
+    },
+    true,
+);
+window.addEventListener(
+    "pointerup",
+    (e) => {
+        if (e.isTrusted || isSecondaryTouch(e)) return;
+        sendPointerEvent("up", e);
+    },
+    true,
+);
 
 // 点击桌面或其他窗口时让内部窗口失焦。只处理 inputSim 合成的 pointerdown：
 // 原生事件在输入聚合层已经被 stopImmediatePropagation 拦截，不会再走到这里。
