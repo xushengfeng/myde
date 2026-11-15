@@ -21,8 +21,26 @@ type DesktopEntry = {
     commentLocal: string;
     icon: string;
     exec: string;
+    /** 应用自带的环境变量：来自 Exec 的 `env A=1` 前缀 */
+    env?: Record<string, string>;
     desktopFile: string;
 };
+
+/** `env A=1 B=2 cmd` → { exec: "cmd", env: { A: "1", B: "2" } }；没有 env 前缀就原样返回 */
+function splitEnvPrefix(exec: string) {
+    const parts = exec.split(/\s+/).filter(Boolean);
+    if (parts.length === 0 || path.basename(parts[0]) !== "env") return { exec, env: {} as Record<string, string> };
+    const env: Record<string, string> = {};
+    let i = 1;
+    for (; i < parts.length; i++) {
+        const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(parts[i]);
+        if (!m) break;
+        env[m[1]] = m[2];
+    }
+    // env 后面没有命令时不认，避免把 env 本身当可执行文件
+    if (i >= parts.length) return { exec, env: {} as Record<string, string> };
+    return { exec: parts.slice(i).join(" "), env };
+}
 
 // 桌面应用列表缓存
 let entriesCache: DesktopEntry[] | null = null;
@@ -62,13 +80,15 @@ async function _getDesktopEntry(appId: string, dirs: string[], lans: string[] = 
             const comment = entry[lans.map((i) => `Comment[${i}]`).find((l) => l in entry) || "Comment"] || "";
             if (exec) {
                 const pureExec = (exec as string).replace(/%.?/g, "");
+                const { exec: command, env } = splitEnvPrefix(pureExec.trim());
                 return {
                     name: entry.Name || "",
                     nameLocal: name,
                     comment: entry.Comment || "",
                     commentLocal: comment,
                     icon: entry.Icon || "",
-                    exec: pureExec.trim(),
+                    exec: command.trim(),
+                    ...(Object.keys(env).length > 0 ? { env } : {}),
                     desktopFile: appId,
                 } as DesktopEntry;
             }

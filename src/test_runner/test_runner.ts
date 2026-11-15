@@ -111,7 +111,10 @@ export function testRunnerRaw(js: string) {
 }
 
 export type TestServerX = {
-    runApp: (exec: string, xServerNum?: number) => import("node:child_process").ChildProcess;
+    runApp: (
+        exec: string,
+        op?: number | { xServerNum?: number; env?: Record<string, string> },
+    ) => import("node:child_process").ChildProcess;
     startXwayland: () => Promise<number | undefined>;
     stopXwayland: () => void;
     server: WaylandServer;

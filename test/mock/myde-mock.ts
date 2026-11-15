@@ -1807,8 +1807,8 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
             const mockServer = createMockServer();
 
             return {
-                runApp: (exec: string, xServerNum?: number) => {
-                    log("runApp", exec, xServerNum);
+                runApp: (exec: string, op?: number | { xServerNum?: number; env?: Record<string, string> }) => {
+                    log("runApp", exec, op);
                     return {} as any;
                 },
                 startXwayland: async () => undefined,

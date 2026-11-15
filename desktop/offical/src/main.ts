@@ -1316,14 +1316,14 @@ function closeSettingsWindow() {
     entry.el.remove();
 }
 
-function appLauncher(iconPath: () => Promise<string>, name: string, exec: string) {
-    const p = appIconEl(exec);
+function appLauncher(iconPath: () => Promise<string>, name: string, exec: string, env?: Record<string, string>) {
+    const p = appIconEl(exec, env);
     loadAppIcon(p, iconPath, name);
     return p;
 }
 
 /** 只创建应用图标容器，图标由调用方在需要时再加载 */
-function appIconEl(exec?: string) {
+function appIconEl(exec?: string, env?: Record<string, string>) {
     const p = view().style({
         width: "48px",
         height: "48px",
@@ -1337,7 +1337,7 @@ function appIconEl(exec?: string) {
         p.on("click", async () => {
             console.log("exec", exec);
             await server.startXwayland();
-            server.runApp(exec);
+            server.runApp(exec, { env });
         });
     }
     return p;
@@ -3126,7 +3126,7 @@ function createStartMenu(
             containIntrinsicSize: "80px 80px",
         });
         const iconView = view().addInto(appEl);
-        const iconEl = appIconEl(app.exec).style({
+        const iconEl = appIconEl(app.exec, app.env).style({
             width: "40px",
             height: "40px",
         });
@@ -3276,6 +3276,7 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
                     fs.readFileAsDataURLSync("/assets/icons/browser.png"),
                 browserApp.name,
                 browserApp.exec,
+                browserApp.env,
             ).addInto(appsEl);
         }
         if (fileManagerApp) {
@@ -3285,6 +3286,7 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
                     fs.readFileAsDataURLSync("/assets/icons/file-manager.png"),
                 fileManagerApp.name,
                 fileManagerApp.exec,
+                fileManagerApp.env,
             ).addInto(appsEl);
         }
         if (terminalApp) {
@@ -3294,6 +3296,7 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
                     fs.readFileAsDataURLSync("/assets/icons/terminal.png"),
                 terminalApp.name,
                 terminalApp.exec,
+                terminalApp.env,
             ).addInto(appsEl);
         }
     });

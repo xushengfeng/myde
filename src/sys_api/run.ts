@@ -70,12 +70,14 @@ export function server(op: { dev?: boolean; render: renderTools }) {
         args: string[],
         xServerNum?: number,
         deEnvOverride: typeof deEnv = deEnv,
+        extraEnv?: Record<string, string>,
     ) => {
         return runApp(execPath, {
             args,
             deEnv: deEnvOverride,
             server: { socketDir: server.socketDir, socketName: server.socketName },
             xServerNum,
+            env: extraEnv,
             user: {
                 uid: Number.isNaN(Number(uid)) ? undefined : Number(uid),
                 gid: Number.isNaN(Number(gid)) ? undefined : Number(gid),
@@ -83,9 +85,10 @@ export function server(op: { dev?: boolean; render: renderTools }) {
         });
     };
 
-    const spawnApp = (exec: string, xServerNum?: number) => {
+    const spawnApp = (exec: string, op?: number | RunAppOptions) => {
+        const options: RunAppOptions = typeof op === "number" ? { xServerNum: op } : (op ?? {});
         const execParts = exec.trim().split(" ");
-        return spawnAppParts(execParts[0], execParts.slice(1), xServerNum);
+        return spawnAppParts(execParts[0], execParts.slice(1), options.xServerNum, deEnv, options.env);
     };
 
     const startXwayland = () => {
@@ -160,8 +163,14 @@ export function server(op: { dev?: boolean; render: renderTools }) {
     };
 
     return {
-        runApp: (exec: string, xServerNum?: number) =>
-            spawnApp(exec, hasDisplayNumber(xServerNum) ? xServerNum : xwaylandDisplay),
+        /** 启动应用；第二个参数可以是 display 编号，也可以是 { xServerNum, env } */
+        runApp: (exec: string, op?: number | RunAppOptions) => {
+            const options: RunAppOptions = typeof op === "number" ? { xServerNum: op } : (op ?? {});
+            return spawnApp(exec, {
+                ...options,
+                xServerNum: hasDisplayNumber(options.xServerNum) ? options.xServerNum : xwaylandDisplay,
+            });
+        },
         startXwayland,
         stopXwayland,
         server,
@@ -198,6 +207,14 @@ class AppOutputLog {
     }
 }
 
+/** runApp 的额外参数 */
+export type RunAppOptions = {
+    /** 直接指定 X display 编号；不传则用正在运行的 xwayland */
+    xServerNum?: number;
+    /** 应用自带的环境变量（如 .desktop 里声明的），会覆盖桌面的默认值 */
+    env?: Record<string, string>;
+};
+
 export function runApp(
     execPath: string,
     op: {
@@ -216,6 +233,8 @@ export function runApp(
             socketName: string;
         };
         xServerNum?: number;
+        /** 应用自带的环境变量，最后合并，优先级最高 */
+        env?: Record<string, string>;
         user?: { uid?: number; gid?: number };
     },
 ) {
@@ -238,6 +257,8 @@ export function runApp(
             WAYLAND_DISPLAY: op.server.socketName,
             WAYLAND_DEBUG: op.deEnv.WAYLAND_DEBUG || "",
             ...(hasDisplayNumber(op.xServerNum) ? { DISPLAY: `:${op.xServerNum}` } : {}),
+            // 应用自带的环境变量（.desktop 里声明的）放最后，可以覆盖上面的默认值
+            ...op.env,
         },
         cwd: op.deEnv.HOME,
         uid: op.user?.uid,

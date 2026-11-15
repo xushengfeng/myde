@@ -818,9 +818,14 @@ serverX.runApp("chrome");
 // 显式指定 display 仍然可以覆盖自动值
 serverX.runApp("chrome", 0);
 
+// 应用自带的环境变量（.desktop 里声明的）随启动传下去
+serverX.runApp(app.exec, { env: app.env });
+
 // 退出桌面时可选
 serverX.stopXwayland();
 ```
+
+`getDesktopEntries()` 会把 `Exec=env LIBVA_DRIVER_NAME=iHD mpv` 里的 `env A=1` 前缀解析到 `env` 上，并把 `Exec` 还原成真正的命令。`runApp(exec, { env })` 把这些变量合并进子进程环境，放最后，同名变量以它为准。
 
 `startXwayland()` 会找一个空闲的 `:N`，启动 `xwayland-satellite :N`，等待 `/tmp/.X11-unix/XN` 出现；可用 `MYDE_XWAYLAND_SATELLITE` 指定 binary 路径。
 

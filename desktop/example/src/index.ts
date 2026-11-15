@@ -416,7 +416,7 @@ async function openLauncher() {
 
         appEl.on("click", async () => {
             await server.startXwayland();
-            server.runApp(app.exec);
+            server.runApp(app.exec, { env: app.env });
             menu.remove();
         });
     }

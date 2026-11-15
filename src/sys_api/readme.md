@@ -8,4 +8,6 @@
 
 `polkit.ts` 是 polkit 的认证前端 agent：在系统总线注册 logind session，接收 polkitd 的认证请求并通过事件交给桌面；PAM 由 polkit-agent-helper-1 完成。
 
-`run.ts` 负责启动应用。`runApp()` 必须读取应用的 stdout/stderr（否则写满 64 KiB 后应用阻塞），输出写到 `$XDG_STATE_HOME/myde/logs/apps/`。
+`run.ts` 负责启动应用。`runApp()` 必须读取应用的 stdout/stderr（否则写满 64 KiB 后应用阻塞），输出写到 `$XDG_STATE_HOME/myde/logs/apps/`。`runApp(exec, { env })` 可以把应用自带的环境变量合并进子进程环境（最后合并，优先级最高）。
+
+`application.ts` 解析 .desktop：除 Name/Comment/Icon/Exec 外，还会从 `Exec=env A=1 cmd` 的前缀取出环境变量放进 `DesktopEntry.env`（`Exec` 同时还原成 `cmd`），交给 `runApp()`。
