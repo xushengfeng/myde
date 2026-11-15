@@ -20,7 +20,7 @@ import { mpris } from "../../sys_api/mpris";
 import { network } from "../../sys_api/network";
 import { notification } from "../../sys_api/notification";
 import { polkit } from "../../sys_api/polkit";
-import { power } from "../../sys_api/power";
+import { power, powerProfiles } from "../../sys_api/power";
 import { volumeControl } from "../../sys_api/volume";
 import { xdgDesktopPortal } from "../../sys_api/xdg_desktop_portal/xdg_desktop_portal";
 
@@ -85,6 +85,7 @@ async function loadDesktop(p: string) {
     myde.MSysApi.notification = new notification(await newDBusIO());
     myde.MSysApi.tray = new tray(await newDBusIO());
     myde.MSysApi.power = new power(await newDBusIO(true));
+    myde.MSysApi.powerProfiles = new powerProfiles(await newDBusIO(true));
     myde.MSysApi.lid = new lid(await newDBusIO(true));
     myde.MSysApi.blue = new blue(await newDBusIO(true));
     myde.MSysApi.network = new network(await newDBusIO(true));

@@ -14,7 +14,14 @@ import type { MenuItem } from "../../src/sys_api/menu";
 import type { MprisEvents, mpris } from "../../src/sys_api/mpris";
 import type { AccessPointEvents, NetworkEvents, network, WifiDeviceEvents } from "../../src/sys_api/network";
 import type { NotificationData, NotificationEvents, notification } from "../../src/sys_api/notification";
-import type { PowerDeviceEvents, PowerEvents, power } from "../../src/sys_api/power";
+import type {
+    PowerDeviceEvents,
+    PowerEvents,
+    PowerProfile,
+    PowerProfilesEvents,
+    power,
+    powerProfiles,
+} from "../../src/sys_api/power";
 import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools";
 import type { MockRenderTools } from "./render-tools";
 import type { MockVolumeManager } from "./volume-mock";
@@ -143,6 +150,8 @@ export interface MockConfig {
     networkManager?: MockNetworkManager;
     /** 电源管理器 */
     powerManager?: MockPowerManager;
+    /** 电源性能模式管理器 */
+    powerProfilesManager?: MockPowerProfilesManager;
     /** 合盖状态管理器 */
     lidManager?: MockLidManager;
     /** 通知管理器 */
@@ -988,6 +997,77 @@ function createMockPower(log: (...args: any[]) => void): MockType<power> {
     return manager.createMock();
 }
 
+export class MockPowerProfilesManager {
+    private profiles: PowerProfile[];
+    private active: string;
+    private emitter = createMockEventEmitter<PowerProfilesEvents>();
+    private log: (...args: any[]) => void;
+
+    constructor(
+        log: (...args: any[]) => void,
+        profiles: PowerProfile[] = [
+            { name: "power-saver", driver: "multiple" },
+            { name: "balanced", driver: "multiple" },
+            { name: "performance", driver: "multiple" },
+        ],
+        active = "balanced",
+    ) {
+        this.log = log;
+        this.profiles = profiles;
+        this.active = active;
+    }
+
+    setProfiles(profiles: PowerProfile[]) {
+        this.profiles = profiles;
+        this.log("powerProfiles.setProfiles", profiles);
+    }
+
+    setActiveProfile(profile: string) {
+        if (this.active === profile) return;
+        this.active = profile;
+        this.log("powerProfiles.setActiveProfile", profile);
+        this.emitter.emit("changed", profile);
+    }
+
+    getActiveProfileName() {
+        return this.active;
+    }
+
+    createMock(): MockType<powerProfiles> {
+        const manager = this;
+        return {
+            async init() {
+                manager.log("powerProfiles.init");
+                return true;
+            },
+            async getProfiles() {
+                return manager.profiles;
+            },
+            async getActiveProfile() {
+                return manager.active;
+            },
+            async setActiveProfile(profile: string) {
+                manager.setActiveProfile(profile);
+            },
+            on: manager.emitter.on.bind(manager.emitter),
+            off: manager.emitter.off.bind(manager.emitter),
+            once: manager.emitter.once.bind(manager.emitter),
+            emit: manager.emitter.emit.bind(manager.emitter),
+            waitFor: manager.emitter.waitFor.bind(manager.emitter),
+            removeAllListeners: manager.emitter.removeAllListeners.bind(manager.emitter),
+            listenerCount: manager.emitter.listenerCount.bind(manager.emitter),
+            hasListeners: manager.emitter.hasListeners.bind(manager.emitter),
+            respond: manager.emitter.respond.bind(manager.emitter),
+            request: manager.emitter.request.bind(manager.emitter),
+        };
+    }
+}
+
+function createMockPowerProfiles(log: (...args: any[]) => void): MockType<powerProfiles> {
+    const manager = new MockPowerProfilesManager(log);
+    return manager.createMock();
+}
+
 export class MockLidManager {
     private closed = false;
     private emitter = createMockEventEmitter<LidEvents>();
@@ -1672,6 +1752,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         blueManager,
         networkManager,
         powerManager,
+        powerProfilesManager,
         lidManager,
         notificationManager,
         mprisManager,
@@ -1748,6 +1829,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         },
         tray: trayManager ? trayManager.createMock() : createMockTray(log),
         power: powerManager ? powerManager.createMock() : createMockPower(log),
+        powerProfiles: powerProfilesManager ? powerProfilesManager.createMock() : createMockPowerProfiles(log),
         blue: blueManager ? blueManager.createMock() : createMockBlue(log),
         network: networkManager ? networkManager.createMock() : createMockNetwork(log),
         volume: volumeManager ? volumeManager.createMock() : createMockVolume(log),

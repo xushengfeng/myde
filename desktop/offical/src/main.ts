@@ -78,6 +78,7 @@ interface ControlNode {
 // RegistrySchema 定义所有键值对类型
 interface RegistrySchema {
     "power.battery": number;
+    "power.battery.charging": boolean;
     "power.lidClosed": boolean;
     "power.devices": id<"power.devices[]">[];
     "power.devices[]": {
@@ -92,6 +93,12 @@ interface RegistrySchema {
             | "Pending discharge"
             | "Unknown";
     };
+    "power.profiles": id<"power.profiles[]">[];
+    "power.profiles[]": {
+        name: string;
+        label: string;
+    };
+    "power.profile": string;
     "wifi.enabled": boolean;
     "wifi.accessPoints": id<"wifi.accessPoints[]">[];
     "wifi.accessPoints[]": {
@@ -155,7 +162,6 @@ type tmpRegistry = Registry<RegistrySchema>;
 
 // 具体的键类型
 type BooleanRegistryKeys = "wifi.enabled" | "blue.power" | "connect.enabled";
-type NumericRegistryKeys = "power.battery";
 
 function createToggle(registry: tmpRegistry, id: BooleanRegistryKeys): ControlNode {
     const source = registry.get(id);
@@ -168,14 +174,6 @@ function createToggle(registry: tmpRegistry, id: BooleanRegistryKeys): ControlNo
     });
 
     return { id, type: "toggle", el: toggle as unknown as ElType<HTMLElement>, unmount: unsub };
-}
-
-function createIndicator(registry: tmpRegistry, id: NumericRegistryKeys): ControlNode {
-    const source = registry.get(id);
-    const label = txt();
-
-    const unsub = source.getAndSubscribe((v) => label.sv(String(v)));
-    return { id, type: "indicator", el: label as unknown as ElType<HTMLElement>, unmount: unsub };
 }
 
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
@@ -2299,16 +2297,19 @@ MSysApi.power
 
         const updateBattery = async () => {
             let batteryPercentage = 0;
+            let batteryCharging = false;
             for (const device of power.getDevices()) {
                 if (
                     (await device.getPowerSupply()) &&
                     ((await device.getType()) === "Battery" || (await device.getType()) === "Ups")
                 ) {
                     batteryPercentage = await device.getPercentage();
+                    batteryCharging = await device.isCharging();
                     break;
                 }
             }
             registry.setData("power.battery", batteryPercentage);
+            registry.setData("power.battery.charging", batteryCharging);
         };
 
         const updateDeviceList = () => {
@@ -2353,6 +2354,52 @@ MSysApi.power
         await updateBattery();
     })
     .catch((e) => console.error("power init error", e));
+
+const powerProfileLabels: Record<string, string> = {
+    "power-saver": "静音",
+    balanced: "平衡",
+    performance: "性能",
+};
+
+rawRegistry.setData("power.profiles", []);
+rawRegistry.setData("power.profile", "");
+
+MSysApi.powerProfiles
+    .init()
+    .then(async (available) => {
+        if (!available) {
+            console.warn("power-profiles-daemon 不可用，性能模式未启用");
+            return;
+        }
+        const profiles = MSysApi.powerProfiles;
+
+        const updateProfiles = async () => {
+            const list = await profiles.getProfiles();
+            for (const profile of list) {
+                rawRegistry.setData(`power.profiles.${profile.name}` as "power.profiles[]", {
+                    name: profile.name,
+                    label: powerProfileLabels[profile.name] ?? profile.name,
+                });
+            }
+            rawRegistry.setData(
+                "power.profiles",
+                list.map((profile) => `power.profiles.${profile.name}` as id<"power.profiles[]">),
+            );
+            rawRegistry.setData("power.profile", await profiles.getActiveProfile());
+        };
+
+        profiles.on("changed", (active) => rawRegistry.setData("power.profile", active));
+        rawRegistry.setSetCallback("power.profile", async (name) => {
+            try {
+                await profiles.setActiveProfile(name);
+                rawRegistry.setData("power.profile", name);
+            } catch (e) {
+                console.warn("设置性能模式失败", e);
+            }
+        });
+        await updateProfiles();
+    })
+    .catch((e) => console.warn("powerProfiles init error", e));
 
 MSysApi.lid
     .init()
@@ -2729,7 +2776,31 @@ MSysApi.volume.init().then(async () => {
 
 // UI 对象池
 const uipool = {
-    "power.battery": () => createIndicator(rawRegistry, "power.battery"),
+    "power.battery": () => {
+        const percentage = rawRegistry.get("power.battery");
+        const charging = rawRegistry.get("power.battery.charging");
+        const label = aLineText();
+        let percentageValue = 0;
+        let chargingValue = false;
+        const render = () => label.sv(`${percentageValue} ${chargingValue ? "充电中" : "未充电"}`);
+        const unsubPercentage = percentage.getAndSubscribe((v) => {
+            percentageValue = v;
+            render();
+        });
+        const unsubCharging = charging.getAndSubscribe((v) => {
+            chargingValue = v;
+            render();
+        });
+        return {
+            id: "power.battery",
+            type: "indicator",
+            el: label as unknown as ElType<HTMLElement>,
+            unmount: () => {
+                unsubPercentage();
+                unsubCharging();
+            },
+        };
+    },
     "power.devices": () => {
         const source = rawRegistry.get("power.devices");
         const us: (() => void)[] = [];
@@ -2762,6 +2833,59 @@ const uipool = {
         });
         return {
             id: "power.devices",
+            type: "dynamic-list",
+            el: container.el.style({ width: px(sSize(6)) }),
+            unmount: () => {
+                unsub();
+                for (const s of us) s();
+            },
+        };
+    },
+    "power.profiles": () => {
+        const source = rawRegistry.get("power.profiles");
+        const activeSource = rawRegistry.get("power.profile");
+        const us: (() => void)[] = [];
+        const container = dynamicScrollList<string>({
+            itemSize: sSize(1.5),
+            containerSize: sSize(1.5) * 3,
+            direction: "down",
+            keyExtractor: (x) => x,
+            renderItem: (k) => {
+                const el = iItem({ type: "h", size: 1.5 }).style({
+                    display: "flex",
+                    alignItems: "center",
+                    padding: `${sSize2.padding}px`,
+                    gap: `${sSize2.padding}px`,
+                    cursor: "pointer",
+                });
+                let name = "";
+                let active = "";
+                const mark = txt().style({ flexShrink: 0 });
+                const renderMark = () => mark.sv(name !== "" && active === name ? "✓" : "○");
+                const usItem = rawRegistry.get(k as "power.profiles[]").getAndSubscribe((v) => {
+                    name = v.name;
+                    el.clear().add([aLineText().sv(v.label), spacer(), mark]);
+                    renderMark();
+                });
+                const usActive = activeSource.getAndSubscribe((v) => {
+                    active = v;
+                    renderMark();
+                });
+                us.push(usItem, usActive);
+                el.on("click", () => {
+                    if (!name) return;
+                    rawRegistry.get("power.profile").set?.(name);
+                });
+                return el;
+            },
+        });
+
+        const unsub = source.getAndSubscribe((ids) => {
+            container.setList(ids);
+            container.el.style({ display: ids.length > 0 ? "" : "none" });
+        });
+        return {
+            id: "power.profiles",
             type: "dynamic-list",
             el: container.el.style({ width: px(sSize(6)) }),
             unmount: () => {
@@ -3441,11 +3565,12 @@ tools.registerTool(
 
         // 弹出框显示详情
         const batteryInfo = uipool["power.battery"]();
+        const profiles = uipool["power.profiles"]();
         const deviceList = uipool["power.devices"]();
 
         ui.bar([
-            // todo 性能方案
             ui.barItem().add(batteryInfo.el),
+            ui.barItem().add(profiles.el),
             ui.barItem().add(deviceList.el),
         ]).el.addInto(tipEl);
 

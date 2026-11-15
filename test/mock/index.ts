@@ -16,6 +16,7 @@ export {
     MockNotificationManager,
     MockPowerDevice,
     MockPowerManager,
+    MockPowerProfilesManager,
     MockTrayItem,
     MockTrayManager,
     MockVfsStore,

@@ -214,6 +214,14 @@ polkit.on("auth-end", (req, { success, cancelled }) => closeDialog(req));
 
 监听 UPower 的 `PropertiesChanged` 和 `DeviceAdded`/`DeviceRemoved`：设备属性变化时 `powerDevice` 发出 `changed`，设备增减时 `power` 发出 `device-added`/`device-removed`，桌面可据此实时刷新电量
 
+`powerDevice.isCharging()` 返回是否正在充电
+
+### powerProfiles
+
+性能模式，来自 power-profiles-daemon。`init()` 会依次尝试新版 `org.freedesktop.UPower.PowerProfiles` 和旧版 `net.hadess.PowerProfiles`，都不可用时返回 `false`
+
+`getProfiles()` 返回当前机器支持的模式（通常是 `power-saver` / `balanced` / `performance`），`getActiveProfile()` / `setActiveProfile()` 读写当前模式，外部切换时发出 `changed`
+
 ### blue
 
 蓝牙设备，包括显示连接设备、记住的设备、设备连接断开

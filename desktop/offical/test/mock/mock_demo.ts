@@ -15,6 +15,7 @@ import {
     MockNotificationManager,
     MockPowerDevice,
     MockPowerManager,
+    MockPowerProfilesManager,
     MockTrayItem,
     MockTrayManager,
     MockVfsStore,
@@ -50,6 +51,7 @@ const mockData = {
 const blueManager = new MockBlueManager(console.log);
 const networkManager = new MockNetworkManager(console.log);
 const powerManager = new MockPowerManager(console.log);
+const powerProfilesManager = new MockPowerProfilesManager(console.log);
 const notificationManager = new MockNotificationManager(console.log);
 const mprisManager = new MockMprisManager(console.log);
 const trayManager = new MockTrayManager(console.log);
@@ -101,6 +103,10 @@ export function getMockNetworkManager() {
 
 export function getMockPowerManager() {
     return powerManager;
+}
+
+export function getMockPowerProfilesManager() {
+    return powerProfilesManager;
 }
 
 export function getMockNotificationManager() {
@@ -506,6 +512,7 @@ async function init() {
         blueManager,
         networkManager,
         powerManager,
+        powerProfilesManager,
         notificationManager,
         mprisManager,
         trayManager,

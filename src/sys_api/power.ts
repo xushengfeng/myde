@@ -10,6 +10,17 @@ export type PowerDeviceEvents = {
     changed: [changedProperties: Record<string, unknown>];
 };
 
+export type PowerProfile = {
+    name: string;
+    cpuDriver?: string[];
+    platformDriver?: string[];
+    driver?: string;
+};
+
+export type PowerProfilesEvents = {
+    changed: [activeProfile: string];
+};
+
 export class power extends EventEmitter<PowerEvents> {
     private dbus: dbusIO;
     private client: dbusClient;
@@ -105,6 +116,9 @@ export class powerDevice extends EventEmitter<PowerDeviceEvents> {
         }
         return "Unknown";
     }
+    async isCharging() {
+        return (await this.getState()) === "Charging";
+    }
     async getPowerSupply() {
         const powerSupply = await this.infc.get<"b">("PowerSupply");
         return powerSupply[0];
@@ -176,5 +190,87 @@ export class powerDevice extends EventEmitter<PowerDeviceEvents> {
     async getModel() {
         const model = await this.infc.get<"s">("Model");
         return model[0];
+    }
+}
+
+/** 性能模式，来自 power-profiles-daemon 的 D-Bus 接口 */
+export class powerProfiles extends EventEmitter<PowerProfilesEvents> {
+    private dbus: dbusIO;
+    private client: dbusClient;
+    private infc?: dbusInterface;
+
+    constructor(dbus: dbusIO) {
+        super();
+        this.dbus = dbus;
+        this.client = new dbusClient({ io: dbus });
+    }
+
+    /** 找到 power-profiles-daemon 并监听 ActiveProfile，没有时返回 false */
+    async init() {
+        await this.dbus.connect();
+        // 新版使用 org.freedesktop.UPower.PowerProfiles，旧版只有 net.hadess.PowerProfiles
+        const candidates = [
+            {
+                service: "org.freedesktop.UPower.PowerProfiles",
+                path: "/org/freedesktop/UPower/PowerProfiles",
+                interface: "org.freedesktop.UPower.PowerProfiles",
+            },
+            {
+                service: "net.hadess.PowerProfiles",
+                path: "/net/hadess/PowerProfiles",
+                interface: "net.hadess.PowerProfiles",
+            },
+        ];
+        for (const candidate of candidates) {
+            try {
+                const service = await this.client.getService(candidate.service);
+                const object = await service.getObject(candidate.path);
+                const infc = await object.getInterface(candidate.interface);
+                // getInterface 不检查对象是否存在，读一次属性确认服务可用
+                await infc.get<"s">("ActiveProfile");
+                this.infc = infc;
+                await infc.propertiesChanged((changedProperties) => {
+                    const active = changedProperties.ActiveProfile;
+                    if (typeof active === "string") {
+                        this.emit("changed", active);
+                    } else if (Array.isArray(active) && typeof active[0] === "string") {
+                        this.emit("changed", active[0]);
+                    }
+                });
+                return true;
+            } catch {
+                // 尝试下一个服务名
+            }
+        }
+        return false;
+    }
+
+    private iface() {
+        if (!this.infc) throw new Error("powerProfiles 未初始化或 power-profiles-daemon 不可用");
+        return this.infc;
+    }
+
+    async getProfiles(): Promise<PowerProfile[]> {
+        const [profiles] = await this.iface().get<"aa{sv}">("Profiles");
+        return profiles
+            .map((entries) => {
+                const data = Object.fromEntries(entries.map(([key, value]) => [key, value.value]));
+                return {
+                    name: String(data.Profile ?? ""),
+                    cpuDriver: data.CpuDriver as string[] | undefined,
+                    platformDriver: data.PlatformDriver as string[] | undefined,
+                    driver: data.Driver as string | undefined,
+                };
+            })
+            .filter((profile) => profile.name !== "");
+    }
+
+    async getActiveProfile() {
+        const [profile] = await this.iface().get<"s">("ActiveProfile");
+        return profile;
+    }
+
+    async setActiveProfile(profile: string) {
+        await this.iface().set<"s">("ActiveProfile", [profile], "s");
     }
 }

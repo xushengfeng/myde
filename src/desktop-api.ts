@@ -19,7 +19,7 @@ import type { mpris } from "./sys_api/mpris";
 import type { network } from "./sys_api/network";
 import type { notification } from "./sys_api/notification";
 import type { polkit } from "./sys_api/polkit";
-import type { power } from "./sys_api/power";
+import type { power, powerProfiles } from "./sys_api/power";
 import { server } from "./sys_api/run";
 import type { volumeControl } from "./sys_api/volume";
 import type { xdgDesktopPortal } from "./sys_api/xdg_desktop_portal/xdg_desktop_portal";
@@ -44,6 +44,7 @@ export const _myde = {
         },
         tray: undefined as unknown as tray,
         power: undefined as unknown as power,
+        powerProfiles: undefined as unknown as powerProfiles,
         blue: undefined as unknown as blue,
         network: undefined as unknown as network,
         polkit: undefined as unknown as polkit,

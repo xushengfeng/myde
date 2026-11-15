@@ -33,6 +33,7 @@ import {
     MockBlueManager, MockBlueDevice,
     MockNetworkManager, MockWifiDevice, MockAccessPoint,
     MockPowerManager, MockPowerDevice,
+    MockPowerProfilesManager,
     MockLidManager,
     MockNotificationManager,
     MockMprisManager, MockMprisPlayer,
@@ -43,6 +44,7 @@ import {
 const blueManager = new MockBlueManager(console.log);
 const networkManager = new MockNetworkManager(console.log);
 const powerManager = new MockPowerManager(console.log);
+const powerProfilesManager = new MockPowerProfilesManager(console.log);
 const lidManager = new MockLidManager(console.log);
 const notificationManager = new MockNotificationManager(console.log);
 const mprisManager = new MockMprisManager(console.log);
@@ -52,6 +54,7 @@ setupMydeMock({
     blueManager,
     networkManager,
     powerManager,
+    powerProfilesManager,
     lidManager,
     notificationManager,
     mprisManager,
@@ -148,6 +151,7 @@ interface MockConfig {
     blueManager?: MockBlueManager;      // 蓝牙管理器
     networkManager?: MockNetworkManager; // 网络管理器
     powerManager?: MockPowerManager;    // 电源管理器
+    powerProfilesManager?: MockPowerProfilesManager; // 性能模式管理器
     lidManager?: MockLidManager;        // 合盖状态管理器
     notificationManager?: MockNotificationManager; // 通知管理器
     mprisManager?: MockMprisManager;    // MPRIS管理器
