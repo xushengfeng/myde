@@ -31,6 +31,40 @@ desktop（evdev）模式下触摸板事件由仓库的 `src/utils/touchpad.ts` �
 - 手动缩放后暂停该窗口的自动居中，与拖动窗口一致
 - 悬停热区时光标变为对应方向的缩放形状（自定义光标已支持 `ew-resize` / `ns-resize` / 两个对角）
 
+## 光标
+
+自定义光标用「一个基座 body + 前后装饰层」组合，全部是 DOM，不使用 SVG。装饰层可以是横线、方框描边、圆角方块或白色加减线，过渡时旧层淡出、新层淡入。
+
+已设计的形状：
+
+- `default`：圆点
+- `pointer`：圆角方形
+- `text`：竖线；`vertical_text`：横线
+- `context_menu`：较窄的中线为 body，上下各一条横线装饰
+- `cell`：外框为 body（空心描边），横/竖两条装饰组成十字
+- `crosshair`：横线 body + 竖线装饰组成十字
+- `copy`：前面的圆角方形为 body，后面偏移的圆角方形为装饰
+- `move`：菱形描边为 body，横/竖两条装饰组成十字
+- `all_scroll` / `all_resize`：和 `move` 相同
+- `grab`：16×16 无圆角方形；`grabbing`：10×10 小无圆角方形
+- `no_drop` / `not_allowed`：小圆 body + 大斜线前景装饰
+- `zoom_in` / `zoom_out`：外圆为 body，白色加/减为前景装饰
+- `progress` / `wait`：静态米字装饰，body 是一个小圆点；`progress` 的圆点在左上，`wait` 的圆点在中间
+- `help` / `dnd_ask`：三个水平圆点，中间圆点为 body，左右为装饰
+- `alias`：左边圆点为 body，右边一个方形装饰
+
+形状之间用 `AnimationGear` 补间 body 的几何参数（宽、高、圆角、旋转），所有形状对先共用同一套过渡（150ms easeOut），个别 pair 可以之后单独覆盖；装饰层独立淡入淡出。图片光标和隐藏在形状之间直接切换，不做补间。窗口缩放热区的 `localShape` 覆盖也走同一套过渡。
+
+没单独设计的 resize 方向先复用现有横/竖/斜线几何：`e`/`w`/`col` 用横线，`n`/`s`/`row` 用竖线，`ne`/`sw` 用 `/`，`nw`/`se` 用 `\`。其余未提到的形状仍回落到默认圆点。
+
+线 resize 之间保留内部方向语义：单向方向为 0/45/…/315，`ew`/`ns`/两个对角方向和 `col`/`row` 是双向线。过渡时按这个方向旋转：双向 ↔ 单向共线时不旋转，非共线才旋转；反向单向之间会转 180°。旋转只发生在过渡中，过渡结束立刻切回目标的无方向线条，静止帧本身不显示方向。
+
+resize ↔ `move` / `all_scroll` / `all_resize` 过渡时优先用十字的一条臂作为 body：横/竖 resize 不旋转，直接作为对应的横/竖臂；斜 resize 统一用横臂作为 body 旋转成斜线（竖臂作为装饰），保证进入和退出用的是同一条臂、可逆。菱形外框和另一条臂作为装饰淡入/淡出。`move` 与其它非线 resize 形状的转换仍以菱形外框为 body。
+
+`text` / `vertical_text` / `crosshair` 是一组独立的过渡：`vertical_text` 与 `crosshair` 共用横线 body，只淡入淡出竖装饰；`text` 与 `crosshair` 之间让竖线保持为 body，横线作为装饰淡入/淡出，不做旋转或尺寸伸缩。两条线的 body/装饰角色互换发生在过渡结束切回无方向帧时，视觉上连续。
+
+`test/cursor/cursor_preview.ts` 把桌面自身的 `normal` 默认静态状态和全部形状按行、列铺成上三角矩阵（过渡来回播放，反方向共用同一格）。`normal` 行不参与动画；其余设计不同的单元格自动播放 `from ↔ to`，两端各停留约 1 秒，初相位错开避免整张矩阵同时闪烁。
+
 ## 退出
 
 `Super+Shift+E` 或 `Ctrl+Alt+Delete` 关闭桌面窗口，结束当前桌面进程。
