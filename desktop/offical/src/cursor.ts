@@ -46,6 +46,8 @@ type CursorDesign = {
     bodyStyle?: "fill" | "outline";
     /** 装饰层身份；相同 key 表示装饰完全一样，切换时不必淡入淡出 */
     decoKey?: string;
+    /** 热点在局部坐标里的位置，缺省 (0, 0) */
+    hotspot?: { x: number; y: number };
     /** body 后方/前方的装饰件 */
     back?: CursorDecoration[];
     front?: CursorDecoration[];
@@ -150,6 +152,7 @@ function makeDesign(
     parts?: {
         bodyStyle?: "fill" | "outline";
         decoKey?: string;
+        hotspot?: { x: number; y: number };
         back?: CursorDecoration[];
         front?: CursorDecoration[];
     },
@@ -183,6 +186,7 @@ const CURSOR_DESIGNS: Record<string, CursorDesign> = {
     }),
     progress: makeDesign("progress", "progress", {
         decoKey: "busy-star",
+        hotspot: { x: -8, y: -8 },
         back: BUSY_STAR,
     }),
     wait: makeDesign("wait", "wait", {
@@ -498,6 +502,14 @@ function createCursorShapeView(): CursorShapeView {
     let backLayer: ElType<HTMLElement> | undefined;
     let frontLayer: ElType<HTMLElement> | undefined;
 
+    /** 整个视觉内容按 -hotspot 平移，让热点落到指针/单元格中心 */
+    function applyHotspot(design: CursorDesign, duration: number) {
+        const x = design.hotspot?.x ?? 0;
+        const y = design.hotspot?.y ?? 0;
+        el.el.style.transition = duration > 0 ? `transform ${duration}ms ease-out` : "none";
+        el.el.style.transform = `translate(${-x}px, ${-y}px)`;
+    }
+
     return {
         el,
         setBody(metrics: CursorShapeMetrics) {
@@ -506,6 +518,7 @@ function createCursorShapeView(): CursorShapeView {
         setDesign(design: CursorDesign, duration: number) {
             if (designKey === design.key) return;
             designKey = design.key;
+            applyHotspot(design, duration);
             applyBodyStyle(body.el, design.bodyStyle);
             // progress / wait 共用同一组米字装饰，只移动 body 指示点，不重复淡入淡出
             const nextDecoKey = design.decoKey ?? design.key;

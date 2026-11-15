@@ -63,6 +63,8 @@ resize ↔ `move` / `all_scroll` / `all_resize` 过渡时优先用十字的一�
 
 `text` / `vertical_text` / `crosshair` 是一组独立的过渡：`vertical_text` 与 `crosshair` 共用横线 body，只淡入淡出竖装饰；`text` 与 `crosshair` 之间让竖线保持为 body，横线作为装饰淡入/淡出，不做旋转或尺寸伸缩。两条线的 body/装饰角色互换发生在过渡结束切回无方向帧时，视觉上连续。
 
+每个设计可以带 `hotspot`，缺省为局部坐标原点（当前所有普通形状都在中心）。`progress` 的热点在左上小圆点 `(-8, -8)`，所以整个米字会偏移到指针右下；热点切换时视觉内容会随过渡一起平移。预览矩阵的 `normal` 行用红圈标出每个形状的热点。
+
 `test/cursor/cursor_preview.ts` 把桌面自身的 `normal` 默认静态状态和全部形状按行、列铺成上三角矩阵（过渡来回播放，反方向共用同一格）。`normal` 行不参与动画；其余设计不同的单元格自动播放 `from ↔ to`，两端各停留约 1 秒，初相位错开避免整张矩阵同时闪烁。
 
 ## 退出

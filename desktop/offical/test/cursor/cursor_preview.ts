@@ -161,6 +161,24 @@ function buildMatrix() {
             animator.setShape(to.shape, 0, true);
             cell.add(animator.el);
 
+            // normal 行是静态帧，用红圈标出该形状的热点（鼠标位置）
+            if (from.label === "normal") {
+                cell.add(
+                    view().style({
+                        position: "absolute",
+                        left: "50%",
+                        top: "50%",
+                        width: "9px",
+                        height: "9px",
+                        border: "1px solid #ff5a5f",
+                        borderRadius: "50%",
+                        transform: "translate(-50%, -50%)",
+                        zIndex: "99",
+                        pointerEvents: "none",
+                    }),
+                );
+            }
+
             // normal 是静态基准；设计相同且线方向也没有变化的 pair 不用补间
             const involvesNormal = from.label === "normal" || to.label === "normal";
             const lineDelta = lineRotationDelta(from.shape, to.shape);
@@ -194,7 +212,7 @@ if ("document" in globalThis) {
     title.add(txt("Cursor 预览").style({ fontSize: "20px", fontWeight: "700" }));
     title.add(
         txt(
-            "行 = 起始形状，列 = 目标形状；只铺上三角（过渡来回播放，反方向共用同一格）。normal 是桌面自身的默认常规静态状态，不参与动画；其余可变化的单元格自动播放 from ↔ to，并在两端各停留约 1 秒。没单独设计的 resize 复用最近的横/竖/斜线，其他未设计的形状用默认圆点代替。线 resize 的方向切换会按内部方向旋转，双向与单向共线时不转；resize 与 move 之间优先用十字臂过渡；text 与 crosshair 之间竖线保持为 body，横线作为装饰淡入/淡出。",
+            "行 = 起始形状，列 = 目标形状；只铺上三角（过渡来回播放，反方向共用同一格）。normal 是桌面自身的默认常规静态状态，不参与动画；其余可变化的单元格自动播放 from ↔ to，并在两端各停留约 1 秒。没单独设计的 resize 复用最近的横/竖/斜线，其他未设计的形状用默认圆点代替。线 resize 的方向切换会按内部方向旋转，双向与单向共线时不转；resize 与 move 之间优先用十字臂过渡；text 与 crosshair 之间竖线保持为 body，横线作为装饰淡入/淡出。normal 行的红圈标出各形状的热点（鼠标位置）。",
         ).style({ fontSize: "12px", color: COLORS.muted }),
     );
 
