@@ -2,6 +2,7 @@ const child_process = require("node:child_process") as typeof import("node:child
 const fs = require("node:fs") as typeof import("node:fs");
 const path = require("node:path") as typeof import("node:path");
 
+import { formatLogTime, getAppLogPath, pruneAppLogs, RotatingLogFile } from "../utils/log";
 import type { renderTools } from "../wayland";
 import { createServer } from "../wayland";
 import { getEnv } from "./env";
@@ -167,6 +168,36 @@ export function server(op: { dev?: boolean; render: renderTools }) {
     };
 }
 
+/** 把应用输出按行加时间戳和来源写入日志；分不清 stdout/stderr 时很难定位问题 */
+class AppOutputLog {
+    private pending = "";
+    constructor(
+        private readonly file: RotatingLogFile,
+        private readonly tag: "out" | "err",
+    ) {}
+
+    push(chunk: Buffer) {
+        const text = this.pending + chunk.toString("utf8");
+        const lines = text.split("\n");
+        this.pending = lines.pop() ?? "";
+        for (const line of lines) this.writeLine(line);
+        // 没有换行的超长输出（如进度条）不能无限攒在内存里
+        if (this.pending.length > 64 * 1024) {
+            this.writeLine(this.pending);
+            this.pending = "";
+        }
+    }
+
+    flush() {
+        if (this.pending) this.writeLine(this.pending);
+        this.pending = "";
+    }
+
+    private writeLine(line: string) {
+        this.file.write(`${formatLogTime()} [${this.tag}] ${line.replace(/\r$/, "")}\n`);
+    }
+}
+
 export function runApp(
     execPath: string,
     op: {
@@ -188,8 +219,7 @@ export function runApp(
         user?: { uid?: number; gid?: number };
     },
 ) {
-    console.log(`Running application: ${execPath}`);
-
+    const startedAt = Date.now();
     const lang = op.deEnv.LANG || "en_US.UTF-8";
     const language = op.deEnv.LANGUAGE || languageFromLang(lang);
 
@@ -213,6 +243,35 @@ export function runApp(
         uid: op.user?.uid,
         gid: op.user?.gid,
     });
+
+    // stdout/stderr 是 pipe 就必须读：否则写满 64 KiB 后应用会阻塞在 write()，
+    // 表现为窗口画面卡死而桌面仍然流畅；同时把输出留到文件里供事后排查。
+    pruneAppLogs();
+    const appLog = new RotatingLogFile(getAppLogPath(execPath, subprocess.pid ?? 0), 10 * 1024 * 1024, 2);
+    appLog.write(`${formatLogTime()} [myde] started: ${execPath}${op.args.length ? ` ${op.args.join(" ")}` : ""}\n`);
+
+    const outLog = new AppOutputLog(appLog, "out");
+    const errLog = new AppOutputLog(appLog, "err");
+    subprocess.stdout?.on("data", (data: Buffer) => outLog.push(data));
+    subprocess.stderr?.on("data", (data: Buffer) => errLog.push(data));
+
+    let finished = false;
+    const finish = (summary: string) => {
+        if (finished) return;
+        finished = true;
+        outLog.flush();
+        errLog.flush();
+        appLog.write(`${formatLogTime()} [myde] ${summary}\n`);
+        appLog.close();
+    };
+    subprocess.on("close", (code, signal) => {
+        finish(`exited: code=${code} signal=${signal} duration=${Date.now() - startedAt}ms`);
+    });
+    subprocess.on("error", (e) => {
+        finish(`spawn error: ${String((e as Error)?.stack ?? e)}`);
+    });
+
+    console.log(`Running application: ${execPath} (pid ${subprocess.pid}, logs: ${appLog.filePath})`);
 
     return subprocess;
 }

@@ -814,6 +814,8 @@ serverX.stopXwayland();
 
 `startXwayland()` 会找一个空闲的 `:N`，启动 `xwayland-satellite :N`，等待 `/tmp/.X11-unix/XN` 出现；可用 `MYDE_XWAYLAND_SATELLITE` 指定 binary 路径。
 
+`runApp()` 会读取应用的 stdout/stderr，写入 `$XDG_STATE_HOME/myde/logs/apps/<可执行名>-<pid>.log`，每行带时间和 `[out]`/`[err]` 来源。管道必须被读取：应用写满 64 KiB 后会阻塞在 `write()`，看起来像窗口画面卡死。日志文件超过 10 MiB 会轮转，最多保留最近 50 份。
+
 ## 开发提示
 
 使用不了`require`，应该使用打包器打包成一个js文件。如果有复杂计算任务，使用 woker+wasm，如果需要其他系统 api，需要修改引擎，请提交 issuse 或 pr。

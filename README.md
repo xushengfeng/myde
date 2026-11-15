@@ -74,6 +74,15 @@ release 的安装包已内置编译好的 `myde-wrap`；本地执行 `npm run bu
 
 启动日志会打印实际的设备访问方式（`logind` / `direct`）。`myde-wrap` 启动时如果既没有 logind、也读不到输入设备也会提示。
 
+### 日志
+
+日志写在 `$XDG_STATE_HOME/myde/logs`（默认 `~/.local/state/myde/logs`）：
+
+- `myde.log`：主进程日志，包含渲染进程 `console` 与崩溃、无响应事件；超过 10 MiB 轮转为 `myde.log.1` 等，保留 3 份。
+- `apps/<可执行名>-<pid>.log`：桌面启动的应用 stdout/stderr，带时间和 `[out]`/`[err]` 标记；最多保留最近 50 份。
+
+原生模式（`myde-wrap` 全屏）下 stdout 落在被 DRM 占用的 TTY 上，屏幕上看不到，日志文件是主要排查入口。应用输出必须被读取，否则写满 64 KiB 后应用会阻塞在 `write()`，表现为窗口画面卡死而桌面仍然流畅。
+
 ## 开发指南
 
 开发细节请参阅 [AGENTS.md](./AGENTS.md)，该文档面向开发者和 LLM 工具。

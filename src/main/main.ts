@@ -3,8 +3,10 @@
 import { closeSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { format } from "node:util";
 import { app, BrowserWindow, globalShortcut, ipcMain, nativeTheme, sharedTexture } from "electron";
 import { uniqueSocketPath } from "../socket-name";
+import { formatLogTime, getLogDir, RotatingLogFile } from "../utils/log";
 import { startInternalPortal, stopInternalPortal } from "./internal_portal";
 
 const run_path = path.join(path.resolve(__dirname, ""), "../../");
@@ -16,6 +18,39 @@ const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 let /** 是否开启开发模式 */ dev: boolean;
 
 dev = true;
+
+/** 主进程日志文件；原生模式 stdout 在被 DRM 占用的 TTY 上，必须落盘 */
+const mainLogFile = new RotatingLogFile(path.join(getLogDir(), "myde.log"));
+
+function mainLog(level: string, message: string) {
+    mainLogFile.write(`${formatLogTime()} [${level}] ${message}\n`);
+}
+
+/** 让主进程 console 同时写日志文件，行为保持不变 */
+function captureConsole() {
+    const methods = ["debug", "info", "log", "warn", "error"] as const;
+    for (const method of methods) {
+        const original = console[method];
+        console[method] = (...args: unknown[]) => {
+            original(...args);
+            let message: string;
+            try {
+                message = format(...args);
+            } catch {
+                message = args.map((arg) => String(arg)).join(" ");
+            }
+            if (message.length > 16 * 1024) message = `${message.slice(0, 16 * 1024)}…`;
+            mainLog(method, message);
+        };
+    }
+}
+
+captureConsole();
+mainLog(
+    "info",
+    `start: version=${app.getVersion()} electron=${process.versions.electron} node=${process.versions.node} pid=${process.pid} argv=${JSON.stringify(process.argv)}`,
+);
+mainLog("info", `log file: ${mainLogFile.filePath}`);
 
 let the_icon = path.join(run_path, "assets/logo/1024x1024.png");
 if (process.platform === "win32") {
@@ -78,12 +113,23 @@ async function createWin() {
         roundedCorners: !runAsDesktop,
     });
     mainWin = main_window;
-    main_window.on("closed", () => sharedLog("main window closed"));
-    main_window.on("unresponsive", () => sharedLog("main window unresponsive"));
-    main_window.webContents.on("render-process-gone", (_e, details) =>
-        sharedLog(`render-process-gone ${JSON.stringify(details)}`),
-    );
-    main_window.webContents.on("destroyed", () => sharedLog("webContents destroyed"));
+    main_window.on("closed", () => {
+        sharedLog("main window closed");
+        mainLog("info", "main window closed");
+    });
+    main_window.on("unresponsive", () => {
+        sharedLog("main window unresponsive");
+        mainLog("warn", "main window unresponsive");
+    });
+    main_window.webContents.on("render-process-gone", (_e, details) => {
+        const line = `render-process-gone ${JSON.stringify(details)}`;
+        sharedLog(line);
+        mainLog("error", line);
+    });
+    main_window.webContents.on("destroyed", () => {
+        sharedLog("webContents destroyed");
+        mainLog("warn", "webContents destroyed");
+    });
     if (process.env.desktop === ":test") {
         rendererPath(main_window.webContents, "test.html", {
             query: { userData: app.getPath("userData"), env: JSON.stringify(process.env) },
@@ -106,12 +152,18 @@ async function createWin() {
     }
 
     if (dev) main_window.webContents.openDevTools();
-    if (runAsDesktop) {
-        mainWin.webContents.on("console-message", ({ message, level: _level, lineNumber }) => {
-            // if (level === "error")
-            console.log(`console-message: lineNumber=${lineNumber}, message=${JSON.stringify(message)}`);
-        });
-    }
+    main_window.webContents.on("console-message", (event) => {
+        const { level, message, sourceId, lineNumber } = event;
+        mainLog(`renderer:${level}`, `${message} (${sourceId}:${lineNumber})`);
+        // 保留原有的 stdout 输出，方便原生模式外接重定向或 SSH 时查看
+        if (runAsDesktop) {
+            try {
+                process.stdout.write(`console-message: lineNumber=${lineNumber}, message=${JSON.stringify(message)}\n`);
+            } catch {
+                /* stdout 已关闭 */
+            }
+        }
+    });
 }
 
 let mainWin: BrowserWindow | null = null;
@@ -191,12 +243,33 @@ const sharedTimer = setInterval(() => {
 }, 4);
 sharedTimer.unref?.();
 
-process.on("uncaughtException", (e: Error) => sharedLog(`uncaughtException ${String(e.stack ?? e)}`));
-process.on("unhandledRejection", (e) => sharedLog(`unhandledRejection ${String(e)}`));
-app.on("before-quit", () => sharedLog("before-quit"));
-app.on("will-quit", () => sharedLog("will-quit"));
-app.on("window-all-closed", () => sharedLog("window-all-closed"));
-app.on("child-process-gone", (_e, details) => sharedLog(`child-process-gone ${JSON.stringify(details)}`));
+process.on("uncaughtException", (e: Error) => {
+    const line = `uncaughtException ${String(e.stack ?? e)}`;
+    sharedLog(line);
+    mainLog("error", line);
+});
+process.on("unhandledRejection", (e) => {
+    const line = `unhandledRejection ${String(e)}`;
+    sharedLog(line);
+    mainLog("error", line);
+});
+app.on("before-quit", () => {
+    sharedLog("before-quit");
+    mainLog("info", "before-quit");
+});
+app.on("will-quit", () => {
+    sharedLog("will-quit");
+    mainLog("info", "will-quit");
+});
+app.on("window-all-closed", () => {
+    sharedLog("window-all-closed");
+    mainLog("info", "window-all-closed");
+});
+app.on("child-process-gone", (_e, details) => {
+    const line = `child-process-gone ${JSON.stringify(details)}`;
+    sharedLog(line);
+    mainLog("error", line);
+});
 
 const server = new mus.UServer();
 server.listen(ipcPath);
@@ -204,6 +277,8 @@ app.on("will-quit", () => {
     try {
         rmSync(ipcPath, { force: true });
     } catch {}
+    mainLog("info", "quit");
+    mainLogFile.close();
 });
 server.on("connection", (socket) => {
     sharedLog("connection");
