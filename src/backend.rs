@@ -1,4 +1,4 @@
-use crate::protocol::ScreenInfo;
+use crate::protocol::{ModeInfo, ScreenInfo};
 use crate::renderer::ScreenConfig;
 use crate::wayland::App;
 use smithay::backend::allocator::dmabuf::Dmabuf;
@@ -9,6 +9,17 @@ pub trait RenderBackend: Send {
 
     /// 返回真实输出屏幕信息（供 GetScreens 使用）
     fn get_screens(&self) -> Vec<ScreenInfo>;
+
+    /// 切换屏幕模式（分辨率 + 刷新率）。返回实际生效的屏幕信息；
+    /// 不支持的屏幕或模式返回错误。winit 后端由宿主决定窗口尺寸，不支持。
+    fn set_screen_mode(
+        &mut self,
+        _screen_index: usize,
+        _mode: ModeInfo,
+    ) -> anyhow::Result<ScreenInfo> {
+        Err(anyhow::anyhow!("当前渲染后端不支持切换屏幕模式"))
+    }
+
     fn init(
         &mut self,
         event_loop: &mut EventLoop<App>,

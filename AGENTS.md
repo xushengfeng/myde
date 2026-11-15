@@ -13,7 +13,8 @@ myde-wrap 是一个轻量级的 Rust Wayland 桌面合成器，专注于渲染�
 - 截取原始画布中的矩形区域（左上角 + 长宽 + 旋转），每个屏幕一个
 - 截取结果拉伸填充到屏幕（隐式缩放）
 - 将处理后的矩形分别渲染到多个屏幕
-- 获取屏幕参数信息
+- 获取屏幕参数信息（当前模式 + 该屏幕支持的全部模式）
+- 切换屏幕模式（分辨率 + 刷新率，仅 DRM 后端）
 - 开启/关闭输入功能
 - 开启/关闭屏幕电源（DPMS，仅 DRM 后端）
 
@@ -22,6 +23,8 @@ myde-wrap 是一个轻量级的 Rust Wayland 桌面合成器，专注于渲染�
 还有个winit窗口后端，可以显示在如kde上作为一个窗口，方便调试wayland相关
 
 wayland协议仅窗口显示相关，不需要其他过多协议
+
+实现了 `wp_presentation`（presentation-time）：在 DRM vblank / winit 重绘后回 `presented`，`refresh` 取当前输出模式。Chromium 客户端靠它估算真实刷新率，否则即使 `wl_output.mode` 是 120Hz 也会退回 60Hz。
 
 ## 技术架构
 
@@ -73,6 +76,10 @@ cargo clippy
 
 屏幕电源能力通过`MYDE_WRAP_SCREEN_POWER=1`广告给子进程；只有 DRM 后端会设置，winit 不设置，应用据此跳过`SetScreenPower`。
 
+屏幕模式切换能力通过`MYDE_WRAP_SCREEN_MODE=1`广告；只有 DRM 后端会设置，winit 的窗口尺寸由宿主决定，不支持切换。
+
+DRM 启动模式取 EDID 首选分辨率下刷新率最高的模式，而不是`modes()[0]`，避免 120Hz 屏幕默认跑 60Hz。
+
 ### 消息格式
 
 ```
@@ -111,9 +118,26 @@ cargo clippy
 
 #### 获取屏幕信息
 
+`modes` 是该屏幕支持的全部模式（同一分辨率/刷新率去重）。旧版 wrap 没有该字段。
+
 ```json
 {
     "type": "GetScreens"
+}
+```
+
+#### 切换屏幕模式
+
+只接受 `GetScreens` 返回的 `modes` 中存在的模式，`refresh_rate` 单位为 Hz。
+只在 DRM 后端生效；winit 返回 `Error`。
+
+```json
+{
+    "type": "SetScreenMode",
+    "screen_index": 0,
+    "width": 1920,
+    "height": 1080,
+    "refresh_rate": 120
 }
 ```
 
@@ -174,12 +198,30 @@ cargo clippy
     "type": "Screens",
     "screens": [
         {
-            "name": "Screen-0",
+            "name": "DRM-Crtc(0)",
             "width": 1920,
             "height": 1080,
-            "refresh_rate": 60
+            "refresh_rate": 120,
+            "modes": [
+                { "width": 1920, "height": 1080, "refresh_rate": 60 },
+                { "width": 1920, "height": 1080, "refresh_rate": 120 }
+            ]
         }
     ]
+}
+```
+
+#### 屏幕模式已切换
+
+字段为实际生效的模式（Hz）。
+
+```json
+{
+    "type": "ScreenMode",
+    "screen_index": 0,
+    "width": 1920,
+    "height": 1080,
+    "refresh_rate": 120
 }
 ```
 

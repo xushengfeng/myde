@@ -6,27 +6,34 @@ use tokio::sync::Mutex;
 use crate::backend::RenderBackend;
 use smithay::{
     backend::allocator::Format,
+    delegate_presentation,
     desktop::{PopupManager, Space, Window},
     input::{Seat, SeatState},
+    output::Output,
     reexports::{
         calloop::{
             generic::Generic, EventLoop, Interest, LoopSignal, Mode as CalloopMode, PostAction,
         },
+        wayland_protocols::wp::presentation_time::server::wp_presentation_feedback,
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             Display, DisplayHandle,
         },
     },
     wayland::{
-        compositor::{CompositorClientState, CompositorState},
+        compositor::{
+            with_surface_tree_downward, CompositorClientState, CompositorState, TraversalAction,
+        },
         dmabuf::{DmabufFeedback, DmabufGlobal, DmabufState},
         output::OutputManagerState,
+        presentation::{PresentationFeedbackCachedState, PresentationState, Refresh},
         selection::data_device::DataDeviceState,
         shell::xdg::XdgShellState,
         shm::ShmState,
         socket::ListeningSocketSource,
     },
 };
+use std::time::Duration;
 
 pub struct App {
     pub start_time: std::time::Instant,
@@ -50,6 +57,11 @@ pub struct App {
     pub popups: PopupManager,
     #[allow(dead_code)]
     pub seat: Seat<Self>,
+    /// wp_presentation 全局；保留 State 以维持 global
+    #[allow(dead_code)]
+    presentation_state: PresentationState,
+    /// presented 事件里的单调递增序号
+    presentation_seq: u64,
 
     // —— 渲染调度状态 ——
     /// 渲染后端。由事件循环线程独占：渲染时先 `take` 出来再调用，
@@ -113,6 +125,11 @@ impl App {
         // Get the loop signal, used to stop the event loop
         let loop_signal = event_loop.get_signal();
 
+        // presentation-time：Chromium 用 presented.refresh 估算刷新率；
+        // 没有该协议时即使 wl_output.mode 是 120Hz 也会退回 60Hz。
+        // CLOCK_MONOTONIC = 1。
+        let presentation_state = PresentationState::new::<Self>(&dh, 1);
+
         Self {
             start_time,
             display_handle: dh,
@@ -129,6 +146,8 @@ impl App {
             data_device_state,
             popups,
             seat,
+            presentation_state,
+            presentation_seq: 0,
             backend: None,
             renderer_cfg: None,
             redraw: Arc::new(AtomicBool::new(false)),
@@ -233,6 +252,14 @@ impl App {
     }
 }
 
+/// CLOCK_MONOTONIC（wp_presentation.clock_id = 1）的绝对时间。
+pub(crate) fn monotonic_now() -> Duration {
+    match nix::time::clock_gettime(nix::time::ClockId::CLOCK_MONOTONIC) {
+        Ok(time) => Duration::new(time.tv_sec().max(0) as u64, time.tv_nsec().max(0) as u32),
+        Err(_) => Duration::ZERO,
+    }
+}
+
 // —— 渲染调度 ——
 //
 // DRM 后端不再由固定 16ms 定时器盲渲，而是事件驱动：
@@ -271,6 +298,48 @@ impl App {
         self.request_redraw();
     }
 
+    /// 在帧上屏（或确认无帧可等）后回 wp_presentation feedback。
+    ///
+    /// `refresh` 传当前输出的刷新周期；时间基准与 frame callback 一致，
+    /// 都是 `App::start_time` 起的时长（CLOCK_MONOTONIC 等价）。
+    pub fn send_presentation_feedbacks(
+        &mut self,
+        output: &Output,
+        time: Duration,
+        refresh: Option<Duration>,
+    ) {
+        let mut callbacks = Vec::new();
+        let roots: Vec<_> = self
+            .space
+            .elements()
+            .filter_map(|window| window.toplevel().map(|t| t.wl_surface().clone()))
+            .collect();
+        for root in roots {
+            with_surface_tree_downward(
+                &root,
+                (),
+                |_, _, _| TraversalAction::DoChildren(()),
+                |_, states, _| {
+                    let mut cached = states.cached_state.get::<PresentationFeedbackCachedState>();
+                    callbacks.append(&mut cached.current().callbacks);
+                },
+                |_, _, _| true,
+            );
+        }
+
+        let refresh = refresh.map(Refresh::fixed).unwrap_or(Refresh::Unknown);
+        for callback in callbacks {
+            self.presentation_seq = self.presentation_seq.wrapping_add(1);
+            callback.presented(
+                output,
+                time,
+                refresh,
+                self.presentation_seq,
+                wp_presentation_feedback::Kind::Vsync,
+            );
+        }
+    }
+
     /// 有脏内容且当前没有帧在飞时，立即渲染一帧；否则等待 vblank。
     fn schedule_render(&mut self) {
         if !self.redraw.load(Ordering::Acquire) {
@@ -291,6 +360,30 @@ impl App {
         let Some(renderer_cfg) = self.renderer_cfg.clone() else {
             return;
         };
+        // 先把 socket 线程请求的模式切换应用到后端。模式切换会影响输出尺寸，
+        // 必须在取配置快照、渲染这一帧之前完成。
+        let pending_modes = {
+            let mut guard = renderer_cfg.blocking_lock();
+            guard.take_pending_modes()
+        };
+        for (index, mode) in pending_modes {
+            match backend.set_screen_mode(index, mode) {
+                Ok(screen) => {
+                    renderer_cfg
+                        .blocking_lock()
+                        .apply_screen_info(index, screen);
+                }
+                Err(e) => {
+                    tracing::warn!("切换屏幕 {} 模式失败: {}", index, e);
+                    // 回滚快照到后端实际状态，避免 socket 侧继续报告错误的模式
+                    if let Some(screen) = backend.get_screens().into_iter().nth(index) {
+                        renderer_cfg
+                            .blocking_lock()
+                            .apply_screen_info(index, screen);
+                    }
+                }
+            }
+        }
         // 取配置快照后立刻释放锁，不让锁跨越整轮 GL 渲染
         let (configs, canvas_size, config_generation, screen_power) = {
             let guard = renderer_cfg.blocking_lock();
@@ -368,6 +461,8 @@ impl App {
         self.backend = Some(backend);
     }
 }
+
+delegate_presentation!(App);
 
 /// Data associated with a wayland client that connects to myde-wrap.
 /// One instance of this type per client.

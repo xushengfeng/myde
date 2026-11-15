@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 use crate::backend::RenderBackend;
-use crate::protocol::{Rect, ScreenInfo};
+use crate::protocol::{ModeInfo, Rect, ScreenInfo};
 use crate::wayland::App;
 
 /// 计算画布相关矩形（内容坐标系：原点为窗口内容（xdg window geometry）左上角，
@@ -91,9 +91,47 @@ struct DrmOutputData {
     crtc: crtc::Handle,
     connector: connector::Handle,
     mode: smithay::reexports::drm::control::Mode,
+    /// connector 支持的全部模式（EDID 顺序）
+    all_modes: Vec<smithay::reexports::drm::control::Mode>,
     width: u32,
     height: u32,
     smithay_output: Output,
+}
+
+fn mode_info(mode: &smithay::reexports::drm::control::Mode) -> ModeInfo {
+    ModeInfo {
+        width: mode.size().0 as u32,
+        height: mode.size().1 as u32,
+        refresh_rate: mode.vrefresh(),
+    }
+}
+
+/// 启动模式：保持 EDID 首选模式的分辨率，在同一分辨率里选刷新率最高的模式。
+///
+/// connector 的 `modes()` 按 EDID 顺序排列，`modes()[0]` 通常是首选分辨率但
+/// 刷新率可能是 60Hz；直接取第一个会让 120Hz 屏幕只跑 60Hz。
+fn pick_startup_mode(
+    modes: &[smithay::reexports::drm::control::Mode],
+) -> Option<smithay::reexports::drm::control::Mode> {
+    let first = modes.first()?;
+    let size = first.size();
+    modes
+        .iter()
+        .filter(|mode| mode.size() == size)
+        .max_by_key(|mode| mode.vrefresh())
+        .copied()
+}
+
+/// 去重后的模式列表：同一分辨率/刷新率只保留一个。
+fn mode_list(modes: &[smithay::reexports::drm::control::Mode]) -> Vec<ModeInfo> {
+    let mut list = Vec::new();
+    for mode in modes {
+        let info = mode_info(mode);
+        if !list.contains(&info) {
+            list.push(info);
+        }
+    }
+    list
 }
 
 /// 设置一个 DRM connector 的 DPMS 状态。
@@ -477,8 +515,17 @@ impl RenderBackend for DrmBackend {
                     for &conn in res.connectors() {
                         let info = dev.get_connector(conn, false)?;
                         if info.state() == connector::State::Connected && !info.modes().is_empty() {
-                            let mode = info.modes()[0];
-                            info!("Found connector: {:?}, mode: {:?}", conn, mode);
+                            let mode = pick_startup_mode(info.modes())
+                                .expect("connector 已确认至少有一个模式");
+                            info!(
+                                "Found connector: {:?}, mode: {:?} ({}x{}@{}Hz, {} 个可用模式)",
+                                conn,
+                                mode,
+                                mode.size().0,
+                                mode.size().1,
+                                mode.vrefresh(),
+                                info.modes().len()
+                            );
 
                             for &enc in info.encoders() {
                                 let enc_info = dev.get_encoder(enc)?;
@@ -514,6 +561,7 @@ impl RenderBackend for DrmBackend {
                                         crtc: c,
                                         connector: conn,
                                         mode,
+                                        all_modes: info.modes().to_vec(),
                                         width: mode.size().0 as u32,
                                         height: mode.size().1 as u32,
                                         smithay_output,
@@ -804,6 +852,7 @@ void main() {
         for window in state.space.elements() {
             window.send_frame(output, time, throttle, |_, _| Some(output.clone()));
         }
+        state.send_presentation_feedbacks(output, crate::wayland::monotonic_now(), throttle);
     }
 
     fn get_screens(&self) -> Vec<ScreenInfo> {
@@ -814,8 +863,75 @@ void main() {
                 width: output.width,
                 height: output.height,
                 refresh_rate: output.mode.vrefresh(),
+                modes: mode_list(&output.all_modes),
             })
             .collect()
+    }
+
+    fn set_screen_mode(
+        &mut self,
+        screen_index: usize,
+        mode: ModeInfo,
+    ) -> anyhow::Result<ScreenInfo> {
+        let output = self
+            .outputs
+            .get(screen_index)
+            .ok_or_else(|| anyhow::anyhow!("Invalid screen index: {}", screen_index))?;
+        let drm_mode = output
+            .all_modes
+            .iter()
+            .find(|m| {
+                m.size().0 as u32 == mode.width
+                    && m.size().1 as u32 == mode.height
+                    && m.vrefresh() == mode.refresh_rate
+            })
+            .copied()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "屏幕 {} 不支持模式 {}x{}@{}Hz",
+                    screen_index,
+                    mode.width,
+                    mode.height,
+                    mode.refresh_rate
+                )
+            })?;
+
+        let runtime = self
+            .compositors
+            .get_mut(screen_index)
+            .ok_or_else(|| anyhow::anyhow!("屏幕 {} 没有 DRM compositor", screen_index))?;
+        runtime
+            .compositor
+            .use_mode(drm_mode)
+            .map_err(|e| anyhow::anyhow!("设置 DRM 模式失败: {:?}", e))?;
+
+        let smithay_mode = smithay::output::Mode {
+            size: (mode.width as i32, mode.height as i32).into(),
+            refresh: (mode.refresh_rate * 1000) as i32,
+        };
+        let output = &mut self.outputs[screen_index];
+        output.mode = drm_mode;
+        output.width = mode.width;
+        output.height = mode.height;
+        output
+            .smithay_output
+            .change_current_state(Some(smithay_mode), None, None, None);
+        if screen_index == 0 {
+            self.width = mode.width;
+            self.height = mode.height;
+        }
+
+        info!(
+            "屏幕 {} 已切换到 {}x{}@{}Hz",
+            screen_index, mode.width, mode.height, mode.refresh_rate
+        );
+        Ok(ScreenInfo {
+            name: format!("DRM-{:?}", output.crtc),
+            width: output.width,
+            height: output.height,
+            refresh_rate: output.mode.vrefresh(),
+            modes: mode_list(&output.all_modes),
+        })
     }
 
     fn get_output_count(&self) -> usize {

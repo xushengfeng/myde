@@ -188,6 +188,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let is_drm = backend.name() == "drm";
     info!("backend inited: {}", backend.name());
     let screen_power_supported = is_drm;
+    // 模式切换（分辨率/刷新率）只在 DRM 后端可用；winit 窗口尺寸由宿主决定
+    let screen_mode_supported = is_drm;
 
     // Set WAYLAND_DISPLAY to our socket name, so child processes connect to myde-wrap
     // rather than the host compositor
@@ -249,6 +251,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     envs.push((
         "MYDE_WRAP_SCREEN_POWER".to_string(),
         if screen_power_supported { "1" } else { "0" }.to_string(),
+    ));
+    // 屏幕模式（分辨率/刷新率）切换能力
+    envs.retain(|(key, _)| key != "MYDE_WRAP_SCREEN_MODE");
+    envs.push((
+        "MYDE_WRAP_SCREEN_MODE".to_string(),
+        if screen_mode_supported { "1" } else { "0" }.to_string(),
     ));
 
     let child_stdio = || {

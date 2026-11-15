@@ -1,4 +1,4 @@
-use crate::protocol::{Rect, ScreenInfo, Transform};
+use crate::protocol::{ModeInfo, Rect, ScreenInfo, Transform};
 use tracing::info;
 
 pub struct Renderer {
@@ -16,6 +16,8 @@ pub struct Renderer {
     /// 屏幕配置代数：任何影响上屏结果的配置变更都会递增。
     /// 渲染线程据此判断"仅配置变了"（只需重做上屏那一遍，离屏画布可复用）
     config_generation: u64,
+    /// 等待渲染线程应用到后端的屏幕模式（每屏一个）
+    pending_modes: Vec<Option<ModeInfo>>,
 }
 
 #[derive(Clone, Debug)]
@@ -35,17 +37,19 @@ impl Renderer {
         if screens.is_empty() {
             info!("no output detected, using auto canvas");
         }
+        let screen_count = screens.len();
 
         Self {
             canvas_size: None,
             captured_rects: Vec::new(),
             transforms: vec![Transform { rotation: 0.0 }],
-            screen_power: vec![true; screens.len()],
+            screen_power: vec![true; screen_count],
             screen_power_supported,
             screens,
             input_enabled: true,
             screen_configs: Vec::new(),
             config_generation: 0,
+            pending_modes: vec![None; screen_count],
         }
     }
 
@@ -117,6 +121,66 @@ impl Renderer {
 
     pub fn get_screens(&self) -> Vec<ScreenInfo> {
         self.screens.clone()
+    }
+
+    /// 请求切换屏幕模式。
+    ///
+    /// 只接受该屏幕 `modes` 里的模式（旧后端没给列表时只允许当前模式），
+    /// 校验通过后立即更新快照，等渲染线程调用 [`Self::take_pending_modes`] 应用到后端。
+    pub fn set_screen_mode(
+        &mut self,
+        screen_index: usize,
+        mode: ModeInfo,
+    ) -> anyhow::Result<ScreenInfo> {
+        let screen = self
+            .screens
+            .get_mut(screen_index)
+            .ok_or_else(|| anyhow::anyhow!("Invalid screen index: {}", screen_index))?;
+        let supported = if screen.modes.is_empty() {
+            screen.width == mode.width
+                && screen.height == mode.height
+                && screen.refresh_rate == mode.refresh_rate
+        } else {
+            screen.modes.contains(&mode)
+        };
+        if !supported {
+            return Err(anyhow::anyhow!(
+                "屏幕 {} 不支持模式 {}x{}@{}Hz",
+                screen_index,
+                mode.width,
+                mode.height,
+                mode.refresh_rate
+            ));
+        }
+
+        screen.width = mode.width;
+        screen.height = mode.height;
+        screen.refresh_rate = mode.refresh_rate;
+        let screen = screen.clone();
+
+        if let Some(slot) = self.pending_modes.get_mut(screen_index) {
+            *slot = Some(mode);
+        }
+        self.config_generation = self.config_generation.wrapping_add(1);
+        Ok(screen)
+    }
+
+    /// 取出待应用的屏幕模式（渲染线程在下一帧渲染前调用）
+    pub fn take_pending_modes(&mut self) -> Vec<(usize, ModeInfo)> {
+        let mut modes = Vec::new();
+        for (index, slot) in self.pending_modes.iter_mut().enumerate() {
+            if let Some(mode) = slot.take() {
+                modes.push((index, mode));
+            }
+        }
+        modes
+    }
+
+    /// 后端实际生效后同步快照（模式切换失败时也用它回滚）
+    pub fn apply_screen_info(&mut self, screen_index: usize, screen: ScreenInfo) {
+        if screen_index < self.screens.len() {
+            self.screens[screen_index] = screen;
+        }
     }
 
     pub fn set_input_enabled(&mut self, enabled: bool) {

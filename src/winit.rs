@@ -14,7 +14,7 @@ use smithay::{
 };
 
 use crate::backend::RenderBackend;
-use crate::protocol::ScreenInfo;
+use crate::protocol::{ModeInfo, ScreenInfo};
 use crate::wayland::App;
 
 pub struct WinitBackend {
@@ -47,8 +47,12 @@ impl RenderBackend for WinitBackend {
 
         // 从 winit 渲染器拿真实支持的 dmabuf 格式，注册 v3 全局。
         // 这里不导入 buffer（渲染器在事件循环闭包里），渲染时惰性导入。
-        let dmabuf_formats: Vec<smithay::backend::allocator::Format> =
-            backend.renderer().dmabuf_formats().iter().copied().collect();
+        let dmabuf_formats: Vec<smithay::backend::allocator::Format> = backend
+            .renderer()
+            .dmabuf_formats()
+            .iter()
+            .copied()
+            .collect();
         state.setup_dmabuf(dmabuf_formats);
 
         let mode = Mode {
@@ -127,14 +131,20 @@ impl RenderBackend for WinitBackend {
 
                         backend.submit(Some(&[damage])).unwrap();
 
-                        state.space.elements().for_each(|window| {
-                            window.send_frame(
-                                &output,
-                                state.start_time.elapsed(),
-                                Some(Duration::ZERO),
-                                |_, _| Some(output.clone()),
-                            )
+                        let time = state.start_time.elapsed();
+                        let refresh = output.current_mode().map(|mode| {
+                            Duration::from_secs_f64(1_000.0 / f64::from(mode.refresh).max(1.0))
                         });
+                        state.space.elements().for_each(|window| {
+                            window.send_frame(&output, time, Some(Duration::ZERO), |_, _| {
+                                Some(output.clone())
+                            })
+                        });
+                        state.send_presentation_feedbacks(
+                            &output,
+                            crate::wayland::monotonic_now(),
+                            refresh,
+                        );
 
                         state.space.refresh();
                         state.popups.cleanup();
@@ -173,6 +183,11 @@ impl RenderBackend for WinitBackend {
             width,
             height,
             refresh_rate,
+            modes: vec![ModeInfo {
+                width,
+                height,
+                refresh_rate,
+            }],
         }]
     }
 

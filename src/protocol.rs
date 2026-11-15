@@ -38,17 +38,31 @@ impl Default for Transform {
     }
 }
 
+/// 屏幕模式（分辨率 + 刷新率）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModeInfo {
+    /// 模式宽度（像素）
+    pub width: u32,
+    /// 模式高度（像素）
+    pub height: u32,
+    /// 刷新率（Hz）
+    pub refresh_rate: u32,
+}
+
 /// 屏幕信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScreenInfo {
     /// 屏幕名称（如 "Screen-0"、"eDP-1"、"HDMI-1"）
     pub name: String,
-    /// 屏幕宽度（像素）
+    /// 当前屏幕宽度（像素）
     pub width: u32,
-    /// 屏幕高度（像素）
+    /// 当前屏幕高度（像素）
     pub height: u32,
-    /// 刷新率（Hz）
+    /// 当前刷新率（Hz）
     pub refresh_rate: u32,
+    /// 该屏幕支持的全部模式；后端不提供时为当前模式
+    #[serde(default)]
+    pub modes: Vec<ModeInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +92,16 @@ pub enum ClientMessage {
         transform: Option<Transform>,
     },
     GetScreens,
+    /// 切换屏幕模式（分辨率 + 刷新率）
+    ///
+    /// 只接受 `GetScreens` 返回的 `modes` 中存在的模式。DRM 后端立即切换，
+    /// winit 后端的窗口尺寸由宿主决定，不支持切换。
+    SetScreenMode {
+        screen_index: usize,
+        width: u32,
+        height: u32,
+        refresh_rate: u32,
+    },
     SetInputEnabled {
         enabled: bool,
     },
@@ -94,14 +118,37 @@ pub enum ClientMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ServerResponse {
-    WindowSizeSet { width: u32, height: u32 },
-    RectsCaptured { rects: Vec<Rect> },
+    WindowSizeSet {
+        width: u32,
+        height: u32,
+    },
+    RectsCaptured {
+        rects: Vec<Rect>,
+    },
     RectsTransformed,
-    RenderedToScreen { screen_index: usize },
-    Screens { screens: Vec<ScreenInfo> },
-    InputState { enabled: bool },
+    RenderedToScreen {
+        screen_index: usize,
+    },
+    Screens {
+        screens: Vec<ScreenInfo>,
+    },
+    /// 屏幕已切换到新模式（字段为实际生效的模式）
+    ScreenMode {
+        screen_index: usize,
+        width: u32,
+        height: u32,
+        refresh_rate: u32,
+    },
+    InputState {
+        enabled: bool,
+    },
     /// `screens` 为实际被接受的屏幕下标；winit 后端返回空数组
-    ScreenPower { on: bool, screens: Vec<usize> },
+    ScreenPower {
+        on: bool,
+        screens: Vec<usize>,
+    },
     Pong,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }

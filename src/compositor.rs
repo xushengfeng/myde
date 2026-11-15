@@ -56,6 +56,32 @@ impl Compositor {
                 let screens = renderer.get_screens();
                 ServerResponse::Screens { screens }
             }
+            ClientMessage::SetScreenMode {
+                screen_index,
+                width,
+                height,
+                refresh_rate,
+            } => match renderer.set_screen_mode(
+                screen_index,
+                crate::protocol::ModeInfo {
+                    width,
+                    height,
+                    refresh_rate,
+                },
+            ) {
+                Ok(screen) => {
+                    self.invalidate();
+                    ServerResponse::ScreenMode {
+                        screen_index,
+                        width: screen.width,
+                        height: screen.height,
+                        refresh_rate: screen.refresh_rate,
+                    }
+                }
+                Err(e) => ServerResponse::Error {
+                    message: e.to_string(),
+                },
+            },
             ClientMessage::SetInputEnabled { enabled } => {
                 renderer.set_input_enabled(enabled);
                 ServerResponse::InputState { enabled }
