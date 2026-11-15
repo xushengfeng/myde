@@ -234,6 +234,8 @@ NetworkManager 属性变化发出 `changed`；无线设备属性、接入点增�
 
 音量与静音变化会通过 `deviceVolumeChange` / `deviceMuteChange` / `streamVolumeChange` / `streamMuteChange` 事件通知，外部（如键盘音量键）修改也能收到
 
+默认输出/输入设备变化（插拔、连接蓝牙、手动切换）会发出 `defaultDeviceChange`，参数是 `"sink"` / `"source"` 和新默认设备的 `id`（没有默认设备时为 `undefined`）
+
 音量条拖动这类高频输入在桌面层用 `MUtils.throttle` 限制写入频率（见“MUtils”），API 本身每次都立即生效
 
 ### input

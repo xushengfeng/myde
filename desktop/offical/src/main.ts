@@ -2676,6 +2676,13 @@ MSysApi.volume.init().then(async () => {
             input: dip,
         };
     }
+    function syncDefault() {
+        const { output, input } = findDefault();
+        if (output?.volume !== undefined) rawRegistry.setData("volume.output.default.volume", output.volume);
+        if (input?.volume !== undefined) rawRegistry.setData("volume.input.default.volume", input.volume);
+        if (output?.isMuted !== undefined) rawRegistry.setData("volume.output.default.muted", output.isMuted);
+        if (input?.isMuted !== undefined) rawRegistry.setData("volume.input.default.muted", input.isMuted);
+    }
     function df() {
         volume.ev.on("deviceVolumeChange", (id, v) => {
             console.log(id, v); // todo 没触发 bug
@@ -2692,11 +2699,9 @@ MSysApi.volume.init().then(async () => {
             if (output?.id === id) rawRegistry.setData("volume.output.default.muted", b);
             if (input?.id === id) rawRegistry.setData("volume.input.default.muted", b);
         });
-        const { output, input } = findDefault();
-        if (output?.volume !== undefined) rawRegistry.setData("volume.output.default.volume", output.volume);
-        if (input?.volume !== undefined) rawRegistry.setData("volume.input.default.volume", input.volume);
-        if (output?.isMuted !== undefined) rawRegistry.setData("volume.output.default.muted", output.isMuted);
-        if (input?.isMuted !== undefined) rawRegistry.setData("volume.input.default.muted", input.isMuted);
+        // 默认设备可能中途变化（插拔、连接蓝牙、手动切换），同步成新设备的状态
+        volume.ev.on("defaultDeviceChange", syncDefault);
+        syncDefault();
 
         rawRegistry.setSetCallback("volume.output.default.volume", (v) => {
             const { output } = findDefault();

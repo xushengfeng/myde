@@ -88,6 +88,13 @@ function readVolume(volume: PactlVolume): number | undefined {
     return first ? first.value / VOLUME_SCALE : undefined;
 }
 
+function defaultDeviceId(devices: Map<number, AudioDevice>, type: "sink" | "source") {
+    for (const device of devices.values()) {
+        if (device.type === type && device.isDefault) return device.id;
+    }
+    return undefined;
+}
+
 function run(x: string): Promise<string> {
     const { promise, resolve, reject } = Promise.withResolvers<string>();
     exec(x, { encoding: "utf-8", maxBuffer: 8 * 1024 * 1024 }, (err, stdo, _stde) => {
@@ -110,6 +117,7 @@ export class volumeControl {
         deviceRemove: [deviceId: number];
         deviceVolumeChange: [deviceId: number, volume: number];
         deviceMuteChange: [deviceId: number, muted: boolean];
+        defaultDeviceChange: [type: "sink" | "source", deviceId: number | undefined];
         streamAdd: [stream: AudioStream];
         streamRemove: [streamId: number];
         streamVolumeChange: [streamId: number, volume: number];
@@ -234,7 +242,19 @@ export class volumeControl {
             next.set(device.id, device);
         }
 
+        const prevDefaultSink = defaultDeviceId(old, "sink");
+        const prevDefaultSource = defaultDeviceId(old, "source");
+
         this.devices = next;
+
+        const nextDefaultSink = defaultDeviceId(next, "sink");
+        const nextDefaultSource = defaultDeviceId(next, "source");
+        if (prevDefaultSink !== nextDefaultSink) {
+            this.ev.emit("defaultDeviceChange", "sink", nextDefaultSink);
+        }
+        if (prevDefaultSource !== nextDefaultSource) {
+            this.ev.emit("defaultDeviceChange", "source", nextDefaultSource);
+        }
 
         for (const [id, device] of next) {
             const prev = old.get(id);
@@ -415,9 +435,11 @@ export class volumeControl {
         const kind = device.type === "source" ? "source" : "sink";
         try {
             await run(`pactl set-default-${kind} ${quote(device.name)}`);
+            const changed = defaultDeviceId(this.devices, kind) !== id;
             for (const [deviceId, item] of this.devices) {
                 if (item.type === device.type) item.isDefault = deviceId === id;
             }
+            if (changed) this.ev.emit("defaultDeviceChange", kind, id);
             return true;
         } catch (_error) {
             return false;
