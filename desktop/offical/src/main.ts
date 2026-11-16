@@ -50,6 +50,9 @@ import {
     vVolume,
 } from "./ui";
 
+/** Chromium / Electron 的 Scheduler API；当前 TS lib 没有声明 */
+declare const scheduler: { yield(): Promise<void> };
+
 // ========== Registry 和 ControlNode ==========
 
 // 特殊的id类型，表示可以用registry.get获取
@@ -365,6 +368,8 @@ type ViewScreen = {
     readonly id: string;
     winId?: MWinId;
     empty: boolean;
+    /** 启动台：固定在最右的应用图标屏，和空桌面一样不参与全局预览 */
+    launchpad: boolean;
     /** 最近一次成为当前屏的顺序，重排时从小到大（旧的到新的） */
     used: number;
     el: ElType<HTMLElement>;
@@ -438,8 +443,13 @@ class ViewData {
 
     constructor() {
         this.createEmptyScreen();
+        this.createLaunchpadScreen();
         this.currentId = this.screens[0]?.id ?? "";
         this.render(false);
+    }
+
+    get launchpadScreen() {
+        return this.screens.find((s) => s.launchpad);
     }
 
     get gestureActive() {
@@ -469,7 +479,7 @@ class ViewData {
         this.render(false);
     }
 
-    private createEmptyScreen() {
+    private createScreen(kind: "empty" | "launchpad") {
         const id = `view-${this.nextId++}`;
         const el = createScreenEl(id, () => {
             if (this.overview) this.selectFromOverview(id);
@@ -478,7 +488,8 @@ class ViewData {
         const gear = new AnimationGear<ViewTransform>(start, { transition: SCREEN_TRANSITION });
         const screen: ViewScreen = {
             id,
-            empty: true,
+            empty: kind === "empty",
+            launchpad: kind === "launchpad",
             used: 0,
             el,
             gear,
@@ -489,6 +500,20 @@ class ViewData {
             screen.visual = value;
             applyScreenTransform(el, value);
         });
+        return screen;
+    }
+
+    private createEmptyScreen() {
+        const screen = this.createScreen("empty");
+        // 空桌面始终在启动台左边
+        const launchpadIndex = this.screens.findIndex((s) => s.launchpad);
+        if (launchpadIndex >= 0) this.screens.splice(launchpadIndex, 0, screen);
+        else this.screens.push(screen);
+        return screen;
+    }
+
+    private createLaunchpadScreen() {
+        const screen = this.createScreen("launchpad");
         this.screens.push(screen);
         return screen;
     }
@@ -745,11 +770,10 @@ class ViewData {
         if (this.overview || this.gesture) return;
         const current = this.currentScreen();
         const empty = this.screens.find((s) => s.empty);
-        if (!empty) return;
-        const ordered = this.screens
-            .filter((s) => !s.empty)
-            .toSorted((a, b) => a.used - b.used)
-            .concat(empty);
+        const launchpad = this.screens.find((s) => s.launchpad);
+        const ordered = this.screens.filter((s) => !s.empty && !s.launchpad).toSorted((a, b) => a.used - b.used);
+        if (empty) ordered.push(empty);
+        if (launchpad) ordered.push(launchpad);
         const changed = ordered.some((s, i) => s !== this.screens[i]);
         this.screens = ordered;
         if (current) this.currentId = current.id;
@@ -771,12 +795,12 @@ class ViewData {
     }
 
     /**
-     * 总览 grid：忽略空桌面，新的从右往左、再从上往下铺。
+     * 总览 grid：忽略空桌面和启动台，新的从右往左、再从上往下铺。
      * 行列数按屏幕宽高比估算，卡片保持虚拟屏比例。
      */
     private overviewTargets() {
         const cards = this.screens
-            .filter((s) => !s.empty)
+            .filter((s) => !s.empty && !s.launchpad)
             .slice()
             .reverse();
         const targets = new Map<string, ViewTransform>();
@@ -2537,6 +2561,8 @@ const windowEl = view()
     .addInto(windowElWarp);
 
 viewData = new ViewData();
+const launchpadScreen = viewData.launchpadScreen;
+if (launchpadScreen) launchpadScreen.el.add(createLaunchpadContent());
 
 // 总览里点到卡片以外的空白处退出预览
 windowEl.on("click", (e) => {
@@ -3513,31 +3539,21 @@ tools.registerTool("showAllView", () => {
 
 type DesktopApp = Awaited<ReturnType<typeof MSysApi.getDesktopEntries>>[number];
 
-/** 开始菜单：按需构建应用格子，图标只在实际可见时加载 */
-function createStartMenu(
-    tipEl: HTMLElement,
-    showTip: (op?: { state?: "show" | "hide" | "toggle"; anchorEl?: HTMLElement }) => void,
-) {
-    const iconConfig: DesktopIconConfig = {
-        theme: setting.get("icon.theme"),
-    };
-    const menu = view("x", "wrap")
-        .style({
-            width: "80vw",
-            height: "80vh",
-            padding: "20px",
-            borderRadius: "20px",
-            // 内容滚动交给菜单自身，避免整个桌面参与滚动和重排
-            overflowY: "auto",
-            alignContent: "flex-start",
-            background: "rgba(245, 245, 245, 0.96)",
-            backdropFilter: "blur(12px)",
-            boxShadow: "0 8px 32px #00000033",
-            contain: "layout paint style",
-        })
-        .addInto(tipEl);
-    const loadingEl = txt("正在加载应用…").style({ padding: "8px", opacity: "0.6" }).addInto(menu);
+/** 开始菜单和启动台共用：应用格子、设置格子、图标懒加载 */
+type AppTileFactoryOptions = {
+    iconConfig: DesktopIconConfig;
+    /** IntersectionObserver 的 root；null 表示视口，适合离屏的启动台 */
+    root: HTMLElement | null;
+    tileWidth: number;
+    tileHeight: number;
+    iconSize: number;
+    labelSize: number;
+    /** 设置格子的白底容器尺寸，图标按容器减内边距 */
+    settingsIconBox: number;
+    onSettingsClick: () => void;
+};
 
+function createAppTileFactory(op: AppTileFactoryOptions) {
     // 图标查找是异步文件 IO，限制并发避免一次可见几十个图标时产生 IO 峰值
     const iconQueue: (() => Promise<void>)[] = [];
     let iconRunning = 0;
@@ -3574,40 +3590,39 @@ function createStartMenu(
                     enqueueIcon(load);
                 }
             },
-            // 菜单隐藏时不会触发；打开后只加载视口附近的行
-            { root: menu.el, rootMargin: "120px 0px" },
+            { root: op.root, rootMargin: "120px 0px" },
         );
     }
 
     function createAppTile(app: DesktopApp) {
         const appEl = view("y").style({
-            width: "80px",
-            height: "80px",
+            width: `${op.tileWidth}px`,
+            height: `${op.tileHeight}px`,
             alignItems: "center",
             justifyContent: "flex-start",
             flexShrink: 0,
             // 屏幕外的格子跳过布局和绘制，长列表滚动更轻
             contentVisibility: "auto",
-            containIntrinsicSize: "80px 80px",
+            containIntrinsicSize: `${op.tileWidth}px ${op.tileHeight}px`,
         });
         const iconView = view().addInto(appEl);
         const iconEl = appIconEl(app.exec, app.env).style({
-            width: "40px",
-            height: "40px",
+            width: `${op.iconSize}px`,
+            height: `${op.iconSize}px`,
         });
         iconView.add(iconEl);
         appEl.add(
             txt(app.nameLocal).style({
-                fontSize: "12px",
-                maxWidth: "80%",
+                fontSize: `${op.labelSize}px`,
+                maxWidth: "92%",
                 overflow: "hidden",
                 textAlign: "center",
             }),
         );
 
         const load = () =>
-            loadAppIcon(iconEl, async () => (await MSysApi.getDesktopIcon(app.icon, iconConfig)) || "", app.name, {
-                rasterSize: 40,
+            loadAppIcon(iconEl, async () => (await MSysApi.getDesktopIcon(app.icon, op.iconConfig)) || "", app.name, {
+                rasterSize: op.iconSize,
             });
         if (observer) {
             iconLoaders.set(appEl.el, load);
@@ -3618,37 +3633,128 @@ function createStartMenu(
         return appEl;
     }
 
-    /** 设置不是真实应用，但在开始菜单里模拟一个应用格子 */
     function createSettingsTile() {
         const appEl = view("y").style({
-            width: "80px",
-            height: "80px",
+            width: `${op.tileWidth}px`,
+            height: `${op.tileHeight}px`,
             alignItems: "center",
             justifyContent: "flex-start",
             flexShrink: 0,
         });
         const iconView = view().addInto(appEl);
         const iconEl = appIconEl().style({
+            width: `${op.settingsIconBox}px`,
+            height: `${op.settingsIconBox}px`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
         });
-        iconEl.add(getIconXEl("settings", { size: 36, width: 36, height: 36 }));
+        const settingsIconSize = Math.max(1, op.settingsIconBox - 12);
+        iconEl.add(
+            getIconXEl("settings", {
+                size: settingsIconSize,
+                width: settingsIconSize,
+                height: settingsIconSize,
+            }),
+        );
         iconView.add(iconEl);
         appEl.add(
             txt("设置").style({
-                fontSize: "12px",
-                maxWidth: "80%",
+                fontSize: `${op.labelSize}px`,
+                maxWidth: "92%",
                 overflow: "hidden",
                 textAlign: "center",
             }),
         );
-        appEl.on("click", () => {
-            showTip({ state: "hide" });
-            openSettingsWindow();
-        });
+        appEl.on("click", () => op.onSettingsClick());
         return appEl;
     }
+
+    return { createAppTile, createSettingsTile };
+}
+
+/** 启动台：放在空桌面右边，显示应用图标，和空桌面一样是特殊虚拟屏 */
+function createLaunchpadContent() {
+    const grid = view("x", "wrap")
+        .style({
+            width: "100%",
+            height: "100%",
+            padding: "48px",
+            boxSizing: "border-box",
+            alignContent: "center",
+            justifyContent: "center",
+            gap: "18px",
+            overflowY: "auto",
+        })
+        .data({ "desktop-ui": "launchpad" });
+    const loadingEl = txt("正在加载应用…").style({ padding: "8px", opacity: "0.6" }).addInto(grid);
+    const tileFactory = createAppTileFactory({
+        iconConfig: { theme: setting.get("icon.theme") },
+        root: null,
+        tileWidth: 96,
+        tileHeight: 104,
+        iconSize: 64,
+        labelSize: 13,
+        settingsIconBox: 64,
+        onSettingsClick: () => openSettingsWindow(),
+    });
+
+    void MSysApi.getDesktopEntries()
+        .catch(() => [] as DesktopApp[])
+        .then(async (apps) => {
+            loadingEl.remove();
+            grid.add(tileFactory.createSettingsTile());
+            if (apps.length === 0) {
+                txt("未找到应用").style({ padding: "8px", opacity: "0.6" }).addInto(grid);
+                return;
+            }
+            const batchSize = 40;
+            for (let i = 0; i < apps.length; i += batchSize) {
+                grid.add(apps.slice(i, i + batchSize).map((app) => tileFactory.createAppTile(app)));
+                if (i + batchSize < apps.length) await scheduler.yield();
+            }
+        });
+    return grid;
+}
+
+/** 开始菜单：按需构建应用格子，图标只在实际可见时加载 */
+function createStartMenu(
+    tipEl: HTMLElement,
+    showTip: (op?: { state?: "show" | "hide" | "toggle"; anchorEl?: HTMLElement }) => void,
+) {
+    const iconConfig: DesktopIconConfig = {
+        theme: setting.get("icon.theme"),
+    };
+    const menu = view("x", "wrap")
+        .style({
+            width: "80vw",
+            height: "80vh",
+            padding: "20px",
+            borderRadius: "20px",
+            // 内容滚动交给菜单自身，避免整个桌面参与滚动和重排
+            overflowY: "auto",
+            alignContent: "flex-start",
+            background: "rgba(245, 245, 245, 0.96)",
+            backdropFilter: "blur(12px)",
+            boxShadow: "0 8px 32px #00000033",
+            contain: "layout paint style",
+        })
+        .addInto(tipEl);
+    const loadingEl = txt("正在加载应用…").style({ padding: "8px", opacity: "0.6" }).addInto(menu);
+
+    const tileFactory = createAppTileFactory({
+        iconConfig,
+        root: menu.el,
+        tileWidth: 80,
+        tileHeight: 80,
+        iconSize: 40,
+        labelSize: 12,
+        settingsIconBox: 48,
+        onSettingsClick: () => {
+            showTip({ state: "hide" });
+            openSettingsWindow();
+        },
+    });
 
     // 元数据在空闲时预取，但不创建 DOM / 不读图标
     const entriesPromise = MSysApi.getDesktopEntries().catch(() => [] as DesktopApp[]);
@@ -3658,7 +3764,7 @@ function createStartMenu(
         buildPromise = (async () => {
             const apps = await entriesPromise;
             loadingEl.remove();
-            menu.add(createSettingsTile());
+            menu.add(tileFactory.createSettingsTile());
             if (apps.length === 0) {
                 txt("未找到应用").style({ padding: "8px", opacity: "0.6" }).addInto(menu);
                 return;
@@ -3666,10 +3772,7 @@ function createStartMenu(
             // 分批插入：先让首屏尽快出现，其余在空闲帧继续，避免一次长任务卡住点击
             const batchSize = 40;
             for (let i = 0; i < apps.length; i += batchSize) {
-                const batch: ReturnType<typeof createAppTile>[] = [];
-                for (const app of apps.slice(i, i + batchSize)) {
-                    batch.push(createAppTile(app));
-                }
+                const batch = apps.slice(i, i + batchSize).map((app) => tileFactory.createAppTile(app));
                 menu.add(batch);
                 if (i + batchSize < apps.length) await scheduler.yield();
             }
