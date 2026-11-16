@@ -23,7 +23,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 root_dir="$(cd -- "$script_dir/../.." && pwd)"
 
 # myde-wrap 当前固定版本（更新时同步改 .github/workflows/build.yml 与 README）
-default_ref="2763e6d0347ff72a225fb5d39f9ef8c15edcd91d"
+default_ref="1c22ee9ed0caf697025210d61d966aa16c4afe93"
 
 repo="${MYDE_WRAP_REPO:-https://github.com/xushengfeng/myde-wrap.git}"
 ref="${MYDE_WRAP_REF:-$default_ref}"
@@ -52,8 +52,13 @@ if git -C "$work_dir" remote get-url origin >/dev/null 2>&1; then
 else
     git -C "$work_dir" remote add origin "$repo"
 fi
-git -C "$work_dir" fetch -q --depth 1 origin "$ref"
-git -C "$work_dir" checkout -q --force FETCH_HEAD
+current_ref="$(git -C "$work_dir" rev-parse HEAD 2>/dev/null || true)"
+if [ "$current_ref" = "$ref" ]; then
+    echo "myde-wrap: 源码已是 $ref，跳过下载"
+else
+    git -C "$work_dir" fetch -q --depth 1 origin "$ref"
+    git -C "$work_dir" checkout -q --force FETCH_HEAD
+fi
 echo "myde-wrap: 源码就绪 $(git -C "$work_dir" rev-parse --short HEAD)"
 
 if [ ! -f "$work_dir/Cargo.toml" ]; then
