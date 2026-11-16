@@ -1245,6 +1245,13 @@ function openSettingsWindow() {
         getScale: () => screenManager.getScale(),
         setScale: (scale) => screenManager.setScale(scale),
         scaleFollowsHost: () => screenManager.scaleFollowsHost(),
+        getResolution: () => screenManager.getResolution(),
+        getResolutions: () => screenManager.getResolutions(),
+        setResolution: (width, height) => screenManager.setResolution(width, height),
+        getRefreshRate: () => screenManager.getRefreshRate(),
+        getRefreshRates: () => screenManager.getRefreshRates(),
+        setRefreshRate: (refreshRate) => screenManager.setRefreshRate(refreshRate),
+        screenModeAvailable: () => MSysApi.display.supports("screen-mode"),
         getTouchpadScrollGain: () => touchpadScrollGain,
         setTouchpadScrollGain: (gain) => {
             touchpadScrollGain = gain;
@@ -1684,6 +1691,20 @@ const server = MSysApi.server({ render });
 // 提前启动 xwayland-satellite；每次启动应用前再 await 一次，崩溃后也能重新拉起。
 void server.startXwayland();
 
+/** server 已更新窗口 DOM 尺寸；最大化窗口要用新的逻辑可用区重新 configure */
+function reconfigureMaximizedWindows() {
+    requestAnimationFrame(() => {
+        for (const info of server.server.windows.list()) {
+            if (!info.states.maximized) continue;
+            const scale = screenManager.getScale();
+            server.server.notify("window.maximize", info.handle, {
+                width: Math.max(1, Math.floor(windowEl.el.offsetWidth / scale)),
+                height: Math.max(1, Math.floor(windowEl.el.offsetHeight / scale)),
+            });
+        }
+    });
+}
+
 /** 屏幕信息 + 客户端缩放；缩放写入设置并同步给 wayland server。 */
 const screenManager = new ScreenManager({
     display: MSysApi.display,
@@ -1693,19 +1714,8 @@ const screenManager = new ScreenManager({
     },
     setScaleSetting: (scale) => desktopSetting.nset("scale", scale),
     applyOutput: (output) => server.server.outputs.set(output),
-    onScaleChanged: () => {
-        // server 已更新窗口 DOM 尺寸；最大化窗口要用新的逻辑可用区重新 configure
-        requestAnimationFrame(() => {
-            for (const info of server.server.windows.list()) {
-                if (!info.states.maximized) continue;
-                const scale = screenManager.getScale();
-                server.server.notify("window.maximize", info.handle, {
-                    width: Math.max(1, Math.floor(windowEl.el.offsetWidth / scale)),
-                    height: Math.max(1, Math.floor(windowEl.el.offsetHeight / scale)),
-                });
-            }
-        });
-    },
+    onScaleChanged: reconfigureMaximizedWindows,
+    onModeChanged: reconfigureMaximizedWindows,
 });
 void screenManager.init().catch((e) => console.error("[screen] 初始化失败", e));
 

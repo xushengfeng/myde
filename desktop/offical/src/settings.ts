@@ -1,4 +1,4 @@
-import { button, type ElType, input, spacer, txt, view } from "dkh-ui";
+import { button, dynamicSelect, type ElType, input, select, spacer, txt, view } from "dkh-ui";
 import type { ConnectConnection, PairingSession } from "../../../src/desktop-api";
 import { aLineText, gGlassStyle, px, sSize2 } from "./ui";
 
@@ -17,6 +17,20 @@ export type SettingsContentOptions = {
     setScale(scale: number): void;
     /** winit / 普通窗口模式跟随宿主缩放，不提供额外缩放 */
     scaleFollowsHost(): boolean;
+    /** 当前分辨率 */
+    getResolution(): { width: number; height: number };
+    /** 可切换的分辨率 */
+    getResolutions(): { width: number; height: number }[];
+    /** 切换分辨率；返回是否成功 */
+    setResolution(width: number, height: number): Promise<boolean>;
+    /** 当前输出刷新率（Hz） */
+    getRefreshRate(): number;
+    /** 当前分辨率下可切换的刷新率（Hz） */
+    getRefreshRates(): number[];
+    /** 切换刷新率；返回是否成功 */
+    setRefreshRate(refreshRate: number): Promise<boolean>;
+    /** wrap 是否支持切换屏幕模式（DRM） */
+    screenModeAvailable(): boolean;
     /** 触摸板双指滚动速度倍率（1 = 1:1 跟随手指） */
     getTouchpadScrollGain(): number;
     setTouchpadScrollGain(gain: number): void;
@@ -168,6 +182,60 @@ function createSegmented<T extends string | number>(
     }
     render();
     return group;
+}
+
+/** 简单测量桌面渲染器 requestAnimationFrame 的实际频率 */
+function createFpsTest() {
+    const result = txt("未测试").style({
+        fontFamily: "monospace",
+        fontSize: "12px",
+        opacity: "0.7",
+        minWidth: "130px",
+        textAlign: "right",
+    });
+    const startButton = dialogButton("开始测试");
+    let running = false;
+
+    startButton.on("click", () => {
+        if (running) return;
+        running = true;
+        startButton.attr({ disabled: true });
+        result.style({ opacity: "1" }).sv("测试中…");
+
+        const start = performance.now();
+        let last = start;
+        let frames = 0;
+        let intervalSum = 0;
+        let minInterval = Number.POSITIVE_INFINITY;
+        let maxInterval = 0;
+
+        const tick = (now: number) => {
+            const interval = now - last;
+            last = now;
+            frames++;
+            if (frames > 1) {
+                intervalSum += interval;
+                minInterval = Math.min(minInterval, interval);
+                maxInterval = Math.max(maxInterval, interval);
+            }
+
+            const elapsed = now - start;
+            if (elapsed >= 1500) {
+                const measured = (frames * 1000) / elapsed;
+                const average = intervalSum / Math.max(1, frames - 1);
+                result.sv(`${measured.toFixed(1)} fps  ${average.toFixed(2)} ms`).attr({
+                    title: `frames=${frames} min=${minInterval.toFixed(2)}ms max=${maxInterval.toFixed(2)}ms`,
+                });
+                startButton.attr({ disabled: false });
+                running = false;
+                return;
+            }
+            requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+    });
+
+    return view("x").style({ alignItems: "center", gap: "8px", flexShrink: "0" }).add([result, startButton]);
 }
 
 function dialogField(control: ElType<HTMLInputElement>) {
@@ -390,16 +458,93 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
                           op.getScale,
                           op.setScale,
                       );
+                const modeAvailable = op.screenModeAvailable();
+                const resolution = op.getResolution();
+                const resolutions = op.getResolutions();
+                const refreshSelect = dynamicSelect();
+                let fillRefresh = () => {};
+
+                let resolutionControl: ElType<HTMLElement>;
+                if (!modeAvailable) {
+                    resolutionControl = txt(
+                        op.scaleFollowsHost()
+                            ? `${resolution.width} × ${resolution.height}`
+                            : `${resolution.width} × ${resolution.height}（当前 wrap 不支持切换）`,
+                    ).style({ opacity: "0.7" });
+                } else {
+                    const resolutionSelect = select(
+                        resolutions.map((item) => ({
+                            name: `${item.width} × ${item.height}`,
+                            value: `${item.width}x${item.height}`,
+                        })),
+                    ).sv(`${resolution.width}x${resolution.height}`);
+                    resolutionSelect.on("change", () => {
+                        const [width, height] = resolutionSelect.gv.split("x").map(Number);
+                        void op.setResolution(width, height).then((ok) => {
+                            if (!ok) {
+                                const current = op.getResolution();
+                                resolutionSelect.sv(`${current.width}x${current.height}`);
+                            }
+                            fillRefresh();
+                        });
+                    });
+                    resolutionControl = fieldStyle(resolutionSelect);
+                }
+
+                let refreshControl: ElType<HTMLElement>;
+                if (!modeAvailable) {
+                    refreshControl = txt(
+                        op.scaleFollowsHost()
+                            ? `${op.getRefreshRate()} Hz，跟随宿主桌面`
+                            : `${op.getRefreshRate()} Hz（当前 wrap 不支持切换）`,
+                    ).style({ opacity: "0.7" });
+                } else {
+                    fillRefresh = () => {
+                        const rates = op.getRefreshRates();
+                        refreshSelect.setList(
+                            rates.map((rate) => ({
+                                name: `${rate} Hz`,
+                                value: String(rate),
+                            })),
+                        );
+                        refreshSelect.el.sv(String(op.getRefreshRate()));
+                    };
+                    fillRefresh();
+                    refreshSelect.el.on("change", () => {
+                        void op.setRefreshRate(Number(refreshSelect.el.gv));
+                    });
+                    refreshControl = fieldStyle(refreshSelect.el);
+                }
+
                 return view("y")
                     .style({ gap: px(sSize2.padding + 8) })
                     .add([
-                        sectionTitle("显示", "Wayland 客户端与窗口的缩放。"),
+                        sectionTitle("显示", "Wayland 客户端与窗口的缩放、输出分辨率与刷新率。"),
                         settingRow(
                             "客户端缩放",
                             op.scaleFollowsHost()
                                 ? "winit / 窗口模式由宿主桌面负责缩放，myde 内部固定 1x。"
                                 : "按比例渲染 Wayland 应用窗口；桌面面板暂不缩放。",
                             control,
+                        ),
+                        settingRow(
+                            "分辨率",
+                            op.scaleFollowsHost()
+                                ? "winit / 窗口模式由宿主桌面决定分辨率。"
+                                : "切换 DRM 输出分辨率；窗口和 Wayland 客户端会按新尺寸重新布局。",
+                            resolutionControl,
+                        ),
+                        settingRow(
+                            "刷新率",
+                            op.scaleFollowsHost()
+                                ? "winit / 窗口模式由宿主桌面决定刷新率。"
+                                : "切换当前分辨率下的刷新率；Wayland 客户端和 wp_presentation 会使用新值。",
+                            refreshControl,
+                        ),
+                        settingRow(
+                            "帧率测试",
+                            "测量桌面界面自身的 requestAnimationFrame 频率。配置为 120Hz 但这里只有 60，说明限制在桌面/宿主链路；这里也是 120，则要看 Wayland 客户端自己的提交流程。",
+                            createFpsTest(),
                         ),
                     ]);
             },
