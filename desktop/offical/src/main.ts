@@ -5344,7 +5344,7 @@ function useEvdevDevice(
     touchpadScrolling: Set<string>,
 ) {
     const dev = input.getDevice(path);
-    if (!dev) return;
+    if (!dev) return () => {};
     const info = dev.info;
     const kind = pointerKindOf(info);
     const touchpad = isTouchpad(info);
@@ -5352,7 +5352,7 @@ function useEvdevDevice(
     const rel = hasRelativeXY(info);
     const abs = MInputMap.absPosMapping(info);
     const keyboard = canKey(info);
-    if (!rel && !abs && !keyboard) return;
+    if (!rel && !abs && !keyboard) return () => {};
     // 高精度滚轮与普通滚轮会同时上报，优先高精度避免重复滚动
     const hiResWheel = info.capabilities.relAxes.includes(InputEventCodes.REL_WHEEL_HI_RES);
     // MT-B 设备多指会交替上报各 slot 坐标
@@ -5369,6 +5369,9 @@ function useEvdevDevice(
     let wheelValueX = 0;
     let wheelValueY = 0;
     const frameKeys: { code: number; value: number }[] = [];
+    // 本设备按下、还没抬起的键：设备移除时补成 up，避免模拟层和客户端一直保持按下
+    const pressedKeys = new Set<number>();
+    const pressedButtons = new Set<number>();
 
     // ── 触摸板：设备事件交给 utils/touchpad 封装，绝对坐标只用于算位移和手指数 ──
     const hasTrackingId = info.capabilities.absAxes.includes(InputEventCodes.ABS_MT_TRACKING_ID);
@@ -5581,6 +5584,8 @@ function useEvdevDevice(
         for (const { code, value } of frame) {
             const button = BTN_TO_BUTTON[code];
             if (button !== undefined) {
+                if (value === 0) pressedButtons.delete(code);
+                else pressedButtons.add(code);
                 emit({
                     kind: "pointer",
                     type: value === 1 ? "down" : "up",
@@ -5591,6 +5596,8 @@ function useEvdevDevice(
                     source: "evdev",
                 });
             } else {
+                if (value === 0) pressedKeys.delete(code);
+                else if (value === 1) pressedKeys.add(code);
                 // 键盘按键（BTN_*（>=BTN_0）是鼠标/触屏按钮，走上面的分支）
                 emit({
                     kind: "key",
@@ -5603,7 +5610,7 @@ function useEvdevDevice(
         }
     }
 
-    if (!dev.startReading().ok) return;
+    if (!dev.startReading().ok) return () => {};
 
     dev.on("relative", (code, value) => {
         // 相对设备出过事件：同 phys 的触摸板绝对坐标视为伴随鼠标通道的重复上报
@@ -5743,6 +5750,47 @@ function useEvdevDevice(
         }
     });
     dev.on("sync", flushFrame);
+
+    return function dispose() {
+        // 设备移除：触摸板的轻触定时器/进行中的滚动/物理键由它自己收尾
+        touchpadInput?.dispose();
+        // 触屏还按着的接触点补 up，否则 pointer 会一直停在按下状态
+        for (const c of touchContacts.values()) {
+            if (c.starting) continue;
+            emit({
+                kind: "pointer",
+                type: "up",
+                x: c.x,
+                y: c.y,
+                button: 0,
+                pointerType: kind,
+                pointerId: c.pointerId,
+                isPrimary: c.primary,
+                source: "evdev",
+            });
+        }
+        touchContacts.clear();
+        for (const code of pressedButtons) {
+            const button = BTN_TO_BUTTON[code];
+            if (button === undefined) continue;
+            emit({
+                kind: "pointer",
+                type: "up",
+                x: pointerPos.x,
+                y: pointerPos.y,
+                button,
+                pointerType: kind,
+                source: "evdev",
+            });
+        }
+        pressedButtons.clear();
+        for (const code of pressedKeys) {
+            emit({ kind: "key", type: "up", code, source: "evdev" });
+        }
+        pressedKeys.clear();
+        if (dev.isReading()) dev.stopReading();
+        dev.removeAllListeners();
+    };
 }
 
 /** 接入 input api：逐设备解码 evdev 事件流（含热插拔），产出统一输入事件 */
@@ -5755,34 +5803,55 @@ function useEvdevInput(input: InputManager, emit: (e: UniInputEvent) => void, po
     const lastTouchpadScroll = new Map<string, number>();
     // 正在滚动的触摸板 phys：伴随鼠标节点的滚轮此时是重复上报
     const touchpadScrolling = new Set<string>();
-    const registerTouchpadPhys = (info: DeviceInfo) => {
-        if (info.phys && isTouchpad(info)) touchpadPhys.add(info.phys);
+    // 设备 path → 注销函数
+    const attached = new Map<string, () => void>();
+
+    /** 设备走了以后按 phys 清掉共享状态；同 phys 的伴随节点/另一台设备还在就保留 */
+    const prunePhysState = () => {
+        const live = new Set<string>();
+        for (const info of input.getDevices()) {
+            if (info.phys) live.add(info.phys);
+        }
+        for (const phys of relativeActivity.keys()) if (!live.has(phys)) relativeActivity.delete(phys);
+        for (const phys of lastTouchpadScroll.keys()) if (!live.has(phys)) lastTouchpadScroll.delete(phys);
+        for (const phys of touchpadScrolling) if (!live.has(phys)) touchpadScrolling.delete(phys);
+        for (const phys of touchpadPhys) if (!live.has(phys)) touchpadPhys.delete(phys);
     };
+
+    const detach = (path: string) => {
+        const dispose = attached.get(path);
+        if (!dispose) return;
+        attached.delete(path);
+        dispose();
+        prunePhysState();
+    };
+
+    const attach = (info: DeviceInfo) => {
+        // 同一 path 重新出现时先收尾旧设备，避免重复订阅和残留按键
+        detach(info.path);
+        if (info.phys && isTouchpad(info)) touchpadPhys.add(info.phys);
+        attached.set(
+            info.path,
+            useEvdevDevice(
+                input,
+                emit,
+                pointerPos,
+                info.path,
+                relativeActivity,
+                touchpadPhys,
+                lastTouchpadScroll,
+                touchpadScrolling,
+            ),
+        );
+    };
+
     for (const info of input.getDevices()) {
-        registerTouchpadPhys(info);
-        useEvdevDevice(
-            input,
-            emit,
-            pointerPos,
-            info.path,
-            relativeActivity,
-            touchpadPhys,
-            lastTouchpadScroll,
-            touchpadScrolling,
-        );
+        attach(info);
     }
-    input.on("deviceAdded", (info) => {
-        registerTouchpadPhys(info);
-        useEvdevDevice(
-            input,
-            emit,
-            pointerPos,
-            info.path,
-            relativeActivity,
-            touchpadPhys,
-            lastTouchpadScroll,
-            touchpadScrolling,
-        );
+    input.on("deviceAdded", attach);
+    input.on("deviceRemoved", detach);
+    input.on("error", (error) => {
+        console.warn("[input] 设备错误:", error.message);
     });
 }
 

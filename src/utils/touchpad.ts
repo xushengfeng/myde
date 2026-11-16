@@ -164,6 +164,50 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         dev.on("sync", () => this.flush());
     }
 
+    /**
+     * 设备移除/停止使用时收尾：结束进行中的滚动和多指手势，抬起还按着的键，清掉判定定时器与接触点。
+     * 事件在这里同步发出，调用方要保证此时仍能分发。
+     */
+    dispose(): void {
+        this.cancelTimer();
+        // 已按下但还没抬起的物理键：等状态机的按下已经发过 down，这里补 up
+        const pendingDowns = new Set<number>();
+        for (const action of this.pending) {
+            if (action.type === "button" && action.action === "down") pendingDowns.add(action.button);
+        }
+        if (this.scrolling) {
+            this.scrolling = false;
+            this.emit("scrollEnd");
+        }
+        if (this.multiFingers > 0) {
+            const fingers = this.multiFingers;
+            this.multiFingers = 0;
+            this.emit("multiEnd", fingers);
+        }
+        const pressed = this.pressedButton;
+        this.pressedButton = undefined;
+        if (pressed !== undefined && !this.physicalDown.has(pressed)) this.emit("button", "up", pressed);
+        for (const button of this.physicalDown) {
+            // 还没随 sync 发出的 down 没有对应的 up
+            if (!pendingDowns.has(button)) this.emit("button", "up", button);
+        }
+        this.physicalDown.clear();
+        this.pending = [];
+        this.contacts.clear();
+        this.fallback = undefined;
+        this.lastX = undefined;
+        this.lastY = undefined;
+        this.lastRawX = undefined;
+        this.lastRawY = undefined;
+        this.btnTouch = false;
+        this.toolFingers = 0;
+        this.phase = "idle";
+        this.roundActive = false;
+        this.roundMaxFingers = 0;
+        this.suppressedMoveX = 0;
+        this.suppressedMoveY = 0;
+    }
+
     private flush(): void {
         const actions = this.pending.splice(0);
         // 抬起的那一帧也可能带着最后一小段位移，位移要用包含已抬起的全部接触点算
