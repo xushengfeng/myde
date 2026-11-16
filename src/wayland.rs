@@ -410,9 +410,10 @@ impl App {
         let Some(mut backend) = self.backend.take() else {
             return;
         };
-        if backend.dispatch() {
-            backend.send_frame_callbacks(self);
-        }
+        // 每个 vblank 都要回 frame callback（dispatch 只负责完成翻页），
+        // 否则客户端等 done 时会错过下一拍，120Hz 被压成 60Hz。
+        backend.dispatch();
+        backend.send_frame_callbacks(self);
         self.render_if_possible(&mut backend);
         self.backend = Some(backend);
     }

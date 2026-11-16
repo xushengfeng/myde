@@ -346,6 +346,8 @@ pub struct DrmBackend {
     last_config_generation: u64,
     /// 上次实际下发的屏幕电源状态（true = 开）
     last_screen_power: Vec<bool>,
+    /// 最近一次 vblank 是否真的完成了翻页（决定要不要回 presentation）
+    presented_on_vblank: std::sync::atomic::AtomicBool,
     /// 启动前的显示状态（fbcon），退出时恢复
     saved_crtcs: Vec<SavedCrtc>,
     // device/device_fd 放在最后：字段按声明顺序 drop，必须等 compositor（surface）
@@ -382,6 +384,7 @@ impl DrmBackend {
             last_content_generation: 0,
             last_config_generation: 0,
             last_screen_power: Vec::new(),
+            presented_on_vblank: std::sync::atomic::AtomicBool::new(false),
             saved_crtcs: Vec::new(),
         }
     }
@@ -830,6 +833,8 @@ void main() {
                 }
             }
         }
+        self.presented_on_vblank
+            .store(presented, std::sync::atomic::Ordering::Release);
         presented
     }
 
@@ -852,11 +857,18 @@ void main() {
         for window in state.space.elements() {
             window.send_frame(output, time, None, |_, _| Some(output.clone()));
         }
-        // presentation 的 refresh 仍取当前模式周期（mode.refresh 为毫赫兹）
-        let refresh = output
-            .current_mode()
-            .map(|mode| Duration::from_secs_f64(1000.0 / f64::from(mode.refresh).max(1.0)));
-        state.send_presentation_feedbacks(output, crate::wayland::monotonic_now(), refresh);
+        // frame callback 每个 vblank 都要发，即使这一拍没有新帧完成；否则客户端
+        // 少拿一次 done 就会等下一拍，连续两次就锁到 60Hz。
+        // presentation 只在真的完成翻页时回，避免把没上屏的帧报告为 presented。
+        if self
+            .presented_on_vblank
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            let refresh = output
+                .current_mode()
+                .map(|mode| Duration::from_secs_f64(1000.0 / f64::from(mode.refresh).max(1.0)));
+            state.send_presentation_feedbacks(output, crate::wayland::monotonic_now(), refresh);
+        }
     }
 
     fn get_screens(&self) -> Vec<ScreenInfo> {
