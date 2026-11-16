@@ -1,17 +1,4 @@
-import {
-    addClass,
-    addStyle,
-    button,
-    check,
-    type ElType,
-    ele,
-    image,
-    pack,
-    setProperty,
-    spacer,
-    txt,
-    view,
-} from "dkh-ui";
+import { addClass, addStyle, button, check, type ElType, ele, image, pack, spacer, txt, view } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
 import type {
     ConnectConnection,
@@ -179,14 +166,8 @@ function createToggle(registry: tmpRegistry, id: BooleanRegistryKeys): ControlNo
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
 const fs = MSysApi.fs;
 
-type View = {
-    ox: number;
-    oy: number;
-};
-
 type InternalWindowEntry = {
     el: ElType<HTMLDivElement>;
-    view: View;
     setActive(active: boolean): void;
     dispose?: () => void;
 };
@@ -373,69 +354,481 @@ class Tools {
 /** 全局窗口身份：服务端 handle */
 type MWinId = WinHandle;
 
-function 回布局(index: number): { x: number; y: number } {
-    const xi = index + 1;
-    const w = Math.sqrt(xi);
-    const 宽 = w % 2 === 1 ? w : Math.ceil(w) % 2 === 0 ? Math.ceil(w) + 1 : Math.ceil(w);
-    const d = Math.floor(宽 / 2);
-    const start = (宽 - 2) ** 2 + 1;
-    const _offset = xi - start - d;
-    const offset = _offset < 0 ? (宽 - 1) * 4 - _offset : _offset;
-    const n = Math.floor(offset / (宽 - 1));
-    const offsetOfN = offset % (宽 - 1);
+type ViewTransform = {
+    x: number;
+    y: number;
+    scale: number;
+    opacity: number;
+};
 
-    if (n === 0) {
-        const y = -d;
-        const x = -offsetOfN + d;
-        return { x, y };
-    } else if (n === 1) {
-        const x = -d;
-        const y = offsetOfN - d;
-        return { x, y };
-    } else if (n === 2) {
-        const y = d;
-        const x = offsetOfN - d;
-        return { x, y };
-    } else {
-        const x = d;
-        const y = -offsetOfN + d;
-        return { x, y };
-    }
+type ViewScreen = {
+    readonly id: string;
+    winId?: MWinId;
+    empty: boolean;
+    /** 最近一次成为当前屏的顺序，重排时从小到大（旧的到新的） */
+    used: number;
+    el: ElType<HTMLElement>;
+    gear: AnimationGear<ViewTransform>;
+    visual: ViewTransform;
+    target: ViewTransform;
+};
+
+const SCREEN_TRANSITION = { duration: 320, map: timingFunction.easeOut };
+/** 三指横滑位移倍率默认值；设置窗口可调 */
+const DEFAULT_GESTURE_GAIN = 4;
+/** 切屏后重排新旧顺序的延迟默认值（毫秒）；设置窗口可调 */
+const DEFAULT_REORDER_DELAY = 3000;
+/** 总览卡片间距（CSS px） */
+const OVERVIEW_GAP = 24;
+/** 三指手势判定横/竖方向前的死区（CSS px） */
+const GESTURE_AXIS_DEADZONE = 12;
+/** 三指上下滑从常规到全局预览的完整行程，按可用高度比例 */
+const OVERVIEW_SWIPE_DISTANCE = 0.25;
+
+/** 三指横滑的当前倍率 */
+let gestureSwitchGain = DEFAULT_GESTURE_GAIN;
+/** 当前切屏重排延迟（毫秒） */
+let reorderDelay = DEFAULT_REORDER_DELAY;
+
+function normalizeGestureGain(value: unknown) {
+    const n = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_GESTURE_GAIN;
+    return Math.min(8, Math.max(1, n));
+}
+
+function normalizeReorderDelay(value: unknown) {
+    const n = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_REORDER_DELAY;
+    return Math.min(10000, Math.max(300, n));
+}
+
+function clampNumber(value: number, min: number, max: number) {
+    return Math.min(max, Math.max(min, value));
 }
 
 /** 输入法控制层在下方创建；焦点回调可能早于此时，统一走可选链 */
 let ime: ImeController | undefined;
 
 class ViewData {
-    private views: View[] = [];
-    private win2View = new Map<MWinId, View>();
+    /** 所有虚拟屏，从左到右；空桌面永远在最后（最右） */
+    private screens: ViewScreen[] = [];
+    private win2Screen = new Map<MWinId, ViewScreen>();
     /** 当前聚焦的窗口 handle，键盘按它反查客户端下发 */
     focusHandle: MWinId | undefined;
-    newView() {
-        for (let i = 1; i <= this.views.length + 1; i++) {
-            const pos = 回布局(i);
-            const exists = this.views.find((v) => v.ox === pos.x && v.oy === pos.y);
-            if (!exists) {
-                const v: View = { ox: pos.x, oy: pos.y };
-                this.views.push(v);
-                return v;
-            }
-        }
-        const v: View = { ox: this.views.length, oy: 0 };
-        this.views.push(v);
-        return v;
+    /** 全局预览（grid）状态 */
+    overview = false;
+    /** 预览进度：0 常规，1 完整 grid；上下滑过程中连续变化 */
+    private overviewProgress = 0;
+
+    private currentId = "";
+    private usedSeq = 0;
+    private nextId = 1;
+    private reorderTimer: number | undefined;
+    private stageWidth = 1;
+    private stageHeight = 1;
+    private gesture:
+        | {
+              offset: number;
+              base: Map<string, ViewTransform>;
+              totalX: number;
+              totalY: number;
+              /** 手势开始时的预览进度，松手时按当前进度吸附 */
+              startOverviewProgress: number;
+              axis: "none" | "horizontal" | "vertical";
+          }
+        | undefined;
+
+    constructor() {
+        this.createEmptyScreen();
+        this.currentId = this.screens[0]?.id ?? "";
+        this.render(false);
     }
-    getViewByWinId(winid: MWinId) {
-        return this.win2View.get(winid);
+
+    get gestureActive() {
+        return this.gesture !== undefined;
     }
-    moveWinToView(winid: MWinId, v: View) {
-        this.win2View.set(winid, v);
-        this.checkAndRmView();
+
+    private currentIndex() {
+        const index = this.screens.findIndex((s) => s.id === this.currentId);
+        return index >= 0 ? index : Math.max(0, this.screens.length - 1);
     }
+
+    private currentScreen() {
+        return this.screens.find((s) => s.id === this.currentId);
+    }
+
+    /** 只允许当前虚拟屏里的窗口接收指针，滚动同理 */
+    isCurrentWin(winid: MWinId) {
+        return this.win2Screen.get(winid)?.id === this.currentId;
+    }
+
+    setStageSize(width: number, height: number) {
+        if (width <= 0 || height <= 0) return;
+        if (Math.abs(width - this.stageWidth) < 0.5 && Math.abs(height - this.stageHeight) < 0.5) return;
+        this.stageWidth = width;
+        this.stageHeight = height;
+        this.cancelGesture();
+        this.render(false);
+    }
+
+    private createEmptyScreen() {
+        const id = `view-${this.nextId++}`;
+        const el = createScreenEl(id, () => {
+            if (this.overview) this.selectFromOverview(id);
+        });
+        const start = { x: this.stageWidth, y: 0, scale: 1, opacity: 1 };
+        const gear = new AnimationGear<ViewTransform>(start, { transition: SCREEN_TRANSITION });
+        const screen: ViewScreen = {
+            id,
+            empty: true,
+            used: 0,
+            el,
+            gear,
+            visual: { ...start },
+            target: { ...start },
+        };
+        gear.setUpdateCallback((value) => {
+            screen.visual = value;
+            applyScreenTransform(el, value);
+        });
+        this.screens.push(screen);
+        return screen;
+    }
+
+    /** 新窗口占用右侧的空桌面；空桌面自动补到最右 */
+    addWindowScreen(winid: MWinId) {
+        this.cancelGesture();
+        let empty = this.screens.find((s) => s.empty);
+        if (!empty) empty = this.createEmptyScreen();
+        empty.empty = false;
+        empty.winId = winid;
+        empty.used = ++this.usedSeq;
+        this.win2Screen.set(winid, empty);
+        this.createEmptyScreen();
+        this.currentId = empty.id;
+        this.setOverviewInternal(false);
+        this.scheduleReorder();
+        this.render(true);
+        return empty;
+    }
+
+    /**
+     * 切到某个虚拟屏。缓冲期内 `screens` 的空间顺序不变，只改当前屏；
+     * 到点后按最近使用顺序重排。
+     */
+    setCurrentScreen(id: string, animate = true) {
+        const screen = this.screens.find((s) => s.id === id);
+        if (!screen) return;
+        this.cancelGesture();
+        this.currentId = screen.id;
+        screen.used = ++this.usedSeq;
+        if (screen.winId) this.focusWin(screen.winId);
+        else this.blurAll();
+        this.scheduleReorder();
+        this.render(animate);
+    }
+
+    /** 沿当前顺序跳到左边/右边的虚拟屏 */
+    moveCurrent(delta: number, animate = true) {
+        const index = this.currentIndex() + delta;
+        const screen = this.screens[index];
+        if (!screen) return;
+        this.setCurrentScreen(screen.id, animate);
+    }
+
+    jumpToWin(winid: MWinId) {
+        const screen = this.win2Screen.get(winid);
+        if (!screen) return;
+        this.setOverviewInternal(false);
+        this.setCurrentScreen(screen.id, true);
+    }
+
     closeWin(winid: MWinId) {
-        this.win2View.delete(winid);
-        this.checkAndRmView();
+        const screen = this.win2Screen.get(winid);
+        if (!screen) return undefined;
+        this.cancelGesture();
+        this.win2Screen.delete(winid);
+        const index = this.screens.indexOf(screen);
+        const wasCurrent = screen.id === this.currentId;
+        screen.gear.moveTo(screen.visual, 0);
+        screen.el.remove();
+        this.screens.splice(index, 1);
+
+        let next: ViewScreen | undefined;
+        if (wasCurrent) {
+            // 优先回上一个应用，没有就落到右边（通常是空桌面）
+            next = this.screens[Math.min(index - 1, this.screens.length - 1)] ?? this.screens[0];
+            if (next) {
+                this.currentId = next.id;
+                if (next.winId) this.focusWin(next.winId);
+                else this.blurAll();
+                this.scheduleReorder();
+            }
+        } else if (this.focusHandle === winid) {
+            this.blurAll();
+        }
+        this.render(this.overview || wasCurrent);
+        return next;
     }
+
+    setOverview(on: boolean) {
+        if (this.overview === on && this.overviewProgress === (on ? 1 : 0)) return;
+        this.cancelGesture();
+        this.applyOverview(on);
+    }
+
+    toggleOverview() {
+        this.setOverview(!this.overview);
+    }
+
+    private applyOverview(on: boolean) {
+        this.setOverviewInternal(on);
+        if (on) {
+            cursor.setLocalShape(undefined);
+        } else {
+            this.scheduleReorder();
+        }
+        this.render(true);
+    }
+
+    private setOverviewInternal(on: boolean) {
+        this.overview = on;
+        this.overviewProgress = on ? 1 : 0;
+        if (on) this.cancelReorder();
+        windowEl.el.toggleAttribute("data-overview", on);
+    }
+
+    private selectFromOverview(id: string) {
+        const screen = this.screens.find((s) => s.id === id);
+        if (!screen || screen.empty) return;
+        this.setOverviewInternal(false);
+        this.setCurrentScreen(screen.id, true);
+    }
+
+    startGesture() {
+        // 预览里也允许起手，用来识别三指下滑退出
+        if (this.gesture || (!this.overview && this.screens.length < 2)) return;
+        this.settleAnimation();
+        const base = new Map<string, ViewTransform>();
+        for (const screen of this.screens) base.set(screen.id, { ...screen.target });
+        this.gesture = {
+            offset: 0,
+            base,
+            totalX: 0,
+            totalY: 0,
+            startOverviewProgress: this.overviewProgress,
+            axis: "none",
+        };
+    }
+
+    private overviewSwipeDistance() {
+        return Math.max(120, this.stageHeight * OVERVIEW_SWIPE_DISTANCE);
+    }
+
+    /** 按 0..1 的进度把每个虚拟屏从常规位置插值到 grid 位置 */
+    private renderOverviewPull(progress: number) {
+        const normal = this.normalTargets(0);
+        const overview = this.overviewTargets();
+        const hidden = { x: -this.stageWidth * 2, y: 0, scale: 1, opacity: 0 };
+        const p = clampNumber(progress, 0, 1);
+        for (const screen of this.screens) {
+            const from = normal.get(screen.id) ?? hidden;
+            const to = overview.get(screen.id) ?? hidden;
+            const value = {
+                x: from.x + (to.x - from.x) * p,
+                y: from.y + (to.y - from.y) * p,
+                scale: from.scale + (to.scale - from.scale) * p,
+                opacity: from.opacity + (to.opacity - from.opacity) * p,
+            };
+            screen.visual = value;
+            screen.target = value;
+            applyScreenTransform(screen.el, value);
+        }
+    }
+
+    moveGesture(dx: number, dy: number) {
+        const gesture = this.gesture;
+        if (!gesture) return;
+        gesture.totalX += dx;
+        gesture.totalY += dy;
+
+        const absX = Math.abs(gesture.totalX);
+        const absY = Math.abs(gesture.totalY);
+        if (gesture.axis === "none") {
+            if (Math.max(absX, absY) < GESTURE_AXIS_DEADZONE) return;
+            gesture.axis = absY > absX ? "vertical" : "horizontal";
+        }
+
+        if (gesture.axis === "vertical") {
+            // 手指往上时进度增大，往下时减小；同一次手势里可以连续来回
+            const distance = this.overviewSwipeDistance();
+            const progress = clampNumber(gesture.startOverviewProgress - gesture.totalY / distance, 0, 1);
+            if (progress === this.overviewProgress) return;
+            this.overviewProgress = progress;
+            this.renderOverviewPull(progress);
+            return;
+        }
+
+        // 全局预览里不响应横滑
+        if (this.overview) return;
+
+        const index = this.currentIndex();
+        const minOffset = -(this.screens.length - 1 - index) * this.stageWidth;
+        const maxOffset = index * this.stageWidth;
+        const offset = clampNumber(gesture.totalX * gestureSwitchGain, minOffset, maxOffset);
+        if (offset === gesture.offset) return;
+        gesture.offset = offset;
+        for (const screen of this.screens) {
+            const base = gesture.base.get(screen.id);
+            if (!base) continue;
+            const value = { ...base, x: base.x + offset };
+            screen.visual = value;
+            screen.target = value;
+            applyScreenTransform(screen.el, value);
+        }
+    }
+
+    endGesture() {
+        const gesture = this.gesture;
+        if (!gesture) return;
+        this.gesture = undefined;
+
+        if (gesture.axis === "vertical") {
+            // 从当前跟手进度吸附到最近的一端
+            for (const screen of this.screens) screen.gear.moveTo(screen.visual, 0);
+            this.applyOverview(this.overviewProgress >= 0.5);
+            return;
+        }
+
+        // 预览里横滑或点按：保持预览
+        if (this.overview) {
+            this.render(true);
+            return;
+        }
+
+        const steps = Math.round(gesture.offset / this.stageWidth);
+        const targetIndex = clampNumber(this.currentIndex() - steps, 0, this.screens.length - 1);
+        const target = this.screens[targetIndex];
+        // 从当前跟手位置继续动画，不要在松手时跳回旧位置
+        for (const screen of this.screens) screen.gear.moveTo(screen.visual, 0);
+        if (target && target.id !== this.currentId) this.setCurrentScreen(target.id, true);
+        else this.render(true);
+    }
+
+    private cancelGesture() {
+        if (!this.gesture) return;
+        this.gesture = undefined;
+        for (const screen of this.screens) screen.gear.moveTo(screen.visual, 0);
+        this.overviewProgress = this.overview ? 1 : 0;
+    }
+
+    private settleAnimation() {
+        for (const screen of this.screens) screen.gear.moveTo(screen.target, 0);
+        this.overviewProgress = this.overview ? 1 : 0;
+    }
+
+    private scheduleReorder() {
+        this.cancelReorder();
+        this.reorderTimer = window.setTimeout(() => {
+            this.reorderTimer = undefined;
+            this.reorder();
+        }, reorderDelay);
+    }
+
+    private cancelReorder() {
+        if (this.reorderTimer !== undefined) {
+            clearTimeout(this.reorderTimer);
+            this.reorderTimer = undefined;
+        }
+    }
+
+    /** 缓冲到点：按最近使用重排，当前屏保持不动，只换左右邻居，不需要动画 */
+    private reorder() {
+        if (this.overview || this.gesture) return;
+        const current = this.currentScreen();
+        const empty = this.screens.find((s) => s.empty);
+        if (!empty) return;
+        const ordered = this.screens
+            .filter((s) => !s.empty)
+            .toSorted((a, b) => a.used - b.used)
+            .concat(empty);
+        const changed = ordered.some((s, i) => s !== this.screens[i]);
+        this.screens = ordered;
+        if (current) this.currentId = current.id;
+        if (changed) this.render(false);
+    }
+
+    private normalTargets(offset: number) {
+        const currentIndex = this.currentIndex();
+        const targets = new Map<string, ViewTransform>();
+        this.screens.forEach((screen, index) => {
+            targets.set(screen.id, {
+                x: (index - currentIndex) * this.stageWidth + offset,
+                y: 0,
+                scale: 1,
+                opacity: 1,
+            });
+        });
+        return targets;
+    }
+
+    /**
+     * 总览 grid：忽略空桌面，新的从右往左、再从上往下铺。
+     * 行列数按屏幕宽高比估算，卡片保持虚拟屏比例。
+     */
+    private overviewTargets() {
+        const cards = this.screens
+            .filter((s) => !s.empty)
+            .slice()
+            .reverse();
+        const targets = new Map<string, ViewTransform>();
+        const count = cards.length;
+        if (count === 0) return targets;
+
+        const aspect = this.stageWidth / this.stageHeight;
+        const cols = clampNumber(Math.round(Math.sqrt(count * aspect)), 1, count);
+        const rows = Math.ceil(count / cols);
+        const padding = Math.max(12, Math.min(this.stageWidth, this.stageHeight) * 0.04);
+        const gap = Math.min(OVERVIEW_GAP, padding);
+        const cellWidth = (this.stageWidth - padding * 2 - gap * (cols - 1)) / cols;
+        const cellHeight = (this.stageHeight - padding * 2 - gap * (rows - 1)) / rows;
+        const scale = Math.max(0.03, Math.min(cellWidth / this.stageWidth, cellHeight / this.stageHeight));
+        const cardWidth = this.stageWidth * scale;
+        const cardHeight = this.stageHeight * scale;
+        const gridWidth = cols * cardWidth + (cols - 1) * gap;
+        const gridHeight = rows * cardHeight + (rows - 1) * gap;
+        const left = (this.stageWidth - gridWidth) / 2;
+        const top = (this.stageHeight - gridHeight) / 2;
+
+        cards.forEach((screen, index) => {
+            const row = Math.floor(index / cols);
+            const gridCol = cols - 1 - (index % cols);
+            targets.set(screen.id, {
+                x: left + gridCol * (cardWidth + gap),
+                y: top + row * (cardHeight + gap),
+                scale,
+                opacity: 1,
+            });
+        });
+        return targets;
+    }
+
+    render(animate = true) {
+        // 手势跟手拖动时由 moveGesture 直接写样式，动画器只在松手/状态切换时接管
+        if (this.gesture) return;
+        const targets = this.overview ? this.overviewTargets() : this.normalTargets(0);
+        const hidden = { x: -this.stageWidth * 2, y: 0, scale: 1, opacity: 0 };
+        for (const screen of this.screens) {
+            const target = targets.get(screen.id);
+            if (target) {
+                screen.target = target;
+                screen.gear.moveTo(target, animate ? SCREEN_TRANSITION : 0);
+            } else {
+                screen.target = hidden;
+                screen.gear.moveTo(hidden, 0);
+            }
+            screen.el.style({ zIndex: screen.id === this.currentId ? "1" : "0" });
+        }
+    }
+
     focusWin(winid: MWinId) {
         const internal = internalWindows.has(winid);
         if (!internal && !server.server.windows.get(winid)) {
@@ -454,10 +847,12 @@ class ViewData {
         if (internal) void ime?.blur();
         else void ime?.focus(winid);
     }
+
     /** 只有 Wayland 窗口才有输入法上下文，内部窗口的文本输入由 DOM 自己处理 */
     getWaylandFocus() {
         return this.focusHandle !== undefined && !isInternalWindow(this.focusHandle) ? this.focusHandle : undefined;
     }
+
     blurAll() {
         this.focusHandle = undefined;
         for (const win of internalWindows.values()) {
@@ -468,13 +863,39 @@ class ViewData {
         }
         void ime?.blur();
     }
-    private checkAndRmView() {
-        const allAliveViews = new Set(this.win2View.values());
-        this.views = this.views.filter((v) => allAliveViews.has(v));
-    }
 }
 
-const viewData = new ViewData();
+/** 在窗口层里创建一屏；窗口和空桌面共用这一层，只通过 transform 移动/缩放 */
+function createScreenEl(id: string, onClick: () => void) {
+    const el = view()
+        .style({
+            position: "absolute",
+            left: "0",
+            top: "0",
+            width: "100%",
+            height: "100%",
+            transformOrigin: "0 0",
+            willChange: "transform, opacity",
+            overflow: "hidden",
+        })
+        .data({ "view-id": id })
+        .on("click", (e) => {
+            e.stopPropagation();
+            onClick();
+        });
+    windowEl.add(el);
+    return el;
+}
+
+function applyScreenTransform(el: ElType<HTMLElement>, value: ViewTransform) {
+    el.style({
+        transform: `translate3d(${value.x}px, ${value.y}px, 0) scale(${value.scale})`,
+        opacity: `${value.opacity}`,
+    });
+}
+
+/** 在窗口层创建完成后再实例化；之前的函数只在运行时访问它 */
+let viewData!: ViewData;
 
 interface WindowCenterConfig {
     enabled: boolean;
@@ -643,8 +1064,6 @@ function pointerKey(p: PointerEvent) {
 /** 正在用鼠标拖拽缩放的窗口 id；期间指针事件不转发给 Wayland 客户端 */
 let resizingWindowId: string | undefined;
 
-let viewAllShowing = false;
-
 class trigger {
     private cbs: (() => undefined | true)[] = [];
     on(cb: () => undefined | true) {
@@ -755,6 +1174,13 @@ const EXIT_BINDINGS: KeyBinding[] = [
     { code: "Delete", ctrl: true, alt: true },
 ];
 
+/** 虚拟屏切换：Super+←/→ 左右跳，Super+Tab 开关全局预览 */
+const DESKTOP_BINDINGS: KeyBinding[] = [
+    { code: "ArrowLeft", meta: true },
+    { code: "ArrowRight", meta: true },
+    { code: "Tab", meta: true },
+];
+
 class Timer {
     private timerId: number | undefined;
     private onxcb: () => void = () => {};
@@ -800,60 +1226,8 @@ function mouseMove(x: number, y: number, p?: PointerEvent) {
     cursor.setSurfaceFocus(target?.clientId);
 }
 
-function cssVar(name: string) {
-    return {
-        getName() {
-            return `var(--${name})`;
-        },
-        setValue(value: string) {
-            setProperty(`--${name}`, value);
-        },
-    };
-}
-
-const viewWidth = cssVar("view-width");
-const viewHeight = cssVar("view-height");
-
-function newViewEl(v: { ox: number; oy: number }) {
-    const id = `view-${v.ox}-${v.oy}`;
-    if (windowViewMap.has(id)) {
-        // biome-ignore lint/style/noNonNullAssertion: ---
-        return windowViewMap.get(id)!;
-    }
-    const el = view()
-        .style({
-            left: `calc(${viewWidth.getName()} * ${v.ox})`,
-            top: `calc(${viewHeight.getName()} * ${v.oy})`,
-            width: "100%",
-            height: "100%",
-            position: "absolute",
-        })
-        .on("click", () => {
-            if (viewAllShowing) {
-                viewAllShowing = false;
-                viewAll(false);
-                setViewScorll({ x: v.ox, y: v.oy });
-            }
-        });
-    windowEl.add(el);
-    windowViewMap.set(id, el);
-    return el;
-}
-
-function setViewScorll({ x, y }: { x: number; y: number }) {
-    windowEl.style({
-        left: `${-x * 100}%`,
-        top: `${-y * 100}%`,
-    });
-}
-
-/** 多窗口总览把所有窗口缩放到 VIEW_ALL_SCALE，关闭按钮反向放大以保持屏幕尺寸不变 */
-const VIEW_ALL_SCALE = 0.25;
-
-const windowCloseButtons = new Map<WinHandle, ElType<HTMLButtonElement>>();
-
 /** 统一的窗口关闭按钮：白色圆底 + 叉号，压在任意窗口内容上都能看清 */
-function createWindowCloseButton(op: { size: number; scale?: number; onClick: () => void }) {
+function createWindowCloseButton(op: { size: number; onClick: () => void }) {
     const btn = button(getIconXEl("cross", { size: Math.round(op.size * 0.55) }))
         .style({
             width: `${op.size}px`,
@@ -870,11 +1244,8 @@ function createWindowCloseButton(op: { size: number; scale?: number; onClick: ()
             zIndex: "10",
         })
         .data({ "desktop-ui": "window-control" });
-    if (op.scale) {
-        btn.style({ transform: `scale(${op.scale})`, transformOrigin: "top right" });
-    }
     btn.on("click", (e) => {
-        // 预览里父级点击是跳转窗口，总览里父级点击是退出总览
+        // 预览里父级点击是跳转窗口；按钮自己先截断，避免触发跳转
         e.stopPropagation();
         op.onClick();
     });
@@ -898,6 +1269,14 @@ addStyle({
     "[data-resize-preview]": {
         width: "var(--resize-preview-width) !important",
         height: "var(--resize-preview-height) !important",
+    },
+    // 总览里隐藏缩放热区，避免缩小后挡住窗口缩略图
+    "[data-overview] [data-desktop-ui='resize-handle']": {
+        display: "none",
+    },
+    // 总览里内容不再接收指针，点击整张卡片只用于切换
+    "[data-overview] [data-view-id] > *": {
+        pointerEvents: "none",
     },
 });
 
@@ -959,7 +1338,6 @@ function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
                 zIndex: corner ? "10" : "9",
                 touchAction: "none",
                 cursor: resizeCursors[edge],
-                display: viewAllShowing ? "none" : "block",
             })
             .data({ "resize-cursor": resizeCursors[edge], "desktop-ui": "resize-handle" });
 
@@ -977,7 +1355,7 @@ function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
         }
 
         handle.on("pointerenter", () => {
-            if (viewAllShowing) return;
+            if (viewData.overview) return;
             if (wayland && server.server.windows.get(windowId)?.states.maximized) return;
             cursor.setLocalShape(resizeCursors[edge]);
         });
@@ -995,7 +1373,7 @@ function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
 }
 
 function beginWindowResize(e: PointerEvent, edge: ResizeEdge, el: HTMLElement, windowId: string, wayland: boolean) {
-    if (e.button !== 0 || e.isPrimary === false || viewAllShowing || resizingWindowId !== undefined) return;
+    if (e.button !== 0 || e.isPrimary === false || viewData.overview || resizingWindowId !== undefined) return;
     const info = wayland ? server.server.windows.get(windowId) : undefined;
     if (wayland && (!info || info.states.maximized)) return;
 
@@ -1146,24 +1524,8 @@ function beginWindowResize(e: PointerEvent, edge: ResizeEdge, el: HTMLElement, w
     window.addEventListener("pointercancel", finish);
 }
 
-function viewAll(s: boolean) {
-    windowElWarp.style({
-        transition: "all 0.3s ease-in-out",
-        transform: s ? `scale(${VIEW_ALL_SCALE})` : "none",
-    });
-    for (const btn of windowCloseButtons.values()) {
-        btn.style({ display: s ? "flex" : "none" });
-    }
-    for (const handles of windowResizeHandles.values()) {
-        for (const handle of handles) handle.style({ display: s ? "none" : "block" });
-    }
-    if (s) cursor.setLocalShape(undefined);
-}
-
-function addWindow(v: View, el: HTMLElement, windowId?: string) {
-    const pel = newViewEl(v);
-    pel.add(el);
-    setViewScorll({ x: v.ox, y: v.oy });
+function addWindow(screen: ViewScreen, el: HTMLElement, windowId?: string) {
+    screen.el.add(el);
 
     pack(el).style({
         position: "absolute",
@@ -1175,10 +1537,7 @@ function addWindow(v: View, el: HTMLElement, windowId?: string) {
 }
 
 function jump2Win(winid: MWinId) {
-    const v = viewData.getViewByWinId(winid);
-    if (!v) return;
-    setViewScorll({ x: v.ox, y: v.oy });
-    viewData.focusWin(winid);
+    viewData.jumpToWin(winid);
 }
 
 // ── 桌面自己的 DOM 窗口 ────────────────────────────────────────────────────────────────────────
@@ -1187,18 +1546,13 @@ function jump2Win(winid: MWinId) {
 const SETTINGS_WINDOW_ID = "internal:settings";
 
 function openSettingsWindow() {
-    if (viewAllShowing) {
-        viewAllShowing = false;
-        viewAll(false);
-    }
+    if (viewData.overview) viewData.setOverview(false);
     if (internalWindows.has(SETTINGS_WINDOW_ID)) {
         jump2Win(SETTINGS_WINDOW_ID);
         return;
     }
 
-    const v = viewData.newView();
-    viewData.moveWinToView(SETTINGS_WINDOW_ID, v);
-
+    const screen = viewData.addWindowScreen(SETTINGS_WINDOW_ID);
     const root = view("y").data({ "internal-window": SETTINGS_WINDOW_ID }).style({
         position: "absolute",
         width: "760px",
@@ -1261,6 +1615,16 @@ function openSettingsWindow() {
         setNaturalScroll: (enabled) => {
             naturalScroll = enabled;
             desktopSetting.nset("naturalScroll", enabled);
+        },
+        getSwitchGestureGain: () => gestureSwitchGain,
+        setSwitchGestureGain: (gain) => {
+            gestureSwitchGain = normalizeGestureGain(gain);
+            desktopSetting.nset("switchGestureGain", gestureSwitchGain);
+        },
+        getReorderDelay: () => reorderDelay,
+        setReorderDelay: (delay) => {
+            reorderDelay = normalizeReorderDelay(delay);
+            desktopSetting.nset("reorderDelay", reorderDelay);
         },
         inputMethodAvailable: !!MSysApi.inputMethod,
         connectAvailable: !!myde.MConnect,
@@ -1330,8 +1694,8 @@ function openSettingsWindow() {
         window.addEventListener("pointercancel", cleanup, { once: true });
     });
 
-    internalWindows.set(SETTINGS_WINDOW_ID, { el: root, view: v, setActive, dispose: settingsContent.dispose });
-    addWindow(v, root.el, SETTINGS_WINDOW_ID);
+    internalWindows.set(SETTINGS_WINDOW_ID, { el: root, setActive, dispose: settingsContent.dispose });
+    addWindow(screen, root.el, SETTINGS_WINDOW_ID);
     addResizeHandles(root.el, SETTINGS_WINDOW_ID, false);
     viewData.focusWin(SETTINGS_WINDOW_ID);
 }
@@ -1339,7 +1703,6 @@ function openSettingsWindow() {
 function closeSettingsWindow() {
     const entry = internalWindows.get(SETTINGS_WINDOW_ID);
     if (!entry) return;
-    if (viewData.focusHandle === SETTINGS_WINDOW_ID) viewData.blurAll();
     internalWindows.delete(SETTINGS_WINDOW_ID);
     viewData.closeWin(SETTINGS_WINDOW_ID);
     windowCenterManager.removeWindow(SETTINGS_WINDOW_ID);
@@ -1461,12 +1824,14 @@ function desktopUiUnderPoint(x: number, y: number, target?: EventTarget | null) 
 
 /** 当前指针位置下命中的客户端窗口；被桌面 UI 盖住时为空 */
 function pointerHits(p: PointerEvent): PointerHit[] {
-    if (viewAllShowing || resizingWindowId !== undefined) return [];
+    if (viewData.overview || viewData.gestureActive || resizingWindowId !== undefined) return [];
     if (desktopUiUnderPoint(p.x, p.y, p.target)) return [];
 
     const hits: PointerHit[] = [];
     const handled = new Set<string>();
     for (const info of server.server.windows.list()) {
+        // 只有当前虚拟屏接收指针；相邻屏在滑动动画中也可能进入视口
+        if (!viewData.isCurrentWin(info.handle)) continue;
         // 每个客户端只处理第一个命中的窗口
         if (handled.has(info.clientId)) continue;
         const rect = render.getXdgSurfaceEle(info.renderId)?.getBoundingClientRect();
@@ -1582,7 +1947,7 @@ type ScrollInput = {
 };
 
 function sendScrollEvent(p: ScrollInput) {
-    if (viewAllShowing || resizingWindowId !== undefined) return;
+    if (viewData.overview || viewData.gestureActive || resizingWindowId !== undefined) return;
     // 只转发落在窗口层（windowEl）上的滚动；面板/任务栏/IME 候选窗等桌面 UI 不转发
     const target =
         p.target instanceof Element
@@ -1593,6 +1958,7 @@ function sendScrollEvent(p: ScrollInput) {
     if (isDesktopUiTarget(target)) return;
     const handled = new Set<string>();
     for (const info of server.server.windows.list()) {
+        if (!viewData.isCurrentWin(info.handle)) continue;
         if (handled.has(info.clientId)) continue;
         const rootEl = render.getXdgSurfaceEle(info.renderId);
         if (!rootEl) continue;
@@ -1651,12 +2017,18 @@ const desktopSetting = MSetting.init({
         touchpadScrollGain: 1,
         /** 触摸板自然滚动（内容跟随手指） */
         naturalScroll: true,
+        /** 三指横滑切屏倍率 */
+        switchGestureGain: DEFAULT_GESTURE_GAIN,
+        /** 切屏后重排新旧顺序的延迟（毫秒） */
+        reorderDelay: DEFAULT_REORDER_DELAY,
     },
 });
 
 // 滚轮在每帧回调里都会读到，缓存设置避免每次同步读配置文件
 let touchpadScrollGain = desktopSetting.nget("touchpadScrollGain") ?? 1;
 let naturalScroll = desktopSetting.nget("naturalScroll") ?? true;
+gestureSwitchGain = normalizeGestureGain(desktopSetting.nget("switchGestureGain"));
+reorderDelay = normalizeReorderDelay(desktopSetting.nget("reorderDelay"));
 
 windowCenterManager.setEnabled(desktopSetting.nget("centerWindows"));
 
@@ -1744,27 +2116,14 @@ server.server.on("window.created", (info) => {
     const wid = info.handle;
     appliedState.set(wid, { w: info.rect.w, h: info.rect.h, maximized: false, scale: info.scale });
 
-    const v = viewData.newView();
-    viewData.moveWinToView(wid, v);
+    const screen = viewData.addWindowScreen(wid);
     // biome-ignore lint/style/noNonNullAssertion: 刚刚创建的，一定有
     const winEl = render.getXdgSurfaceEle(info.renderId)!;
     pack(winEl).style({
         width: `${info.rect.w * info.scale}px`,
         height: `${info.rect.h * info.scale}px`,
     });
-    const closeBtn = createWindowCloseButton({
-        size: 24 * info.scale,
-        scale: 1 / VIEW_ALL_SCALE,
-        onClick: () => server.server.notify("window.close", wid),
-    }).style({
-        position: "absolute",
-        top: `${4 * info.scale}px`,
-        right: `${4 * info.scale}px`,
-        display: viewAllShowing ? "flex" : "none",
-    });
-    closeBtn.addInto(winEl);
-    windowCloseButtons.set(wid, closeBtn);
-    addWindow(v, winEl, wid);
+    addWindow(screen, winEl, wid);
     addResizeHandles(winEl, wid, true);
     viewData.focusWin(wid);
     server.server.notify("window.setBox", wid, { width: 800, height: 600 });
@@ -1773,9 +2132,8 @@ server.server.on("window.created", (info) => {
 server.server.on("window.closed", (wid) => {
     console.log(`window ${wid} closed`);
     appliedState.delete(wid);
-    windowCloseButtons.delete(wid);
     removeResizeHandles(wid);
-    if (viewData.focusHandle === wid) viewData.blurAll();
+    windowCenterManager.removeWindow(wid);
     viewData.closeWin(wid);
     // 指针还停在刚关闭的窗口上时，立刻回到默认光标；
     // 否则客户端退出流程补发的 hidden 会把光标留成空白
@@ -1907,10 +2265,11 @@ const bg = image(fs.readFileAsDataURLSync("/assets/wallpaper/1.svg"), "wallpaper
 
 const windowElWarp = view().style({
     position: "absolute",
+    zIndex: "0",
 });
 
 const toolsEl = view()
-    .style({ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" })
+    .style({ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", zIndex: "10" })
     .class(
         addClass(
             { pointerEvents: "none" },
@@ -1932,6 +2291,7 @@ const lockScreen = view().class(
             position: "fixed",
             top: "0",
             left: "0",
+            zIndex: "30",
         },
         {
             "&>*": {
@@ -2160,6 +2520,7 @@ const imeOverlay = view().style({
     width: "100%",
     height: "100%",
     pointerEvents: "none",
+    zIndex: "20",
 });
 
 mainEl.add([bg, windowElWarp, toolsEl, imeOverlay, lockScreen, cursorEl, screenOffLayer]);
@@ -2171,17 +2532,22 @@ const windowEl = view()
         left: 0,
         width: "100%",
         height: "100%",
-        transition: "0.4s",
+        overflow: "hidden",
     })
     .addInto(windowElWarp);
-const windowViewMap = new Map<string, ElType<HTMLElement>>();
+
+viewData = new ViewData();
+
+// 总览里点到卡片以外的空白处退出预览
+windowEl.on("click", (e) => {
+    if (viewData.overview && e.target === windowEl.el) viewData.setOverview(false);
+});
 
 const ob = new ResizeObserver((e) => {
     for (const entry of e) {
         const rect = entry.contentRect;
-        viewWidth.setValue(`${rect.width}px`);
-        viewHeight.setValue(`${rect.height}px`);
         windowCenterManager.setViewport(0, 0, rect.width, rect.height);
+        viewData.setStageSize(rect.width, rect.height);
     }
 });
 
@@ -2240,6 +2606,7 @@ void ime.init();
 
 const initRect = windowEl.el.getBoundingClientRect();
 windowCenterManager.setViewport(0, 0, initRect.width, initRect.height);
+viewData.setStageSize(initRect.width, initRect.height);
 
 async function confirm(text: string) {
     const p = Promise.withResolvers<boolean>();
@@ -3139,8 +3506,7 @@ tools.registerTool("blank", () => {
 });
 tools.registerTool("showAllView", () => {
     const showAllViewBtn = button(getIconXEl("mutiWinView", { size: 20, width: 24, height: 24 })).on("click", () => {
-        viewAllShowing = !viewAllShowing;
-        viewAll(viewAllShowing);
+        viewData.toggleOverview();
     });
     return showAllViewBtn;
 });
@@ -4129,6 +4495,19 @@ body.on("keydown", (e) => {
         return;
     }
     if (state.getState() !== "normal") return;
+    if (viewData.overview) {
+        // 全局预览只响应普通点击和 Esc，键盘不再进入应用
+        e.preventDefault();
+        if (!e.repeat && e.code === "Escape") viewData.setOverview(false);
+        return;
+    }
+    if (!e.repeat && matchBindings(e, DESKTOP_BINDINGS)) {
+        e.preventDefault();
+        if (e.code === "ArrowLeft") viewData.moveCurrent(-1);
+        else if (e.code === "ArrowRight") viewData.moveCurrent(1);
+        else viewData.toggleOverview();
+        return;
+    }
     // 内部窗口自己处理 DOM 键盘事件（输入框、下拉框等），不转发给 Wayland 客户端
     if (isInternalWindow(viewData.focusHandle)) return;
     const handle = viewData.focusHandle;
@@ -4143,6 +4522,10 @@ body.on("keydown", (e) => {
 });
 body.on("keyup", (e) => {
     if (state.getState() !== "normal") return;
+    if (viewData.overview || matchBindings(e, DESKTOP_BINDINGS)) {
+        e.preventDefault();
+        return;
+    }
     if (isInternalWindow(viewData.focusHandle)) return;
     const handle = viewData.focusHandle;
     if (handle === undefined) return;
@@ -4324,6 +4707,16 @@ function useEvdevDevice(
             pointerType: kind,
             source: "evdev",
         });
+    });
+    // 三指横滑切换虚拟屏：跟手移动，松手吸附；总览里不响应
+    touchpadInput?.on("multiStart", (fingers) => {
+        if (fingers >= 3) viewData.startGesture();
+    });
+    touchpadInput?.on("multiMove", (fingers, moveX, moveY) => {
+        if (fingers >= 3) viewData.moveGesture(moveX, moveY);
+    });
+    touchpadInput?.on("multiEnd", (fingers) => {
+        if (fingers >= 3) viewData.endGesture();
     });
 
     function flushFrame() {

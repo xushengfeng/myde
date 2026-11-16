@@ -37,6 +37,12 @@ export type SettingsContentOptions = {
     /** 触摸板自然滚动（内容跟随手指） */
     getNaturalScroll(): boolean;
     setNaturalScroll(enabled: boolean): void;
+    /** 三指横滑切屏倍率 */
+    getSwitchGestureGain(): number;
+    setSwitchGestureGain(gain: number): void;
+    /** 切屏后重排新旧顺序的延迟（毫秒） */
+    getReorderDelay(): number;
+    setReorderDelay(delay: number): void;
     inputMethodAvailable: boolean;
     connectAvailable: boolean;
     getConnectEnabled(): boolean;
@@ -577,6 +583,48 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
                             "自然滚动",
                             "开启时内容跟随手指移动；关闭后方向相反，接近传统滚轮。",
                             createToggle(op.getNaturalScroll, op.setNaturalScroll),
+                        ),
+                    ]);
+            },
+        },
+        {
+            id: "gesture",
+            name: "手势",
+            build: () => {
+                return view("y")
+                    .style({ gap: px(sSize2.padding + 8) })
+                    .add([
+                        sectionTitle("手势", "触摸板三指手势与虚拟桌面切换。"),
+                        settingRow(
+                            "切屏倍率",
+                            "三指横滑的位移倍率；数值越大，换一个虚拟屏需要的滑动距离越短。",
+                            createSegmented(
+                                [
+                                    { name: "1×", value: 1 },
+                                    { name: "2×", value: 2 },
+                                    { name: "3×", value: 3 },
+                                    { name: "4×", value: 4 },
+                                    { name: "5×", value: 5 },
+                                    { name: "6×", value: 6 },
+                                ],
+                                op.getSwitchGestureGain,
+                                op.setSwitchGestureGain,
+                            ),
+                        ),
+                        settingRow(
+                            "重排延迟",
+                            "切屏后保持旧空间顺序的时间；到点后按最近使用顺序在内部重排。",
+                            createSegmented(
+                                [
+                                    { name: "1 秒", value: 1000 },
+                                    { name: "2 秒", value: 2000 },
+                                    { name: "3 秒", value: 3000 },
+                                    { name: "4 秒", value: 4000 },
+                                    { name: "5 秒", value: 5000 },
+                                ],
+                                op.getReorderDelay,
+                                op.setReorderDelay,
+                            ),
                         ),
                     ]);
             },
