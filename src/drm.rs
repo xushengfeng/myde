@@ -312,7 +312,9 @@ impl smithay::backend::renderer::element::RenderElement<GlesRenderer> for MyElem
         renderer: &mut GlesRenderer,
     ) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
         match self {
-            // 必须透传，否则 DrmCompositor 看不到 dmabuf，整屏直出会退化成 GPU 合成
+            // 透传底层 buffer，理论上允许 DrmCompositor 直出。注意：当前 Electron
+            // 的 dmabuf 实测仍选 Swapchain（direct=0），这是 opaque/alpha/plane 条件
+            // 未满足，不是这里丢了 storage；不要为了 direct=0 反复改本函数。
             MyElement::Wayland(e) => e.underlying_storage(renderer),
             MyElement::Custom(_) => None,
         }

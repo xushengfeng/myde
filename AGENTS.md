@@ -263,6 +263,14 @@ DRM 启动模式取 EDID 首选分辨率下刷新率最高的模式，而不是`
 }
 ```
 
+## 渲染调度与整屏直出（改动前先看）
+
+- **独立的 frame callback 心跳不能删**。DRM 的 vblank 事件是跟着 page flip 来的，没有新帧就没有 vblank；只靠 `on_vblank` 发 `wl_callback.done` 时，客户端错过一拍就会自锁在 60Hz（实测 62fps，KDE 下同内容 120）。`main.rs` 用输出刷新周期一半的 timer 调 `App::pump_frame_callbacks()`；frame callback 用 0.75 个周期做最小间隔，避免和真实 vblank 重复。不要改回 16ms 兜底或删掉 `pump_frame_callbacks`。
+- `wl_callback.done` 和 `wp_presentation.presented` 必须用同一个 `CLOCK_MONOTONIC`（`crate::wayland::monotonic_now()`）。Chromium 会拿两者一起排帧，基准不同会算错 deadline。
+- `MyElement` 已透传 `underlying_storage`，identity 路径也会跳过离屏纹理，但**实测 DrmCompositor 仍然选 Swapchain，direct scanout=0**（`MYDE_WRAP_STATS=1` 可看统计）。当前 GPU 合成 `avg_render≈2.2ms`，120Hz 已足够；**不要仅为了 `direct=0` 反复改 `underlying_storage` 或整屏判断**。若以后要继续追，先确认 Electron/Chromium buffer 的 opaque region、alpha 和 primary plane 格式是否满足直出条件，再用统计验证。
+- `MYDE_WRAP_STATS=1` 会每 2 秒输出 `vblank/submitted/callbacks/renders/direct/avg_render/offscreen`，用于区分「客户端没提交」「wrap 渲染慢」「vblank 没发」；默认关闭，避免日志刷屏。
+- 整屏 identity 直出路径与离屏/CropStretch 路径不要同时启用；`use_offscreen` 在非整屏、旋转或需要缩放时为 true，切换时会丢弃旧离屏纹理。
+
 ## TODO
 
 - 屏幕电源权限：当前直接操作 DRM connector，依赖 wrap 以 root 或 `video` 组运行并成为 DRM master；后续接入 libseat/logind 的 `TakeDevice`。DPMS 本身不需要额外权限。
