@@ -936,16 +936,18 @@ void main() {
                 } else {
                     0.0
                 };
-                info!(
-                    "wrap stats: vblank={:.1}/s submitted={:.1}/s callbacks={:.1}/s renders={:.1}/s direct={:.1}/s avg_render={:.2}ms offscreen={}",
-                    stats.vblanks as f64 / secs,
-                    stats.submitted as f64 / secs,
-                    stats.callbacks as f64 / secs,
-                    stats.renders as f64 / secs,
-                    stats.direct as f64 / secs,
-                    avg_render,
-                    stats.offscreen
-                );
+                if std::env::var_os("MYDE_WRAP_STATS").is_some() {
+                    info!(
+                        "wrap stats: vblank={:.1}/s submitted={:.1}/s callbacks={:.1}/s renders={:.1}/s direct={:.1}/s avg_render={:.2}ms offscreen={}",
+                        stats.vblanks as f64 / secs,
+                        stats.submitted as f64 / secs,
+                        stats.callbacks as f64 / secs,
+                        stats.renders as f64 / secs,
+                        stats.direct as f64 / secs,
+                        avg_render,
+                        stats.offscreen
+                    );
+                }
                 let offscreen = stats.offscreen;
                 *stats = WrapStats::new();
                 stats.offscreen = offscreen;
