@@ -17,6 +17,7 @@ interface NativeTexture {
     stride: number;
     size: number;
     modifier: string;
+    slot: number;
 }
 
 interface NativeModule {
@@ -55,6 +56,7 @@ interface NativeModule {
         regionWidth: number,
         regionHeight: number,
     ): Buffer;
+    releaseDmabufTexture(slot: number): void;
     convertDmabufToTexture(
         fd: number,
         offset: number,
@@ -62,6 +64,7 @@ interface NativeModule {
         width: number,
         height: number,
         format: number,
+        owner: string,
     ): NativeTexture | null;
 }
 
@@ -117,6 +120,11 @@ export interface DmabufPlane {
 export interface ConvertDmabufToRgbaOptions {
     width: number;
     height: number;
+    /**
+     * 拷贝池的 owner（通常是 client + surface）。池只会在同一个 owner 内复用
+     * 拷贝缓冲；别的 owner 只能回收已空闲足够久的槽位，避免窗口之间串内容。
+     */
+    owner?: string;
     /** DRM fourcc, see `DRM_FORMAT`. */
     format: number;
     /**
@@ -228,7 +236,15 @@ export function convertDmabufToRgba(options: ConvertDmabufToRgbaOptions): Buffer
  */
 export function convertDmabufToTexture(options: ConvertDmabufToRgbaOptions): ConvertedDmabufTexture | null {
     const { width, height, format, plane, offset } = validateDmabuf(options);
-    const result = native.convertDmabufToTexture(plane.fd, offset, plane.stride, width, height, format);
+    const result = native.convertDmabufToTexture(
+        plane.fd,
+        offset,
+        plane.stride,
+        width,
+        height,
+        format,
+        options.owner ?? "",
+    );
     if (result === null) return null;
 
     let closed = false;
@@ -249,6 +265,9 @@ export function convertDmabufToTexture(options: ConvertDmabufToRgbaOptions): Con
             if (closed) return;
             closed = true;
             closeSync(result.fd);
+            // 把输出的 GBM buffer 还给池子；调用方要等消费者（Electron 的导入纹理）
+            // 释放后再 close，槽位才会被下一帧复用。
+            native.releaseDmabufTexture(result.slot);
         },
     };
 }

@@ -806,12 +806,13 @@ fn js_convert_dmabuf_to_texture(mut cx: FunctionContext) -> JsResult<JsValue> {
     let width = arg_u32(&mut cx, 3, "width")?;
     let height = arg_u32(&mut cx, 4, "height")?;
     let format = arg_u32(&mut cx, 5, "format")?;
+    let owner = cx.argument::<JsString>(6)?.value(&mut cx);
 
     if width == 0 || height == 0 {
         return cx.throw_error("width and height must be greater than zero");
     }
 
-    let converted = match gpu::convert(fd, offset, stride, width, height, format) {
+    let converted = match gpu::convert(fd, offset, stride, width, height, format, &owner) {
         Ok(Some(converted)) => converted,
         Ok(None) => return Ok(cx.null().upcast()),
         Err(error) => {
@@ -826,12 +827,20 @@ fn js_convert_dmabuf_to_texture(mut cx: FunctionContext) -> JsResult<JsValue> {
     let stride = cx.number(converted.stride);
     let size = cx.number(converted.size as f64);
     let modifier = cx.string(converted.modifier.to_string());
+    let slot = cx.number(converted.slot as f64);
     object.set(&mut cx, "fd", fd)?;
     object.set(&mut cx, "offset", offset)?;
     object.set(&mut cx, "stride", stride)?;
     object.set(&mut cx, "size", size)?;
     object.set(&mut cx, "modifier", modifier)?;
+    object.set(&mut cx, "slot", slot)?;
     Ok(object.upcast())
+}
+
+fn js_release_dmabuf_texture(mut cx: FunctionContext) -> JsResult<JsValue> {
+    let slot = arg_u64(&mut cx, 0, "slot")?;
+    gpu::release(slot);
+    Ok(cx.undefined().upcast())
 }
 
 #[neon::main]
@@ -845,5 +854,6 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("convertShmToRgbaInto", js_convert_shm_to_rgba_into)?;
     cx.export_function("convertShmToRgbaRegion", js_convert_shm_to_rgba_region)?;
     cx.export_function("convertDmabufToTexture", js_convert_dmabuf_to_texture)?;
+    cx.export_function("releaseDmabufTexture", js_release_dmabuf_texture)?;
     Ok(())
 }

@@ -5,7 +5,8 @@
 Electron 的 `sharedTexture.importSharedTexture` 只接受 `bgra`、`rgba`、`rgbaf16`、`nv12`、`nv16`、`p010le`。Chromium 内部其实认识 XRGB/XBGR，但 JS 接口没有暴露，而且 XRGB/XBGR 的 alpha 字节是未定义的。本模块把这些格式补上：
 - **GPU 路径（默认）**：用 EGL 导入源 dmabuf，着色器做通道重排/补 alpha，渲染到新的 ARGB8888 GBM dmabuf，再交给 `importSharedTexture`。像素不回到 CPU，也不经过 `putImageData`。
 - **CPU 路径（回退）**：mmap 源 dmabuf，Rust 里重排成 RGBA `Buffer`，适合没有 DRM render node、EGL 初始化失败或驱动不能导入该 dmabuf 的情况。
-- **每帧不等待 GPU**：EGL 上下文、着色器、FBO 和纹理首次创建后复用，每帧只新建导出用的 GBM buffer 和 EGLImage；绘制后 `glFlush` 提交，依赖 dma-buf 隐式 fence 与 Electron 的导入/合成同步，避免 `glFinish` 阻塞合成线程。
+- **每帧不等待 GPU**：EGL 上下文、着色器、FBO 和纹理首次创建后复用，导出用的 GBM buffer 从按尺寸复用的池里取，EGLImage 每帧新建、延迟两帧销毁；绘制后 `glFlush` 提交，依赖 dma-buf 隐式 fence 与 Electron 的导入/合成同步，避免 `glFinish` 阻塞合成线程。
+- **输出 buffer 池**：池按 owner（通常 client+surface）隔离，只有调用方 `close()` 后才回收；同一 owner 内直接复用，别的 owner 只能回收空闲 ≥1s 的槽位，避免窗口之间串内容。总内存按预算分配（默认 256MB，`MYDE_DRM_POOL_MB`），预算满时返回 `null`，由调用方回退零拷贝。
 - **同步兜底**：如果某个驱动对隐式 fence 支持不好（出现旧帧/花屏），设置 `MYDE_DRM_GPU_FINISH=1`，转换函数会改回每帧 `glFinish` 等待 GPU 完成。
 - Rust 原生实现（neon），TypeScript 包装，vite 构建，pnpm 管理
 - 只支持 **LINEAR** modifier（当前 myde 的 dmabuf feedback 只广播 modifier 0）
@@ -51,6 +52,8 @@ const texture = convertDmabufToTexture({
     height: bufferObj.height,
     format: bufferObj.format,
     modifier: 0n, // 只接受 DRM_FORMAT_MOD_LINEAR
+    // 多 surface 时必须传：池只在同一 owner 内复用，跨窗口不会串内容
+    owner: `${clientId}:${surfaceId}`,
     planes: [
         {
             fd: bufferObj.planes[0].fd,
@@ -81,17 +84,21 @@ if (texture) {
             },
         });
         const frame = imported.getVideoFrame();
-        imported.release();
         // 用 c2d.drawImage(frame, ...) 绘制
-        frame.close();
-    } finally {
-        // importSharedTexture 已经 dup 了 fd，可以关闭模块返回的那个
-        texture.close();
+        // 等绘制/合成不再需要这一帧时再释放，顺序是 frame.close() -> imported.release()
+        // -> texture.close()；texture.close() 关闭导出的 fd 并把池槽位还回去。
+        requestAnimationFrame(() => {
+            frame.close();
+            imported.release();
+            texture.close();
+        });
     }
 }
 ```
 
-`convertDmabufToTexture` 返回 `null` 表示 GPU 路径不可用，继续走下面的 CPU 回退。GPU 输出固定是 LINEAR `ARGB8888`，所以 `pixelFormat` 是 `"bgra"`。
+`convertDmabufToTexture` 返回 `null` 表示 GPU 路径不可用，或池的内存预算已经满了，继续走下面的 CPU 回退（或零拷贝导入）。GPU 输出固定是 LINEAR `ARGB8888`，所以 `pixelFormat` 是 `"bgra"`。
+
+`owner` 用于池隔离：省略时所有调用方共用一个 owner，多窗口下可能把拷贝缓冲复用到别的窗口。
 
 ### 3. CPU 回退：转成 RGBA Buffer
 
@@ -201,7 +208,7 @@ MYDE_DRM_GPU_TRACE=0 pnpm dev                 # 关闭
 | 阶段         | 含义                                                                                             |
 | ------------ | ------------------------------------------------------------------------------------------------ |
 | `current`    | `eglMakeCurrent`（已经 current 时接近 0）                                                        |
-| `gbm_create` | `gbm_bo_create`，每帧新分配导出 buffer                                                           |
+| `gbm_create` | 从池里取（命中）或 `gbm_bo_create`（预算内新建）导出 buffer                                   |
 | `gbm_fd`     | `gbm_bo_get_fd` 导出 dma-buf fd                                                                  |
 | `images`     | 创建源/目标（以及 alpha）EGLImage                                                                |
 | `bind`       | `glEGLImageTargetTexture2DOES` 绑定到复用的纹理                                                  |
@@ -235,6 +242,6 @@ GPU 路径对 RGBX/BGRX/RGBA/BGRA 会从偏移 1 处按 ARGB/ABGR 导入，避�
 - modifier 必须是 `DRM_FORMAT_MOD_LINEAR`（0）。tiled buffer 无法直接 mmap，非 0 modifier 会抛错。
 - 只支持单 plane 的 32 位格式。NV12/NV16/P010 不做转换。
 - GPU 路径需要能打开 DRM render node，并且系统提供 EGL/GBM 和 `EGL_EXT_image_dma_buf_import`；否则自动回退到 CPU。
-- GPU 路径每帧创建一块新的 GBM buffer；后续可以按尺寸做 buffer 池。
-- `convertDmabufToTexture` 返回的 fd 需要调用 `close()`；`convertDmabufToRgba` 的输入 fd 由调用方拥有，模块不会 close。
+- GPU 路径的输出 buffer 按尺寸池化，池按 owner 隔离、按字节预算（`MYDE_DRM_POOL_MB`，默认 256MB）分配；预算满时返回 `null`，需要调用方回退。跨 owner 回收一个槽位要求它空闲 ≥ `MYDE_DRM_STEAL_IDLE_MS`（默认 1000ms）。
+- `convertDmabufToTexture` 返回的 `close()` 必须等消费方用完再调用：关闭导出的 fd 并把池槽位还回去。`convertDmabufToRgba` 的输入 fd 由调用方拥有，模块不会 close。
 - CPU 路径每次都会分配 `width * height * 4` 的新 Buffer，能直通的格式不要走这里。

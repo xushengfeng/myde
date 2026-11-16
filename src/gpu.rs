@@ -157,6 +157,33 @@ pub struct ConvertedTexture {
     pub stride: u32,
     pub size: u64,
     pub modifier: u64,
+    /// Buffer pool slot; release the slot after the consumer is done with the
+    /// imported texture so the next frame can reuse the same GBM buffer.
+    pub slot: u64,
+}
+
+/// The pool is budgeted in bytes, not in frame count: a slot is created only
+/// when an in-flight frame needs one, and reuse is free. This makes the memory
+/// ceiling independent of window size: 4K frames use ~33MB each, 1080p ~8MB.
+const DEFAULT_POOL_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
+const MIN_POOL_BUDGET_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_POOL_BUDGET_BYTES: u64 = 2048 * 1024 * 1024;
+/// 一个 owner（窗口 surface）的槽位只有空闲这么久后，才允许被别的 owner 回收。
+/// 没有 presented 回调时，这是避免 A 窗口旧内容出现在 B 窗口里的下限。
+const DEFAULT_STEAL_IDLE_MS: u64 = 1000;
+/// 大量极小窗口时的槽位数量上限（预算已经限制了总字节数）
+const MAX_POOL_SLOTS: usize = 64;
+
+struct PooledBuffer {
+    id: u64,
+    /// client + surface；同一 owner 内复用是安全的，跨 owner 复用必须等旧内容
+    /// 肯定已经离开屏幕，否则 A 窗口会闪出 B 窗口的内容。
+    owner: String,
+    width: u32,
+    height: u32,
+    in_use: bool,
+    free_since: Option<Instant>,
+    buffer: gbm::BufferObject<()>,
 }
 
 const GPU_STAGE_COUNT: usize = 9;
@@ -344,6 +371,15 @@ struct GpuContext {
     /// where implicit dma-buf fences are not reliable.
     wait_for_completion: bool,
     trace: Option<GpuTrace>,
+    /// Reused output buffers. Creating a new GBM buffer per frame triggers
+    /// high-order allocations and xe's fragmentation reclaim loop; reusing a
+    /// small pool keeps memory flat and lets the caller release a copy.
+    pool: Vec<PooledBuffer>,
+    next_slot: u64,
+    /// 输出 buffer 的总内存预算；超过后不再新建，需要时回收空闲槽或回退零拷贝
+    pool_budget: u64,
+    /// 跨 owner 回收一个空闲槽前，至少要空闲多久
+    steal_idle: Duration,
 }
 
 impl GpuContext {
@@ -487,18 +523,32 @@ impl GpuContext {
             wait_for_completion: std::env::var_os("MYDE_DRM_GPU_FINISH")
                 .is_some_and(|value| value != "0" && !value.is_empty()),
             trace: GpuTrace::from_env(),
+            pool: Vec::new(),
+            next_slot: 1,
+            pool_budget: std::env::var("MYDE_DRM_POOL_MB")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|mb| mb.saturating_mul(1024 * 1024))
+                .unwrap_or(DEFAULT_POOL_BUDGET_BYTES)
+                .clamp(MIN_POOL_BUDGET_BYTES, MAX_POOL_BUDGET_BYTES),
+            steal_idle: std::env::var("MYDE_DRM_STEAL_IDLE_MS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(Duration::from_millis)
+                .unwrap_or(Duration::from_millis(DEFAULT_STEAL_IDLE_MS)),
         })
     }
 
     fn convert(
         &mut self,
+        owner: &str,
         width: u32,
         height: u32,
         format: u32,
         fd: RawFd,
         offset: u32,
         stride: u32,
-    ) -> Result<ConvertedTexture, String> {
+    ) -> Result<Option<ConvertedTexture>, String> {
         let spec =
             source_spec(format).ok_or_else(|| format!("unsupported DRM format 0x{format:08x}"))?;
         if stride < width.saturating_mul(4) {
@@ -514,22 +564,14 @@ impl GpuContext {
         }
         let stage_current = timer.mark();
 
-        let buffer = self
-            .gbm
-            .create_buffer_object::<()>(
-                width,
-                height,
-                gbm::Format::Argb8888,
-                gbm::BufferObjectFlags::LINEAR | gbm::BufferObjectFlags::RENDERING,
-            )
-            .map_err(|error| format!("gbm_bo_create failed: {error}"))?;
+        let Some((slot_id, dst_fd, dst_stride, dst_offset, dst_modifier)) =
+            self.acquire_buffer(owner, width, height)?
+        else {
+            // 池里的 buffer 都还被上一帧的导入占着：回退到零拷贝导入，
+            // 不能无限新建（那正是显存按帧上涨的原因）。
+            return Ok(None);
+        };
         let stage_gbm_create = timer.mark();
-        let dst_stride = buffer.stride();
-        let dst_offset = buffer.offset(0);
-        let dst_modifier = u64::from(buffer.modifier());
-        let dst_fd: OwnedFd = buffer
-            .fd()
-            .map_err(|error| format!("gbm_bo_get_fd failed: {error}"))?;
         let stage_gbm_fd = timer.mark();
 
         let mut images: Vec<egl::Image> = Vec::with_capacity(3);
@@ -678,6 +720,7 @@ impl GpuContext {
             } else {
                 destroy_images(&self.egl, self.display, &mut images);
             }
+            self.release_buffer(slot_id);
             return Err(error);
         }
         self.alpha_has_image = alpha_has_image;
@@ -688,7 +731,6 @@ impl GpuContext {
         self.older_images = std::mem::replace(&mut self.previous_images, images);
         let stage_recycle = timer.mark();
 
-        drop(buffer);
         let raw_fd = dst_fd.into_raw_fd();
 
         if let Some(trace) = self.trace.as_mut() {
@@ -710,13 +752,132 @@ impl GpuContext {
             );
         }
 
-        Ok(ConvertedTexture {
+        Ok(Some(ConvertedTexture {
             fd: raw_fd,
             offset: dst_offset,
             stride: dst_stride,
             size: dst_stride as u64 * height as u64,
             modifier: dst_modifier,
+            slot: slot_id,
+        }))
+    }
+
+    fn slot_bytes(slot: &PooledBuffer) -> u64 {
+        slot.buffer.stride() as u64 * slot.height as u64
+    }
+
+    fn pool_bytes(&self) -> u64 {
+        self.pool.iter().map(Self::slot_bytes).sum()
+    }
+
+    fn create_slot(
+        &mut self,
+        owner: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<PooledBuffer, String> {
+        let buffer = self
+            .gbm
+            .create_buffer_object::<()>(
+                width,
+                height,
+                gbm::Format::Argb8888,
+                gbm::BufferObjectFlags::LINEAR | gbm::BufferObjectFlags::RENDERING,
+            )
+            .map_err(|error| format!("gbm_bo_create failed: {error}"))?;
+        let id = self.next_slot;
+        self.next_slot += 1;
+        Ok(PooledBuffer {
+            id,
+            owner: owner.to_string(),
+            width,
+            height,
+            in_use: true,
+            free_since: None,
+            buffer,
         })
+    }
+
+    /// Take a free pooled buffer for (owner, width, height), creating one while
+    /// the byte budget allows. Returns the exported fd plus the buffer's
+    /// geometry. `None` means every slot is busy and the caller should fall
+    /// back to a zero-copy import instead of allocating more memory.
+    fn acquire_buffer(
+        &mut self,
+        owner: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<Option<(u64, OwnedFd, u32, u32, u64)>, String> {
+        // 1. 同一 owner 同尺寸的空闲槽位：直接复用，旧内容也是这个窗口自己的
+        if let Some(index) = self.pool.iter().position(|slot| {
+            !slot.in_use && slot.owner == owner && slot.width == width && slot.height == height
+        }) {
+            self.pool[index].in_use = true;
+            return self.export_slot(index);
+        }
+
+        // 2. 同一 owner 其它尺寸的空闲槽位：换一块尺寸继续用（还是自己的内存）
+        if let Some(index) = self
+            .pool
+            .iter()
+            .position(|slot| !slot.in_use && slot.owner == owner)
+        {
+            let slot = self.create_slot(owner, width, height)?;
+            self.pool[index] = slot;
+            return self.export_slot(index);
+        }
+
+        let needed = width as u64 * 4 * height as u64;
+
+        // 3. 预算/槽位够就新建；空池至少建一块，避免预算比单帧还小时用不了拷贝
+        let fits_budget = self.pool_bytes() + needed <= self.pool_budget;
+        let has_room = self.pool.len() < MAX_POOL_SLOTS;
+        if self.pool.is_empty() || (fits_budget && has_room) {
+            let slot = self.create_slot(owner, width, height)?;
+            self.pool.push(slot);
+            return self.export_slot(self.pool.len() - 1);
+        }
+
+        // 4. 预算满了：只能回收别的 owner、且已经空闲足够久的槽位。没有
+        // presented 回调，不能更快地复用别人的 buffer，否则会闪出别的窗口内容。
+        if let Some(index) = self.pool.iter().position(|slot| {
+            if slot.in_use || slot.owner == owner {
+                return false;
+            }
+            slot.free_since
+                .is_some_and(|since| since.elapsed() >= self.steal_idle)
+        }) {
+            let slot = self.create_slot(owner, width, height)?;
+            self.pool[index] = slot;
+            return self.export_slot(index);
+        }
+
+        Ok(None)
+    }
+
+    fn export_slot(
+        &self,
+        index: usize,
+    ) -> Result<Option<(u64, OwnedFd, u32, u32, u64)>, String> {
+        let slot = &self.pool[index];
+        let fd = slot
+            .buffer
+            .fd()
+            .map_err(|error| format!("gbm_bo_get_fd failed: {error}"))?;
+        Ok(Some((
+            slot.id,
+            fd,
+            slot.buffer.stride(),
+            slot.buffer.offset(0),
+            u64::from(slot.buffer.modifier()),
+        )))
+    }
+
+    fn release_buffer(&mut self, id: u64) {
+        if let Some(slot) = self.pool.iter_mut().find(|slot| slot.id == id) {
+            slot.in_use = false;
+            slot.free_since = Some(Instant::now());
+        }
     }
 
     fn create_image(&self, desc: ImageDesc) -> Result<egl::Image, String> {
@@ -877,6 +1038,7 @@ pub fn convert(
     width: u32,
     height: u32,
     format: u32,
+    owner: &str,
 ) -> Result<Option<ConvertedTexture>, String> {
     if source_spec(format).is_none() {
         return Ok(None);
@@ -896,12 +1058,21 @@ pub fn convert(
             *slot = Some(context);
         }
         match slot.as_mut().expect("initialized above") {
-            Ok(context) => context
-                .convert(width, height, format, fd, offset, stride)
-                .map(Some),
+            Ok(context) => context.convert(owner, width, height, format, fd, offset, stride),
             Err(_) => Ok(None),
         }
     })
+}
+
+/// Release a pooled output buffer after the consumer is done with the imported
+/// texture. Until this is called the slot stays busy and a new conversion will
+/// fall back to the caller instead of allocating more GPU memory.
+pub fn release(slot: u64) {
+    GPU.with(|context| {
+        if let Some(Ok(context)) = context.borrow_mut().as_mut() {
+            context.release_buffer(slot);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -953,6 +1124,7 @@ mod tests {
             width,
             height,
             crate::DRM_FORMAT_RGBA8888,
+            "test",
         )
         .unwrap()
         {
@@ -989,6 +1161,7 @@ mod tests {
             libc::munmap(ptr, converted.size as usize);
             libc::close(converted.fd);
         }
+        release(converted.slot);
 
         // Switching away from a format with a separate alpha plane must detach
         // the cached alpha image without crashing.
@@ -999,9 +1172,11 @@ mod tests {
             width,
             height,
             crate::DRM_FORMAT_ARGB8888,
+            "test",
         )
         .unwrap()
         .unwrap();
         unsafe { libc::close(again.fd) };
+        release(again.slot);
     }
 }
