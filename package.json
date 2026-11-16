@@ -19,7 +19,8 @@
         "desktop:simpletest": "export desktop=':test' && electron-vite --ignoreConfigWarning preview",
         "desktop:offical": "cd desktop/offical && npm run build && cd ../.. && export desktop='desktop/offical' && electron-vite --ignoreConfigWarning preview",
         "desktop:remote": "cd desktop/remote && npm run build && cd ../.. && export desktop='desktop/remote' && electron-vite --ignoreConfigWarning preview",
-        "desktop:example": "cd desktop/example && npm run build && cd ../.. && export desktop='desktop/example' && electron-vite --ignoreConfigWarning preview"
+        "desktop:example": "cd desktop/example && npm run build && cd ../.. && export desktop='desktop/example' && electron-vite --ignoreConfigWarning preview",
+        "test:frametime": "vite desktop/offical/test/frametime"
     },
     "author": {
         "name": "xsf",

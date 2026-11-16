@@ -1,5 +1,6 @@
 import { button, dynamicSelect, type ElType, input, select, spacer, txt, view } from "dkh-ui";
 import type { ConnectConnection, PairingSession } from "../../../src/desktop-api";
+import { createFrameChart } from "./frame_chart";
 import { aLineText, gGlassStyle, px, sSize2 } from "./ui";
 
 export type ImePanelPreeditMode = "auto" | "always" | "never";
@@ -188,60 +189,6 @@ function createSegmented<T extends string | number>(
     }
     render();
     return group;
-}
-
-/** 简单测量桌面渲染器 requestAnimationFrame 的实际频率 */
-function createFpsTest() {
-    const result = txt("未测试").style({
-        fontFamily: "monospace",
-        fontSize: "12px",
-        opacity: "0.7",
-        minWidth: "130px",
-        textAlign: "right",
-    });
-    const startButton = dialogButton("开始测试");
-    let running = false;
-
-    startButton.on("click", () => {
-        if (running) return;
-        running = true;
-        startButton.attr({ disabled: true });
-        result.style({ opacity: "1" }).sv("测试中…");
-
-        const start = performance.now();
-        let last = start;
-        let frames = 0;
-        let intervalSum = 0;
-        let minInterval = Number.POSITIVE_INFINITY;
-        let maxInterval = 0;
-
-        const tick = (now: number) => {
-            const interval = now - last;
-            last = now;
-            frames++;
-            if (frames > 1) {
-                intervalSum += interval;
-                minInterval = Math.min(minInterval, interval);
-                maxInterval = Math.max(maxInterval, interval);
-            }
-
-            const elapsed = now - start;
-            if (elapsed >= 1500) {
-                const measured = (frames * 1000) / elapsed;
-                const average = intervalSum / Math.max(1, frames - 1);
-                result.sv(`${measured.toFixed(1)} fps  ${average.toFixed(2)} ms`).attr({
-                    title: `frames=${frames} min=${minInterval.toFixed(2)}ms max=${maxInterval.toFixed(2)}ms`,
-                });
-                startButton.attr({ disabled: false });
-                running = false;
-                return;
-            }
-            requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
-    });
-
-    return view("x").style({ alignItems: "center", gap: "8px", flexShrink: "0" }).add([result, startButton]);
 }
 
 function dialogField(control: ElType<HTMLInputElement>) {
@@ -522,6 +469,15 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
                     refreshControl = fieldStyle(refreshSelect.el);
                 }
 
+                // 预算线跟随当前输出刷新率；没有测量需求时不跑 rAF，点图表里的开始再采样
+                const frameChart = createFrameChart({
+                    windowMs: 4000,
+                    height: 132,
+                    refreshRate: () => op.getRefreshRate(),
+                    autoStart: false,
+                });
+                sectionCleanup = () => frameChart.destroy();
+
                 return view("y")
                     .style({ gap: px(sSize2.padding + 8) })
                     .add([
@@ -547,11 +503,13 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
                                 : "切换当前分辨率下的刷新率；Wayland 客户端和 wp_presentation 会使用新值。",
                             refreshControl,
                         ),
-                        settingRow(
-                            "帧率测试",
-                            "测量桌面界面自身的 requestAnimationFrame 频率。配置为 120Hz 但这里只有 60，说明限制在桌面/宿主链路；这里也是 120，则要看 Wayland 客户端自己的提交流程。",
-                            createFpsTest(),
-                        ),
+                        view("y")
+                            .style({
+                                padding: `${px(sSize2.padding)} ${px(sSize2.padding + 4)}`,
+                                borderRadius: px(sSize2.radius1),
+                                ...gGlassStyle.itemInBg,
+                            })
+                            .add(frameChart.el),
                     ]);
             },
         },

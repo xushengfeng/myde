@@ -108,7 +108,8 @@ resize ↔ `move` / `all_scroll` / `all_resize` 过渡时优先用十字的一�
 设置项：
 - 外观：`icon.theme` 应用图标主题
 - 显示：Wayland 客户端缩放 `desktop.scale`（100% / 125% / 150% / 175% / 200%）。缩放后 surface 逻辑坐标不变，
-  客户端 buffer 与窗口 DOM 尺寸按比例放大；桌面面板暂不缩放。winit 后端和普通窗口模式跟随宿主桌面，固定 1x
+  客户端 buffer 与窗口 DOM 尺寸按比例放大；桌面面板暂不缩放。winit 后端和普通窗口模式跟随宿主桌面，固定 1x。
+  下方帧时间图表按需启动，实时采样桌面界面的 `requestAnimationFrame` 帧间隔，并按当前输出刷新率画出预算线
 - 滚动：触摸板双指滚动速度 `desktop.touchpadScrollGain`、自然滚动 `desktop.naturalScroll`
 - 手势：三指横滑切屏倍率 `desktop.switchGestureGain`（默认 4×）、切屏后重排延迟 `desktop.reorderDelay`（默认 3000ms）
 - 输入法：候选窗预编辑 `ime.panelPreedit`（`auto` / `always` / `never`）
@@ -117,6 +118,8 @@ resize ↔ `move` / `all_scroll` / `all_resize` 过渡时优先用十字的一�
 - 关于：重启桌面，重新载入桌面界面（会关闭正在运行的窗口）；不会重启 myde 进程
 
 顶栏有互联工具，类似 WiFi：开关互联、显示本机 ID、列出已记忆和当前连接的设备；点击设备可在连接/断开之间切换。互联开关状态保存在 `connect.enabled`。
+
+`test/frametime` 用同一份 `src/frame_chart.ts` 做独立预览：`pnpm test:frametime` 启动 vite 后，在 myde 里用浏览器打开终端输出的地址；可切换窗口与刷新率、实测刷新率，并用持续负载或一次性长帧验证图表。
 
 ## 输入法
 
