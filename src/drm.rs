@@ -845,14 +845,18 @@ void main() {
         };
         let output = &output_data.smithay_output;
         let time = self.start_time.elapsed();
-        // 节流间隔 = 刷新周期（mode.refresh 为毫赫兹）
-        let throttle = output
+        // 这里的回调本来就由 DRM vblank 驱动，不能再按刷新周期节流：
+        // smithay 的 `SurfaceFrameThrottlingState` 用严格大于判断，vblank 间隔
+        // 只要比 mode.refresh 算出的周期短一点点就会丢掉一整轮回调，
+        // 120Hz 会被稳定压成 60Hz（UFO 测出 60~62）。
+        for window in state.space.elements() {
+            window.send_frame(output, time, None, |_, _| Some(output.clone()));
+        }
+        // presentation 的 refresh 仍取当前模式周期（mode.refresh 为毫赫兹）
+        let refresh = output
             .current_mode()
             .map(|mode| Duration::from_secs_f64(1000.0 / f64::from(mode.refresh).max(1.0)));
-        for window in state.space.elements() {
-            window.send_frame(output, time, throttle, |_, _| Some(output.clone()));
-        }
-        state.send_presentation_feedbacks(output, crate::wayland::monotonic_now(), throttle);
+        state.send_presentation_feedbacks(output, crate::wayland::monotonic_now(), refresh);
     }
 
     fn get_screens(&self) -> Vec<ScreenInfo> {
