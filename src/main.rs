@@ -187,6 +187,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let is_drm = backend.name() == "drm";
     info!("backend inited: {}", backend.name());
+    let frame_period = backend
+        .frame_interval()
+        .unwrap_or(Duration::from_millis(16));
     let screen_power_supported = is_drm;
     // 模式切换（分辨率/刷新率）只在 DRM 后端可用；winit 窗口尺寸由宿主决定
     let screen_mode_supported = is_drm;
@@ -368,8 +371,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if is_drm {
         let timer = Timer::immediate();
         loop_handle.insert_source(timer, move |_event, _, state| {
+            // page flip 才产生 vblank；没有帧在飞时也需要按刷新率补 frame callback，
+            // 否则客户端错过一拍就永远等不到下一次 done（稳定 60Hz）。
+            state.pump_frame_callbacks();
             state.refresh_and_render();
-            TimeoutAction::ToDuration(Duration::from_millis(16))
+            TimeoutAction::ToDuration(frame_period / 2)
         })?;
     }
 

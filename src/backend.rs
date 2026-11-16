@@ -45,6 +45,12 @@ pub trait RenderBackend: Send {
         true
     }
 
+    /// 当前输出的刷新周期。DRM 用它驱动一个独立的 frame callback tick，
+    /// 避免只有 page flip 时才有 vblank、客户端错过一拍就锁在 60Hz。
+    fn frame_interval(&self) -> Option<std::time::Duration> {
+        None
+    }
+
     /// 是否还有帧在等 vblank（帧在飞）。
     ///
     /// 有帧在飞时不应再渲染：既浪费，又会把 vblank 门控打乱造成掉帧。

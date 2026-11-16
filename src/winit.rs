@@ -164,6 +164,10 @@ impl RenderBackend for WinitBackend {
         Ok(())
     }
 
+    fn frame_interval(&self) -> Option<Duration> {
+        Some(Duration::from_secs_f64(1.0 / 60.0))
+    }
+
     fn dispatch(&mut self) -> bool {
         false
     }

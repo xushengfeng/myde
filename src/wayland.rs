@@ -415,6 +415,16 @@ impl App {
         self.backend = Some(backend);
     }
 
+    /// 独立于 page flip 的帧回调 tick：DRM 后端只会在有帧提交时收到 vblank，
+    /// 客户端错过一拍就没有下一次 done，会一直锁在 60Hz。定时器用它补心跳。
+    pub fn pump_frame_callbacks(&mut self) {
+        let Some(backend) = self.backend.take() else {
+            return;
+        };
+        backend.send_frame_callbacks(self);
+        self.backend = Some(backend);
+    }
+
     /// 事件批次结束后（display 事件源 / 定时兜底）调用：
     /// 刷新 space、检测窗口增删、按需渲染。
     pub fn refresh_and_render(&mut self) {

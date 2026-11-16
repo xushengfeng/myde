@@ -883,6 +883,15 @@ void main() {
         presented
     }
 
+    fn frame_interval(&self) -> Option<Duration> {
+        self.outputs.first().and_then(|output| {
+            output
+                .smithay_output
+                .current_mode()
+                .map(|mode| Duration::from_secs_f64(1000.0 / f64::from(mode.refresh).max(1.0)))
+        })
+    }
+
     fn has_frame_in_flight(&self) -> bool {
         self.compositors.iter().any(|r| r.needs_vblank)
     }
@@ -897,12 +906,13 @@ void main() {
         // 和 presentation 同用 CLOCK_MONOTONIC：Chromium 会把 frame callback 时间
         // 和 presented 时间一起用于排帧，基准不同会算错下一帧 deadline。
         let time = crate::wayland::monotonic_now();
-        // 这里的回调本来就由 DRM vblank 驱动，不能再按刷新周期节流：
-        // smithay 的 `SurfaceFrameThrottlingState` 用严格大于判断，vblank 间隔
-        // 只要比 mode.refresh 算出的周期短一点点就会丢掉一整轮回调，
-        // 120Hz 会被稳定压成 60Hz（UFO 测出 60~62）。
+        // vblank 与独立心跳定时器都会进来：用 0.75 个周期做最小间隔，
+        // 避免同一拍发两次；不用完整周期，避免 vblank 间隔略短时被严格大于判断丢掉。
+        let throttle = output
+            .current_mode()
+            .map(|mode| Duration::from_secs_f64(0.75 * 1000.0 / f64::from(mode.refresh).max(1.0)));
         for window in state.space.elements() {
-            window.send_frame(output, time, None, |_, _| Some(output.clone()));
+            window.send_frame(output, time, throttle, |_, _| Some(output.clone()));
         }
         // frame callback 每个 vblank 都要发，即使这一拍没有新帧完成；否则客户端
         // 少拿一次 done 就会等下一拍，连续两次就锁到 60Hz。
