@@ -306,6 +306,17 @@ impl smithay::backend::renderer::element::RenderElement<GlesRenderer> for MyElem
             MyElement::Custom(e) => e.draw(frame, src, dst, damage, opaque_regions),
         }
     }
+
+    fn underlying_storage(
+        &self,
+        renderer: &mut GlesRenderer,
+    ) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
+        match self {
+            // 必须透传，否则 DrmCompositor 看不到 dmabuf，整屏直出会退化成 GPU 合成
+            MyElement::Wayland(e) => e.underlying_storage(renderer),
+            MyElement::Custom(_) => None,
+        }
+    }
 }
 
 type GbmDrmCompositor = DrmCompositor<
