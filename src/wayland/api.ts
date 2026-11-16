@@ -132,6 +132,62 @@ export interface TextInputState {
     cursorRect: Rect | null;
 }
 
+// ───────────────────────── 剪贴板 / 数据中转 ─────────────────────────
+
+/**
+ * 一次客户端 selection 的身份。server 不保存字节，桌面按需读取：
+ * `await server.request("clipboard.read", change.token, mime)`。
+ *
+ * token 只在这次 selection 存活期间有效（下一次复制、清空或源连接断开后失效），
+ * 所以想要历史的桌面要在 `clipboard.changed` 到达时立刻读。
+ */
+export interface ClipboardChange {
+    token: string;
+    seat: string;
+    /** 源客户端声明的全部 mime；桌面按自己关心的子集读取 */
+    mimes: string[];
+    appid: string;
+    clientId: string;
+    time: number;
+}
+
+/** `clipboard.changed(null)` 的原因：显式清空，还是源客户端退出/销毁了 data_source */
+export type ClipboardClearReason = "cleared" | "sourceGone";
+
+/**
+ * 桌面把历史条目放回剪贴板时声明的身份。
+ * 字节不进 server：客户端 `wl_data_offer.receive` 时，server 用 `id` 向桌面发
+ * `clipboard.requestData` 要数据。
+ */
+export interface DesktopClipboard {
+    /** 桌面自己的条目 id，原样带回 `clipboard.requestData` */
+    id: string;
+    mimes: string[];
+    /** 缺省 `seat0`；多 seat 时指定放回哪把 seat 的剪贴板 */
+    seat?: string;
+}
+
+/** `clipboard.offer` 的 selection 描述；桌面通常只传 handle，由 server 填入当前 selection */
+export interface ClipboardOffer {
+    token: string;
+    mimes: string[];
+}
+
+/**
+ * 一次客户端拖拽。`token` 在拖拽期间有效，桌面可以按需读取数据
+ * （`server.request("dnd.read", token, mime)`），用于把内容存进中转站。
+ */
+export interface DragStartInfo {
+    token: string;
+    clientId: string;
+    appid: string;
+    seat: string;
+    mimes: string[];
+    actions: ("copy" | "move")[];
+}
+
+export type DragEndReason = "finished" | "cancelled";
+
 // ───────────────────────── 客户端 ─────────────────────────
 
 export interface ClientLogConfig {
@@ -206,9 +262,16 @@ export type ServerEvents = {
     /** 客户端请求移动窗口（xdg_toplevel.move） */
     "window.startMove": [handle: WinHandle];
     "cursor.changed": [clientId: string, state: CursorState];
-    "clipboard.copy": [clientId: string, text: string];
-    /** 客户端请求粘贴；桌面用 `notify("clipboard.paste", clientId, text)` 回填 */
-    "clipboard.pasteRequested": [clientId: string];
+    /**
+     * 客户端复制（selection 变化）或清空。`null` 时用 `reason` 区分显式清空与源消失。
+     * 桌面收到非空 change 后应立刻 `clipboard.read` 取走自己要存的历史 mime。
+     * `seat` 只在 `null` 时给出：哪把 seat 的 selection 没了。
+     */
+    "clipboard.changed": [change: ClipboardChange | null, reason?: ClipboardClearReason, seat?: string];
+    /** 客户端开始拖拽（`wl_data_device.start_drag`）；桌面可据此弹出中转站 */
+    "dnd.started": [drag: DragStartInfo];
+    /** 拖拽结束；`reason` 区分正常 drop 与取消 */
+    "dnd.finished": [token: string, reason: DragEndReason];
     "client.opened": [clientId: string];
     /** 该客户端的窗口已在此之前逐个发出 `window.closed` */
     "client.closed": [clientId: string];
@@ -218,6 +281,8 @@ export type ServerEvents = {
 
 /**
  * server 内部按 handle 反查 `(client, winId)` 后下发，桌面不接触 Wayland 对象 id。
+ * client 级命令（`clipboard.set` / `clipboard.clear` / `dnd.move` / `dnd.drop` / `dnd.cancel`）
+ * 没有 handle，由 server 直接处理。
  * 无返回值；查询用 `request` / `windows.*`。
  */
 export type ServerNotifyMap = {
@@ -245,10 +310,34 @@ export type ServerNotifyMap = {
     "input.scroll": [handle: WinHandle, ev: ScrollCommand, seat?: string];
     "input.key": [handle: WinHandle, key: number, state: "pressed" | "released", seat?: string];
     "input.text": [handle: WinHandle, text: string, preedit: boolean, seat?: string];
-    /** 把剪贴板内容 offer 给该客户端，通常在获得焦点时调用 */
-    "clipboard.offer": [handle: WinHandle];
-    /** 剪贴板回填，clientId 来自 `clipboard.pasteRequested` 事件（剪贴板是 client 级而非窗口级） */
-    "clipboard.paste": [clientId: string, text: string];
+    /**
+     * 桌面把历史条目放回剪贴板（`null` = 清空）。字节不进 server，
+     * 客户端真正粘贴时 server 用 `clipboard.requestData` 向桌面要。
+     * 这是 client 级命令：server 不走 handle 反查。
+     */
+    "clipboard.set": [selection: DesktopClipboard | null];
+    "clipboard.clear": [];
+    /**
+     * 把当前剪贴板或指定 selection offer 给该客户端，通常在获得键盘焦点时调用。
+     * `selection` 仅供 server 内部填充，桌面只传 handle 即可。
+     */
+    "clipboard.offer": [handle: WinHandle, selection?: ClipboardOffer, seat?: string];
+    /**
+     * 桌面驱动拖拽目标：`target` 为 null 表示离开当前目标。
+     * x/y 是目标窗口的 surface-local 逻辑坐标。
+     */
+    "dnd.move": [token: string, target: { handle: WinHandle; x: number; y: number } | null];
+    /** 在目标窗口（或 null = 窗口外释放）松开，server 完成 drop 并转发数据 */
+    "dnd.drop": [token: string, target: { handle: WinHandle; x: number; y: number } | null];
+    /**
+     * 取消拖拽会话（client 级命令）。中转站收下数据后调用；
+     * 数据要先通过 `dnd.read` 读完，取消后 token 失效。
+     */
+    "dnd.cancel": [token: string];
+    /** server 内部：桌面开始驱动目标时撤掉源客户端本地目标，桌面不直接调用 */
+    "dnd.detachLocal": [];
+    /** server 内部：会话结束后清掉源客户端本地拖拽状态 */
+    "dnd.endLocal": [];
 };
 
 // ───────────────────────── 请求-应答 ─────────────────────────
@@ -268,4 +357,20 @@ export type ServerRequests = {
     "textInput.get": { args: [handle: WinHandle]; result: TextInputState };
     /** 桌面提供可用空间，注册一次，见 api.ts */
     "surfaceBounds.request": { args: []; result: Size };
+    /** 读取客户端 selection 的字节；token 来自 `clipboard.changed`，失效/无数据返回 null */
+    "clipboard.read": { args: [token: string, mime: string]; result: Uint8Array | null };
+    /**
+     * server 向桌面要数据（桌面作为剪贴板/拖拽源时）。
+     * server 侧带超时；桌面没响应或返回 null 会关闭目标 fd。
+     */
+    "clipboard.requestData": { args: [id: string, mime: string]; result: Uint8Array | null };
+    /** 读取拖拽源的数据；token 来自 `dnd.started`，拖拽结束后失效 */
+    "dnd.read": { args: [token: string, mime: string]; result: Uint8Array | null };
+    /** 桌面作为拖拽源开始一次会话；`id` 原样回到 `dnd.requestData` */
+    "dnd.start": {
+        args: [item: { id: string; mimes: string[] }, actions?: ("copy" | "move")[]];
+        result: string;
+    };
+    /** 桌面作为拖拽源时，目标 receive 后向桌面要数据 */
+    "dnd.requestData": { args: [id: string, mime: string]; result: Uint8Array | null };
 };

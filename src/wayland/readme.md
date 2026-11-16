@@ -90,7 +90,7 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
 `WinHandle` / `CursorState` …）。
 
 - **事件**：`server.on("window.created" | "window.changed" | "window.closed" | "window.startMove" |
-  "cursor.changed" | "clipboard.copy" | "clipboard.pasteRequested" | "client.opened" | "client.closed", …)`
+  "cursor.changed" | "clipboard.changed" | "dnd.started" | "dnd.finished" | "client.opened" | "client.closed", …)`
 - **查询**：`server.windows.list() / get() / preview() / hitTest()`、`server.cursor.get(clientId)`、`await server.request(…)`
   （`hitTest(handle, p)` 走 xdg 域的完整几何，含 popup/subsurface/input region，供桌面决定指针事件发给哪个窗口）
 - **命令**：`server.notify("window.focus" | … | "input.pointer" | …, handle, …)`
@@ -117,7 +117,8 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
 | `keyboard.test.ts` | `input.key` 的键码映射与按键序列（按键事件按顺序对账） |
 | `pointer.test.ts` | `input.pointer`（move / down / up 三键落点与坐标）、`input.scroll` 滚轮方向、`cursor.changed` |
 | `text_input.test.ts` | `input.text` → `zwp_text_input_v3` 的 `commit_string` 落进编辑框 |
-| `clipboard.test.ts` | 双向剪贴板：`clipboard.offer` → `pasteRequested` → `paste` 回填；客户端 `set_selection` → `clipboard.copy` |
+| `clipboard.test.ts` | 双向剪贴板：`clipboard.set`/`offer` → `requestData` 回填；客户端 `set_selection` → `clipboard.changed` → `clipboard.read` |
+| `dnd_cross.test.ts` | 跨客户端 DnD：A 的选区拖拽 → 桌面 `dnd.move/drop` 到 B → B 的 drop 拿到文字 |
 | `popup.test.ts` | 真实 Qt/KDE 客户端（konsole）右键菜单：`xdg_popup` 初始 configure/ack 后提交首帧、`constraint_adjustment` 把菜单约束在窗口内、点击外部收回 grab 并销毁弹层（无 konsole 时跳过） |
 | `window_close.test.ts` | 客户端断线 / `xdg_toplevel.destroy` 后撤掉 canvas DOM（konsole `--separate`，无 konsole 时跳过） |
 | `render_tools.test.ts` | `renderCanvas` 每帧先清空再绘制：半透明/透明帧是替换而不是 source-over 叠加 |
@@ -145,18 +146,37 @@ npx vitest run src/wayland/test/pointer.test.ts
 所以「页面坐标 = 注入坐标 − (几何宽−视口宽, 几何高−视口高)」，两个尺寸都在运行时现取，不写死。
 `wl_pointer.axis` 与 DOM wheel 的数值单位也不同（滚轮一格在 `axis` 里是 10、在 DOM 里是约 120），只断言方向与所在轴。
 
+剪贴板的数据所有权在桌面（`clipboard.changed` → `clipboard.read`），server 只保存 selection 的 token 与 mime：
+- 客户端复制 → `set_selection` → `clipboard.changed(change)`；桌面立刻 `clipboard.read(token, mime)` 取字节存历史。
+- 客户端粘贴 → `clipboard.offer(handle)` → 目标 `receive(fd)` → server 直接把 fd 转给源客户端的
+  `wl_data_source.send`（应用间传输不经过桌面）。
+- 桌面回放历史 → `clipboard.set({ id, mimes })` → 目标 `receive` 时 server 用
+  `clipboard.requestData(id, mime)` 向桌面要字节（3s 超时）。
+- 源客户端退出 / 销毁 source → `clipboard.changed(null, "sourceGone")`；桌面想保留内容就自己 `clipboard.set` 回去。
+- 桌面没在 `clipboard.changed` 到达时读的 mime 会随 source 一起消失，不会有人替它缓存。
+
 剪贴板的顺序坑（`clipboard.test.ts`）：客户端自己持有剪贴板时，粘贴直接吃本地缓存、不会向合成器发
 `wl_data_offer.receive`，所以「桌面回填」的用例必须排在客户端复制**之前**；复制的文案用 `input.text` 打进去，
-空选择走的读取分支不会 emit `clipboard.copy`。
+保证是非空内容。
 
-拖拽（DnD）目前只支持**同一 client 内**：`start_drag` 时目标 surface 必须在本客户端对象表里，否则给
-`wl_data_source.cancelled`。流程是 `data_offer` + `offer` + `source_actions` → `enter` → 指针移动时 `motion` → 抬起时
-`wl_pointer.button` 后发 `offer.action` + `drop`，再给 source 发 `action` + `dnd_drop_performed`；
-目标的 `wl_data_offer.receive` fd 通过 `wl_data_source.send` 转给 source，随后补 `dnd_finished`。
-`wl_data_offer.set_actions` / `wl_data_source.set_actions` 会协商 copy/move（优先目标 preferred action），
-漏发 action 时部分客户端会取消 drop。跨 client 拖拽需要桌面侧全局 pointer 事件，暂未接入。
-单测见 `protocols/core/data_device.test.ts`；真实 Chromium 的选区拖动见 `test/text_drag.test.ts`，
-轻触 FSM 到选区拖动的链路见 `test/tap_drag.test.ts`。
+拖拽（DnD）的目标发现由桌面驱动：`start_drag` 后 server 建一个全局会话并保留同 client 的本地目标作为回退；
+桌面一旦调用 `dnd.move(token, { handle, x, y })`，就撤掉本地目标，由 server 把 `enter/motion/leave/drop`
+发给目标客户端（跨 client 也可）。目标 `wl_data_offer` 上带 `dndSessionId`，它的 accept / set_actions /
+receive / finish 由 core 转给全局会话；`receive` 的 fd 直接转给源客户端的 `wl_data_source.send`。
+目标不 `finish` 时 server 2 秒兜底，`dnd.drop` 之后的目标事件顺序与本地路径一致。
+
+拖拽开始/结束会发 `dnd.started` / `dnd.finished`，并给出一个只读 token：
+桌面可以在拖拽进行中用 `dnd.read(token, mime)` 取数据（例如中转站收下拖拽内容），再用
+`dnd.cancel(token)` 结束会话。桌面作为源时用 `dnd.start` 建会话，目标 `receive` 时 server 用
+`dnd.requestData(id, mime)` 向桌面要字节。
+
+注意 `dnd.drop(token, null)` 和 `dnd.cancel` 的区别：前者是“在窗口外释放”，给源发
+`action=none` + `dnd_drop_performed` + `dnd_finished`，GTK/Firefox 的标签撕出依赖这个结果；
+后者是用户取消（Esc、源销毁），发 `cancelled`。hub 驱动时收尾还会补一个 `wl_pointer.button(released)`，
+避免 GTK 停在 drag 状态。
+单测见 `host/dnd_hub.test.ts` 与 `protocols/core/data_device.test.ts`；真实 Chromium 的选区拖动见
+`test/text_drag.test.ts`（含拖拽中读取），跨客户端投递见 `test/dnd_cross.test.ts`，轻触 FSM 到选区拖动的
+链路见 `test/tap_drag.test.ts`。
 
 ## 新增协议指南
 
@@ -238,7 +258,8 @@ export const exampleModule = defineModule({
   取它们作为 `CoreApi` / `WaylandDomainRegistry` 的形状。host 只跑装配清单，不 `new` 任何域状态。
 - **桌面命令进 `actions`**：`server.notify` 的命令由 `host/server.ts` 反查 handle 后派发
   （`client.runAction`），组包、serial、**按 seat 分发**、状态维护全在协议文件里，host 不写协议事件。
-  例外只有 `clipboard.paste`（写 fd，不发协议消息，server 直达 `client.paste`）。
+  例外是 client 级的 `clipboard.set` / `clipboard.clear`（由 server 记录 selection 并广播，没有 handle），
+  以及 `clipboard.offer`（server 先填入当前 selection 再走 `actions`）。
   命令里**只改 `WindowRecord` / 只发 Wayland 事件**，语义事件（`window.changed` 等）仍由 Store fan-in。
 - **`ctx` 是 handler 唯一的依赖来源**：handler 不碰 `this`（`WaylandClient`）。新增能力先进
   `module.ts` 的契约，再接到 `ctx`：连接级的口（`objects`/`send*`/`scene`/`registry`）由
@@ -251,6 +272,9 @@ export const exampleModule = defineModule({
   host 的 `windows.hitTest` 也走同一个查询）。`hooks` 是 core → 扩展的**通知/扇出**通道：扩展注册回调，
   由 `host/client.ts` 聚合、`ctx.notify.*` 触发。`onCommit`（每次 commit，含无 buffer 的初始 commit）与 `onFrame`（已合成、渲染之前）
   分阶段，**不能合并**；`onTextInput` 是 `input.text` 的仲裁通道（core 不认识 `zwp_*` 事件）。
+- **跨 client 拖拽会话在 `host/dnd_hub.ts`**：server 创建一次，各连接在 `buildCtx` 里注册 peer；
+  core 只负责把源/目标的 `wl_data_*` 事件转给 hub，hub 用 peer 的对象表和 `sendNow` 组目标侧消息。
+  字节仍然只走 fd（源客户端 → 目标客户端）或桌面的 `dnd.requestData`，hub 不缓存内容。
 - **语义事实进域状态，谁拥有谁持有（单写入点）**：窗口记录与它的 `window.*` fan-in 在
   `protocols/ext/windows_store.ts`（`ctx.domain.windows`）、输入设备记录在
   `protocols/core/seat_store.ts`（`ctx.domain.seat`），两者由各自模块的 `domain` initializer `new`；

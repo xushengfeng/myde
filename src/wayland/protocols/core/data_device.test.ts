@@ -9,6 +9,15 @@ type Sent = { id: number; event: string; args: Record<string, unknown> };
 
 function makeCtx() {
     const sent: Sent[] = [];
+    const selections: { seat: string; sourceId: number; mimes: string[] }[] = [];
+    const forwards: { token: string; mime: string; fd: number }[] = [];
+    const drags: {
+        kind: "start" | "finish";
+        sourceId: number;
+        mimes?: string[];
+        actions?: string[];
+        reason?: string;
+    }[] = [];
     const objectData = new Map<number, unknown>();
     let nextId = 100;
     let serial = 1;
@@ -46,7 +55,7 @@ function makeCtx() {
     };
 
     const domain = {
-        dataDevice: { devices: new Map(), pendingPaste: undefined },
+        dataDevice: { devices: new Map<string, Set<number>>([["seat0", new Set([11])]]) },
         seat: {
             byName: (name?: string) => ((name ?? "seat0") === "seat0" ? seat : undefined),
             get: (id: number) => (id === 1 ? seat : undefined),
@@ -79,6 +88,24 @@ function makeCtx() {
         },
         domain,
         client: { id: "test", displayId: 1, protoVersions: new Map(), emit: () => {} },
+        transfer: {
+            selectionChanged: (seat: string, sourceId: number, mimes: string[]) =>
+                selections.push({ seat, sourceId, mimes }),
+            clearSelection: () => {},
+            sourceDestroyed: () => {},
+            forward: (token: string, mime: string, fd: number) => forwards.push({ token, mime, fd }),
+            dragStarted: (_seat: string, sourceId: number, mimes: string[], actions: ("copy" | "move")[]) =>
+                drags.push({ kind: "start", sourceId, mimes, actions }),
+            dragFinished: (sourceId: number, reason: string) => drags.push({ kind: "finish", sourceId, reason }),
+        },
+        dnd: {
+            targetAccept: () => {},
+            targetActions: () => {},
+            targetReceive: () => {},
+            targetFinish: () => {},
+            targetGone: () => {},
+            sourceActions: () => {},
+        },
         core: {},
         cursor: {},
         notify: {},
@@ -90,7 +117,7 @@ function makeCtx() {
     objectData.set(11, { seatName: "seat0" });
     objectData.set(12, { offers: ["text/plain;charset=utf-8"] });
 
-    return { ctx, sent, objectData, seat };
+    return { ctx, sent, selections, forwards, drags, objectData, seat };
 }
 
 function request(ctx: ModuleCtx, key: string, id: number, args: Record<string, unknown>) {
@@ -111,10 +138,16 @@ function events(sent: Sent[], event: string) {
 
 describe("wl_data_device drag-and-drop", () => {
     it("start_drag → motion → drop → receive 路由回 source", () => {
-        const { ctx, sent } = makeCtx();
+        const { ctx, sent, drags } = makeCtx();
 
         request(ctx, "wl_data_device.start_drag", 11, { source: 12, origin: 10, icon: 0, serial: 1 });
 
+        expect(drags[0]).toEqual({
+            kind: "start",
+            sourceId: 12,
+            mimes: ["text/plain;charset=utf-8"],
+            actions: ["copy"],
+        });
         const enter = events(sent, "wl_data_device.enter")[0];
         expect(enter).toBeDefined();
         expect(enter.args).toMatchObject({ surface: 10, x: 5, y: 5 });
@@ -129,6 +162,7 @@ describe("wl_data_device drag-and-drop", () => {
         expect(events(sent, "wl_data_device.drop")).toHaveLength(1);
         expect(events(sent, "wl_data_offer.action")[0].args.dnd_action).toBe(1);
         expect(events(sent, "wl_data_source.dnd_drop_performed")).toHaveLength(1);
+        expect(drags[1]).toEqual({ kind: "finish", sourceId: 12, reason: "finished" });
 
         const offerId = enter.args.id as number;
         const { fd } = newFd("");
@@ -147,5 +181,57 @@ describe("wl_data_device drag-and-drop", () => {
         expect(events(sent, "wl_data_source.cancelled")).toHaveLength(1);
         expect(events(sent, "wl_data_device.enter")).toHaveLength(0);
         expect(ctx.domain.dataDevice.drag).toBeUndefined();
+    });
+});
+
+describe("wl_data_device clipboard", () => {
+    it("set_selection 只把 mime 交给 transfer，不读字节", () => {
+        const { ctx, selections } = makeCtx();
+
+        request(ctx, "wl_data_device.set_selection", 11, { source: 12, serial: 1 });
+
+        expect(selections).toEqual([{ seat: "seat0", sourceId: 12, mimes: ["text/plain;charset=utf-8"] }]);
+    });
+
+    it("clipboard.offer 按 selection 的 mime 组包，receive 交给 transfer.forward", () => {
+        const { ctx, sent, forwards } = makeCtx();
+
+        action(ctx, "clipboard.offer", 20, [{ token: "t1", mimes: ["text/plain;charset=utf-8"] }]);
+
+        const selection = events(sent, "wl_data_device.selection")[0];
+        expect(selection.args.id).toBeDefined();
+        const offerId = selection.args.id as number;
+        expect(events(sent, "wl_data_offer.offer").map((e) => e.args.mime_type)).toEqual(["text/plain;charset=utf-8"]);
+
+        const { fd } = newFd("");
+        request(ctx, "wl_data_offer.receive", offerId, { mime_type: "text/plain;charset=utf-8", fd });
+        expect(forwards).toEqual([{ token: "t1", mime: "text/plain;charset=utf-8", fd }]);
+    });
+
+    it("offer(null) 发 selection(nil)", () => {
+        const { ctx, sent } = makeCtx();
+
+        action(ctx, "clipboard.offer", 20, [undefined]);
+
+        const selection = events(sent, "wl_data_device.selection")[0];
+        expect(selection.args.id).toBe(0);
+    });
+});
+
+describe("drag action negotiation", () => {
+    it("重复 set_actions 不再反复回 action", () => {
+        const { ctx, sent } = makeCtx();
+        request(ctx, "wl_data_device.start_drag", 11, { source: 12, origin: 10, icon: 0, serial: 1 });
+        const offerId = events(sent, "wl_data_device.enter")[0].args.id as number;
+
+        for (let i = 0; i < 5; i++) {
+            request(ctx, "wl_data_offer.set_actions", offerId, {
+                dnd_actions: 7,
+                preferred_action: 2,
+            });
+        }
+
+        expect(events(sent, "wl_data_offer.action")).toHaveLength(1);
+        expect(events(sent, "wl_data_source.action")).toHaveLength(1);
     });
 });

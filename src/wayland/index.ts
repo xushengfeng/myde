@@ -19,7 +19,13 @@ export function createServer(op: { render: renderTools; socketDir?: string }): W
 export type {
     Client,
     ClientLogConfig,
+    ClipboardChange,
+    ClipboardClearReason,
+    ClipboardOffer,
     CursorState,
+    DesktopClipboard,
+    DragEndReason,
+    DragStartInfo,
     OutputInfo,
     PointerCommand,
     Rect,

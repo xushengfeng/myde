@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { collectAppLogs, logOfType } from "../../test_runner/applog";
 import { testRunnerApp } from "../../test_runner/test_runner";
+import type { DragStartInfo } from "../../wayland";
 
 type Sel = { type: "sel"; gesture: number; start: number; end: number; text: string };
 type Meta = { type: "meta"; innerW: number; innerH: number };
@@ -37,6 +38,12 @@ if (typeof document !== "undefined") {
 
         const { waitExit } = testRunnerApp(`test/electron_app/start.js ${tmpfile}`, async ({ server, runner }) => {
             const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+            let drag: DragStartInfo | undefined;
+            let dragText: string | undefined;
+            // 桌面端在中转站松手前会读拖拽数据；这里模拟“拖拽进行中就读取”
+            server.on("dnd.started", (d) => {
+                drag = d;
+            });
             server.on("window.created", (info) => {
                 void (async () => {
                     try {
@@ -72,6 +79,15 @@ if (typeof document !== "undefined") {
                             move(x, 100);
                             await sleep(60);
                         }
+                        // 模拟桌面中转站在拖拽过程中读数据（松手收进历史）
+                        await sleep(200);
+                        if (drag) {
+                            const mime = drag.mimes.find((m) => m.startsWith("text/plain"));
+                            if (mime) {
+                                const bytes = await server.request("dnd.read", drag.token, mime);
+                                dragText = bytes ? new TextDecoder().decode(bytes) : undefined;
+                            }
+                        }
                         up(140, 100);
                         await sleep(700);
 
@@ -81,7 +97,7 @@ if (typeof document !== "undefined") {
                         up(250, 100);
                         await sleep(300);
 
-                        runner.sendData({ ok: true });
+                        runner.sendData({ ok: true, dragText });
                     } catch (e) {
                         runner.sendData({ error: String(e) });
                     } finally {
@@ -110,5 +126,8 @@ if (typeof document !== "undefined") {
         expect(g1!.end, `第一次拖拽应选中文字 ${dump()}`).toBeGreaterThan(g1!.start);
         expect(drop, `第二次拖拽没有完成 drop（DnD 失败） ${dump()}`).toBeDefined();
         expect(drop!.end, `在选区上拖拽不应塌缩成点击 ${dump()}`).toBeGreaterThan(drop!.start);
+        // 拖拽过程中 `dnd.read` 应能从 Chromium 源读到选区文本
+        const dragText = raw.find((r) => r.dragText !== undefined)?.dragText as string | undefined;
+        expect(dragText, `拖拽过程中没读到数据 ${dump()}`).toBeTruthy();
     });
 });

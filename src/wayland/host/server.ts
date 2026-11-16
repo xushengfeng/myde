@@ -20,7 +20,9 @@ import { EventEmitter } from "../../event-emitter/event-emitter";
 import { uniqueSocketName } from "../../socket-name";
 import type {
     Client,
+    ClipboardOffer,
     CursorState,
+    DesktopClipboard,
     OutputInfo,
     ServerEvents,
     ServerNotifyMap,
@@ -28,12 +30,13 @@ import type {
     WindowInfo,
     WinHandle,
 } from "../api";
-import type { ActionArgs, WaylandWinId } from "../module";
+import type { ActionArgs, TransferApi, WaylandWinId } from "../module";
 import { assertModuleConflicts } from "../protocols/index";
 import type { renderTools } from "../render_tools";
 import type { WaylandName } from "../utils/wayland-binary";
 import { WaylandProtocols, waylandProtocolsNameMap } from "../utils/wayland-proto";
 import { type ClientHost, WaylandClient } from "./client";
+import { DndHub } from "./dnd_hub";
 
 export { WaylandServer };
 
@@ -44,6 +47,32 @@ interface WindowEntry {
     /** 创建时缓存，`renderId` 只在 windowCreated 那一刻可得 */
     renderId: string;
 }
+
+/**
+ * 当前 selection 只记录「谁、有哪些 mime」，不记录字节。
+ * 客户端源由 server 直接转发 fd；桌面源在 receive 时按需向桌面要。
+ */
+type ClipboardState =
+    | {
+          kind: "client";
+          token: string;
+          seat: string;
+          clientId: string;
+          sourceId: number;
+          mimes: string[];
+          time: number;
+      }
+    | {
+          kind: "desktop";
+          token: string;
+          seat: string;
+          desktopId: string;
+          mimes: string[];
+          time: number;
+      };
+
+/** 桌面没按期提供数据时关闭 fd，避免焦点客户端的粘贴永久挂起 */
+const DESKTOP_DATA_TIMEOUT_MS = 3000;
 
 function waylandName(name: number): WaylandName {
     return name as WaylandName;
@@ -113,6 +142,12 @@ class WaylandServer {
     private nextHandle = 1;
     /** 当前输出配置（单屏；多屏时扩展为列表） */
     private output: OutputInfo = DEFAULT_OUTPUT;
+    /** seat → 当前 selection（只有元数据，字节在客户端或桌面） */
+    private clipboard = new Map<string, ClipboardState>();
+    /** token → selection；旧 token 在 selection 替换/清除时删除 */
+    private clipboardTokens = new Map<string, ClipboardState>();
+    /** 跨客户端拖拽会话 */
+    private dnd: DndHub;
 
     /**
      * 输出配置。桌面启动、分辨率或缩放变化时调用 `set`；
@@ -173,6 +208,12 @@ class WaylandServer {
         this.render = op.render;
         this.clients = this.rawClients;
 
+        this.dnd = new DndHub({
+            started: (info) => this.emitEvent("dnd.started", info),
+            finished: (token, reason) => this.emitEvent("dnd.finished", token, reason),
+            requestData: (id, mime) => this.requestDndData(id, mime),
+        });
+
         this.socketPath = path.join(this.socketDir, this.socketName);
 
         initWaylandProtocols();
@@ -193,6 +234,19 @@ class WaylandServer {
             const entry = this.windowTable.get(handle);
             if (entry === undefined) throw new Error(`unknown window handle: ${handle}`);
             return entry.client.textInputState(entry.winId);
+        });
+        // 桌面读客户端 selection；异步结果由 EventEmitter 的 thenable 展开
+        this.events.respond("clipboard.read", ((token: string, mime: string) =>
+            this.readClipboard(token, mime)) as unknown as (token: string, mime: string) => Uint8Array | null);
+        this.events.respond("dnd.read", ((token: string, mime: string) => this.dnd.read(token, mime)) as unknown as (
+            token: string,
+            mime: string,
+        ) => Uint8Array | null);
+        this.respond("dnd.start", (item, actions) => {
+            const names = actions ?? ["copy"];
+            let mask = 0;
+            for (const name of names) mask |= name === "move" ? 2 : 1;
+            return this.dnd.startDesktop(item.id, item.mimes, mask);
         });
 
         console.log("Support protocols:", Object.keys(WaylandProtocols));
@@ -271,10 +325,35 @@ class WaylandServer {
     }
 
     private dispatchNotify<K extends keyof ServerNotifyMap>(key: K, args: ServerNotifyMap[K]): void {
-        if (key === "clipboard.paste") {
-            // 剪贴板是 client 级的，直接用事件带下来的 clientId
-            const [clientId, text] = args as unknown as [string, string];
-            this.rawClients.get(clientId)?.paste(text);
+        if (key === "clipboard.set") {
+            // 剪贴板是 client 级 / server 级，没有 window handle
+            this.setDesktopClipboard(args[0] as DesktopClipboard | null);
+            return;
+        }
+        if (key === "clipboard.clear") {
+            this.setDesktopClipboard(null);
+            return;
+        }
+        if (key === "clipboard.offer") {
+            const [handle, explicit] = args as unknown as [WinHandle, ClipboardOffer | undefined];
+            const entry = this.windowTable.get(handle);
+            if (entry === undefined) {
+                console.warn("notify clipboard.offer: unknown window handle", handle);
+                return;
+            }
+            entry.client.offerClipboard(explicit ?? this.clipboardOffer("seat0"), "seat0");
+            return;
+        }
+        if (key === "dnd.cancel") {
+            const [token] = args as unknown as [string];
+            this.dnd.cancel(token);
+            return;
+        }
+        if (key === "dnd.move" || key === "dnd.drop") {
+            const [token, target] = args as unknown as [string, { handle: WinHandle; x: number; y: number } | null];
+            const resolved = target ? this.resolveDndTarget(target.handle, target.x, target.y) : null;
+            if (key === "dnd.move") this.dnd.move(token, resolved);
+            else this.dnd.drop(token, resolved);
             return;
         }
         const handle = args[0] as WinHandle;
@@ -286,6 +365,12 @@ class WaylandServer {
         // host 只做 handle 反查与派发，命令语义在协议模块的 `actions` 里
         const { client, winId } = entry;
         client.runAction(key, winId, stripHandle(args));
+    }
+
+    private resolveDndTarget(handle: WinHandle, x: number, y: number) {
+        const entry = this.windowTable.get(handle);
+        if (entry === undefined) return null;
+        return { clientId: entry.client.id, winId: entry.winId, x, y };
     }
 
     // ───────────────────────── 窗口表与快照 ─────────────────────────
@@ -368,10 +453,25 @@ class WaylandServer {
         const clientId = crypto.randomUUID().slice(0, 8);
         console.log(`New client connected: ${clientId}`);
 
+        const transfer: TransferApi = {
+            selectionChanged: (seat, sourceId, mimes) => this.clientSelectionChanged(clientId, seat, sourceId, mimes),
+            clearSelection: (seat) => this.clearClipboard(seat, "cleared"),
+            sourceDestroyed: (sourceId) => this.clientSourceDestroyed(clientId, sourceId),
+            forward: (token, mime, fd) => this.forwardClipboard(token, mime, fd),
+            dragStarted: (seat, sourceId, mimes, actions) => {
+                let mask = 0;
+                for (const a of actions) mask |= a === "move" ? 2 : 1;
+                const appid = this.rawClients.get(clientId)?.getAppid() ?? "";
+                this.dnd.startClient(clientId, appid, seat, sourceId, mimes, mask);
+            },
+            dragFinished: (sourceId, reason) => this.dnd.sourceFinished(clientId, sourceId, reason),
+        };
         const host: ClientHost = {
             surfaceBounds: () => this.requestSync("surfaceBounds.request"),
             output: () => this.output,
             cursorChanged: (state) => this.emitEvent("cursor.changed", clientId, state),
+            transfer,
+            dnd: this.dnd,
         };
         const client = new WaylandClient({ id: clientId, socket, render: this.render, host });
         this.rawClients.set(clientId, client);
@@ -424,8 +524,6 @@ class WaylandServer {
                 if (info) this.emitEvent("window.changed", info);
             }
         });
-        client.on("copy", (text) => this.emitEvent("clipboard.copy", clientId, text));
-        client.on("paste", () => this.emitEvent("clipboard.pasteRequested", clientId));
     }
 
     /** 断开：先补发该客户端全部窗口的关闭，再报 client.closed —— 残留窗口由 server 兜底 */
@@ -436,7 +534,183 @@ class WaylandServer {
             this.handlesByClient.delete(clientId);
         }
         this.rawClients.delete(clientId);
+        // 该客户端持有的 selection 没有源了；桌面若要保留内容，收到 sourceGone 后自己 clipboard.set 回去
+        for (const seat of [...this.clipboard.keys()]) {
+            const state = this.clipboard.get(seat);
+            if (state?.kind === "client" && state.clientId === clientId) this.clearClipboard(seat, "sourceGone");
+        }
+        // 进行中的拖拽也结束，让中转站清掉拖拽态
+        this.dnd.detach(clientId);
         this.emitEvent("client.closed", clientId);
+    }
+
+    // ───────────────────────── 剪贴板数据中转 ─────────────────────────
+
+    /** 当前 seat 的 offer 描述；桌面调用 `clipboard.offer` 时由 server 填入 */
+    private clipboardOffer(seat: string): ClipboardOffer | null {
+        const state = this.clipboard.get(seat);
+        return state ? { token: state.token, mimes: [...state.mimes] } : null;
+    }
+
+    /** 桌面把历史条目放回剪贴板；字节仍在桌面，receive 时通过 `clipboard.requestData` 取 */
+    private setDesktopClipboard(selection: DesktopClipboard | null): void {
+        const seat = selection?.seat ?? "seat0";
+        this.replaceSelection(seat, null);
+        if (!selection || selection.mimes.length === 0) {
+            this.broadcastClipboard(null, seat);
+            return;
+        }
+        const token = `cb-desktop-${crypto.randomUUID()}`;
+        const state: ClipboardState = {
+            kind: "desktop",
+            token,
+            seat,
+            desktopId: selection.id,
+            mimes: [...selection.mimes],
+            time: Date.now(),
+        };
+        this.clipboard.set(seat, state);
+        this.clipboardTokens.set(token, state);
+        this.broadcastClipboard({ token, mimes: state.mimes }, seat);
+    }
+
+    /** 客户端 `set_selection`：替换该 seat 的 selection、通知桌面、推给焦点客户端 */
+    private clientSelectionChanged(clientId: string, seat: string, sourceId: number, mimes: string[]): void {
+        if (mimes.length === 0) {
+            this.clearClipboard(seat, "cleared");
+            return;
+        }
+        this.replaceSelection(seat, { clientId, sourceId });
+        const token = `cb-${crypto.randomUUID()}`;
+        const state: ClipboardState = {
+            kind: "client",
+            token,
+            seat,
+            clientId,
+            sourceId,
+            mimes: [...mimes],
+            time: Date.now(),
+        };
+        this.clipboard.set(seat, state);
+        this.clipboardTokens.set(token, state);
+        this.broadcastClipboard({ token, mimes: state.mimes }, seat);
+        this.emitEvent("clipboard.changed", {
+            token,
+            seat,
+            mimes: [...mimes],
+            appid: this.rawClients.get(clientId)?.getAppid() ?? "",
+            clientId,
+            time: state.time,
+        });
+    }
+
+    private clearClipboard(seat: string, reason: "cleared" | "sourceGone"): void {
+        if (!this.clipboard.has(seat)) return;
+        this.replaceSelection(seat, null);
+        this.broadcastClipboard(null, seat);
+        this.emitEvent("clipboard.changed", null, reason, seat);
+    }
+
+    /** 删除旧 selection：source 客户端还在就发 `cancelled`，token 立即失效 */
+    private replaceSelection(seat: string, keep: { clientId: string; sourceId: number } | null): void {
+        const prev = this.clipboard.get(seat);
+        if (!prev) return;
+        this.clipboard.delete(seat);
+        this.clipboardTokens.delete(prev.token);
+        const same =
+            keep !== null &&
+            prev.kind === "client" &&
+            prev.clientId === keep.clientId &&
+            prev.sourceId === keep.sourceId;
+        if (prev.kind === "client" && !same) this.rawClients.get(prev.clientId)?.cancelDataSource(prev.sourceId);
+    }
+
+    private broadcastClipboard(selection: ClipboardOffer | null, seat: string): void {
+        for (const client of this.rawClients.values()) client.offerClipboard(selection, seat);
+    }
+
+    private clientSourceDestroyed(clientId: string, sourceId: number): void {
+        for (const [seat, state] of this.clipboard) {
+            if (state.kind === "client" && state.clientId === clientId && state.sourceId === sourceId) {
+                this.clearClipboard(seat, "sourceGone");
+                return;
+            }
+        }
+    }
+
+    private readClipboard(token: string, mime: string): Promise<Uint8Array | null> {
+        const state = this.clipboardTokens.get(token);
+        if (state?.kind !== "client" || !state.mimes.includes(mime)) return Promise.resolve(null);
+        const client = this.rawClients.get(state.clientId);
+        if (!client) return Promise.resolve(null);
+        return client.readDataSource(state.sourceId, mime);
+    }
+
+    // ───────────────────────── 拖拽中转 ─────────────────────────
+
+    /** 桌面作为拖拽源时，目标 receive 后向桌面要数据 */
+    private async requestDndData(id: string, mime: string): Promise<Uint8Array | null> {
+        try {
+            const results = await Promise.race([
+                this.events.request("dnd.requestData", id, mime),
+                new Promise<never>((_, reject) => {
+                    const t = setTimeout(() => reject(new Error("timeout")), DESKTOP_DATA_TIMEOUT_MS);
+                    (t as { unref?: () => void }).unref?.();
+                }),
+            ]);
+            return results[0] ?? null;
+        } catch (err) {
+            console.warn("dnd requestData failed:", err);
+            return null;
+        }
+    }
+
+    /** offer 的 fd → 真正的数据源；调用后 fd 由本方法关闭 */
+    private forwardClipboard(token: string, mime: string, fd: number): void {
+        const state = this.clipboardTokens.get(token);
+        if (!state || !state.mimes.includes(mime)) {
+            this.closeFd(fd);
+            return;
+        }
+        if (state.kind === "client") {
+            const client = this.rawClients.get(state.clientId);
+            const ok = client?.sendDataSource(state.sourceId, mime, fd) ?? false;
+            // sendMessageImm 已把 fd dup 进 socket；本地这份可以关了
+            this.closeFd(fd);
+            if (!ok) console.warn(`clipboard forward: source ${state.sourceId} is gone`);
+            return;
+        }
+        void this.requestDesktopData(state.desktopId, mime)
+            .then((bytes) => {
+                if (bytes && bytes.length > 0) fs.writeFileSync(fd, bytes);
+            })
+            .catch((err) => console.error("clipboard forward: write fd failed", err))
+            .finally(() => this.closeFd(fd));
+    }
+
+    /** 向桌面要数据；桌面没注册 responder / 超时都按 null 处理 */
+    private async requestDesktopData(id: string, mime: string): Promise<Uint8Array | null> {
+        try {
+            const results = await Promise.race([
+                this.events.request("clipboard.requestData", id, mime),
+                new Promise<never>((_, reject) => {
+                    const t = setTimeout(() => reject(new Error("timeout")), DESKTOP_DATA_TIMEOUT_MS);
+                    (t as { unref?: () => void }).unref?.();
+                }),
+            ]);
+            return results[0] ?? null;
+        } catch (err) {
+            console.warn("clipboard requestData failed:", err);
+            return null;
+        }
+    }
+
+    private closeFd(fd: number): void {
+        try {
+            fs.closeSync(fd);
+        } catch {
+            // ignore
+        }
     }
 
     isProtocolSupported(protocol: string): boolean {

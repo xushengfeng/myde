@@ -132,3 +132,16 @@ resize ↔ `move` / `all_scroll` / `all_resize` 过渡时优先用十字的一�
 - 配置在 `settings.json` 的 `ime` 命名空间：`toggle`、`nextIM`、`prevIM`、`panelPreedit`
   - `panelPreedit`：`auto`（默认，fcitx 已在发内联预编辑时候选窗不重复显示）/ `always` / `never`
 - 候选窗和托盘弹窗的视觉分别在 `src/ui.ts` 的 `imeCandidatePopup` / `imeTrayPanel`，静态预览见 `test/ui_example/ui_demo.ts`
+
+## 剪贴板
+
+数据层在 `src/clipboard.ts`，UI 在 `src/clipboard_tool.ts`，是顶栏一个和 WiFi 同类的工具：
+
+- 点击图标打开历史；点击条目把它放回剪贴板，`清空` 清掉历史
+- 客户端开始拖拽时自动展开弹窗，顶部出现“松开存入中转站”，松手把拖拽内容收进历史
+- 按住条目拖出：桌面作为 DnD 源，松手落在应用窗口上就投递过去
+- 遵循「server 只发事件、桌面持有字节」：
+  - 客户端复制 → `clipboard.changed` → 桌面按 mime 立刻 `clipboard.read` 取进历史；密码管理器标记的 mime 跳过
+  - 源客户端退出/销毁 source → `sourceGone` → 把最后一条 `clipboard.set` 回去，内容不随应用消失
+  - 应用粘贴桌面历史 → 桌面只声明 `{ id, mimes }`；server 在 `receive` 时用 `clipboard.requestData` 回来要字节
+  - 历史上限：50 条 / 单条 32MB / 总量 128MB；文本预览截断到 2000 字符

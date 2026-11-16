@@ -87,8 +87,12 @@ export type RequestMsg<K extends RequestKey = RequestKey> = {
  */
 export type ActionKey = keyof ServerNotifyMap;
 
-/** 命令表去掉首参 handle —— handle 是桌面身份，host 反查后换成 `winId` */
-export type ActionArgs<K extends ActionKey> = ServerNotifyMap[K] extends [unknown, ...infer R] ? R : never;
+/** 命令表去掉首参 handle —— handle 是桌面身份，host 反查后换成 `winId`；无首参的 client 级命令得到 `[]` */
+export type ActionArgs<K extends ActionKey> = K extends unknown
+    ? ServerNotifyMap[K] extends [unknown, ...infer R]
+        ? R
+        : []
+    : never;
 
 export interface ActionMsg<K extends ActionKey = ActionKey> {
     /** handle 反查到的窗口对象（xdg_toplevel id）；`clipboard.*` 等客户端级 action 可忽略 */
@@ -475,8 +479,6 @@ export interface WaylandClientEventMap {
     windowUnFullscreen: (xdgToplevelId: WaylandWinId) => void;
     appid: (id: string) => void;
     title: (xdgToplevelId: WaylandWinId, title: string) => void;
-    copy: (text: string) => void;
-    paste: () => void;
 }
 
 // ───────────── 语义 Store 与客户端自身（结构化实现，由 host 注入） ─────────────
@@ -593,6 +595,79 @@ export interface ClientApi {
     output(): OutputInfo;
 }
 
+/**
+ * 数据中转：剪贴板 / 拖拽的 fd 与字节都经这里。
+ *
+ * 协议模块只拿 token 和 mime，不关心数据在哪个连接、桌面还是客户端；
+ * 字节的缓存、持久化、预览全在桌面，server 只负责把 fd 送到正确的一侧。
+ */
+export interface TransferApi {
+    /** 客户端 `set_selection`：server 记录 selection、发 `clipboard.changed`、并把 offer 推给焦点客户端 */
+    selectionChanged(seat: string, sourceId: number, mimes: string[]): void;
+    /** 客户端把 selection 清空（`set_selection(nil)`） */
+    clearSelection(seat: string): void;
+    /** 客户端销毁 `wl_data_source`；若它正是当前 selection，server 清空并报 `sourceGone` */
+    sourceDestroyed(sourceId: number): void;
+    /**
+     * 把某个 offer 的 fd 交给 token 背后的数据源；调用方交出 fd 所有权。
+     * 客户端源直接转发给 `wl_data_source.send`，桌面源则走 `clipboard.requestData`。
+     */
+    forward(token: string, mime: string, fd: number): void;
+    /** 客户端开始拖拽；server 建一个只读 token 并通知桌面 */
+    dragStarted(seat: string, sourceId: number, mimes: string[], actions: ("copy" | "move")[]): void;
+    /** 拖拽结束（正常 drop 或取消）；token 失效 */
+    dragFinished(sourceId: number, reason: "finished" | "cancelled"): void;
+}
+
+/** 跨客户端拖拽会话里，目标侧 core 转发给 hub 的事件（offer 带 `dndSessionId`） */
+export interface DndApi {
+    targetAccept(token: string, offerId: number, mime: string): void;
+    targetActions(token: string, offerId: number, actions: number, preferred: number): void;
+    targetReceive(token: string, offerId: number, mime: string, fd: number): void;
+    targetFinish(token: string, offerId: number): void;
+    targetGone(token: string, offerId: number): void;
+    /** 源 `wl_data_source.set_actions` 同步到全局会话 */
+    sourceActions(sourceId: number, actions: number): void;
+}
+
+/** 单个连接给全局拖拽 hub 的窄接口；实现里只碰自己的对象表和 ctx */
+export interface DndPeer {
+    clientId: string;
+    objects: ObjectApi;
+    sendNow(id: number, event: string, args: Record<string, unknown>): void;
+    dataDevices(seat: string): WaylandObjectId2<"wl_data_device">[];
+    nextSerial(): number;
+    hitTest(winId: WaylandWinId, p: { x: number; y: number }): HitTestResult | undefined;
+    sendDataSource(sourceId: number, mime: string, fd: number): boolean;
+    readDataSource(sourceId: number, mime: string): Promise<Uint8Array | null>;
+    /** 桌面开始驱动目标后，撤掉源客户端自己的同 client 目标 */
+    detachLocalDrag(): void;
+    /** 会话结束：清掉源客户端的本地拖拽状态（不再发 cancelled） */
+    endLocalDrag(): void;
+}
+
+/** host 持有的全局拖拽会话；server 创建一次，所有连接共用 */
+export interface DndHubApi {
+    attach(peer: DndPeer): void;
+    detach(clientId: string): void;
+    forClient(clientId: string): DndApi;
+    startClient(
+        clientId: string,
+        appid: string,
+        seat: string,
+        sourceId: number,
+        mimes: string[],
+        actions: number,
+    ): string;
+    sourceActions(clientId: string, sourceId: number, actions: number): void;
+    sourceFinished(clientId: string, sourceId: number, reason: "finished" | "cancelled"): void;
+    read(token: string, mime: string): Promise<Uint8Array | null>;
+    move(token: string, target: { clientId: string; winId: WaylandWinId; x: number; y: number } | null): void;
+    drop(token: string, target: { clientId: string; winId: WaylandWinId; x: number; y: number } | null): void;
+    cancel(token: string): void;
+    startDesktop(itemId: string, mimes: string[], actions?: number): string;
+}
+
 // ───────────────────────── handler 运行时上下文 ─────────────────────────
 
 /**
@@ -631,6 +706,10 @@ export interface ModuleCtx {
     };
     /** 客户端自身 */
     client: ClientApi;
+    /** 数据中转（剪贴板 / 拖拽的 fd 与字节出口） */
+    transfer: TransferApi;
+    /** 跨客户端拖拽：目标侧 offer 事件交给全局 hub */
+    dnd: DndApi;
     /** 场景投影（可能瘦身为 SceneCmd 分发，像素走 ImageKV） */
     scene: renderTools;
 }

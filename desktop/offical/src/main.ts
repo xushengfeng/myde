@@ -14,6 +14,9 @@ import type { MenuItem } from "../../../src/sys_api/menu";
 import type { wifiDevice } from "../../../src/sys_api/network";
 import type { powerDevice } from "../../../src/sys_api/power";
 import { TouchpadInput } from "../../../src/utils/touchpad";
+import type { DragStartInfo } from "../../../src/wayland";
+import { type ClipboardItem, type ClipboardStation, initClipboard } from "./clipboard";
+import { createClipboardStationTool } from "./clipboard_tool";
 import { Cursor } from "./cursor";
 import { getIconXEl } from "./icon";
 import { ImeController } from "./ime/ime";
@@ -54,6 +57,20 @@ import {
 declare const scheduler: { yield(): Promise<void> };
 
 // ========== Registry 和 ControlNode ==========
+
+/** 剪贴板数据层（server 创建后 init，见 `initClipboard`）；焦点路径可能早于初始化，所以可空 */
+let clipboard: ClipboardStation | undefined;
+
+type ToolShowTip = (s?: { state?: "show" | "hide" | "toggle"; anchorEl?: HTMLElement }) => void;
+/** 剪贴板/中转站顶栏工具；拖拽事件会直接打开它 */
+let clipboardStationTool: ReturnType<typeof createClipboardStationTool> | undefined;
+let clipboardToolEl: HTMLElement | undefined;
+let showClipboardTip: ToolShowTip | undefined;
+/** 当前进行中的客户端拖拽；指针落在中转站弹窗上时把数据收进来 */
+let activeDrag: DragStartInfo | undefined;
+/** 中转站自动弹出可能正好盖住指针，要求指针在弹窗上停留一小段时间才算“要放这里” */
+let stationHoverAt = 0;
+let stationWasHover = false;
 
 // 特殊的id类型，表示可以用registry.get获取
 type id<T extends string = string> = string & { __brand: T };
@@ -1108,8 +1125,10 @@ class ViewData {
         }
         // 目标聚焦、其余失焦，全部经 server 下发；内部窗口没有 Wayland 焦点，只清掉客户端焦点
         for (const info of server.server.windows.list()) {
-            if (!internal && info.handle === winid) server.server.notify("window.focus", info.handle);
-            else server.server.notify("window.blur", info.handle);
+            if (!internal && info.handle === winid) {
+                server.server.notify("window.focus", info.handle);
+                clipboard?.offer(info.handle);
+            } else server.server.notify("window.blur", info.handle);
         }
         if (internal) void ime?.blur();
         else void ime?.focus(winid);
@@ -1288,6 +1307,7 @@ const planteData: Plant[] = [
             { id: "blank" },
             { id: "mediaControl" },
             { id: "tray" },
+            { id: "clipboard" },
             { id: "blue" },
             { id: "network" },
             { id: "connect" },
@@ -2106,7 +2126,7 @@ function desktopUiUnderPoint(x: number, y: number, target?: EventTarget | null) 
 }
 
 /** 当前指针位置下命中的客户端窗口；被桌面 UI 盖住时为空 */
-function pointerHits(p: PointerEvent): PointerHit[] {
+function pointerHits(p: { x: number; y: number; target?: EventTarget | null }): PointerHit[] {
     if (viewData.overview || viewData.gestureActive || resizingWindowId !== undefined) return [];
     if (desktopUiUnderPoint(p.x, p.y, p.target)) return [];
 
@@ -2130,6 +2150,17 @@ function pointerHits(p: PointerEvent): PointerHit[] {
         hits.push({ handle: info.handle, clientId: info.clientId });
     }
     return hits;
+}
+
+/** 桌面坐标 → `dnd.move/drop` 需要的目标窗口 + surface 局部坐标 */
+function dndTargetAt(x: number, y: number): { handle: WinHandle; x: number; y: number } | undefined {
+    const hit = pointerHits({ x, y })[0];
+    if (!hit) return undefined;
+    const info = server.server.windows.get(hit.handle);
+    const rect = info ? render.getXdgSurfaceEle(info.renderId)?.getBoundingClientRect() : undefined;
+    if (!info || !rect) return undefined;
+    const scale = info.scale || 1;
+    return { handle: hit.handle, x: (x - rect.left) / scale, y: (y - rect.top) / scale };
 }
 
 function sendPointerTo(hit: PointerHit, type: "move" | "down" | "up", p: PointerEvent) {
@@ -2164,8 +2195,126 @@ function sendPointerTo(hit: PointerHit, type: "move" | "down" | "up", p: Pointer
     }
 }
 
+type StationDrag = {
+    item: ClipboardItem;
+    last: { x: number; y: number };
+    token?: string;
+    ended?: { x: number; y: number };
+};
+let stationDrag: StationDrag | undefined;
+
+function finishStationDrag(drag: StationDrag, x: number, y: number) {
+    if (!drag.token) return;
+    const target = dndTargetAt(x, y);
+    if (target) server.server.notify("dnd.drop", drag.token, target);
+    else server.server.notify("dnd.cancel", drag.token);
+}
+
+/** 中转站条目拖出：桌面作为 DnD 源，server 负责目标 offer 和数据转发 */
+function handleStationDrag(item: ClipboardItem, phase: "start" | "move" | "end", x: number, y: number) {
+    if (phase === "start") {
+        const drag: StationDrag = { item, last: { x, y } };
+        stationDrag = drag;
+        void server.server
+            .request("dnd.start", { id: item.id, mimes: item.mimes }, ["copy"])
+            .then((token) => {
+                if (stationDrag !== drag) {
+                    server.server.notify("dnd.cancel", token);
+                    return;
+                }
+                drag.token = token;
+                if (drag.ended) {
+                    stationDrag = undefined;
+                    finishStationDrag(drag, drag.ended.x, drag.ended.y);
+                } else {
+                    server.server.notify("dnd.move", token, dndTargetAt(drag.last.x, drag.last.y) ?? null);
+                }
+            })
+            .catch((err) => {
+                console.error("dnd.start failed:", err);
+                if (stationDrag === drag) stationDrag = undefined;
+            });
+        return;
+    }
+
+    const drag = stationDrag;
+    if (!drag) return;
+    drag.last = { x, y };
+    if (phase === "move") {
+        if (drag.token) server.server.notify("dnd.move", drag.token, dndTargetAt(x, y) ?? null);
+        return;
+    }
+    if (drag.token) {
+        stationDrag = undefined;
+        finishStationDrag(drag, x, y);
+    } else {
+        drag.ended = { x, y };
+    }
+}
+
+/** 拖拽指针落在中转站弹窗上松手：先读数据入库，再取消源客户端的拖拽会话 */
+async function dropDragToStation() {
+    const drag = activeDrag;
+    if (!drag) return;
+    activeDrag = undefined;
+    clipboardStationTool?.setDragActive(false);
+    let item: ClipboardItem | undefined;
+    try {
+        item = await clipboard?.add(
+            drag.mimes,
+            (mime) => server.server.request("dnd.read", drag.token, mime),
+            drag.appid || "拖拽",
+            drag.seat,
+        );
+    } finally {
+        // 数据已经读完（或读失败）；取消让源客户端退出 drag 状态
+        server.server.notify("dnd.cancel", drag.token);
+    }
+    // 收进中转站的内容直接成为当前剪贴板，用户可以马上粘贴
+    if (item) clipboard?.copy(item.id);
+}
+
 function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): PointerHit | undefined {
     const key = pointerKey(p);
+
+    // 拖拽会话由桌面驱动：不把指针转给源窗口，改发 dnd.move/drop
+    if (activeDrag) {
+        // 自动弹出的下拉会盖住最大化窗口的 tab 栏；只有指针移到剪贴板图标上才展开
+        if (type === "move" && clipboardToolEl && clipboardToolEl.contains(document.elementFromPoint(p.x, p.y))) {
+            showClipboardTip?.({ state: "show", anchorEl: clipboardToolEl });
+        }
+        const overStation = clipboardStationTool?.containsPoint(p.x, p.y) ?? false;
+        if (overStation && !stationWasHover) stationHoverAt = performance.now();
+        stationWasHover = overStation;
+        clipboardStationTool?.setDropHover(overStation);
+        // 刚自动弹出时指针可能正好在弹窗上；停留一小会儿才当成有意投递
+        const stationArmed = overStation && performance.now() - stationHoverAt >= 160;
+        if (stationArmed) {
+            if (type === "up") {
+                void dropDragToStation();
+                const route = pointerRoutes.get(key);
+                route?.buttons.delete(p.button ?? 0);
+                if (route && route.buttons.size === 0) pointerRoutes.delete(key);
+                pointerTarget = undefined;
+            }
+            return undefined;
+        }
+
+        const target = dndTargetAt(p.x, p.y);
+        if (type === "move") {
+            server.server.notify("dnd.move", activeDrag.token, target ?? null);
+        } else if (type === "up") {
+            // 没有目标也走 drop(null)：让 GTK/Firefox 得到“窗口外释放”而不是取消
+            server.server.notify("dnd.drop", activeDrag.token, target ?? null);
+            activeDrag = undefined;
+            clipboardStationTool?.setDragActive(false);
+            const route = pointerRoutes.get(key);
+            route?.buttons.delete(p.button ?? 0);
+            if (route && route.buttons.size === 0) pointerRoutes.delete(key);
+            pointerTarget = undefined;
+        }
+        return undefined;
+    }
 
     if (type === "down") {
         let route = pointerRoutes.get(key);
@@ -2343,6 +2492,24 @@ render.on({
     },
 });
 const server = MSysApi.server({ render });
+// 剪贴板字节、历史、持久化都在桌面；server 只发事件、按需要数据
+clipboard = initClipboard(server.server);
+// 客户端开始拖拽 → 自动展开中转站弹窗；结束时收起拖拽态
+server.server.on("dnd.started", (drag) => {
+    activeDrag = drag;
+    stationHoverAt = 0;
+    stationWasHover = false;
+    clipboardStationTool?.setDragActive(true);
+    // 收起可能正好盖住 tab 栏的下拉；指针移到图标上时会再展开
+    showClipboardTip?.({ state: "hide" });
+});
+server.server.on("dnd.finished", (token) => {
+    if (activeDrag?.token !== token) return;
+    activeDrag = undefined;
+    stationHoverAt = 0;
+    stationWasHover = false;
+    clipboardStationTool?.setDragActive(false);
+});
 // 提前启动 xwayland-satellite；每次启动应用前再 await 一次，崩溃后也能重新拉起。
 void server.startXwayland();
 
@@ -4641,6 +4808,28 @@ tools.registerTool(
             showTip({ state: "show", anchorEl: el.el });
         });
 
+        return el;
+    },
+    { selfBackground: true },
+);
+
+tools.registerTool(
+    "clipboard",
+    ({ tipEl, showTip }) => {
+        if (!clipboard) return view().add(txt("剪贴板未就绪"));
+        clipboardStationTool = createClipboardStationTool({
+            station: clipboard,
+            tipEl,
+            onCopy: () => showTip({ state: "hide" }),
+            onDragItem: handleStationDrag,
+        });
+        showClipboardTip = showTip;
+        const el = clipboardStationTool.el;
+        clipboardToolEl = el.el;
+        if (activeDrag) clipboardStationTool.setDragActive(true);
+        el.on("click", () => {
+            showTip({ state: "show", anchorEl: el.el });
+        });
         return el;
     },
     { selfBackground: true },

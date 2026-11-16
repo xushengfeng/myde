@@ -7,14 +7,15 @@ import { testRunnerApp } from "../../test_runner/test_runner";
 /**
  * 剪贴板双向测试（`wl_data_device`）：
  *
- * - **桌面 → 客户端**：`notify("clipboard.offer", handle)` offer 出去 → 客户端 Ctrl+V →
- *   `wl_data_offer.receive` → `clipboard.pasteRequested` → 桌面 `notify("clipboard.paste", clientId, text)`
- *   回填 → 编辑框里出现桌面的文案
- * - **客户端 → 桌面**：客户端 Ctrl+A/Ctrl+C → `set_selection` → 服务端读 fd → `clipboard.copy` 事件
+ * - **桌面 → 客户端**：`clipboard.set` 声明桌面条目 → `notify("clipboard.offer", handle)` →
+ *   客户端 Ctrl+V → `wl_data_offer.receive` → server `clipboard.requestData` → 桌面回字节
+ *   → 编辑框里出现桌面的文案
+ * - **客户端 → 桌面**：客户端 Ctrl+A/Ctrl+C → `set_selection` → `clipboard.changed` →
+ *   桌面 `clipboard.read(token, mime)` 取走字节
  *
  * **顺序不能反**：Chromium 自己持有剪贴板时，粘贴直接吃本地缓存、**不会**向合成器发
  * `wl_data_offer.receive`（实测 pasteRequests=0）。所以必须先粘贴、后复制；
- * 复制的文案用 `input.text` 打进去，保证是非空内容（空选择走的读取分支不 emit `clipboard.copy`）。
+ * 复制的文案用 `input.text` 打进去，保证是非空内容。
  *
  * 约束同其他 e2e：回调是 `script.toString()` 求值的，计划写在回调体内、随结果带出；
  * 日志要经 `test_runner/applog.ts` 剥两层 JSON。
@@ -61,11 +62,23 @@ if (typeof document !== "undefined") {
             const [CTRL, A, C, V, DEL] = plan.keys;
 
             const seen = { copied: [] as string[], pasteRequests: 0 };
-            server.on("clipboard.copy", (_clientId, text) => seen.copied.push(text));
-            // 客户端 Ctrl+V 会挂起一个 receive，必须立刻回填（服务端有 10s 超时）
-            server.on("clipboard.pasteRequested", (clientId) => {
+            const items = new Map<string, Map<string, Uint8Array>>();
+            const textBytes = (s: string) => new TextEncoder().encode(s);
+            items.set("desk", new Map([["text/plain;charset=utf-8", textBytes(plan.pasteText)]]));
+            server.notify("clipboard.set", { id: "desk", mimes: ["text/plain;charset=utf-8"] });
+            // 客户端 Ctrl+V 会 receive fd；server 通过 requestData 向桌面要字节（3s 超时）
+            server.respond("clipboard.requestData", (id, mime) => {
                 seen.pasteRequests++;
-                server.notify("clipboard.paste", clientId, plan.pasteText);
+                return items.get(id)?.get(mime) ?? null;
+            });
+            server.on("clipboard.changed", (change) => {
+                if (!change) return;
+                for (const mime of change.mimes) {
+                    if (!mime.startsWith("text/plain")) continue;
+                    void server.request("clipboard.read", change.token, mime).then((bytes) => {
+                        if (bytes) seen.copied.push(new TextDecoder().decode(bytes));
+                    });
+                }
             });
 
             server.on("window.created", (info) => {
@@ -111,14 +124,14 @@ if (typeof document !== "undefined") {
                         await tap(DEL);
                         await sleep(200);
 
-                        // 3. 打入已知文案 → 全选 → 复制 → set_selection → clipboard.copy
+                        // 3. 打入已知文案 → 全选 → 复制 → set_selection → clipboard.changed
                         server.notify("input.text", info.handle, plan.typed, false);
                         await sleep(400);
                         await combo(CTRL, A);
                         await sleep(150);
                         await combo(CTRL, C);
-                        // 服务端读 selection fd 前有 200ms 延时，多留一点
-                        await sleep(900);
+                        // 桌面 clipboard.read 会等客户端写 fd；读完后外层断言
+                        await sleep(1200);
 
                         runner.sendData({ plan, ...seen });
                     } catch (e) {
@@ -165,18 +178,18 @@ if (typeof document !== "undefined") {
             `编辑框没被清空，${dump()}`,
         ).toBe(true);
 
-        // 方向一：桌面 offer → 客户端请求 → 桌面回填，编辑框里出现桌面文案
+        // 方向一：桌面 selection → 客户端请求 → 桌面回填，编辑框里出现桌面文案
         expect(
             raw.find((r) => r.pasteRequests !== undefined)?.pasteRequests ?? 0,
-            `桌面没收到 clipboard.pasteRequested，${dump()}`,
+            `桌面没收到 clipboard.requestData，${dump()}`,
         ).toBeGreaterThan(0);
         expect(
             edits.some((e) => e.value.includes(p.pasteText)),
             `编辑框里没出现桌面文案 "${p.pasteText}"，${dump()}`,
         ).toBe(true);
 
-        // 方向二：客户端 Ctrl+C → 桌面收到 clipboard.copy
+        // 方向二：客户端 Ctrl+C → clipboard.changed → 桌面读回文案
         const copied = raw.find((r) => r.copied)?.copied ?? [];
-        expect(copied, `桌面没收到 clipboard.copy，${dump()}`).toContain(p.typed);
+        expect(copied, `桌面没读到客户端复制的文案，${dump()}`).toContain(p.typed);
     });
 });

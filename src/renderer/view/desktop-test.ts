@@ -97,6 +97,10 @@ function runApp(execPath: string, args: string[] = []) {
             }),
         )
         .addInto();
+    // @ts-expect-error
+    window.logLog = () => {
+        console.log(logData.map((line) => line.trim()).join("\n"));
+    };
 }
 
 const render = new renderToolsHtmlEl();
@@ -152,13 +156,31 @@ server.on("window.changed", (info) => {
     server.notify("window.maximize", info.handle, { width, height });
 });
 
-server.on("clipboard.copy", (clientId, text) => {
-    console.log(`Client ${clientId} copy text:`, text);
-});
+/** 测试桌面：客户端复制的文本留在本地，源退出后把最后一条放回剪贴板 */
+const clipboardItems = new Map<string, Map<string, Uint8Array>>();
+let clipboardSeq = 0;
+let lastClipboardId: string | undefined;
 
-server.on("clipboard.pasteRequested", (clientId) => {
-    // todo copy后似乎抢占了，如果是自定义粘贴需要重新offer
-    server.notify("clipboard.paste", clientId, "hello");
+server.respond("clipboard.requestData", (id, mime) => clipboardItems.get(id)?.get(mime) ?? null);
+
+server.on("clipboard.changed", (change, reason) => {
+    if (!change) {
+        if (reason === "sourceGone" && lastClipboardId) {
+            const item = clipboardItems.get(lastClipboardId);
+            if (item) server.notify("clipboard.set", { id: lastClipboardId, mimes: [...item.keys()] });
+        }
+        return;
+    }
+    for (const mime of change.mimes) {
+        if (!mime.startsWith("text/plain")) continue;
+        void server.request("clipboard.read", change.token, mime).then((bytes) => {
+            if (!bytes) return;
+            const id = `cb${++clipboardSeq}`;
+            clipboardItems.set(id, new Map([[mime, bytes]]));
+            lastClipboardId = id;
+            console.log(`Client ${change.clientId} copy text:`, new TextDecoder().decode(bytes));
+        });
+    }
 });
 
 // 光标形态改由 server 事件下发（renderToolsOn.onCursorUpdata 保留给渲染侧，语义相同）

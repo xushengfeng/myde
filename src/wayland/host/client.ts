@@ -1,15 +1,17 @@
 import type { USocket } from "myde-unix-socket";
-import type { Client, ClientLogConfig, CursorState, OutputInfo, Rect, TextInputState } from "../api";
+import type { Client, ClientLogConfig, ClipboardOffer, CursorState, OutputInfo, Rect, TextInputState } from "../api";
 import type {
     ActionArgs,
     ActionFn,
     ActionKey,
     ActionMsg,
     DataOf,
+    DndHubApi,
     DomainInit,
     ErrorCode,
     ModuleCtx,
     RequestMsg,
+    TransferApi,
     WaylandClientEventMap,
     WaylandDomainRegistry,
     WaylandObjectId2,
@@ -18,6 +20,7 @@ import type {
 import { protocolModules } from "../protocols/index";
 import { type WaylandEventObj, WaylandEventOpcode, type WaylandInterfaces } from "../protocols/wayland-types";
 import type { renderTools } from "../render_tools";
+import { newFd } from "../utils/fd";
 import type { WaylandObjectId, WaylandOp, WaylandProtocol } from "../utils/wayland-binary";
 import { WaylandArgType } from "../utils/wayland-binary";
 import { WaylandDecoder } from "../utils/wayland-decoder";
@@ -70,8 +73,36 @@ const outputHooks = protocolModules.flatMap((m) => (m.hooks.onOutput ? [m.hooks.
 /** 桌面命令（`server.notify`）→ 协议模块的 `actions`，与请求分发表同构 */
 const actionHandlers = new Map<ActionKey, ActionFn>(protocolModules.flatMap((m) => [...m.actions]));
 
+/** 读取客户端 data source 时等待首字节 / 稳定的上限（没有可靠 EOF，只能按「不再增长」收尾） */
+const FD_FIRST_BYTE_MS = 600;
+const FD_IDLE_MS = 120;
+const FD_MAX_BYTES = 64 * 1024 * 1024;
+
+async function waitForFdData(fd: number): Promise<number> {
+    const start = Date.now();
+    let last = 0;
+    let lastChange = 0;
+    for (;;) {
+        await new Promise((r) => setTimeout(r, 20));
+        let size = 0;
+        try {
+            size = Number(fs.fstatSync(fd).size) || 0;
+        } catch {
+            return 0;
+        }
+        if (size > 0 && size !== last) {
+            last = size;
+            lastChange = Date.now();
+        }
+        if (last > 0 && Date.now() - lastChange >= FD_IDLE_MS) return Math.min(last, FD_MAX_BYTES);
+        if (last > FD_MAX_BYTES) return FD_MAX_BYTES;
+        if (last === 0 && Date.now() - start > FD_FIRST_BYTE_MS) return 0;
+        if (Date.now() - start > 3000) return Math.min(last, FD_MAX_BYTES);
+    }
+}
+
 /**
- * server 注入的宿主能力。client 只认识这两条，fan-in / handle 分配全在 server（见 host/server.ts）。
+ * server 注入的宿主能力。client 只认识这几条，fan-in / handle 分配全在 server（见 host/server.ts）。
  */
 export interface ClientHost {
     /** 桌面提供的可用空间（同步；xdg_surface.get_toplevel 要填 configure_bounds） */
@@ -80,6 +111,10 @@ export interface ClientHost {
     output(): OutputInfo;
     /** 光标状态变化，server 转成 `cursor.changed` 事件 */
     cursorChanged(state: CursorState): void;
+    /** 数据中转：剪贴板 / 拖拽的 fd 与字节出口（实现在 server） */
+    transfer: TransferApi;
+    /** 跨客户端拖拽会话（实现在 host/dnd_hub） */
+    dnd: DndHubApi;
 }
 
 export class WaylandClient implements Client {
@@ -103,6 +138,8 @@ export class WaylandClient implements Client {
     private cursor: CursorStore;
     /** 协议模块看到的 host 能力面 —— module.ts 契约的真实实现 */
     public readonly ctx: ModuleCtx;
+    /** 每个 data source 的读取串行队列（见 `readDataSource`） */
+    private dataSourceReads = new Map<number, Promise<Uint8Array | null>>();
     // 事件存储
     private events: { [K in keyof WaylandClientEventMap]?: WaylandClientEventMap[K][] } = {};
 
@@ -279,6 +316,8 @@ export class WaylandClient implements Client {
                 surfaceBounds: () => this.host.surfaceBounds(),
                 output: () => this.host.output(),
             },
+            transfer: this.host.transfer,
+            dnd: this.host.dnd.forClient(this.id),
             scene: this.render,
         };
 
@@ -294,6 +333,19 @@ export class WaylandClient implements Client {
                 if (init) initDomain(ctx.domain, key, init, ctx);
             }
         }
+        // 跨客户端拖拽：域状态装配完后再注册，peer 的查询方法此时都能用
+        this.host.dnd.attach({
+            clientId: this.id,
+            objects: ctx.objects,
+            sendNow: (id, event, args) => this.sendMessageImm(id as never, event as never, args as never),
+            dataDevices: (seat) => [...(ctx.domain.dataDevice.devices?.get(seat) ?? [])],
+            nextSerial: () => ctx.domain.seat.nextSerial(),
+            hitTest: (winId, p) => ctx.domain.xdgSurface.hitTest(winId, p),
+            sendDataSource: (sourceId, mime, fd) => this.sendDataSource(sourceId, mime, fd),
+            readDataSource: (sourceId, mime) => this.readDataSource(sourceId, mime),
+            detachLocalDrag: () => this.detachDataDrag(),
+            endLocalDrag: () => this.endDataDrag(),
+        });
         return ctx;
     }
 
@@ -674,37 +726,83 @@ export class WaylandClient implements Client {
         await Promise.all(ps);
     }
 
-    paste: (text: string) => void = (text: string) => {
-        if (!this.ctx.domain.dataDevice.pendingPaste) {
-            console.warn("No pending paste request");
-            return;
-        }
-        const p = this.ctx.domain.dataDevice.pendingPaste;
+    /**
+     * 把当前 selection 的 mimes offer 给本连接（server 在 selection 变化 / 焦点进入时调用）。
+     * 协议组包在 core 的 `clipboard.offer` action，这里只负责跨连接入口。
+     */
+    offerClipboard(selection: ClipboardOffer | null, seat?: string): void {
+        this.runAction("clipboard.offer", 0 as WaylandWinId, [selection ?? undefined, seat]);
+    }
+
+    /** 把 fd 交给本连接的 wl_data_source（跨连接剪贴板转发的落点） */
+    sendDataSource(sourceId: number, mime: string, fd: number): boolean {
+        const id = sourceId as WaylandObjectId2<"wl_data_source">;
+        if (!this.getObjectOption(id)) return false;
+        this.sendMessageImm(id, "wl_data_source.send", { mime_type: mime, fd });
+        return true;
+    }
+
+    /** 通知客户端 source 不再被需要 */
+    cancelDataSource(sourceId: number): void {
+        const id = sourceId as WaylandObjectId2<"wl_data_source">;
+        if (this.getObjectOption(id)) this.sendMessageImm(id, "wl_data_source.cancelled", {});
+    }
+
+    /** 桌面开始驱动拖拽目标：撤掉本连接自己的同 client 目标，避免双份 enter/drop */
+    detachDataDrag(): void {
+        this.runAction("dnd.detachLocal", 0 as WaylandWinId, []);
+    }
+
+    /** 会话结束：清掉本连接的本地拖拽状态（源已收到 finished/cancelled） */
+    endDataDrag(): void {
+        this.runAction("dnd.endLocal", 0 as WaylandWinId, []);
+    }
+
+    /**
+     * 读一次客户端 data source 的 mime；同一 source 的读取串行化
+     * （部分客户端不接受并发 `wl_data_source.send`）。无数据/源已消失返回 null。
+     */
+    readDataSource(sourceId: number, mime: string): Promise<Uint8Array | null> {
+        const id = sourceId as WaylandObjectId2<"wl_data_source">;
+        if (!this.getObjectOption(id)) return Promise.resolve(null);
+        const prev = this.dataSourceReads.get(sourceId);
+        const next = (prev ? prev.catch(() => undefined) : Promise.resolve()).then(() =>
+            this.readDataSourceNow(id, mime),
+        );
+        this.dataSourceReads.set(sourceId, next);
+        return next.finally(() => {
+            if (this.dataSourceReads.get(sourceId) === next) this.dataSourceReads.delete(sourceId);
+        });
+    }
+
+    private async readDataSourceNow(
+        sourceId: WaylandObjectId2<"wl_data_source">,
+        mime: string,
+    ): Promise<Uint8Array | null> {
+        const { fd } = newFd("");
         try {
-            // write text into fd
-            try {
-                const u8 = new Uint8Array(Buffer.from(text, "utf8").buffer);
-                fs.writeSync(p.fd, u8 as any, 0, u8.length, 0);
-            } catch (_e) {
-                // some fds may not support position; fallback to writeFileSync via fd
-                try {
-                    fs.writeFileSync(p.fd, text, { encoding: "utf8" as any });
-                } catch (_e2) {
-                    console.error("Failed to write paste text to fd:", _e2);
-                }
+            this.sendMessageImm(sourceId, "wl_data_source.send", { mime_type: mime, fd });
+            const size = await waitForFdData(fd);
+            if (size <= 0) return null;
+            const out = new Uint8Array(size);
+            let off = 0;
+            while (off < size) {
+                const n = fs.readSync(fd, out, off, size - off, off);
+                if (n <= 0) break;
+                off += n;
             }
+            return off === size ? out : out.subarray(0, off);
         } catch (err) {
-            console.error("Error during paste():", err);
+            console.error("readDataSource failed:", err);
+            return null;
         } finally {
-            clearTimeout(p.timeout);
             try {
-                fs.closeSync(p.fd);
+                fs.closeSync(fd);
             } catch {
                 // ignore
             }
-            this.ctx.domain.dataDevice.pendingPaste = undefined;
         }
-    };
+    }
     /**
      * 连接断开兜底：客户端不会再发 wl_surface.destroy / xdg destroy，
      * 这里直接撤掉元素与画布，避免软件已退出但 canvas DOM 还留在屏幕上。
@@ -712,6 +810,7 @@ export class WaylandClient implements Client {
     private cleanupRender(): void {
         if (this.cleanedUp) return;
         this.cleanedUp = true;
+        this.host.dnd.detach(this.id);
         this.ctx.domain.xdgSurface.destroyAll();
         for (const [id, obj] of this.objects) {
             if (obj.protocol.name !== "wl_surface") continue;

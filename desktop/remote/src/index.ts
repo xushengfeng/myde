@@ -11,6 +11,32 @@ console.log("connect load", myId);
 const render = new RemoteRender(connect);
 const server = MSysApi.server({ render: render });
 
+/** 远程演示桌面：把文本剪贴板留在本地，源客户端退出后把最后一条放回去 */
+const clipboardItems = new Map<string, Map<string, Uint8Array>>();
+let clipboardSeq = 0;
+let lastClipboardId: string | undefined;
+server.server.respond("clipboard.requestData", (id, mime) => clipboardItems.get(id)?.get(mime) ?? null);
+server.server.on("clipboard.changed", (change, reason) => {
+    if (!change) {
+        if (reason === "sourceGone" && lastClipboardId) {
+            const item = clipboardItems.get(lastClipboardId);
+            if (item) server.server.notify("clipboard.set", { id: lastClipboardId, mimes: [...item.keys()] });
+        }
+        return;
+    }
+    for (const mime of change.mimes) {
+        if (!mime.startsWith("text/plain")) continue;
+        void server.server.request("clipboard.read", change.token, mime).then((bytes) => {
+            if (!bytes) return;
+            const id = `cb-${++clipboardSeq}`;
+            clipboardItems.set(id, new Map([[mime, bytes]]));
+            lastClipboardId = id;
+            // 远程协作：可以把这里换成把文本同步到另一端
+            console.log("remote clipboard:", new TextDecoder().decode(bytes));
+        });
+    }
+});
+
 function handleInputEvent(event: any, toplevelId: string | null) {
     switch (event.type) {
         case "pointermove":

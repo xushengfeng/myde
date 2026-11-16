@@ -598,8 +598,7 @@ server.on("window.changed", (info) => {}); // rect/states/title/appid 任一变�
 server.on("window.closed", (handle) => {});
 server.on("window.startMove", (handle) => {});
 server.on("cursor.changed", (clientId, state: CursorState) => {});
-server.on("clipboard.copy", (clientId, text) => {});
-server.on("clipboard.pasteRequested", (clientId) => {});
+server.on("clipboard.changed", (change, reason) => {});
 server.on("client.opened", (clientId) => {});
 server.on("client.closed", (clientId) => {});
 ```
@@ -713,19 +712,71 @@ const ti = await server.request("textInput.get", handle);
 触摸板连续滚动按规范只发 `axis`（连续、无离散步进）；`axis_value120` 是滚轮通道，只随 `wheel` 发送。滚轮的高精度事件可以同帧发 `axis` + `axis_value120`（v8+）或 `axis` + `axis_discrete`（v5-7）。自然滚动通过 `axis_relative_direction`（v9）告诉客户端物理方向。客户端之间轴值换算差异（Chromium 的 ×12、GTK3/Firefox 的 ÷10×40 等）属于客户端行为，官方桌面只提供全局/触摸板速度倍率，不按 appid 改轴值。
 
 键盘与剪贴板是**连接级**的：同一客户端有多个窗口时按 `clientId` 去重后再发，否则会重复收键。
-剪贴板回填也按 `clientId`（事件里带下来的那个），不走 handle：
+
+### 剪贴板与数据中转
+
+server 不保存剪贴板字节，只记录“当前 selection 是哪个源、有哪些 mime”。字节、历史、持久化都在桌面：
 
 ```typescript
-server.on("clipboard.pasteRequested", (clientId) => {
-    server.notify("clipboard.paste", clientId, "文本");
+// 客户端复制：server 先给 token；桌面按需读取自己要存的 mime（立刻读，source 退出后就没了）
+server.on("clipboard.changed", (change, reason) => {
+    if (!change) {
+        if (reason === "sourceGone") {
+            // 源客户端退出了；桌面可以把最后一条放回剪贴板
+            server.notify("clipboard.set", { id: "last", mimes: ["text/plain;charset=utf-8"] });
+        }
+        return;
+    }
+    void server.request("clipboard.read", change.token, "text/plain;charset=utf-8").then((bytes) => {
+        // 存历史 / 更新中转站；bytes 是 Uint8Array | null
+    });
 });
-server.notify("clipboard.offer", handle); // 获得焦点时把剪贴板 offer 给该客户端
+
+// 桌面作为源：只声明 id 和 mime，不把字节交给 server
+server.notify("clipboard.set", { id: "item-1", mimes: ["text/plain;charset=utf-8"] });
+server.respond("clipboard.requestData", (id, mime) => items.get(id)?.bytes.get(mime) ?? null);
+
+// 键盘焦点进入窗口时 offer 当前 selection
+server.notify("clipboard.offer", handle);
 ```
 
-拖拽（drag-and-drop）走 Wayland 的 `wl_data_device.start_drag`：目前支持**同一客户端内**拖动，客户端用
-`wl_data_source.offer` 声明的 mime 会成为 `wl_data_offer`，指针移动时发 `wl_data_device.motion`，抬手发
-`drop`/`dnd_drop_performed`/`dnd_finished`；目标 `wl_data_offer.receive` 的 fd 由 core 转给 source 写回。
-目标 surface 不在本客户端时发 `wl_data_source.cancelled`，跨客户端拖拽尚未接入。
+- 应用 → 应用粘贴时，server 直接把目标 `receive` 的 fd 转给源客户端的 `wl_data_source.send`，**字节不经过桌面**。
+- 桌面 → 应用时，server 在 `receive` 时用 `clipboard.requestData` 向桌面要（3 秒超时，超时关 fd）。
+- `clipboard.set(null)` / `clipboard.clear()` 清空；`clipboard.changed(null, "cleared")` 是客户端主动清空。
+- 读取失败、源已退出、token 过期都返回 `null`，桌面按“没有数据”处理。
+
+拖拽（drag-and-drop）走 Wayland 的 `wl_data_device.start_drag`。源客户端开始拖拽后，桌面通过
+`dnd.move` 决定目标窗口，`dnd.drop` 完成投递：
+
+```typescript
+server.on("dnd.started", (drag) => {
+    // { token, clientId, appid, seat, mimes, actions }
+    // 这里可以自动展开中转站弹窗
+});
+server.notify("dnd.move", drag.token, { handle, x, y });  // x/y 是目标窗口 surface-local 逻辑坐标
+server.notify("dnd.move", drag.token, null);              // 离开当前目标
+server.notify("dnd.drop", drag.token, { handle, x, y });  // 在目标窗口放下
+server.notify("dnd.drop", drag.token, null);              // 窗口外释放（不是取消）
+server.notify("dnd.cancel", drag.token);                  // 取消（Esc / 源销毁）
+server.on("dnd.finished", (token, reason) => {});         // reason: finished | cancelled
+```
+
+`dnd.move` 第一次到达时 server 会撤掉源客户端自己的本地目标，之后由全局会话跨客户端发
+`enter/motion/leave/drop`；目标 `receive` 的 fd 直接转给源客户端的 `wl_data_source.send`。
+桌面不实现 `dnd.move` 时，同一客户端内的拖拽仍按本地路径工作。
+
+桌面作为拖拽源（从中转站拖出）：
+
+```typescript
+const token = await server.request("dnd.start", { id: "item-1", mimes: ["text/plain;charset=utf-8"] }, ["copy"]);
+server.notify("dnd.move", token, { handle, x, y });
+server.notify("dnd.drop", token, { handle, x, y });
+server.respond("dnd.requestData", (id, mime) => items.get(id)?.bytes.get(mime) ?? null);
+```
+
+中转站收下客户端拖拽仍走 `dnd.read(token, mime)` + `dnd.cancel(token)`（先读后取消）。
+官方桌面把剪贴板历史和中转站做成同一个顶栏工具（`src/clipboard_tool.ts`），`dnd.started` 时自动展开，
+指针落在弹窗上松手就收进历史；条目也可以拖出到应用窗口。
 
 ### 桌面提供可用空间
 

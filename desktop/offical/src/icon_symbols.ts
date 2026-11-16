@@ -879,6 +879,48 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             ],
         };
     },
+    clipboard: (env) => {
+        const { size } = buildZb(256);
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: 56, y: 48 }, ri: 12, ro: 26 },
+                                    { p: { x: 200, y: 48 }, ri: 12, ro: 26 },
+                                    { p: { x: 200, y: 232 }, ri: 12, ro: 26 },
+                                    { p: { x: 56, y: 232 }, ri: 12, ro: 26 },
+                                ],
+                                width: 16,
+                                close: true,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: 96, y: 34 }, ri: 8, ro: 16 },
+                                    { p: { x: 160, y: 34 }, ri: 8, ro: 16 },
+                                    { p: { x: 160, y: 68 }, ri: 8, ro: 16 },
+                                    { p: { x: 96, y: 68 }, ri: 8, ro: 16 },
+                                ],
+                                width: 16,
+                                close: true,
+                                fill: true,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
     notification: (env) => {
         const { center, size } = buildZb(256);
         const w = 24;
