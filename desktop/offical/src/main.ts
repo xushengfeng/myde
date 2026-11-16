@@ -1,4 +1,4 @@
-import { addClass, addStyle, button, check, type ElType, ele, image, pack, spacer, txt, view } from "dkh-ui";
+import { addClass, addStyle, button, check, type ElType, ele, image, input, pack, spacer, txt, view } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
 import type {
     ConnectConnection,
@@ -362,6 +362,8 @@ type ViewTransform = {
     y: number;
     scale: number;
     opacity: number;
+    /** 特殊屏淡出时的模糊量（px），普通屏为 0 */
+    blur: number;
 };
 
 type ViewScreen = {
@@ -389,6 +391,26 @@ const OVERVIEW_GAP = 24;
 const GESTURE_AXIS_DEADZONE = 12;
 /** 三指上下滑从常规到全局预览的完整行程，按可用高度比例 */
 const OVERVIEW_SWIPE_DISTANCE = 0.25;
+/** 三指下拉展开启动器输入框的完整行程，按可用高度比例 */
+const LAUNCHER_SWIPE_DISTANCE = 0.2;
+/** 启动器输入框高度（CSS px） */
+const LAUNCHER_HEIGHT = 52;
+/** 全局预览时启动器距工作区顶部（CSS px） */
+const OVERVIEW_LAUNCHER_TOP = 12;
+/** 全局预览 grid 顶部为启动器预留的高度 */
+const OVERVIEW_TOP_INSET = OVERVIEW_LAUNCHER_TOP + LAUNCHER_HEIGHT + 24;
+
+type LauncherController = {
+    getProgress(): number;
+    getOverviewMix(): number;
+    setProgress(progress: number): void;
+    setOverviewMix(overview: number): void;
+    animateVisual(progress: number, overview: number, onComplete?: () => void): void;
+    settle(): void;
+    isVisible(): boolean;
+    blur(): void;
+    setStageSize(height: number): void;
+};
 
 /** 三指横滑的当前倍率 */
 let gestureSwitchGain = DEFAULT_GESTURE_GAIN;
@@ -422,6 +444,9 @@ class ViewData {
     overview = false;
     /** 预览进度：0 常规，1 完整 grid；上下滑过程中连续变化 */
     private overviewProgress = 0;
+    private launcher?: LauncherController;
+    /** 进入全局预览前的启动器进度，退出时恢复 */
+    private launcherBeforeOverview = 0;
 
     private currentId = "";
     private usedSeq = 0;
@@ -437,6 +462,10 @@ class ViewData {
               totalY: number;
               /** 手势开始时的预览进度，松手时按当前进度吸附 */
               startOverviewProgress: number;
+              /** 手势开始时的启动器进度 */
+              startLauncherProgress: number;
+              /** 竖向手势本次控制的是预览还是启动器 */
+              verticalRole: "none" | "overview" | "launcher";
               axis: "none" | "horizontal" | "vertical";
           }
         | undefined;
@@ -454,6 +483,18 @@ class ViewData {
 
     get gestureActive() {
         return this.gesture !== undefined;
+    }
+
+    setLauncher(launcher: LauncherController) {
+        this.launcher = launcher;
+    }
+
+    toggleLauncher() {
+        if (this.overview) return;
+        const visible = (this.launcher?.getProgress() ?? 0) > 0.5;
+        // 隐藏状态下先把停靠位置归到常规，避免从预览顶部淡入
+        this.launcher?.setOverviewMix(0);
+        this.launcher?.animateVisual(visible ? 0 : 1, 0);
     }
 
     private currentIndex() {
@@ -475,6 +516,7 @@ class ViewData {
         if (Math.abs(width - this.stageWidth) < 0.5 && Math.abs(height - this.stageHeight) < 0.5) return;
         this.stageWidth = width;
         this.stageHeight = height;
+        this.launcher?.setStageSize(height);
         this.cancelGesture();
         this.render(false);
     }
@@ -484,7 +526,7 @@ class ViewData {
         const el = createScreenEl(id, () => {
             if (this.overview) this.selectFromOverview(id);
         });
-        const start = { x: this.stageWidth, y: 0, scale: 1, opacity: 1 };
+        const start = { x: this.stageWidth, y: 0, scale: 1, opacity: 1, blur: 0 };
         const gear = new AnimationGear<ViewTransform>(start, { transition: SCREEN_TRANSITION });
         const screen: ViewScreen = {
             id,
@@ -615,9 +657,34 @@ class ViewData {
     }
 
     private setOverviewInternal(on: boolean) {
+        const wasOverview = this.overview;
         this.overview = on;
         this.overviewProgress = on ? 1 : 0;
-        if (on) this.cancelReorder();
+        if (on) {
+            if (!wasOverview) {
+                // 进入全局预览时启动器出现在 grid 上方；退出时恢复进入前的状态
+                this.launcherBeforeOverview = this.launcher?.getProgress() ?? 0;
+                if (this.launcher) {
+                    if (this.launcher.isVisible()) {
+                        // 常规可见：保持在原位，只从三分之一移到顶部
+                        this.launcher.animateVisual(1, 1);
+                    } else {
+                        // 隐藏：直接放到顶部隐藏位置，再只做轻微滑入
+                        this.launcher.setOverviewMix(1);
+                        this.launcher.animateVisual(1, 1);
+                    }
+                }
+            }
+            this.cancelReorder();
+        } else if (wasOverview) {
+            if (this.launcherBeforeOverview >= 0.5) {
+                // 进入前就是可见的：回到常规三分之一位置并保持可见
+                this.launcher?.animateVisual(1, 0);
+            } else {
+                // 进入前隐藏：从顶部滑出工作区；隐藏位置与停靠 mix 无关
+                this.launcher?.animateVisual(0, 1);
+            }
+        }
         windowEl.el.toggleAttribute("data-overview", on);
     }
 
@@ -632,6 +699,7 @@ class ViewData {
         // 预览里也允许起手，用来识别三指下滑退出
         if (this.gesture || (!this.overview && this.screens.length < 2)) return;
         this.settleAnimation();
+        this.launcher?.settle();
         const base = new Map<string, ViewTransform>();
         for (const screen of this.screens) base.set(screen.id, { ...screen.target });
         this.gesture = {
@@ -640,6 +708,8 @@ class ViewData {
             totalX: 0,
             totalY: 0,
             startOverviewProgress: this.overviewProgress,
+            startLauncherProgress: this.launcher?.getProgress() ?? 0,
+            verticalRole: "none",
             axis: "none",
         };
     }
@@ -648,24 +718,84 @@ class ViewData {
         return Math.max(120, this.stageHeight * OVERVIEW_SWIPE_DISTANCE);
     }
 
+    private launcherSwipeDistance() {
+        return Math.max(100, this.stageHeight * LAUNCHER_SWIPE_DISTANCE);
+    }
+
     /** 按 0..1 的进度把每个虚拟屏从常规位置插值到 grid 位置 */
     private renderOverviewPull(progress: number) {
         const normal = this.normalTargets(0);
         const overview = this.overviewTargets();
-        const hidden = { x: -this.stageWidth * 2, y: 0, scale: 1, opacity: 0 };
+        const hidden = { x: -this.stageWidth * 2, y: 0, scale: 1, opacity: 0, blur: 0 };
         const p = clampNumber(progress, 0, 1);
         for (const screen of this.screens) {
+            const special = screen.empty || screen.launchpad;
+            // 特殊屏在虚拟屏下面；预览/过渡中当前应用屏再高一层，避免被其他屏盖住
+            const z = special
+                ? "0"
+                : overview
+                  ? screen.id === this.currentId
+                      ? "2"
+                      : "1"
+                  : screen.id === this.currentId
+                    ? "1"
+                    : "0";
+            screen.el.style({ zIndex: z });
             const from = normal.get(screen.id) ?? hidden;
-            const to = overview.get(screen.id) ?? hidden;
+            const to = overview.get(screen.id);
+            if (!to) {
+                // 空桌面和启动台不参与预览，留在原位淡出；启动台再缩小和模糊
+                const shrink = screen.launchpad ? 1 - 0.12 * p : 1;
+                const value = {
+                    x: from.x + (this.stageWidth * (1 - shrink)) / 2,
+                    y: from.y + (this.stageHeight * (1 - shrink)) / 2,
+                    scale: from.scale * shrink,
+                    opacity: from.opacity * (1 - p),
+                    blur: screen.launchpad ? p * 8 : 0,
+                };
+                screen.visual = value;
+                screen.target = value;
+                applyScreenTransform(screen.el, value);
+                continue;
+            }
             const value = {
                 x: from.x + (to.x - from.x) * p,
                 y: from.y + (to.y - from.y) * p,
                 scale: from.scale + (to.scale - from.scale) * p,
                 opacity: from.opacity + (to.opacity - from.opacity) * p,
+                blur: from.blur + (to.blur - from.blur) * p,
             };
             screen.visual = value;
             screen.target = value;
             applyScreenTransform(screen.el, value);
+        }
+    }
+
+    private syncLauncherWithOverviewGesture(gesture: NonNullable<ViewData["gesture"]>, overviewProgress: number) {
+        const launcher = this.launcher;
+        if (!launcher) return;
+        const p = clampNumber(overviewProgress, 0, 1);
+        const entering = gesture.startOverviewProgress < 0.5;
+        if (entering) {
+            if (gesture.startLauncherProgress < 0.5) {
+                // 隐藏 -> 全局：停在预览顶部，从工作区外滑入
+                launcher.setOverviewMix(1);
+                launcher.setProgress(p);
+            } else {
+                // 常规可见 -> 全局：保持不透明，从三分之一连续移到顶部
+                launcher.setProgress(1);
+                launcher.setOverviewMix(p);
+            }
+            return;
+        }
+        if (this.launcherBeforeOverview >= 0.5) {
+            // 预览 -> 常规可见：保持不透明，从顶部移回三分之一
+            launcher.setProgress(1);
+            launcher.setOverviewMix(p);
+        } else {
+            // 预览 -> 隐藏：保持在顶部，向下滑动时收起
+            launcher.setOverviewMix(1);
+            launcher.setProgress(p);
         }
     }
 
@@ -683,12 +813,36 @@ class ViewData {
         }
 
         if (gesture.axis === "vertical") {
-            // 手指往上时进度增大，往下时减小；同一次手势里可以连续来回
-            const distance = this.overviewSwipeDistance();
-            const progress = clampNumber(gesture.startOverviewProgress - gesture.totalY / distance, 0, 1);
-            if (progress === this.overviewProgress) return;
-            this.overviewProgress = progress;
-            this.renderOverviewPull(progress);
+            if (gesture.verticalRole === "none") {
+                const up = gesture.totalY < 0;
+                if (this.overview) {
+                    // 预览里搜索栏不能收起；上滑自然停在满进度，下滑退出预览
+                    gesture.verticalRole = "overview";
+                } else if (gesture.startLauncherProgress > 0.5) {
+                    // 常规已展开：上滑收起搜索栏；下滑保持不变
+                    gesture.verticalRole = "launcher";
+                } else {
+                    // 搜索栏隐藏：上滑进入预览，下滑拉出搜索栏
+                    gesture.verticalRole = up ? "overview" : "launcher";
+                }
+            }
+
+            if (gesture.verticalRole === "overview") {
+                // 手指往上时预览进度增大，往下时减小；同一次手势里可以连续来回
+                const distance = this.overviewSwipeDistance();
+                const progress = clampNumber(gesture.startOverviewProgress - gesture.totalY / distance, 0, 1);
+                if (progress === this.overviewProgress) return;
+                this.overviewProgress = progress;
+                this.renderOverviewPull(progress);
+                this.syncLauncherWithOverviewGesture(gesture, progress);
+                return;
+            }
+
+            // 启动器：往下拉出，往上推回
+            const distance = this.launcherSwipeDistance();
+            const progress = clampNumber(gesture.startLauncherProgress + gesture.totalY / distance, 0, 1);
+            this.launcher?.setOverviewMix(0);
+            this.launcher?.setProgress(progress);
             return;
         }
 
@@ -717,9 +871,35 @@ class ViewData {
         this.gesture = undefined;
 
         if (gesture.axis === "vertical") {
-            // 从当前跟手进度吸附到最近的一端
-            for (const screen of this.screens) screen.gear.moveTo(screen.visual, 0);
-            this.applyOverview(this.overviewProgress >= 0.5);
+            if (gesture.verticalRole === "launcher") {
+                const visible = (this.launcher?.getProgress() ?? 0) >= 0.5;
+                this.launcher?.animateVisual(visible ? 1 : 0, 0);
+                return;
+            }
+            if (gesture.verticalRole === "overview") {
+                const targetOverview = this.overviewProgress >= 0.5;
+                const entering = gesture.startOverviewProgress < 0.5;
+                // 从当前跟手进度吸附到最近的一端
+                for (const screen of this.screens) screen.gear.moveTo(screen.visual, 0);
+                this.applyOverview(targetOverview);
+                if (this.launcher) {
+                    if (entering) {
+                        if (targetOverview) {
+                            this.launcher.animateVisual(1, 1);
+                            // 手势进入预览时，记录手势开始前的启动器状态，供按钮/Esc 退出时恢复
+                            this.launcherBeforeOverview = gesture.startLauncherProgress;
+                        } else {
+                            this.launcher.animateVisual(gesture.startLauncherProgress >= 0.5 ? 1 : 0, 0);
+                        }
+                    } else if (targetOverview) {
+                        this.launcher.animateVisual(1, 1);
+                    } else if (this.launcherBeforeOverview >= 0.5) {
+                        this.launcher.animateVisual(1, 0);
+                    } else {
+                        this.launcher.animateVisual(0, 1);
+                    }
+                }
+            }
             return;
         }
 
@@ -789,6 +969,7 @@ class ViewData {
                 y: 0,
                 scale: 1,
                 opacity: 1,
+                blur: 0,
             });
         });
         return targets;
@@ -812,15 +993,17 @@ class ViewData {
         const rows = Math.ceil(count / cols);
         const padding = Math.max(12, Math.min(this.stageWidth, this.stageHeight) * 0.04);
         const gap = Math.min(OVERVIEW_GAP, padding);
+        const topInset = OVERVIEW_TOP_INSET;
+        const availableHeight = Math.max(1, this.stageHeight - topInset);
         const cellWidth = (this.stageWidth - padding * 2 - gap * (cols - 1)) / cols;
-        const cellHeight = (this.stageHeight - padding * 2 - gap * (rows - 1)) / rows;
+        const cellHeight = (availableHeight - padding * 2 - gap * (rows - 1)) / rows;
         const scale = Math.max(0.03, Math.min(cellWidth / this.stageWidth, cellHeight / this.stageHeight));
         const cardWidth = this.stageWidth * scale;
         const cardHeight = this.stageHeight * scale;
         const gridWidth = cols * cardWidth + (cols - 1) * gap;
         const gridHeight = rows * cardHeight + (rows - 1) * gap;
         const left = (this.stageWidth - gridWidth) / 2;
-        const top = (this.stageHeight - gridHeight) / 2;
+        const top = topInset + (availableHeight - gridHeight) / 2;
 
         cards.forEach((screen, index) => {
             const row = Math.floor(index / cols);
@@ -830,6 +1013,7 @@ class ViewData {
                 y: top + row * (cardHeight + gap),
                 scale,
                 opacity: 1,
+                blur: 0,
             });
         });
         return targets;
@@ -838,22 +1022,45 @@ class ViewData {
     render(animate = true) {
         // 手势跟手拖动时由 moveGesture 直接写样式，动画器只在松手/状态切换时接管
         if (this.gesture) return;
-        const targets = this.overview ? this.overviewTargets() : this.normalTargets(0);
-        const hidden = { x: -this.stageWidth * 2, y: 0, scale: 1, opacity: 0 };
+        const normal = this.normalTargets(0);
+        const overview = this.overview ? this.overviewTargets() : undefined;
+        const hidden = { x: -this.stageWidth * 2, y: 0, scale: 1, opacity: 0, blur: 0 };
         for (const screen of this.screens) {
-            const target = targets.get(screen.id);
-            if (target) {
-                screen.target = target;
-                screen.gear.moveTo(target, animate ? SCREEN_TRANSITION : 0);
+            const special = screen.empty || screen.launchpad;
+            let target: ViewTransform;
+            if (!overview) {
+                target = normal.get(screen.id) ?? hidden;
+            } else if (special) {
+                // 特殊屏不进入预览：留在原位缩小、模糊、淡出，并在虚拟屏下面
+                const base = normal.get(screen.id) ?? hidden;
+                const shrink = screen.launchpad ? 0.88 : 1;
+                target = {
+                    x: base.x + (this.stageWidth * (1 - shrink)) / 2,
+                    y: base.y + (this.stageHeight * (1 - shrink)) / 2,
+                    scale: base.scale * shrink,
+                    opacity: 0,
+                    blur: screen.launchpad ? 8 : 0,
+                };
             } else {
-                screen.target = hidden;
-                screen.gear.moveTo(hidden, 0);
+                target = overview.get(screen.id) ?? hidden;
             }
-            screen.el.style({ zIndex: screen.id === this.currentId ? "1" : "0" });
+            screen.target = target;
+            screen.gear.moveTo(target, animate ? SCREEN_TRANSITION : 0);
+            const z = overview
+                ? special
+                    ? "0"
+                    : screen.id === this.currentId
+                      ? "2"
+                      : "1"
+                : screen.id === this.currentId
+                  ? "1"
+                  : "0";
+            screen.el.style({ zIndex: z });
         }
     }
 
     focusWin(winid: MWinId) {
+        this.launcher?.blur();
         const internal = internalWindows.has(winid);
         if (!internal && !server.server.windows.get(winid)) {
             console.warn("cant find window", winid);
@@ -899,7 +1106,7 @@ function createScreenEl(id: string, onClick: () => void) {
             width: "100%",
             height: "100%",
             transformOrigin: "0 0",
-            willChange: "transform, opacity",
+            willChange: "transform, opacity, filter",
             overflow: "hidden",
         })
         .data({ "view-id": id })
@@ -915,6 +1122,7 @@ function applyScreenTransform(el: ElType<HTMLElement>, value: ViewTransform) {
     el.style({
         transform: `translate3d(${value.x}px, ${value.y}px, 0) scale(${value.scale})`,
         opacity: `${value.opacity}`,
+        filter: value.blur > 0 ? `blur(${value.blur}px)` : "none",
     });
 }
 
@@ -1204,6 +1412,9 @@ const DESKTOP_BINDINGS: KeyBinding[] = [
     { code: "ArrowRight", meta: true },
     { code: "Tab", meta: true },
 ];
+
+/** 顶部启动器：Alt+Space 拉出/收起 */
+const LAUNCHER_BINDINGS: KeyBinding[] = [{ code: "Space", alt: true }];
 
 class Timer {
     private timerId: number | undefined;
@@ -2561,6 +2772,8 @@ const windowEl = view()
     .addInto(windowElWarp);
 
 viewData = new ViewData();
+const launcher = createLauncher();
+viewData.setLauncher(launcher);
 const launchpadScreen = viewData.launchpadScreen;
 if (launchpadScreen) launchpadScreen.el.add(createLaunchpadContent());
 
@@ -3673,6 +3886,128 @@ function createAppTileFactory(op: AppTileFactoryOptions) {
     return { createAppTile, createSettingsTile };
 }
 
+/** 顶部启动器输入框：默认藏在工作区上方，可跟手下拉/上推 */
+function createLauncher(): LauncherController {
+    const LAUNCHER_TRANSITION = { duration: 260, map: timingFunction.easeOut };
+    let stageHeight = Math.max(1, windowEl.el.getBoundingClientRect().height || window.innerHeight);
+    let progress = 0;
+    let overviewMix = 0;
+    const restingTop = () => {
+        const normalTop = stageHeight / 3 - LAUNCHER_HEIGHT / 2;
+        return normalTop + (OVERVIEW_LAUNCHER_TOP - normalTop) * overviewMix;
+    };
+    const hiddenOffset = () => Math.max(0, restingTop() + LAUNCHER_HEIGHT + 12);
+
+    const layer = view()
+        .style({
+            position: "absolute",
+            inset: "0",
+            overflow: "hidden",
+            pointerEvents: "none",
+            zIndex: "2",
+        })
+        .addInto(windowElWarp);
+    const shell = view("x")
+        .style({
+            position: "absolute",
+            top: "0px",
+            left: "50%",
+            width: "min(560px, 80vw)",
+            height: `${LAUNCHER_HEIGHT}px`,
+            padding: "0 18px",
+            boxSizing: "border-box",
+            alignItems: "center",
+            borderRadius: "16px",
+            background: "rgba(255,255,255,0.94)",
+            backdropFilter: "blur(20px)",
+            boxShadow: "0 12px 40px #00000033",
+            border: "1px solid #ffffff88",
+            opacity: "0",
+            transform: `translate3d(-50%, -${hiddenOffset()}px, 0)`,
+            visibility: "hidden",
+            pointerEvents: "none",
+            willChange: "transform, opacity, filter",
+        })
+        .data({ "desktop-ui": "launcher", "launcher-input": "" })
+        .addInto(layer);
+    const field = input("text")
+        .style({
+            width: "100%",
+            height: "100%",
+            border: "none",
+            outline: "none",
+            background: "transparent",
+            padding: "0",
+            fontSize: "16px",
+            color: "#111",
+        })
+        .attr({ placeholder: "搜索或输入命令" });
+    shell.add(field);
+    shell.on("click", () => field.el.focus());
+
+    const gear = new AnimationGear({ progress: 0, overview: 0 }, { transition: LAUNCHER_TRANSITION });
+    const blurInput = () => {
+        if (document.activeElement instanceof HTMLElement && document.activeElement.closest("[data-launcher-input]")) {
+            document.activeElement.blur();
+        }
+    };
+    const apply = () => {
+        const p = progress;
+        shell.style({
+            top: `${restingTop()}px`,
+            transform: `translate3d(-50%, -${(1 - p) * hiddenOffset()}px, 0)`,
+            opacity: `${p}`,
+            visibility: p > 0 ? "visible" : "hidden",
+            pointerEvents: p > 0.5 ? "auto" : "none",
+        });
+        if (p === 1 && document.activeElement !== field.el) {
+            field.el.focus({ preventScroll: true });
+        } else if (p === 0) {
+            blurInput();
+        }
+    };
+    gear.setUpdateCallback((value) => {
+        progress = value.progress;
+        overviewMix = value.overview;
+        apply();
+    });
+    gear.moveTo({ progress: 0, overview: 0 }, 0);
+
+    const settle = () => gear.moveTo({ progress, overview: overviewMix }, 0);
+
+    return {
+        getProgress: () => progress,
+        getOverviewMix: () => overviewMix,
+        setProgress: (value) => {
+            progress = clampNumber(value, 0, 1);
+            apply();
+        },
+        setOverviewMix: (value) => {
+            overviewMix = clampNumber(value, 0, 1);
+            apply();
+        },
+        animateVisual: (targetProgress, targetOverview, onComplete) => {
+            settle();
+            gear.moveTo(
+                {
+                    progress: clampNumber(targetProgress, 0, 1),
+                    overview: clampNumber(targetOverview, 0, 1),
+                },
+                LAUNCHER_TRANSITION,
+                onComplete,
+            );
+        },
+        settle,
+        isVisible: () => progress >= 0.5,
+        blur: blurInput,
+        setStageSize: (height) => {
+            if (height <= 0) return;
+            stageHeight = height;
+            apply();
+        },
+    };
+}
+
 /** 启动台：放在空桌面右边，显示应用图标，和空桌面一样是特殊虚拟屏 */
 function createLaunchpadContent() {
     const grid = view("x", "wrap")
@@ -4584,12 +4919,18 @@ window.addEventListener(
     "pointerdown",
     (e) => {
         if (e.isTrusted) return;
-        if (!isInternalWindow(viewData.focusHandle)) return;
         const target = e.target as HTMLElement | null;
+        if (!target?.closest("[data-launcher-input]")) launcher.blur();
+        if (!isInternalWindow(viewData.focusHandle)) return;
         if (!target?.closest("[data-internal-window]")) viewData.blurAll();
     },
     true,
 );
+
+function isLauncherInputFocused() {
+    const active = document.activeElement;
+    return active instanceof HTMLElement && active.closest("[data-launcher-input]") !== null;
+}
 
 body.on("keydown", (e) => {
     if (!e.repeat && matchBindings(e, EXIT_BINDINGS)) {
@@ -4598,10 +4939,20 @@ body.on("keydown", (e) => {
         return;
     }
     if (state.getState() !== "normal") return;
-    if (viewData.overview) {
-        // 全局预览只响应普通点击和 Esc，键盘不再进入应用
+    if (!e.repeat && matchBindings(e, LAUNCHER_BINDINGS)) {
         e.preventDefault();
-        if (!e.repeat && e.code === "Escape") viewData.setOverview(false);
+        viewData.toggleLauncher();
+        return;
+    }
+    if (viewData.overview) {
+        // 全局预览只响应普通点击和 Esc；启动器/内部窗口的输入留给 DOM
+        if (!e.repeat && e.code === "Escape") {
+            e.preventDefault();
+            viewData.setOverview(false);
+            return;
+        }
+        if (isLauncherInputFocused() || isInternalWindow(viewData.focusHandle)) return;
+        e.preventDefault();
         return;
     }
     if (!e.repeat && matchBindings(e, DESKTOP_BINDINGS)) {
@@ -4611,7 +4962,8 @@ body.on("keydown", (e) => {
         else viewData.toggleOverview();
         return;
     }
-    // 内部窗口自己处理 DOM 键盘事件（输入框、下拉框等），不转发给 Wayland 客户端
+    // 启动器和内部窗口自己处理 DOM 键盘事件，不转发给 Wayland 客户端
+    if (isLauncherInputFocused()) return;
     if (isInternalWindow(viewData.focusHandle)) return;
     const handle = viewData.focusHandle;
     if (handle === undefined) return;
@@ -4625,7 +4977,12 @@ body.on("keydown", (e) => {
 });
 body.on("keyup", (e) => {
     if (state.getState() !== "normal") return;
-    if (viewData.overview || matchBindings(e, DESKTOP_BINDINGS)) {
+    if (matchBindings(e, DESKTOP_BINDINGS) || matchBindings(e, LAUNCHER_BINDINGS)) {
+        e.preventDefault();
+        return;
+    }
+    if (isLauncherInputFocused()) return;
+    if (viewData.overview) {
         e.preventDefault();
         return;
     }
