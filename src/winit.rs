@@ -131,7 +131,7 @@ impl RenderBackend for WinitBackend {
 
                         backend.submit(Some(&[damage])).unwrap();
 
-                        let time = state.start_time.elapsed();
+                        let time = crate::wayland::monotonic_now();
                         let refresh = output.current_mode().map(|mode| {
                             Duration::from_secs_f64(1_000.0 / f64::from(mode.refresh).max(1.0))
                         });

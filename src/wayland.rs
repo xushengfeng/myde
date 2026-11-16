@@ -36,7 +36,6 @@ use smithay::{
 use std::time::Duration;
 
 pub struct App {
-    pub start_time: std::time::Instant,
     pub socket_name: std::ffi::OsString,
     pub display_handle: DisplayHandle,
     pub space: Space<Window>,
@@ -82,7 +81,6 @@ pub struct App {
 
 impl App {
     pub fn new(event_loop: &mut EventLoop<Self>, display: Display<Self>) -> Self {
-        let start_time = std::time::Instant::now();
         let dh = display.handle();
 
         // Here we initialize implementations of some wayland protocols
@@ -131,7 +129,6 @@ impl App {
         let presentation_state = PresentationState::new::<Self>(&dh, 1);
 
         Self {
-            start_time,
             display_handle: dh,
             space,
             loop_signal,

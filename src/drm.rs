@@ -24,7 +24,7 @@ use smithay::{
 use std::fs::OpenOptions;
 use std::os::unix::io::{AsFd, OwnedFd};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 use crate::backend::RenderBackend;
@@ -342,7 +342,6 @@ pub struct DrmBackend {
     gbm: Option<GbmDevice<Arc<OwnedFd>>>,
     renderer: Option<GlesRenderer>,
     compositors: Vec<DrmOutputRuntime>,
-    start_time: Instant,
     frame_count: u64,
     /// VBlank 事件通道，携带发生翻页的 crtc
     rx: Option<std::sync::mpsc::Receiver<crtc::Handle>>,
@@ -385,7 +384,6 @@ impl DrmBackend {
             gbm: None,
             renderer: None,
             compositors: Vec::new(),
-            start_time: Instant::now(),
             frame_count: 0,
             rx: Some(rx),
             tx: Some(tx),
@@ -860,7 +858,9 @@ void main() {
             return;
         };
         let output = &output_data.smithay_output;
-        let time = self.start_time.elapsed();
+        // 和 presentation 同用 CLOCK_MONOTONIC：Chromium 会把 frame callback 时间
+        // 和 presented 时间一起用于排帧，基准不同会算错下一帧 deadline。
+        let time = crate::wayland::monotonic_now();
         // 这里的回调本来就由 DRM vblank 驱动，不能再按刷新周期节流：
         // smithay 的 `SurfaceFrameThrottlingState` 用严格大于判断，vblank 间隔
         // 只要比 mode.refresh 算出的周期短一点点就会丢掉一整轮回调，
