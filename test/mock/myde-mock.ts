@@ -1494,7 +1494,7 @@ function createMockDisplay(log: (...args: any[]) => void): MockType<display> {
             log("display.connect", _op);
         },
         supports(feature: string) {
-            return feature === "screen-power";
+            return feature === "screen-power" || feature === "screen-mode";
         },
         async setWindowSize(_width: number, _height: number) {
             log("display.setWindowSize", _width, _height);
@@ -1504,6 +1504,14 @@ function createMockDisplay(log: (...args: any[]) => void): MockType<display> {
         },
         async getScreens() {
             return [];
+        },
+        async setScreenMode(screenIndex: number, mode: { width: number; height: number; refresh_rate: number }) {
+            log("display.setScreenMode", screenIndex, mode);
+            return mode;
+        },
+        async setScreenRefreshRate(screenIndex: number, refreshRate: number) {
+            log("display.setScreenRefreshRate", screenIndex, refreshRate);
+            return { width: 0, height: 0, refresh_rate: refreshRate };
         },
         async setInputEnabled(_enabled: boolean) {
             log("display.setInputEnabled", _enabled);

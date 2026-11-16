@@ -3,11 +3,21 @@ import { EventEmitter } from "../event-emitter/event-emitter";
 
 const { ipcRenderer } = require("electron") as typeof import("electron");
 
-interface Screen {
+export interface ScreenMode {
+    width: number;
+    height: number;
+    /** Hz */
+    refresh_rate: number;
+}
+
+export interface Screen {
     name: string;
     width: number;
     height: number;
+    /** Hz */
     refresh_rate: number;
+    /** wrap 报告的可用模式；旧版 wrap 或不支持的后端没有该字段 */
+    modes?: ScreenMode[];
 }
 
 export interface Rect {
@@ -50,7 +60,7 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         return this.type;
     }
 
-    /** 当前 wrap 提供的能力，如 "screen-power" */
+    /** 当前 wrap 提供的能力，如 "screen-power"、"screen-mode" */
     supports(feature: string): boolean {
         return this.features.has(feature);
     }
@@ -165,6 +175,12 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
                         on: data.on as boolean,
                         screens: data.screens as number[],
                     } satisfies ScreenPowerResult);
+                } else if (type === "ScreenMode") {
+                    pending.resolve({
+                        width: data.width as number,
+                        height: data.height as number,
+                        refresh_rate: data.refresh_rate as number,
+                    } satisfies ScreenMode);
                 } else {
                     pending.resolve(undefined);
                 }
@@ -253,6 +269,44 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
             return [];
         }
         return (await this.sendWithResponse("GetScreens", {}, "Screens")) as Screen[];
+    }
+
+    /**
+     * 切换屏幕模式（分辨率 + 刷新率）。
+     * 只接受 `getScreens()` 返回的 `modes` 中的模式，返回实际生效的模式；
+     * 非桌面模式、旧版 wrap 或 winit 后端返回 undefined。
+     */
+    async setScreenMode(screenIndex: number, mode: ScreenMode): Promise<ScreenMode | undefined> {
+        if (this.type !== "desktop" || !this.supports("screen-mode")) {
+            return undefined;
+        }
+        return (await this.sendWithResponse(
+            "SetScreenMode",
+            {
+                screen_index: screenIndex,
+                width: mode.width,
+                height: mode.height,
+                refresh_rate: mode.refresh_rate,
+            },
+            "ScreenMode",
+        )) as ScreenMode | undefined;
+    }
+
+    /** 只改刷新率，分辨率沿用该屏幕当前模式。 */
+    async setScreenRefreshRate(screenIndex: number, refreshRate: number): Promise<ScreenMode | undefined> {
+        if (this.type !== "desktop" || !this.supports("screen-mode")) {
+            return undefined;
+        }
+        const screens = await this.getScreens();
+        const screen = screens[screenIndex];
+        if (!screen) {
+            throw new Error(`Invalid screen index: ${screenIndex}`);
+        }
+        return this.setScreenMode(screenIndex, {
+            width: screen.width,
+            height: screen.height,
+            refresh_rate: refreshRate,
+        });
     }
 
     async setInputEnabled(enabled: boolean): Promise<boolean> {

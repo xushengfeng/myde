@@ -114,9 +114,22 @@ if (MSysApi.display.supports("screen-power")) {
     await MSysApi.display.setScreenPower(false);
     await MSysApi.display.setScreenPower(true);
 }
+
+// 屏幕当前模式与可切换模式；refresh_rate 单位 Hz，winit/旧版 wrap 的 modes 为空
+const [screen] = await MSysApi.display.getScreens();
+console.log(screen.width, screen.height, screen.refresh_rate, screen.modes);
+
+// 切换刷新率（只有 DRM 后端、且 wrap 广告 MYDE_WRAP_SCREEN_MODE=1 时可用）
+if (MSysApi.display.supports("screen-mode")) {
+    await MSysApi.display.setScreenRefreshRate(0, 120);
+    // 或指定完整模式：
+    // await MSysApi.display.setScreenMode(0, { width: 1920, height: 1080, refresh_rate: 120 });
+}
 ```
 
 `setScreenPower` 走 DRM connector 的 DPMS，只关显示输出，不挂起系统。官方桌面在锁屏进入息屏状态时先铺黑并等一帧，再关 DPMS；任意输入唤醒时先开屏并吞掉该输入。
+
+`getScreens` 的 `refresh_rate` 与 `modes` 来自真实输出模式。DRM 下 wrap 启动时会在 EDID 首选分辨率里选刷新率最高的模式，`wp_presentation` 的 `refresh` 也跟随当前输出，而不是固定 120Hz。官方桌面的 `ScreenManager` 已提供 `getResolution()` / `getResolutions()` / `setResolution()` 和 `getRefreshRate()` / `getRefreshRates()` / `setRefreshRate()`，切换后会把新模式同步给 wayland server 的 `outputs.set`，分辨率变化时还会重设窗口尺寸并让最大化窗口重新 configure；设置窗口的"显示 → 分辨率 / 刷新率"就是这些接口的入口。
 
 ### media
 

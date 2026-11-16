@@ -50,7 +50,10 @@ async function loadDesktop(p: string) {
         await myde.MSysApi.display.connect({
             socketPath: env.MYDE_WRAP_SOCKET,
             mus,
-            features: env.MYDE_WRAP_SCREEN_POWER === "1" ? ["screen-power"] : [],
+            features: [
+                ...(env.MYDE_WRAP_SCREEN_POWER === "1" ? ["screen-power"] : []),
+                ...(env.MYDE_WRAP_SCREEN_MODE === "1" ? ["screen-mode"] : []),
+            ],
         });
     }
     myde.MSysApi.fs = new vfs(dirPath);
