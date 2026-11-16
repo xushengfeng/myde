@@ -8,14 +8,13 @@ import { getEnumValue } from "../../utils/wayland-proto";
  * 没有这个协议时它退回 60Hz，即使 `wl_output.mode` 报的是 120。
  *
  * 当前由 Electron 桌面渲染，没有 DRM vblank 可读：在桌面 rAF 上回 presented，
- * 时间戳用 CLOCK_MONOTONIC，refresh 取桌面刷新率。每个 surface 每次 rAF 只回
+ * 时间戳用 CLOCK_MONOTONIC，refresh 取当前输出模式。每个 surface 每次 rAF 只回
  * 一个，避免客户端按 presented 的节奏跑超刷新率。
  */
 
-/** 120Hz 的刷新间隔（纳秒）。 */
-const REFRESH_NS = 8_333_333;
-
 const CLOCK_MONOTONIC = 1;
+/** 输出配置缺失或 refresh 为 0 时的回退周期（60Hz，纳秒）。 */
+const FALLBACK_REFRESH_NS = 16_666_667;
 
 declare module "../../module" {
     interface WaylandDomainRegistry {
@@ -36,6 +35,13 @@ function nowNsec(): bigint {
     return process.hrtime.bigint();
 }
 
+/** 当前输出的刷新周期（纳秒）。OutputInfo.mode.refresh 单位是 mHz。 */
+function refreshNsec(ctx: ModuleCtx): number {
+    const mhz = ctx.client.output().mode.refresh;
+    if (!Number.isFinite(mhz) || mhz <= 0) return FALLBACK_REFRESH_NS;
+    return Math.max(1, Math.round(1_000_000_000_000 / mhz));
+}
+
 function sendPresented(ctx: ModuleCtx, feedbackId: WaylandObjectId2<"wp_presentation_feedback">) {
     const ns = nowNsec();
     const sec = ns / 1_000_000_000n;
@@ -49,7 +55,7 @@ function sendPresented(ctx: ModuleCtx, feedbackId: WaylandObjectId2<"wp_presenta
         tv_sec_hi: Number((sec >> 32n) & 0xffffffffn),
         tv_sec_lo: Number(sec & 0xffffffffn),
         tv_nsec: nsec,
-        refresh: REFRESH_NS,
+        refresh: refreshNsec(ctx),
         seq_hi: Math.floor(seq / 2 ** 32),
         seq_lo: seq >>> 0,
         flags: getEnumValue("wp_presentation_feedback.kind", ["vsync"]),

@@ -69,10 +69,14 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
   客户端重绘前最多是短暂变形，不会露出壁纸。
 - **dmabuf 异步导入**期间若来了更新的像素提交或 `attach(nil)`，旧提交回来时按 surface 的
   `renderSeq` 丢弃，避免旧帧覆盖新画面、也避免解绑后又被画回来。
-- **桌面模式**默认用 `MYDE_DRM_GPU_FINISH=1`：转换器 `glFinish` 后才把 GPU 转换出的
+- **默认**用 `MYDE_DRM_GPU_FINISH=1`：转换器 `glFinish` 后才把 GPU 转换出的
   GBM buffer 交给 Electron 导入。转换器依赖 dma-buf 隐式 fence；驱动/时序不可靠时导入方会
   采样到还没画完的 buffer（整块透明）。等完成会牺牲一点吞吐，但保证推上去的每帧都是完整的；
   `MYDE_DRM_GPU_FINISH=0` 可恢复异步。
+- **默认**把 dmabuf 先 GPU 拷贝到 myde 自己的 ARGB8888 dmabuf，再导入 Electron。
+  直接 `importSharedTexture` 是零拷贝，VideoFrame 仍引用客户端的 dma-buf；客户端复用
+  buffer 时，Electron/宿主合成器可能还在采样旧纹理，表现为偶发旧帧闪回。拷贝后客户端
+  buffer 的生命周期与合成解耦。`MYDE_DMABUF_COPY=0` 可关闭。
 
 ## 对外 API（桌面侧）
 

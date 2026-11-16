@@ -18,15 +18,11 @@ const fs = require("node:fs") as typeof import("node:fs");
 /**
  * myde-drm 的 GPU 转换在 glFlush 后就把新 GBM buffer 交给 Electron 导入，
  * 依赖 dma-buf 隐式 fence 让导入方等到画完。驱动/时序不保证时会采样到还没写入的
- * 新 buffer（整块透明），窗口就闪一帧透明。桌面模式默认用 glFinish：
- * 宁可这一帧晚一点（掉帧），也不要把透明画面推到屏幕上。
- * `MYDE_DRM_GPU_FINISH=0` 可恢复异步行为。
+ * 新 buffer（整块透明）或旧内容。默认用 glFinish：宁可这一帧晚一点（掉帧），
+ * 也不要把透明/旧帧推到屏幕上。`MYDE_DRM_GPU_FINISH=0` 可恢复异步行为。
  */
 try {
-    if (globalThis.location !== undefined) {
-        const displayType = new URLSearchParams(globalThis.location.search).get("displayType");
-        if (displayType === "desktop") process.env.MYDE_DRM_GPU_FINISH ||= "1";
-    }
+    if (globalThis.location !== undefined) process.env.MYDE_DRM_GPU_FINISH ||= "1";
 } catch {
     // 纯 node 环境没有 location：保持 myde-drm 默认行为
 }
@@ -152,6 +148,8 @@ declare module "../../module" {
         commitPacing: {
             pending: Map<SurfaceId, WaylandObjectId2<"wl_callback">[]>;
             raf: boolean;
+            /** 没有待发回调后继续跑 rAF 的帧数，防止稀疏 rAF 被宿主排到 60Hz */
+            idleFrames: number;
         };
     }
 }
@@ -206,11 +204,18 @@ function sendPreferredScale(ctx: ModuleCtx, surface: SurfaceId, output: OutputIn
     });
 }
 
+/** 静止后继续跑多少帧 rAF；120Hz 下约 500ms。 */
+const PACING_KEEPALIVE_FRAMES = 60;
+
 /**
  * 帧回调按桌面 rAF 排队：同一 surface 每次 rAF 只发一个 done。
  *
  * 立即回 done 会让客户端一路跑超刷新率（实测能到 200+ commit/s）；等一个 rAF
  * 再回则是把每个 surface 的更新节拍钉在桌面刷新率上，Chrome 会按 120Hz 稳定出帧。
+ *
+ * 只在有回调时注册下一帧还不够：客户端拿到 done 后 commit，可能落在两次 rAF
+ * 之间，上一轮链已结束，宿主会把新的孤立 rAF 排到 60Hz（KDE 宽容，wrap/winit
+ * 不宽容）。保持一小段连续 rAF，动画期间不断链，静止后自动停。
  */
 function scheduleFrameDone(ctx: ModuleCtx, surfaceId: SurfaceId, callback: WaylandObjectId2<"wl_callback">) {
     const pacing = ctx.domain.commitPacing;
@@ -220,21 +225,26 @@ function scheduleFrameDone(ctx: ModuleCtx, surfaceId: SurfaceId, callback: Wayla
         pacing.pending.set(surfaceId, queue);
     }
     queue.push(callback);
+    pacing.idleFrames = 0;
     if (pacing.raf) return;
 
     const drain = () => {
         pacing.raf = false;
-        let more = false;
+        let sent = 0;
         for (const [sid, q] of pacing.pending) {
             const cb = q.shift();
             if (cb !== undefined) {
-                ctx.sendNow(cb, "wl_callback.done", { callback_data: Date.now() });
+                // 必须和 presentation 的 CLOCK_MONOTONIC 同基准且单调；Date.now()
+                // 会被 NTP 调整，客户端据此排帧时会出现回退/抖动。
+                const callbackData = Number(process.hrtime.bigint() / 1_000_000n) >>> 0;
+                ctx.sendNow(cb, "wl_callback.done", { callback_data: callbackData });
                 ctx.sendNow(ctx.client.displayId, "wl_display.delete_id", { id: cb });
+                sent++;
             }
             if (q.length === 0) pacing.pending.delete(sid);
-            else more = true;
         }
-        if (more) {
+        pacing.idleFrames = sent > 0 ? 0 : pacing.idleFrames + 1;
+        if (pacing.idleFrames < PACING_KEEPALIVE_FRAMES) {
             pacing.raf = true;
             requestAnimationFrame(drain);
         }
@@ -946,7 +956,7 @@ export const waylandCoreModule = defineModule({
         /** 输入设备记录（原 `state/seat_store.ts`，host 已不持有）：只有 core 读写 */
         seat: () => new SeatStore(),
         output: () => ({ outputs: new Set(), surfaces: new Set() }),
-        commitPacing: () => ({ pending: new Map(), raf: false }),
+        commitPacing: () => ({ pending: new Map(), raf: false, idleFrames: 0 }),
     },
     hooks: {
         /** 桌面改了输出/缩放：重发 wl_output 状态和 surface 的整数缩放偏好。 */
@@ -1387,10 +1397,14 @@ export const waylandCoreModule = defineModule({
                 unmapSurface(ctx, surfaceId);
                 ctx.cursor.hide(surfaceId);
                 ctx.notify.commit(surfaceId, false);
+                // 没有新 buffer 的提交也可能请求了 frame callback（Firefox 的 vsync
+                // source 会这样取节拍）；不回复会让它退回 60Hz 软件定时器。
+                for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
             } else if (!bufferObj) {
                 // 无 buffer 的 commit 也要让扩展看到：xdg 靠初始 commit 才能下发 configure
                 // （规范：客户端先不带 buffer 提交，合成器才回 configure，之后才允许 attach）
                 ctx.notify.commit(surfaceId, false);
+                for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
             } else {
                 // 本次提交带像素：序号用于识别异步导入完成前是否已被更新的像素提交取代
                 const seq = (surface.data.renderSeq ?? 0) + 1;
@@ -1434,6 +1448,8 @@ export const waylandCoreModule = defineModule({
                 }
                 // 转换/导入失败时保持 undefined：宁可掉这一帧，也不画透明像素
                 let image: ImageData | VideoFrame | undefined;
+                /** image 是否是 myde 自己的稳定副本（GPU 拷贝 / CPU 转换），而不是客户端 dmabuf 零拷贝 */
+                let imageStable = false;
                 if (bufferObj.type === "shm") {
                     let frame = bufferObj.frame;
                     if (!frame) {
@@ -1540,8 +1556,12 @@ export const waylandCoreModule = defineModule({
                         const pixelFormat = getElectronPixelFormat(bufferObj.format);
                         let imageFromGpu: VideoFrame | undefined;
                         let converted: ImageData | undefined;
+                        // 直接 importSharedTexture 是零拷贝，VideoFrame 仍指向客户端的 dmabuf；
+                        // 客户端复用 buffer 时可能把旧内容又贴回来。默认先让 GPU 转换到
+                        // myde 自己的 dmabuf，再导入这个稳定副本；MYDE_DMABUF_COPY=0 可关闭。
+                        const forceCopy = rendererEnv.MYDE_DMABUF_COPY !== "0";
 
-                        if (!pixelFormat) {
+                        if (forceCopy || !pixelFormat) {
                             try {
                                 const gpu = convertDmabufToTexture({
                                     width: bufferObj.width,
@@ -1576,6 +1596,7 @@ export const waylandCoreModule = defineModule({
                                         });
                                         imageFromGpu = t.getVideoFrame();
                                         t.release();
+                                        imageStable = true;
                                     } finally {
                                         gpu.close();
                                     }
@@ -1587,7 +1608,7 @@ export const waylandCoreModule = defineModule({
                                 );
                             }
 
-                            if (!imageFromGpu) {
+                            if (!pixelFormat && !imageFromGpu) {
                                 try {
                                     const rgba = convertDmabufToRgba({
                                         width: bufferObj.width,
@@ -1609,6 +1630,7 @@ export const waylandCoreModule = defineModule({
                                         bufferObj.width,
                                         bufferObj.height,
                                     );
+                                    imageStable = true;
                                 } catch (error) {
                                     console.error(
                                         `dmabuf format 0x${bufferObj.format.toString(16)} conversion failed:`,
@@ -1709,12 +1731,31 @@ export const waylandCoreModule = defineModule({
                         c2d.drawImage(image, 0, 0, canvas.width, canvas.height);
                     } else c2d.putImageData(image, 0, 0);
                 }
+                // 零拷贝 VideoFrame 仍然引用客户端 dmabuf：等到下一次 rAF（本轮 DOM
+                // canvas 提交之后）再 close + release，避免客户端复用旧内容。
+                // GPU/CPU 稳定副本已经与客户端 buffer 解耦，可以立刻归还，避免只带
+                // 两个 buffer 的客户端被多扣一帧后掉到 60Hz。
                 if (image instanceof VideoFrame) {
-                    image.close();
+                    if (imageStable) {
+                        // 稳定副本：立即把客户端 buffer 还回去；VideoFrame 自己再留一帧，
+                        // 让 canvas 的 GPU 绘制有机会完成。
+                        if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
+                        const frame = image;
+                        requestAnimationFrame(() => frame.close());
+                    } else {
+                        const frame = image;
+                        requestAnimationFrame(() => {
+                            frame.close();
+                            if (bufferId && ctx.objects.has(bufferId)) {
+                                ctx.sendNow(bufferId, "wl_buffer.release", {});
+                            }
+                        });
+                    }
+                } else if (bufferId) {
+                    // shm/CPU 路径已经同步拷贝完，可以立刻归还
+                    ctx.sendNow(bufferId, "wl_buffer.release", {});
                 }
-                // 像素已经复制进合成器自己的画布，源 buffer 可以立刻还给客户端。
                 // frame callback 走 rAF 排队，把每个 surface 的提交节拍钉在桌面刷新率上。
-                if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
                 for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
 
                 // 渲染之前交给扩展后处理（viewporter 的裁剪缩放）
