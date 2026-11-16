@@ -1615,10 +1615,11 @@ export const waylandCoreModule = defineModule({
                         let imageFromGpu: VideoFrame | undefined;
                         let converted: ImageData | undefined;
                         // 默认先 GPU 拷贝一份稳定副本：VideoFrame 不再引用客户端 dmabuf，
-                        // 客户端复用 buffer 时不会闪旧帧。myde-drm 内部按尺寸复用一块小
+                        // 客户端复用 buffer 时不会闪旧帧。myde-drm 内部按尺寸复用一块
                         // buffer 池（按内存预算自动分配，默认 256MB，MYDE_DRM_POOL_MB），
-                        // 拷贝在消费者释放导入纹理后才还给池子，
-                        // 不会按帧累积。MYDE_DMABUF_COPY=0 可退回零拷贝。
+                        // 槽位按 client+surface 隔离，拷贝在消费者释放导入纹理后才还给
+                        // 池子，不会按帧累积，也不会串到别的窗口。MYDE_DMABUF_COPY=0
+                        // 可退回零拷贝。
                         const forceCopy = rendererEnv.MYDE_DMABUF_COPY !== "0";
 
                         if (forceCopy || !pixelFormat) {
@@ -1628,6 +1629,9 @@ export const waylandCoreModule = defineModule({
                                     height: bufferObj.height,
                                     format: bufferObj.format,
                                     modifier,
+                                    // 池按 client+surface 隔离：不同窗口不共用拷贝缓冲，
+                                    // 避免一个窗口闪出另一个窗口的内容。
+                                    owner: `${ctx.client.id}:${surfaceId}`,
                                     planes: bufferObj.planes.map((p) => ({
                                         fd: p.fd,
                                         offset: p.offset,

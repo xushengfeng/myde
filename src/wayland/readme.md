@@ -77,8 +77,9 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
 - **默认**把 dmabuf 先 GPU 拷贝到 myde 自己的 ARGB8888 dmabuf，再导入 Electron：
   `VideoFrame` 不再引用客户端的 dma-buf，客户端复用 buffer 时不会闪旧帧。myde-drm
   按尺寸复用一个小 buffer 池，池子按**内存预算**自动分配（默认 256MB，`MYDE_DRM_POOL_MB`
-  可调），一个拷贝占用的槽位要等导入纹理释放后才归还；4K 帧约 33MB、1080p 约 8MB，
-  所以上限自动随窗口大小变化，不是按窗口数预分配；
+  可调），一个拷贝占用的槽位要等导入纹理释放后才归还；槽位按 client+surface 隔离，
+  别的窗口只能回收空闲 ≥1s（`MYDE_DRM_STEAL_IDLE_MS`）的槽位，避免 A 窗口闪出 B 窗口
+  的内容；4K 帧约 33MB、1080p 约 8MB，上限随窗口大小自动变化；
   池满时回退到零拷贝，避免按帧新建高 order GBM buffer（xe 上会触发回收循环、显存按帧
   上涨）。`MYDE_DMABUF_COPY=0` 可强制零拷贝。
 
