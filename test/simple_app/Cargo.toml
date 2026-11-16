@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "dmabuf_one_frame"
 path = "src/bin/dmabuf_one_frame.rs"
 
+[[bin]]
+name = "dmabuf_flood"
+path = "src/bin/dmabuf_flood.rs"
+
 [dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.31", features = ["client", "staging"] }

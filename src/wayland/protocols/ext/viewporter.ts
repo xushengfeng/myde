@@ -25,7 +25,8 @@ export const viewporterModule = defineModule({
          * 收缩就是靠 set_source 裁掉旧内容，读 pending 会让第二次之后的裁剪丢失。
          */
         onFrame: (surfaceId, canvas, _pending, ctx) => {
-            const data = ctx.objects.get(surfaceId).data.current;
+            const surface = ctx.objects.get(surfaceId);
+            const data = surface.data.current;
             const viewport = data.viewport;
             const source = viewport?.source;
             if (!source) return;
@@ -44,9 +45,18 @@ export const viewporterModule = defineModule({
             }
             const width = Math.max(1, Math.round(sw));
             const height = Math.max(1, Math.round(sh));
-            const ncanvas = new OffscreenCanvas(width, height);
+            // 每个 commit 都提交视频帧时，如果每帧 new 一个裁剪画布，GC 跟不上时
+            // 会在 GPU 进程里堆住大量 4K 画布。同一个 surface 复用一块，尺寸变了再换。
+            let ncanvas = surface.data.viewportCanvas as OffscreenCanvas | undefined;
+            if (!ncanvas || ncanvas.width !== width || ncanvas.height !== height) {
+                ncanvas = new OffscreenCanvas(width, height);
+                surface.data.viewportCanvas = ncanvas;
+            }
             const sctx = ncanvas.getContext("2d");
-            sctx?.drawImage(canvas, sx, sy, sw, sh, 0, 0, width, height);
+            if (sctx) {
+                // drawImage 的 destination 覆盖整块画布，不需要先 clear
+                sctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, width, height);
+            }
             return ncanvas;
         },
     },

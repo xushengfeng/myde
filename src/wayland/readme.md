@@ -74,10 +74,13 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
   GBM buffer 交给 Electron 导入。转换器依赖 dma-buf 隐式 fence；驱动/时序不可靠时导入方会
   采样到还没画完的 buffer（整块透明）。等完成会牺牲一点吞吐，但保证推上去的每帧都是完整的；
   `MYDE_DRM_GPU_FINISH=0` 可恢复异步。
-- **默认**把 dmabuf 先 GPU 拷贝到 myde 自己的 ARGB8888 dmabuf，再导入 Electron。
-  直接 `importSharedTexture` 是零拷贝，VideoFrame 仍引用客户端的 dma-buf；客户端复用
-  buffer 时，Electron/宿主合成器可能还在采样旧纹理，表现为偶发旧帧闪回。拷贝后客户端
-  buffer 的生命周期与合成解耦。`MYDE_DMABUF_COPY=0` 可关闭。
+- **默认**把 dmabuf 先 GPU 拷贝到 myde 自己的 ARGB8888 dmabuf，再导入 Electron：
+  `VideoFrame` 不再引用客户端的 dma-buf，客户端复用 buffer 时不会闪旧帧。myde-drm
+  按尺寸复用一个小 buffer 池，池子按**内存预算**自动分配（默认 256MB，`MYDE_DRM_POOL_MB`
+  可调），一个拷贝占用的槽位要等导入纹理释放后才归还；4K 帧约 33MB、1080p 约 8MB，
+  所以上限自动随窗口大小变化，不是按窗口数预分配；
+  池满时回退到零拷贝，避免按帧新建高 order GBM buffer（xe 上会触发回收循环、显存按帧
+  上涨）。`MYDE_DMABUF_COPY=0` 可强制零拷贝。
 
 ## 对外 API（桌面侧）
 

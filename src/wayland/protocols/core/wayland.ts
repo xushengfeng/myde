@@ -99,6 +99,10 @@ declare module "../../module" {
             pending: WaylandSurfaceData;
             /** 提交序号：异步导入完成时据此丢弃被新提交/解绑取代的旧帧 */
             renderSeq?: number;
+            /** 本 rAF 内已经合成过一帧；false 时提交的帧直接丢，见 wl_surface.commit */
+            frameReady?: boolean;
+            /** wp_viewport.source 的裁剪画布，按 surface 复用，避免每帧分配 */
+            viewportCanvas?: OffscreenCanvas;
         };
     }
 }
@@ -206,6 +210,38 @@ function sendPreferredScale(ctx: ModuleCtx, surface: SurfaceId, output: OutputIn
 
 /** 静止后继续跑多少帧 rAF；120Hz 下约 500ms。 */
 const PACING_KEEPALIVE_FRAMES = 60;
+
+/**
+ * 等 rAF 再 close 的 VideoFrame。rAF 被提交洪峰饿住时，这个队列会一直涨；稳定副本
+ * 每帧都是新分配的 GPU dmabuf（4K 一帧 ~33MB），不设上限就会把内存吃光。超过上限
+ * 时提前关最旧的：老的早就过了合成时机，宁可丢它也不能让 GPU 内存无上限增长。
+ */
+const MAX_PENDING_VIDEO_FRAMES = 8;
+const pendingVideoFrames = new Map<VideoFrame, () => void>();
+
+function closePendingVideoFrame(frame: VideoFrame) {
+    const onClose = pendingVideoFrames.get(frame);
+    if (onClose === undefined) return;
+    pendingVideoFrames.delete(frame);
+    try {
+        frame.close();
+    } catch {
+        /* 已关闭 */
+    }
+    // VideoFrame 先 close 再 release 导入对象：两者各持一份引用，先放帧的
+    // 引用、再放导入的引用，GPU 资源才会在最后一个引用消失时销毁。
+    onClose();
+}
+
+function releaseVideoFrameLater(frame: VideoFrame, onClose?: () => void) {
+    pendingVideoFrames.set(frame, onClose ?? (() => {}));
+    requestAnimationFrame(() => closePendingVideoFrame(frame));
+    while (pendingVideoFrames.size > MAX_PENDING_VIDEO_FRAMES) {
+        const oldest = pendingVideoFrames.keys().next().value;
+        if (oldest === undefined) break;
+        closePendingVideoFrame(oldest);
+    }
+}
 
 /**
  * 帧回调按桌面 rAF 排队：同一 surface 每次 rAF 只发一个 done。
@@ -1406,6 +1442,26 @@ export const waylandCoreModule = defineModule({
                 ctx.notify.commit(surfaceId, false);
                 for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
             } else {
+                // 每个 surface 每个 rAF 最多合成一帧：客户端提交快于合成器时，多出来的帧
+                // 直接丢（归还 buffer、照常回 frame callback）。否则每帧都要一份新的 GPU
+                // 拷贝，主线程被占满后 rAF 停转、canvas 消费不掉，显存会按帧无限涨——
+                // 4K 视频几十秒就能吃掉整机内存，表现为整个桌面卡死。
+                // 尺寸变化不丢：客户端可能只提交一次 resize，跳过会一直停在旧尺寸。
+                if (
+                    surface.data.frameReady === false &&
+                    bufferObj.width === surface.data.canvas.width &&
+                    bufferObj.height === surface.data.canvas.height
+                ) {
+                    if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
+                    for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
+                    return;
+                }
+                surface.data.frameReady = false;
+                // 只管住节拍，不等这一帧处理完：处理中再来提交最多也就并发一两帧，
+                // 但 rAF 不会被提交洪峰饿死，画布能持续消费，显存不会按帧累积。
+                requestAnimationFrame(() => {
+                    surface.data.frameReady = true;
+                });
                 // 本次提交带像素：序号用于识别异步导入完成前是否已被更新的像素提交取代
                 const seq = (surface.data.renderSeq ?? 0) + 1;
                 surface.data.renderSeq = seq;
@@ -1450,6 +1506,8 @@ export const waylandCoreModule = defineModule({
                 let image: ImageData | VideoFrame | undefined;
                 /** image 是否是 myde 自己的稳定副本（GPU 拷贝 / CPU 转换），而不是客户端 dmabuf 零拷贝 */
                 let imageStable = false;
+                /** 导入对象的 release 延后到 VideoFrame close 之后（见 closePendingVideoFrame） */
+                let releaseImported: (() => void) | undefined;
                 if (bufferObj.type === "shm") {
                     let frame = bufferObj.frame;
                     if (!frame) {
@@ -1556,9 +1614,11 @@ export const waylandCoreModule = defineModule({
                         const pixelFormat = getElectronPixelFormat(bufferObj.format);
                         let imageFromGpu: VideoFrame | undefined;
                         let converted: ImageData | undefined;
-                        // 直接 importSharedTexture 是零拷贝，VideoFrame 仍指向客户端的 dmabuf；
-                        // 客户端复用 buffer 时可能把旧内容又贴回来。默认先让 GPU 转换到
-                        // myde 自己的 dmabuf，再导入这个稳定副本；MYDE_DMABUF_COPY=0 可关闭。
+                        // 默认先 GPU 拷贝一份稳定副本：VideoFrame 不再引用客户端 dmabuf，
+                        // 客户端复用 buffer 时不会闪旧帧。myde-drm 内部按尺寸复用一块小
+                        // buffer 池（按内存预算自动分配，默认 256MB，MYDE_DRM_POOL_MB），
+                        // 拷贝在消费者释放导入纹理后才还给池子，
+                        // 不会按帧累积。MYDE_DMABUF_COPY=0 可退回零拷贝。
                         const forceCopy = rendererEnv.MYDE_DMABUF_COPY !== "0";
 
                         if (forceCopy || !pixelFormat) {
@@ -1575,6 +1635,7 @@ export const waylandCoreModule = defineModule({
                                     })),
                                 });
                                 if (gpu) {
+                                    let imported = false;
                                     try {
                                         const t = await importSharedTexture({
                                             textureInfo: {
@@ -1595,10 +1656,16 @@ export const waylandCoreModule = defineModule({
                                             },
                                         });
                                         imageFromGpu = t.getVideoFrame();
-                                        t.release();
+                                        imported = true;
+                                        // 拷贝占用的池槽位要等导入纹理释放后才归还，
+                                        // 否则下一帧可能复用还在被宿主采样的 buffer。
+                                        releaseImported = () => {
+                                            t.release();
+                                            gpu.close();
+                                        };
                                         imageStable = true;
                                     } finally {
-                                        gpu.close();
+                                        if (!imported) gpu.close();
                                     }
                                 }
                             } catch (error) {
@@ -1665,7 +1732,7 @@ export const waylandCoreModule = defineModule({
                                     },
                                 });
                                 image = t.getVideoFrame();
-                                t.release();
+                                releaseImported = () => t.release();
                             } catch (error) {
                                 console.error(`dmabuf format 0x${bufferObj.format.toString(16)} import failed:`, error);
                             }
@@ -1677,6 +1744,7 @@ export const waylandCoreModule = defineModule({
                 const latest = ctx.objects.getOption(surfaceId);
                 if (!image || !latest || latest.data.renderSeq !== seq) {
                     if (image instanceof VideoFrame) image.close();
+                    releaseImported?.();
                     if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
                     for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
                     return;
@@ -1738,14 +1806,14 @@ export const waylandCoreModule = defineModule({
                 if (image instanceof VideoFrame) {
                     if (imageStable) {
                         // 稳定副本：立即把客户端 buffer 还回去；VideoFrame 自己再留一帧，
-                        // 让 canvas 的 GPU 绘制有机会完成。
+                        // 让 canvas 的 GPU 绘制有机会完成。导入对象的 release 也延后到
+                        // VideoFrame close 之后，避免 GPU 资源提前/迟迟不释放。
                         if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
-                        const frame = image;
-                        requestAnimationFrame(() => frame.close());
+                        releaseVideoFrameLater(image, releaseImported);
                     } else {
                         const frame = image;
-                        requestAnimationFrame(() => {
-                            frame.close();
+                        releaseVideoFrameLater(frame, () => {
+                            releaseImported?.();
                             if (bufferId && ctx.objects.has(bufferId)) {
                                 ctx.sendNow(bufferId, "wl_buffer.release", {});
                             }
