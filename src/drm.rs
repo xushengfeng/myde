@@ -967,13 +967,40 @@ void main() {
         let canvas_valid = offscreen_rect.width > 0 && offscreen_rect.height > 0;
         let canvas_now = (offscreen_rect.width, offscreen_rect.height);
 
+        // 截取区域正好是整屏、且不旋转时，离屏纹理 + CropStretch 只是多一遍全屏
+        // 渲染。直接按 1:1 渲到 DRM 输出，省掉这遍 GPU pass（全屏 120Hz 下很关键）。
+        let use_offscreen = std::env::var_os("MYDE_WRAP_FORCE_OFFSCREEN").is_some()
+            || self.outputs.iter().enumerate().any(|(index, output)| {
+                let config = configs.iter().find(|c| c.screen_index == index);
+                let rect = config
+                    .and_then(|c| c.rect.as_ref())
+                    .cloned()
+                    .unwrap_or_else(|| app_rect.clone());
+                let rotation = config
+                    .and_then(|c| c.transform.as_ref())
+                    .map(|t| t.rotation)
+                    .unwrap_or(0.0);
+                !(rotation == 0.0
+                    && rect.x == 0
+                    && rect.y == 0
+                    && rect.width == output.width
+                    && rect.height == output.height)
+            });
+
+        // 直出时离屏纹理不再更新；丢掉它，切回截取/旋转时重新创建，避免复用旧内容
+        if !use_offscreen {
+            self.offscreen_texture = None;
+            self.offscreen_size = None;
+        }
+
         // 相对上一次上屏：客户端内容、屏幕配置、画布尺寸是否变化
-        let offscreen_size_matches = !canvas_valid || self.offscreen_size == Some(canvas_now);
+        let offscreen_size_matches =
+            !use_offscreen || !canvas_valid || self.offscreen_size == Some(canvas_now);
         let content_changed = woke
             || state.content_generation != self.last_content_generation
             || !offscreen_size_matches;
         let config_changed = config_generation != self.last_config_generation;
-        let offscreen_ready = !canvas_valid || self.offscreen_texture.is_some();
+        let offscreen_ready = !use_offscreen || !canvas_valid || self.offscreen_texture.is_some();
 
         if self.renderer.is_none() || (!content_changed && !config_changed && offscreen_ready) {
             // 画面没有变化：跳过离屏 pass、上屏与 page flip（静止画面零 GPU 开销），
@@ -999,37 +1026,37 @@ void main() {
             None => return,
         };
 
-        // Collect render elements from all windows in the space.
-        // 与 smithay 的 Space 渲染保持一致：窗口原点对应 xdg window geometry 的
-        // 原点，而 surface tree 的原点相对窗口原点偏移 geometry().loc
-        //（CSD 阴影/边距）。渲染 surface tree 时减去该偏移，
-        // 把窗口内容原点放在画布 (0, 0)。画布 1:1 渲染（scale = 1）。
-        let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = state
-            .space
-            .elements()
-            .flat_map(|window| {
-                let surface = window.toplevel().unwrap().wl_surface().clone();
-                let geometry_loc = window.geometry().loc;
-                render_elements_from_surface_tree(
-                    renderer,
-                    &surface,
-                    (
-                        -geometry_loc.x - offscreen_rect.x,
-                        -geometry_loc.y - offscreen_rect.y,
-                    ),
-                    smithay::utils::Scale::from(1.0),
-                    1.0,
-                    smithay::backend::renderer::element::Kind::Unspecified,
-                )
-            })
-            .collect();
-
         // —— 第一遍：把画布内容 1:1 渲入离屏纹理（随画布尺寸变化重建）——
         // 仅在客户端内容变化或纹理尺寸不匹配时重绘；只改屏幕配置时直接复用上一帧画布
         let mut offscreen_texture: Option<smithay::backend::renderer::gles::GlesTexture> = None;
         let mut crop_shader: Option<smithay::backend::renderer::gles::GlesTexProgram> = None;
 
-        if canvas_valid && self.rotate_shader.is_some() {
+        if use_offscreen && canvas_valid && self.rotate_shader.is_some() {
+            // Collect render elements from all windows in the space.
+            // 与 smithay 的 Space 渲染保持一致：窗口原点对应 xdg window geometry 的
+            // 原点，而 surface tree 的原点相对窗口原点偏移 geometry().loc
+            //（CSD 阴影/边距）。渲染 surface tree 时减去该偏移，
+            // 把窗口内容原点放在画布 (0, 0)。画布 1:1 渲染（scale = 1）。
+            let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = state
+                .space
+                .elements()
+                .flat_map(|window| {
+                    let surface = window.toplevel().unwrap().wl_surface().clone();
+                    let geometry_loc = window.geometry().loc;
+                    render_elements_from_surface_tree(
+                        renderer,
+                        &surface,
+                        (
+                            -geometry_loc.x - offscreen_rect.x,
+                            -geometry_loc.y - offscreen_rect.y,
+                        ),
+                        smithay::utils::Scale::from(1.0),
+                        1.0,
+                        smithay::backend::renderer::element::Kind::Unspecified,
+                    )
+                })
+                .collect();
+
             let need_recreate = match (&self.offscreen_texture, self.offscreen_size) {
                 (Some(_), Some(sz)) => sz != (offscreen_rect.width, offscreen_rect.height),
                 _ => true,
