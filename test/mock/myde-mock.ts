@@ -72,7 +72,7 @@ export interface MockWindowInfo {
     rect: { x: number; y: number; w: number; h: number };
     /** 输出缩放：桌面显示尺寸 = rect × scale */
     scale: number;
-    states: { activated: boolean; maximized: boolean; minimized: boolean };
+    states: { activated: boolean; maximized: boolean; minimized: boolean; fullscreen: boolean };
     renderId: string;
 }
 
@@ -246,6 +246,12 @@ export function createMockClient(op?: string | { id?: string; server?: MockWayla
                 case "windowUnMaximized":
                     if (handle) server.notify("window.unmaximize", handle);
                     break;
+                case "windowFullscreen":
+                    if (handle) server.notify("window.fullscreen", handle);
+                    break;
+                case "windowUnFullscreen":
+                    if (handle) server.notify("window.unfullscreen", handle);
+                    break;
             }
         },
         close() {
@@ -326,7 +332,7 @@ export function createMockServer(): MockWaylandServer {
                 title: "",
                 rect: { x: 0, y: 0, w: op.width ?? 0, h: op.height ?? 0 },
                 scale: output.scale,
-                states: { activated: false, maximized: false, minimized: false },
+                states: { activated: false, maximized: false, minimized: false, fullscreen: false },
                 renderId: op.renderId,
             };
             infos.set(handle, info);
@@ -394,11 +400,23 @@ export function createMockServer(): MockWaylandServer {
                 case "window.maximize":
                     info.states.activated = true;
                     info.states.maximized = true;
+                    info.states.fullscreen = false;
                     info.states.minimized = false;
                     changed(info);
                     break;
                 case "window.unmaximize":
                     info.states.maximized = false;
+                    changed(info);
+                    break;
+                case "window.fullscreen":
+                    info.states.activated = true;
+                    info.states.fullscreen = true;
+                    info.states.maximized = false;
+                    info.states.minimized = false;
+                    changed(info);
+                    break;
+                case "window.unfullscreen":
+                    info.states.fullscreen = false;
                     changed(info);
                     break;
                 case "window.minimize":

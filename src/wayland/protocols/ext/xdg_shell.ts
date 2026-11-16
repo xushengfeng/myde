@@ -155,6 +155,7 @@ function sendConfigure(ctx: ModuleCtx, xdgSurfaceId: WaylandObjectId2<"xdg_surfa
         const states: number[] = [];
         if (win.actived) states.push(getEnumValue("xdg_toplevel.state", "activated"));
         if (win.maximized) states.push(getEnumValue("xdg_toplevel.state", "maximized"));
+        if (win.fullscreen) states.push(getEnumValue("xdg_toplevel.state", "fullscreen"));
         send(role as WaylandObjectId2<"xdg_toplevel">, "xdg_toplevel.configure", {
             width: win.box.width,
             height: win.box.height,
@@ -206,6 +207,8 @@ export interface WindowsSink {
     startMove(id: WaylandWinId): void;
     maximized(id: WaylandWinId): void;
     unmaximized(id: WaylandWinId): void;
+    fullscreened(id: WaylandWinId): void;
+    unfullscreened(id: WaylandWinId): void;
     titleChanged(id: WaylandWinId, title: string): void;
 }
 
@@ -242,6 +245,8 @@ export class WindowsStore {
             title: "",
             maximized: false,
             minimized: false,
+            fullscreen: false,
+            fullscreenRestoreMaximized: false,
         });
         this.#sink.created(id, renderId);
     }
@@ -279,9 +284,35 @@ export class WindowsStore {
     /** 客户端请求最大化/取消最大化：先改记录再发事件，window.changed 的 states 才自包含 */
     setMaximized(id: WaylandWinId, maximized: boolean): void {
         const w = this.#wins.get(id);
-        if (w) w.maximized = maximized;
+        if (w) {
+            w.maximized = maximized;
+            // 全屏与最大化互斥：客户端从全屏里请求最大化时，configure 不再同时带两个状态
+            if (maximized) {
+                w.fullscreen = false;
+                w.fullscreenRestoreMaximized = false;
+            } else {
+                // 显式取消最大化后，退出全屏也不再自动恢复最大化
+                w.fullscreenRestoreMaximized = false;
+            }
+        }
         if (maximized) this.#sink.maximized(id);
         else this.#sink.unmaximized(id);
+    }
+
+    /** 客户端请求全屏/取消全屏：与最大化互斥，先改记录再发事件 */
+    setFullscreen(id: WaylandWinId, fullscreen: boolean): void {
+        const w = this.#wins.get(id);
+        if (w) {
+            if (fullscreen && !w.fullscreen) w.fullscreenRestoreMaximized = w.maximized;
+            w.fullscreen = fullscreen;
+            if (fullscreen) w.maximized = false;
+            else if (w.fullscreenRestoreMaximized) {
+                w.maximized = true;
+                w.fullscreenRestoreMaximized = false;
+            }
+        }
+        if (fullscreen) this.#sink.fullscreened(id);
+        else this.#sink.unfullscreened(id);
     }
 }
 
@@ -708,6 +739,8 @@ export const xdgShellModule = defineModule({
                 startMove: (wid) => ctx.client.emit("windowStartMove", wid),
                 maximized: (wid) => ctx.client.emit("windowMaximized", wid),
                 unmaximized: (wid) => ctx.client.emit("windowUnMaximized", wid),
+                fullscreened: (wid) => ctx.client.emit("windowFullscreen", wid),
+                unfullscreened: (wid) => ctx.client.emit("windowUnFullscreen", wid),
                 titleChanged: (wid, title) => ctx.client.emit("title", wid, title),
             }),
     },
@@ -797,6 +830,7 @@ export const xdgShellModule = defineModule({
                 capabilities: new Uint32Array([
                     getEnumValue("xdg_toplevel.wm_capabilities", "minimize"),
                     getEnumValue("xdg_toplevel.wm_capabilities", "maximize"),
+                    getEnumValue("xdg_toplevel.wm_capabilities", "fullscreen"),
                 ]),
             });
             const outerBounds = ctx.client.surfaceBounds() || { width: 800, height: 600 };
@@ -918,6 +952,13 @@ export const xdgShellModule = defineModule({
         "xdg_toplevel.unset_maximized": (x, ctx) => {
             ctx.domain.windows.setMaximized(x.id, false);
         },
+        "xdg_toplevel.set_fullscreen": (x, ctx) => {
+            // 单屏实现：忽略 output 参数，桌面按整块输出摆放窗口
+            ctx.domain.windows.setFullscreen(x.id, true);
+        },
+        "xdg_toplevel.unset_fullscreen": (x, ctx) => {
+            ctx.domain.windows.setFullscreen(x.id, false);
+        },
         "xdg_toplevel.destroy": (x, ctx) => {
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(x.id);
             if (xdgSurfaceId === undefined) return;
@@ -986,6 +1027,8 @@ export const xdgShellModule = defineModule({
             if (ctx.domain.xdgSurface.getXdgSurfaceByToplevel(msg.winId) === undefined) return;
             win.actived = true;
             win.maximized = true;
+            win.fullscreen = false;
+            win.fullscreenRestoreMaximized = false;
             win.minimized = false;
             win.box.width = msg.args[0]?.width ?? win.box.width;
             win.box.height = msg.args[0]?.height ?? win.box.height;
@@ -995,8 +1038,37 @@ export const xdgShellModule = defineModule({
             const win = ctx.domain.windows.get(msg.winId);
             if (win === undefined) return;
             win.maximized = false;
+            win.fullscreenRestoreMaximized = false;
             win.box.width = msg.args[0]?.width ?? win.box.width;
             win.box.height = msg.args[0]?.height ?? win.box.height;
+            configureWin(ctx, msg.winId);
+        },
+        "window.fullscreen": (msg, ctx) => {
+            const win = ctx.domain.windows.get(msg.winId);
+            if (win === undefined) return;
+            if (ctx.domain.xdgSurface.getXdgSurfaceByToplevel(msg.winId) === undefined) return;
+            if (!win.fullscreen) win.fullscreenRestoreMaximized = win.maximized;
+            win.actived = true;
+            win.fullscreen = true;
+            win.maximized = false;
+            win.minimized = false;
+            win.box.width = msg.args[0]?.width ?? win.box.width;
+            win.box.height = msg.args[0]?.height ?? win.box.height;
+            configureWin(ctx, msg.winId);
+        },
+        "window.unfullscreen": (msg, ctx) => {
+            const win = ctx.domain.windows.get(msg.winId);
+            if (win === undefined) return;
+            const restoreMaximized = win.fullscreenRestoreMaximized;
+            win.fullscreen = false;
+            win.fullscreenRestoreMaximized = false;
+            if (restoreMaximized) {
+                // 退出全屏回到进入前的最大化；盒子交给桌面的 window.maximize 重新下发
+                win.maximized = true;
+            } else {
+                win.box.width = msg.args[0]?.width ?? win.box.width;
+                win.box.height = msg.args[0]?.height ?? win.box.height;
+            }
             configureWin(ctx, msg.winId);
         },
         "window.minimize": (msg, ctx) => {

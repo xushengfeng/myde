@@ -471,6 +471,8 @@ export interface WaylandClientEventMap {
     windowResized: (xdgToplevelId: WaylandWinId, width: number, height: number) => void;
     windowMaximized: (xdgToplevelId: WaylandWinId) => void;
     windowUnMaximized: (xdgToplevelId: WaylandWinId) => void;
+    windowFullscreen: (xdgToplevelId: WaylandWinId) => void;
+    windowUnFullscreen: (xdgToplevelId: WaylandWinId) => void;
     appid: (id: string) => void;
     title: (xdgToplevelId: WaylandWinId, title: string) => void;
     copy: (text: string) => void;
@@ -486,6 +488,13 @@ export interface WindowRecord {
     /** 由桌面命令或客户端 set/unset_maximized 维护，进 WindowInfo.states */
     maximized: boolean;
     minimized: boolean;
+    /** 由桌面命令或客户端 set/unset_fullscreen 维护，进 WindowInfo.states */
+    fullscreen: boolean;
+    /**
+     * 进入全屏前是否处于最大化。退出全屏时用它恢复原状态；
+     * 只在本模块内部使用，不进 WindowInfo。
+     */
+    fullscreenRestoreMaximized: boolean;
 }
 
 export interface WindowsApi {
@@ -500,6 +509,7 @@ export interface WindowsApi {
     resized(id: WaylandWinId, width: number, height: number): void;
     startMove(id: WaylandWinId): void;
     setMaximized(id: WaylandWinId, maximized: boolean): void;
+    setFullscreen(id: WaylandWinId, fullscreen: boolean): void;
 }
 
 export interface CursorApi {

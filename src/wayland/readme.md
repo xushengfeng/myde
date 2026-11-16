@@ -26,7 +26,8 @@
 - xdg-shell
     - xdg_wm_base
     - xdg_surface
-    - xdg_toplevel 部分
+    - xdg_toplevel 部分（maximize / fullscreen / minimize；fullscreen 忽略 output 参数，单屏，
+      退出全屏恢复进入前的最大化状态）
     - xdg_popup 部分
     - xdg_positioner 部分
 

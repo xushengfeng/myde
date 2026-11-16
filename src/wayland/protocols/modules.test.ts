@@ -105,6 +105,8 @@ describe("桌面命令（actions）", () => {
             "window.setSize",
             "window.maximize",
             "window.unmaximize",
+            "window.fullscreen",
+            "window.unfullscreen",
             "window.minimize",
         ]) {
             expect(owner.get(key), `命令 ${key} 没有声明方`).toBe("xdg-shell");

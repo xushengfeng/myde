@@ -31,6 +31,11 @@ export interface WindowStates {
     activated: boolean;
     maximized: boolean;
     minimized: boolean;
+    /**
+     * 客户端请求或桌面下发的全屏。桌面按整块输出摆放窗口（不保留工具栏空间），
+     * 退出全屏时恢复普通窗口尺寸。
+     */
+    fullscreen: boolean;
 }
 
 /** 宽高（不含位置） */
@@ -225,6 +230,12 @@ export type ServerNotifyMap = {
     /** 不带 size 时沿用盒子尺寸 */
     "window.maximize": [handle: WinHandle, size?: Size];
     "window.unmaximize": [handle: WinHandle, size?: Size];
+    /**
+     * 全屏：桌面下发整块输出尺寸。退出全屏会恢复进入前的最大化状态；
+     * 进入前是普通窗口时用 `size`（缺省沿用盒子尺寸）恢复。
+     */
+    "window.fullscreen": [handle: WinHandle, size?: Size];
+    "window.unfullscreen": [handle: WinHandle, size?: Size];
     "window.minimize": [handle: WinHandle];
     /**
      * `seat` 是**选择器不是广播位**：缺省 `"seat0"`（本机光标），显式传 `"seat1"` 才驱动第二把。

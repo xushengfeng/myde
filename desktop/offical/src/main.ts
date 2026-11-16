@@ -410,6 +410,8 @@ type LauncherController = {
     isVisible(): boolean;
     blur(): void;
     setStageSize(height: number): void;
+    /** 舞台铺满视口时顶部工具栏仍覆盖在 stage 上，总览/搜索栏要额外下移这么多 */
+    setTopInset(px: number): void;
 };
 
 /** 三指横滑的当前倍率 */
@@ -452,6 +454,8 @@ class ViewData {
     private usedSeq = 0;
     private nextId = 1;
     private reorderTimer: number | undefined;
+    private chromeCallback?: () => void;
+    private chromeInsets = { top: 0, bottom: 0, left: 0, right: 0 };
     private stageWidth = 1;
     private stageHeight = 1;
     private gesture:
@@ -509,6 +513,30 @@ class ViewData {
     /** 只允许当前虚拟屏里的窗口接收指针，滚动同理 */
     isCurrentWin(winid: MWinId) {
         return this.win2Screen.get(winid)?.id === this.currentId;
+    }
+
+    /** 当前虚拟屏的窗口；空桌面/启动台没有窗口 */
+    currentWinId() {
+        return this.currentScreen()?.winId;
+    }
+
+    /** 视图状态（当前屏/总览）变化后回调，用来同步全屏时工具栏的避让 */
+    setChromeCallback(cb: () => void) {
+        this.chromeCallback = cb;
+    }
+
+    /** 工具栏在 stage 内的占位；总览 grid 和搜索栏会用它避开工具栏 */
+    setChromeInsets(insets: { top: number; bottom: number; left: number; right: number }) {
+        const prev = this.chromeInsets;
+        if (
+            prev.top === insets.top &&
+            prev.bottom === insets.bottom &&
+            prev.left === insets.left &&
+            prev.right === insets.right
+        )
+            return;
+        this.chromeInsets = { ...insets };
+        this.launcher?.setTopInset(insets.top);
     }
 
     setStageSize(width: number, height: number) {
@@ -988,22 +1016,28 @@ class ViewData {
         const count = cards.length;
         if (count === 0) return targets;
 
+        const insets = this.chromeInsets;
         const aspect = this.stageWidth / this.stageHeight;
         const cols = clampNumber(Math.round(Math.sqrt(count * aspect)), 1, count);
         const rows = Math.ceil(count / cols);
         const padding = Math.max(12, Math.min(this.stageWidth, this.stageHeight) * 0.04);
         const gap = Math.min(OVERVIEW_GAP, padding);
+        // 舞台始终铺满视口，工具栏占位不会缩小 stage，总览要自己让开工具栏
+        const leftBound = insets.left;
+        const topBound = insets.top;
+        const availableWidth = Math.max(1, this.stageWidth - insets.left - insets.right);
+        const availableHeight = Math.max(1, this.stageHeight - topBound - insets.bottom);
         const topInset = OVERVIEW_TOP_INSET;
-        const availableHeight = Math.max(1, this.stageHeight - topInset);
-        const cellWidth = (this.stageWidth - padding * 2 - gap * (cols - 1)) / cols;
-        const cellHeight = (availableHeight - padding * 2 - gap * (rows - 1)) / rows;
+        const gridAreaHeight = Math.max(1, availableHeight - topInset);
+        const cellWidth = (availableWidth - padding * 2 - gap * (cols - 1)) / cols;
+        const cellHeight = (gridAreaHeight - padding * 2 - gap * (rows - 1)) / rows;
         const scale = Math.max(0.03, Math.min(cellWidth / this.stageWidth, cellHeight / this.stageHeight));
         const cardWidth = this.stageWidth * scale;
         const cardHeight = this.stageHeight * scale;
         const gridWidth = cols * cardWidth + (cols - 1) * gap;
         const gridHeight = rows * cardHeight + (rows - 1) * gap;
-        const left = (this.stageWidth - gridWidth) / 2;
-        const top = topInset + (availableHeight - gridHeight) / 2;
+        const left = leftBound + (availableWidth - gridWidth) / 2;
+        const top = topBound + topInset + (gridAreaHeight - gridHeight) / 2;
 
         cards.forEach((screen, index) => {
             const row = Math.floor(index / cols);
@@ -1022,6 +1056,8 @@ class ViewData {
     render(animate = true) {
         // 手势跟手拖动时由 moveGesture 直接写样式，动画器只在松手/状态切换时接管
         if (this.gesture) return;
+        // 先按当前屏的全屏状态决定工具栏是否隐藏
+        this.chromeCallback?.();
         const normal = this.normalTargets(0);
         const overview = this.overview ? this.overviewTargets() : undefined;
         const hidden = { x: -this.stageWidth * 2, y: 0, scale: 1, opacity: 0, blur: 0 };
@@ -1413,6 +1449,9 @@ const DESKTOP_BINDINGS: KeyBinding[] = [
     { code: "Tab", meta: true },
 ];
 
+/** 当前聚焦窗口全屏：Super+F */
+const FULLSCREEN_BINDINGS: KeyBinding[] = [{ code: "KeyF", meta: true }];
+
 /** 顶部启动器：Alt+Space 拉出/收起 */
 const LAUNCHER_BINDINGS: KeyBinding[] = [{ code: "Space", alt: true }];
 
@@ -1509,6 +1548,10 @@ addStyle({
     "[data-overview] [data-desktop-ui='resize-handle']": {
         display: "none",
     },
+    // 全屏窗口没有可拖拽的边框
+    "[data-fullscreen] [data-desktop-ui='resize-handle']": {
+        display: "none",
+    },
     // 总览里内容不再接收指针，点击整张卡片只用于切换
     "[data-overview] [data-view-id] > *": {
         pointerEvents: "none",
@@ -1591,7 +1634,12 @@ function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
 
         handle.on("pointerenter", () => {
             if (viewData.overview) return;
-            if (wayland && server.server.windows.get(windowId)?.states.maximized) return;
+            if (
+                wayland &&
+                (server.server.windows.get(windowId)?.states.maximized ||
+                    server.server.windows.get(windowId)?.states.fullscreen)
+            )
+                return;
             cursor.setLocalShape(resizeCursors[edge]);
         });
         handle.on("pointerleave", () => {
@@ -1610,7 +1658,7 @@ function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
 function beginWindowResize(e: PointerEvent, edge: ResizeEdge, el: HTMLElement, windowId: string, wayland: boolean) {
     if (e.button !== 0 || e.isPrimary === false || viewData.overview || resizingWindowId !== undefined) return;
     const info = wayland ? server.server.windows.get(windowId) : undefined;
-    if (wayland && (!info || info.states.maximized)) return;
+    if (wayland && (!info || info.states.maximized || info.states.fullscreen)) return;
 
     // 热区属于桌面覆盖层：阻止冒泡，窗口层的 down/up 就不会转发给客户端
     e.stopPropagation();
@@ -2298,17 +2346,34 @@ const server = MSysApi.server({ render });
 // 提前启动 xwayland-satellite；每次启动应用前再 await 一次，崩溃后也能重新拉起。
 void server.startXwayland();
 
-/** server 已更新窗口 DOM 尺寸；最大化窗口要用新的逻辑可用区重新 configure */
+/** 窗口可用区（CSS px）：整块舞台内缩工具栏；最大化与普通窗口居中都用它 */
+function availableStageSize() {
+    return {
+        x: wino.l,
+        y: wino.t,
+        width: Math.max(1, windowEl.el.offsetWidth - wino.l - wino.r),
+        height: Math.max(1, windowEl.el.offsetHeight - wino.t - wino.b),
+    };
+}
+
+/** server 已更新窗口 DOM 尺寸；最大化/全屏窗口要用新的可用区重新 configure */
 function reconfigureMaximizedWindows() {
     requestAnimationFrame(() => {
+        let hasFullscreen = false;
+        const available = availableStageSize();
         for (const info of server.server.windows.list()) {
+            if (info.states.fullscreen) {
+                hasFullscreen = true;
+                continue;
+            }
             if (!info.states.maximized) continue;
             const scale = screenManager.getScale();
             server.server.notify("window.maximize", info.handle, {
-                width: Math.max(1, Math.floor(windowEl.el.offsetWidth / scale)),
-                height: Math.max(1, Math.floor(windowEl.el.offsetHeight / scale)),
+                width: Math.max(1, Math.floor(available.width / scale)),
+                height: Math.max(1, Math.floor(available.height / scale)),
             });
         }
+        if (hasFullscreen) syncFullscreenWindowBoxes();
     });
 }
 
@@ -2326,11 +2391,14 @@ const screenManager = new ScreenManager({
 });
 void screenManager.init().catch((e) => console.error("[screen] 初始化失败", e));
 
-// 桌面可用空间（surface-local 逻辑尺寸）
+// 桌面提供窗口可用空间（surface-local 逻辑尺寸）：工具栏通过内缩体现，stage 本身仍是整块视口
 server.server.respond("surfaceBounds.request", () => {
     const rect = windowEl.el.getBoundingClientRect();
     const scale = screenManager.getScale();
-    return { width: rect.width / scale, height: rect.height / scale };
+    return {
+        width: Math.max(1, (rect.width - wino.l - wino.r) / scale),
+        height: Math.max(1, (rect.height - wino.t - wino.b) / scale),
+    };
 });
 
 server.server.on("client.opened", (clientId) => {
@@ -2344,12 +2412,36 @@ server.server.on("client.closed", (clientId) => {
  * 桌面已应用的窗口状态。`window.changed` 是合并事件（rect/states/title/appid 任一变化），
  * 靠这份本地快照差分出「客户端请求 resize / maximize」。
  */
-const appliedState = new Map<WinHandle, { w: number; h: number; maximized: boolean; scale: number }>();
+const appliedState = new Map<
+    WinHandle,
+    { w: number; h: number; maximized: boolean; fullscreen: boolean; scale: number }
+>();
+/** 全屏时临时暂停居中的窗口；退出时只恢复这些，不打断用户手动拖动后的状态 */
+const fullscreenCenteringPaused = new Set<WinHandle>();
+
+/** 进入全屏：暂停自动居中，避免 ResizeObserver 用旧 viewport 把铺满的窗口移到偏移位置 */
+function pauseCenteringForFullscreen(handle: WinHandle) {
+    if (windowCenterManager.isPaused(handle)) return;
+    windowCenterManager.pauseCentering(handle);
+    fullscreenCenteringPaused.add(handle);
+}
+
+/** 退出全屏：只恢复因全屏而暂停的窗口 */
+function resumeCenteringForFullscreen(handle: WinHandle) {
+    if (!fullscreenCenteringPaused.delete(handle)) return;
+    windowCenterManager.resumeCentering(handle);
+}
 
 server.server.on("window.created", (info) => {
     console.log(`Client ${info.clientId} created window ${info.handle}`, info.renderId);
     const wid = info.handle;
-    appliedState.set(wid, { w: info.rect.w, h: info.rect.h, maximized: false, scale: info.scale });
+    appliedState.set(wid, {
+        w: info.rect.w,
+        h: info.rect.h,
+        maximized: false,
+        fullscreen: false,
+        scale: info.scale,
+    });
 
     const screen = viewData.addWindowScreen(wid);
     // biome-ignore lint/style/noNonNullAssertion: 刚刚创建的，一定有
@@ -2357,6 +2449,8 @@ server.server.on("window.created", (info) => {
     pack(winEl).style({
         width: `${info.rect.w * info.scale}px`,
         height: `${info.rect.h * info.scale}px`,
+        left: `${wino.l}px`,
+        top: `${wino.t}px`,
     });
     addWindow(screen, winEl, wid);
     addResizeHandles(winEl, wid, true);
@@ -2367,6 +2461,8 @@ server.server.on("window.created", (info) => {
 server.server.on("window.closed", (wid) => {
     console.log(`window ${wid} closed`);
     appliedState.delete(wid);
+    lastFullscreenBox.delete(wid);
+    fullscreenCenteringPaused.delete(wid);
     removeResizeHandles(wid);
     windowCenterManager.removeWindow(wid);
     viewData.closeWin(wid);
@@ -2427,14 +2523,48 @@ server.server.on("window.changed", (info) => {
     if (!applied) return;
     const winEl = render.getXdgSurfaceEle(info.renderId);
 
-    // 尺寸变化（来自 xdg_surface.set_window_geometry）或输出缩放变化
+    // 全屏状态变化（由客户端发起）：窗口铺满整块输出，工具栏随之避让
+    if (applied.fullscreen !== info.states.fullscreen) {
+        applied.fullscreen = info.states.fullscreen;
+        winEl?.toggleAttribute("data-fullscreen", info.states.fullscreen);
+        if (info.states.fullscreen) {
+            // 最大化与全屏互斥；进入全屏时把本地最大化快照一起收敛，避免走恢复分支
+            applied.maximized = info.states.maximized;
+            pauseCenteringForFullscreen(info.handle);
+            syncFullscreenChrome();
+            syncFullscreenWindowBoxes();
+            return;
+        }
+        // 退出全屏：恢复普通窗口尺寸；若同时切到最大化，下面的最大化分支会再覆盖成铺满
+        lastFullscreenBox.delete(info.handle);
+        resumeCenteringForFullscreen(info.handle);
+        if (!info.states.maximized) {
+            const width = 800;
+            const height = 600;
+            if (winEl) {
+                pack(winEl).style({
+                    width: `${width * info.scale}px`,
+                    height: `${height * info.scale}px`,
+                    left: `${wino.l}px`,
+                    top: `${wino.t}px`,
+                });
+            }
+            server.server.notify("window.unfullscreen", info.handle, { width, height });
+        } else {
+            server.server.notify("window.unfullscreen", info.handle);
+        }
+        syncFullscreenChrome();
+    }
+
+    // 尺寸变化（来自 xdg_surface.set_window_geometry）或输出缩放变化。
+    // 全屏窗口的 DOM 尺寸由桌面按输出铺满，不跟随客户端提交的普通几何。
     if (applied.w !== info.rect.w || applied.h !== info.rect.h || applied.scale !== info.scale) {
         applied.w = info.rect.w;
         applied.h = info.rect.h;
         applied.scale = info.scale;
         // 拖拽缩放期间 DOM 尺寸是桌面自己的预览，等客户端提交或超时后再以客户端几何为准
         const previewingResize = resizingWindowId === info.handle || resizeSettleTimers.has(info.handle);
-        if (winEl && !previewingResize) {
+        if (winEl && !previewingResize && !info.states.fullscreen) {
             pack(winEl).style({
                 width: `${info.rect.w * info.scale}px`,
                 height: `${info.rect.h * info.scale}px`,
@@ -2449,18 +2579,18 @@ server.server.on("window.changed", (info) => {
     if (applied.maximized !== info.states.maximized) {
         applied.maximized = info.states.maximized;
         if (!winEl) return;
+        if (info.states.fullscreen) return;
         if (info.states.maximized) {
-            const widthPx = windowEl.el.offsetWidth;
-            const heightPx = windowEl.el.offsetHeight;
+            const available = availableStageSize();
             pack(winEl).style({
-                width: `${widthPx}px`,
-                height: `${heightPx}px`,
-                left: "0px",
-                top: "0px",
+                width: `${available.width}px`,
+                height: `${available.height}px`,
+                left: `${available.x}px`,
+                top: `${available.y}px`,
             });
             server.server.notify("window.maximize", info.handle, {
-                width: Math.max(1, Math.floor(widthPx / info.scale)),
-                height: Math.max(1, Math.floor(heightPx / info.scale)),
+                width: Math.max(1, Math.floor(available.width / info.scale)),
+                height: Math.max(1, Math.floor(available.height / info.scale)),
             });
         } else {
             // 恢复尺寸是 surface 逻辑尺寸；DOM 按输出缩放放大
@@ -2469,12 +2599,16 @@ server.server.on("window.changed", (info) => {
             pack(winEl).style({
                 width: `${width * info.scale}px`,
                 height: `${height * info.scale}px`,
-                left: "0px",
-                top: "0px",
+                left: `${wino.l}px`,
+                top: `${wino.t}px`,
             });
             server.server.notify("window.unmaximize", info.handle, { width, height });
         }
     }
+
+    // 客户端可能在 commit 里用 set_window_geometry 把元素尺寸写回旧值（例如全屏前的最大化尺寸）；
+    // 全屏窗口每次变化后都重新铺满输出，避免被工具栏占位部分裁掉
+    if (info.states.fullscreen) syncFullscreenWindowBoxes();
 });
 
 // 断开时 server 统一补发该客户端全部窗口的 window.closed，上面的 closeWin 已经覆盖
@@ -2498,8 +2632,19 @@ const bg = image(fs.readFileAsDataURLSync("/assets/wallpaper/1.svg"), "wallpaper
     objectFit: "cover",
 });
 
+/** 顶部/底部/左右工具栏占用的空间；只用于“可用区”计算，不限制 windowElWarp 的 DOM 尺寸 */
+const wino = { t: 0, l: 0, r: 0, b: 0 };
+
+/**
+ * 虚拟桌面包装始终铺满视口；工具栏避让只体现为窗口的可用区内缩（最大化、居中、surfaceBounds）。
+ * 这样全屏渲染不需要改外部 DOM 尺寸，窗口/舞台天然是整块输出。
+ */
 const windowElWarp = view().style({
     position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
     zIndex: "0",
 });
 
@@ -2785,7 +2930,13 @@ windowEl.on("click", (e) => {
 const ob = new ResizeObserver((e) => {
     for (const entry of e) {
         const rect = entry.contentRect;
-        windowCenterManager.setViewport(0, 0, rect.width, rect.height);
+        // stage 始终是整块视口；窗口可用区再按工具栏 inset 内缩
+        windowCenterManager.setViewport(
+            wino.l,
+            wino.t,
+            Math.max(1, rect.width - wino.l - wino.r),
+            Math.max(1, rect.height - wino.t - wino.b),
+        );
         viewData.setStageSize(rect.width, rect.height);
     }
 });
@@ -3892,9 +4043,11 @@ function createLauncher(): LauncherController {
     let stageHeight = Math.max(1, windowEl.el.getBoundingClientRect().height || window.innerHeight);
     let progress = 0;
     let overviewMix = 0;
+    /** 舞台铺满视口，顶部工具栏仍覆盖在上面 */
+    let topInset = 0;
     const restingTop = () => {
         const normalTop = stageHeight / 3 - LAUNCHER_HEIGHT / 2;
-        return normalTop + (OVERVIEW_LAUNCHER_TOP - normalTop) * overviewMix;
+        return normalTop + (OVERVIEW_LAUNCHER_TOP + topInset - normalTop) * overviewMix;
     };
     const hiddenOffset = () => Math.max(0, restingTop() + LAUNCHER_HEIGHT + 12);
 
@@ -4003,6 +4156,10 @@ function createLauncher(): LauncherController {
         setStageSize: (height) => {
             if (height <= 0) return;
             stageHeight = height;
+            apply();
+        },
+        setTopInset: (px) => {
+            topInset = Math.max(0, px);
             apply();
         },
     };
@@ -4807,7 +4964,6 @@ for (const type of SWALLOWED_EVENTS) {
     window.addEventListener(type, domInputEvent, true);
 }
 
-const wino = { t: 0, l: 0, r: 0, b: 0 };
 for (const p of planteData) {
     const plantEl = view().style({ position: "absolute" }).addInto(toolsEl);
     switch (p.posi) {
@@ -4865,12 +5021,155 @@ for (const p of planteData) {
         }
     }
 }
-windowElWarp.style({
-    left: `${wino.l}px`,
-    right: `${wino.r}px`,
-    top: `${wino.t}px`,
-    bottom: `${wino.b}px`,
+// wino 不限制舞台尺寸，只用于窗口可用区：居中使用区、最大化尺寸、surfaceBounds 与总览布局
+windowCenterManager.setViewport(
+    wino.l,
+    wino.t,
+    Math.max(1, windowEl.el.offsetWidth - wino.l - wino.r),
+    Math.max(1, windowEl.el.offsetHeight - wino.t - wino.b),
+);
+viewData.setChromeInsets({ top: wino.t, bottom: wino.b, left: wino.l, right: wino.r });
+
+// ── 全屏渲染：工具栏不改变层级，而是模糊淡出；窗口本来就在整块舞台上，不需要改外部 DOM ──
+// 用户进入全局预览，或切到没有全屏窗口的虚拟屏时，工具栏原样恢复。
+
+/** 工具栏当前是否处于隐藏状态 */
+let fullscreenChromeHidden = false;
+/** 全屏窗口最近一次下发的尺寸，避免重复 configure */
+const lastFullscreenBox = new Map<WinHandle, string>();
+
+/** 当前虚拟屏的窗口是否全屏 */
+function currentScreenFullscreen() {
+    const winid = viewData.currentWinId();
+    return winid !== undefined && server.server.windows.get(winid)?.states.fullscreen === true;
+}
+
+/** 整块输出尺寸（CSS px）；舞台固定铺满视口 */
+function fullOutputSize() {
+    return { width: windowEl.el.offsetWidth, height: windowEl.el.offsetHeight };
+}
+
+/** 把全屏窗口的 DOM 与客户端逻辑尺寸铺满整块输出 */
+function syncFullscreenWindowBoxes() {
+    const out = fullOutputSize();
+    for (const info of server.server.windows.list()) {
+        if (!info.states.fullscreen) continue;
+        const el = render.getXdgSurfaceEle(info.renderId);
+        if (!el) continue;
+        pack(el).style({
+            width: `${out.width}px`,
+            height: `${out.height}px`,
+            left: "0px",
+            top: "0px",
+        });
+        const width = Math.max(1, Math.floor(out.width / info.scale));
+        const height = Math.max(1, Math.floor(out.height / info.scale));
+        const key = `${width}x${height}@${info.scale}`;
+        if (lastFullscreenBox.get(info.handle) === key) continue;
+        lastFullscreenBox.set(info.handle, key);
+        // 用 setSize 只改盒子并 configure：全屏 state 已在记录里，
+        // 这样给后台虚拟屏的全屏窗口重新下发尺寸时不会顺带改变焦点状态
+        server.server.notify("window.setSize", info.handle, { width, height });
+    }
+}
+
+const fullscreenChromeGear = new AnimationGear(
+    { mix: 0 },
+    { transition: { duration: 260, map: timingFunction.easeOut } },
+);
+fullscreenChromeGear.setUpdateCallback(({ mix }) => {
+    // 先加模糊，后半程再透明：动画结束时工具栏完全让位
+    const fade = Math.max(0, (mix - 0.35) / 0.65);
+    toolsEl.style({
+        opacity: `${1 - fade}`,
+        filter: mix > 0.001 ? `blur(${mix * 10}px)` : "none",
+    });
+    const hidden = mix >= 0.999;
+    toolsEl.style({ visibility: hidden ? "hidden" : "visible" });
+    toolsEl.el.toggleAttribute("data-fullscreen-toolbars", hidden);
 });
+fullscreenChromeGear.moveTo({ mix: 0 }, 0);
+
+/** 视图（当前屏 / 全局预览 / 手势）或窗口状态变化后，重新计算全屏模式 */
+function syncFullscreenChrome(animate = true) {
+    const currentFullscreen = currentScreenFullscreen();
+    if (currentFullscreen) {
+        // 客户端后续的 set_window_geometry 可能把元素尺寸写回旧值，进入/停留全屏时都重新铺满
+        syncFullscreenWindowBoxes();
+    }
+    const hide = currentFullscreen && !viewData.overview && !viewData.gestureActive;
+    if (fullscreenChromeHidden === hide) return;
+    fullscreenChromeHidden = hide;
+    // 动画一开始就不再让工具栏接收输入；恢复时立即重新可用
+    toolsEl.el.inert = hide;
+    fullscreenChromeGear.moveTo({ mix: hide ? 1 : 0 }, animate ? undefined : 0);
+}
+
+/** 桌面主动切换当前聚焦窗口的全屏（Super+F） */
+function toggleFullscreen(winid = viewData.focusHandle) {
+    if (winid === undefined || isInternalWindow(winid)) return;
+    const info = server.server.windows.get(winid);
+    if (!info) return;
+    const next = !info.states.fullscreen;
+    const applied = appliedState.get(winid);
+    const winEl = render.getXdgSurfaceEle(info.renderId);
+
+    if (next) {
+        const out = fullOutputSize();
+        server.server.notify("window.fullscreen", winid, {
+            width: Math.max(1, Math.floor(out.width / info.scale)),
+            height: Math.max(1, Math.floor(out.height / info.scale)),
+        });
+        // 桌面命令不发 window.changed，这里自己更新本地快照
+        if (applied) {
+            applied.fullscreen = true;
+            applied.maximized = false;
+        }
+        pauseCenteringForFullscreen(winid);
+        winEl?.toggleAttribute("data-fullscreen", true);
+        syncFullscreenChrome();
+        syncFullscreenWindowBoxes();
+        return;
+    }
+
+    server.server.notify("window.unfullscreen", winid, { width: 800, height: 600 });
+    lastFullscreenBox.delete(winid);
+    resumeCenteringForFullscreen(winid);
+    // 先恢复工具栏和 stage 尺寸，再按恢复后的可用区铺窗口（最大化要看 inset 后的尺寸）
+    syncFullscreenChrome();
+    // 进入全屏前是最大化的话，协议层会把最大化恢复回来；这里按恢复后的状态铺窗口
+    const restoredMaximized = server.server.windows.get(winid)?.states.maximized === true;
+    if (applied) {
+        applied.fullscreen = false;
+        applied.maximized = restoredMaximized;
+    }
+    winEl?.toggleAttribute("data-fullscreen", false);
+    if (winEl) {
+        if (restoredMaximized) {
+            const available = availableStageSize();
+            pack(winEl).style({
+                width: `${available.width}px`,
+                height: `${available.height}px`,
+                left: `${available.x}px`,
+                top: `${available.y}px`,
+            });
+            server.server.notify("window.maximize", winid, {
+                width: Math.max(1, Math.floor(available.width / info.scale)),
+                height: Math.max(1, Math.floor(available.height / info.scale)),
+            });
+        } else {
+            pack(winEl).style({
+                width: `${800 * info.scale}px`,
+                height: `${600 * info.scale}px`,
+                left: `${wino.l}px`,
+                top: `${wino.t}px`,
+            });
+        }
+    }
+}
+
+viewData.setChromeCallback(() => syncFullscreenChrome());
+syncFullscreenChrome(false);
 
 const body = pack(document.body);
 
@@ -4962,6 +5261,11 @@ body.on("keydown", (e) => {
         else viewData.toggleOverview();
         return;
     }
+    if (!e.repeat && matchBindings(e, FULLSCREEN_BINDINGS)) {
+        e.preventDefault();
+        toggleFullscreen();
+        return;
+    }
     // 启动器和内部窗口自己处理 DOM 键盘事件，不转发给 Wayland 客户端
     if (isLauncherInputFocused()) return;
     if (isInternalWindow(viewData.focusHandle)) return;
@@ -4977,7 +5281,11 @@ body.on("keydown", (e) => {
 });
 body.on("keyup", (e) => {
     if (state.getState() !== "normal") return;
-    if (matchBindings(e, DESKTOP_BINDINGS) || matchBindings(e, LAUNCHER_BINDINGS)) {
+    if (
+        matchBindings(e, DESKTOP_BINDINGS) ||
+        matchBindings(e, LAUNCHER_BINDINGS) ||
+        matchBindings(e, FULLSCREEN_BINDINGS)
+    ) {
         e.preventDefault();
         return;
     }

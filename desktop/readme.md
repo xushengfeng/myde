@@ -579,7 +579,7 @@ interface WindowInfo {
     title: string;
     rect: { x: number; y: number; w: number; h: number };
     scale: number; // 输出缩放：显示尺寸 = rect × scale，输入坐标 = 桌面坐标 ÷ scale
-    states: { activated: boolean; maximized: boolean; minimized: boolean };
+    states: { activated: boolean; maximized: boolean; minimized: boolean; fullscreen: boolean };
     renderId: string; // render.getXdgSurfaceEle(info.renderId)
 }
 ```
@@ -649,8 +649,23 @@ server.notify("window.setBox", handle, { width, height }); // 只记盒子，不
 server.notify("window.setSize", handle, { width, height });
 server.notify("window.maximize", handle, { width, height });
 server.notify("window.unmaximize", handle, { width, height });
+server.notify("window.fullscreen", handle, { width, height });
+server.notify("window.unfullscreen", handle, { width, height });
 server.notify("window.minimize", handle);
 ```
+
+`window.maximize` 与 `window.fullscreen` 互斥（进入一个会清掉另一个），分别对应
+`xdg_toplevel.configure` 的 `maximized` / `fullscreen` state。退出全屏会恢复进入前的
+最大化状态（从最大化进入的全屏，退出后仍是最大化）。客户端自己调用
+`set_fullscreen` / `unset_fullscreen` 时，桌面会收到 `window.changed`（看 `states.fullscreen`），
+再由桌面用 `window.fullscreen` / `window.unfullscreen` 下发最终盒子。`wm_capabilities` 已声明
+`minimize` / `maximize` / `fullscreen`。
+
+官方桌面（`desktop/offical`）对全屏的处理：舞台（`windowElWarp`/`windowEl`）始终铺满视口，
+工具栏占位只体现为窗口可用区（最大化尺寸、普通窗口居中、`surfaceBounds`）的内缩，不再限制
+舞台 DOM。全屏时只是让工具栏**模糊淡出**，全屏窗口按整块输出 configure；进入全局预览、
+或切到没有全屏窗口的虚拟屏时工具栏原样恢复。`Super+F` 切换当前聚焦窗口的全屏。总览 grid
+与顶部搜索栏按工具栏占位内缩，避免被顶部工具栏覆盖。
 
 `window.focus` / `window.blur` 是**键盘焦点的唯一入口**——`wl_keyboard.enter/leave`、text-input 的
 enter/leave、剪贴板 selection 归属都跟它走。指针 hover **不**自动切键盘焦点，要不要 focus-follows-mouse

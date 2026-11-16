@@ -305,6 +305,7 @@ class WaylandServer {
                 activated: record?.actived ?? false,
                 maximized: record?.maximized ?? false,
                 minimized: record?.minimized ?? false,
+                fullscreen: record?.fullscreen ?? false,
             },
             renderId: entry.renderId,
         };
@@ -410,6 +411,8 @@ class WaylandServer {
         });
         client.on("windowMaximized", (winId) => this.emitChanged(clientId, winId));
         client.on("windowUnMaximized", (winId) => this.emitChanged(clientId, winId));
+        client.on("windowFullscreen", (winId) => this.emitChanged(clientId, winId));
+        client.on("windowUnFullscreen", (winId) => this.emitChanged(clientId, winId));
         // setTitle 是「先发事件再改记录」，payload 里的 title 必须用事件带下来的值
         client.on("title", (winId, title) => this.emitChanged(clientId, winId, (info) => ({ ...info, title })));
         // appid 是 client 级的：该客户端的每个窗口都要通知一次
