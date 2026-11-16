@@ -24,7 +24,7 @@ use smithay::{
 use std::fs::OpenOptions;
 use std::os::unix::io::{AsFd, OwnedFd};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 use crate::backend::RenderBackend;
@@ -335,6 +335,32 @@ struct DrmOutputRuntime {
     element_id: smithay::backend::renderer::element::Id,
 }
 
+struct WrapStats {
+    start: Instant,
+    vblanks: u64,
+    submitted: u64,
+    callbacks: u64,
+    renders: u64,
+    direct: u64,
+    render_ns: u128,
+    offscreen: bool,
+}
+
+impl WrapStats {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            vblanks: 0,
+            submitted: 0,
+            callbacks: 0,
+            renders: 0,
+            direct: 0,
+            render_ns: 0,
+            offscreen: false,
+        }
+    }
+}
+
 pub struct DrmBackend {
     width: u32,
     height: u32,
@@ -358,6 +384,7 @@ pub struct DrmBackend {
     last_screen_power: Vec<bool>,
     /// 最近一次 vblank 是否真的完成了翻页（决定要不要回 presentation）
     presented_on_vblank: std::sync::atomic::AtomicBool,
+    stats: std::sync::Mutex<WrapStats>,
     /// 启动前的显示状态（fbcon），退出时恢复
     saved_crtcs: Vec<SavedCrtc>,
     // device/device_fd 放在最后：字段按声明顺序 drop，必须等 compositor（surface）
@@ -394,6 +421,7 @@ impl DrmBackend {
             last_config_generation: 0,
             last_screen_power: Vec::new(),
             presented_on_vblank: std::sync::atomic::AtomicBool::new(false),
+            stats: std::sync::Mutex::new(WrapStats::new()),
             saved_crtcs: Vec::new(),
         }
     }
@@ -829,18 +857,26 @@ void main() {
         // VBlank 按 crtc 路由到对应输出的 compositor 完成翻页。
         // 返回本次是否有帧真正完成上屏（用于决定何时发 frame 回调）。
         let mut presented = false;
+        let mut vblanks = 0u64;
+        let mut submitted = 0u64;
         if let Some(rx) = self.rx.as_ref() {
             while let Ok(handle) = rx.try_recv() {
+                vblanks += 1;
                 if let Some(index) = self.outputs.iter().position(|o| o.crtc == handle) {
                     if let Some(runtime) = self.compositors.get_mut(index) {
                         if runtime.needs_vblank {
                             runtime.needs_vblank = false;
                             let _ = runtime.compositor.frame_submitted();
                             presented = true;
+                            submitted += 1;
                         }
                     }
                 }
             }
+        }
+        if let Ok(mut stats) = self.stats.lock() {
+            stats.vblanks += vblanks;
+            stats.submitted += submitted;
         }
         self.presented_on_vblank
             .store(presented, std::sync::atomic::Ordering::Release);
@@ -879,6 +915,31 @@ void main() {
                 .current_mode()
                 .map(|mode| Duration::from_secs_f64(1000.0 / f64::from(mode.refresh).max(1.0)));
             state.send_presentation_feedbacks(output, crate::wayland::monotonic_now(), refresh);
+        }
+        if let Ok(mut stats) = self.stats.lock() {
+            stats.callbacks += 1;
+            let elapsed = stats.start.elapsed();
+            if elapsed >= Duration::from_secs(2) {
+                let secs = elapsed.as_secs_f64();
+                let avg_render = if stats.renders > 0 {
+                    stats.render_ns as f64 / stats.renders as f64 / 1_000_000.0
+                } else {
+                    0.0
+                };
+                info!(
+                    "wrap stats: vblank={:.1}/s submitted={:.1}/s callbacks={:.1}/s renders={:.1}/s direct={:.1}/s avg_render={:.2}ms offscreen={}",
+                    stats.vblanks as f64 / secs,
+                    stats.submitted as f64 / secs,
+                    stats.callbacks as f64 / secs,
+                    stats.renders as f64 / secs,
+                    stats.direct as f64 / secs,
+                    avg_render,
+                    stats.offscreen
+                );
+                let offscreen = stats.offscreen;
+                *stats = WrapStats::new();
+                stats.offscreen = offscreen;
+            }
         }
     }
 
@@ -1048,6 +1109,7 @@ void main() {
             Some(r) => r,
             None => return,
         };
+        let render_started = Instant::now();
 
         // —— 第一遍：把画布内容 1:1 渲入离屏纹理（随画布尺寸变化重建）——
         // 仅在客户端内容变化或纹理尺寸不匹配时重绘；只改屏幕配置时直接复用上一帧画布
@@ -1219,6 +1281,14 @@ void main() {
                 FrameFlags::DEFAULT,
             ) {
                 Ok(render_frame_result) => {
+                    if matches!(
+                        render_frame_result.primary_element,
+                        smithay::backend::drm::compositor::PrimaryPlaneElement::Element(_)
+                    ) {
+                        if let Ok(mut stats) = self.stats.lock() {
+                            stats.direct += 1;
+                        }
+                    }
                     if !render_frame_result.is_empty {
                         // Queue the frame for display
                         if let Err(e) = runtime.compositor.queue_frame(()) {
@@ -1249,5 +1319,10 @@ void main() {
         state.space.refresh();
         state.popups.cleanup();
         let _ = state.display_handle.flush_clients();
+        if let Ok(mut stats) = self.stats.lock() {
+            stats.renders += 1;
+            stats.render_ns += render_started.elapsed().as_nanos();
+            stats.offscreen = use_offscreen;
+        }
     }
 }
