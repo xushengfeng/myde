@@ -2835,6 +2835,8 @@ const bg = image(fs.readFileAsDataURLSync("/assets/wallpaper/1.svg"), "wallpaper
 const wino = { t: 0, l: 0, r: 0, b: 0 };
 /** 工具栏容器；界面缩放变化后按视觉尺寸重新计算 wino */
 const chromePlants: { el: ElType<HTMLElement>; posi: Plant["posi"] }[] = [];
+/** 启动台内容的外层；用视觉 px 避让工具栏，内部内容再按 zoom 缩放 */
+let launchpadContentEl: ElType<HTMLElement> | undefined;
 
 /**
  * 虚拟桌面包装始终铺满视口；工具栏避让只体现为窗口的可用区内缩（最大化、居中、surfaceBounds）。
@@ -3142,7 +3144,10 @@ const launcher = createLauncher();
 viewData.setLauncher(launcher);
 launcher.setUiScale(uiScale);
 const launchpadScreen = viewData.launchpadScreen;
-if (launchpadScreen) launchpadScreen.el.add(createLaunchpadContent());
+if (launchpadScreen) {
+    launchpadContentEl = createLaunchpadContent();
+    launchpadScreen.el.add(launchpadContentEl);
+}
 
 // 总览里点到卡片以外的空白处退出预览
 windowEl.on("click", (e) => {
@@ -4400,19 +4405,31 @@ function createLauncher(): LauncherController {
 
 /** 启动台：放在空桌面右边，显示应用图标，和空桌面一样是特殊虚拟屏 */
 function createLaunchpadContent() {
+    // 外层用未缩放的视觉 px 避让工具栏；内部 grid 再按界面缩放
+    const root = view()
+        .data({ "desktop-ui": "launchpad" })
+        .style({
+            position: "absolute",
+            top: "0px",
+            left: "0px",
+            right: "0px",
+            bottom: "0px",
+            boxSizing: "border-box",
+            overflow: "hidden",
+        });
     const grid = view("x", "wrap")
         .style({
             width: "100%",
             height: "100%",
             padding: "48px",
             boxSizing: "border-box",
-            alignContent: "center",
-            justifyContent: "center",
+            alignContent: "flex-start",
+            justifyContent: "flex-start",
             gap: "18px",
             overflowY: "auto",
             zoom: "var(--desktop-ui-scale, 1)",
-        })
-        .data({ "desktop-ui": "launchpad" });
+        });
+    root.add(grid);
     const loadingEl = txt("正在加载应用…").style({ padding: "8px", opacity: "0.6" }).addInto(grid);
     const tileFactory = createAppTileFactory({
         iconConfig: { theme: setting.get("icon.theme") },
@@ -4440,7 +4457,7 @@ function createLaunchpadContent() {
                 if (i + batchSize < apps.length) await scheduler.yield();
             }
         });
-    return grid;
+    return root;
 }
 
 /** 开始菜单：按需构建应用格子，图标只在实际可见时加载 */
@@ -5283,6 +5300,13 @@ function measureChromeInsets() {
         false,
     );
     viewData.setChromeInsets({ top: wino.t, bottom: wino.b, left: wino.l, right: wino.r });
+    // 启动台内容避让工具栏；外层是未缩放的视觉 px，内部 grid 自己处理 zoom
+    launchpadContentEl?.style({
+        top: `${wino.t}px`,
+        left: `${wino.l}px`,
+        right: `${wino.r}px`,
+        bottom: `${wino.b}px`,
+    });
     reconfigureMaximizedWindows();
 }
 
