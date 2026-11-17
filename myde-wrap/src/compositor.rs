@@ -100,8 +100,7 @@ impl Compositor {
                     },
                 }
             }
-            ClientMessage::Ping => ServerResponse::Pong,
-            // 心跳回包没有响应，避免 Pong 再触发一轮 Pong
+            // 心跳回包没有响应
             ClientMessage::Pong => return None,
         };
 

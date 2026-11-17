@@ -1549,9 +1549,6 @@ function createMockDisplay(log: (...args: any[]) => void): MockType<display> {
             log("display.setScreenPower", on, screenIndex);
             return { on, screens: [screenIndex ?? 0] };
         },
-        async ping() {
-            log("display.ping");
-        },
         disconnect() {
             log("display.disconnect");
         },

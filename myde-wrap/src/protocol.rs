@@ -112,7 +112,6 @@ pub enum ClientMessage {
         #[serde(default)]
         screen_index: Option<usize>,
     },
-    Ping,
     /// 回应 wrap 的 Ping：证明页面事件循环仍在运行
     Pong,
 }
@@ -149,7 +148,6 @@ pub enum ServerResponse {
         on: bool,
         screens: Vec<usize>,
     },
-    Pong,
     /// 页面存活检测：客户端收到后应立即回 Pong
     Ping,
     Error {

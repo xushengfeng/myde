@@ -49,8 +49,6 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
     private buffer: ArrayBuffer = new ArrayBuffer(0);
     private type: "desktop" | "window" = "window";
     private features = new Set<string>();
-    private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-    private heartbeatBusy = false;
 
     setType(type: "desktop" | "window") {
         this.type = type;
@@ -91,35 +89,7 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         this.socket.on("close", () => {
             console.log("Display socket closed");
             this.socket = null;
-            this.stopHeartbeat();
         });
-
-        this.startHeartbeat();
-    }
-
-    /**
-     * 控制连接是长连接，空闲时也要保活，兼容仍带读超时的 wrap。
-     * 上一次 Ping 未返回时跳过，避免响应类型互相覆盖。
-     */
-    private startHeartbeat() {
-        this.stopHeartbeat();
-        this.heartbeatTimer = setInterval(() => {
-            if (this.heartbeatBusy || !this.socket) return;
-            this.heartbeatBusy = true;
-            void this.ping()
-                .catch(() => {})
-                .finally(() => {
-                    this.heartbeatBusy = false;
-                });
-        }, 3000);
-    }
-
-    private stopHeartbeat() {
-        if (this.heartbeatTimer !== undefined) {
-            clearInterval(this.heartbeatTimer);
-            this.heartbeatTimer = undefined;
-        }
-        this.heartbeatBusy = false;
     }
 
     private handleData(data: Uint8Array): void {
@@ -341,15 +311,7 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         )) as ScreenPowerResult;
     }
 
-    async ping(): Promise<void> {
-        if (this.type !== "desktop") {
-            return;
-        }
-        await this.sendWithResponse("Ping", {}, "Pong");
-    }
-
     disconnect(): void {
-        this.stopHeartbeat();
         if (this.socket) {
             this.socket.destroy();
             this.socket = null;

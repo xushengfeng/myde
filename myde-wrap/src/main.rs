@@ -428,7 +428,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     Ordering::Release,
                                 );
                                 // 心跳每 3 秒一次，不刷日志
-                                if !matches!(msg, ClientMessage::Ping | ClientMessage::Pong) {
+                                if !matches!(msg, ClientMessage::Pong) {
                                     info!("received message: {:?}", msg);
                                 }
                                 let response = rt_clone.block_on(compositor.handle_message(msg));
