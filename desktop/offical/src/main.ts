@@ -1601,10 +1601,8 @@ addStyle({
         width: "var(--resize-preview-width) !important",
         height: "var(--resize-preview-height) !important",
     },
-    // 服务端装饰：外观与设置窗口一致（浅色半透明、圆角、阴影）
+    // 服务端装饰：只有标题栏有底色/模糊；内容区域保持透明，允许客户端透明窗口露出壁纸
     "[data-client-frame][data-decorated]": {
-        background: "rgba(245, 245, 245, 0.97)",
-        backdropFilter: "blur(18px)",
         boxShadow: "0 12px 40px #0000002a",
         borderRadius: "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))",
     },
@@ -1885,12 +1883,8 @@ function beginWindowResize(
         resized = true;
         const frame = wayland ? clientWindowFrames.get(windowId) : undefined;
         if (frame) {
-            // frame 负责标题栏与内容的总尺寸；内容尺寸用预览属性压住客户端提交前的旧几何
+            // 位置随指针走；尺寸等客户端提交后由渲染层回调同步，避免外框/阴影提前变大
             setClientFramePosition(frame, left, top);
-            setClientFrameLayout(frame, width, height);
-            contentEl.setAttribute("data-resize-preview", "");
-            contentEl.style.setProperty("--resize-preview-width", `${width}px`);
-            contentEl.style.setProperty("--resize-preview-height", `${height}px`);
         } else {
             el.style.left = `${Math.round(left)}px`;
             el.style.top = `${Math.round(top)}px`;
@@ -1923,9 +1917,15 @@ function beginWindowResize(
                         surfaceEl.style.removeProperty("--resize-preview-width");
                         surfaceEl.style.removeProperty("--resize-preview-height");
                         const frame = clientWindowFrames.get(windowId);
-                        if (frame)
-                            setClientFrameLayout(frame, current.rect.w * current.scale, current.rect.h * current.scale);
-                        else
+                        if (frame) {
+                            if (frame.decorated) applyFrameSurfaceSize(frame);
+                            else
+                                setClientFrameLayout(
+                                    frame,
+                                    current.rect.w * current.scale,
+                                    current.rect.h * current.scale,
+                                );
+                        } else
                             pack(surfaceEl).style({
                                 width: `${current.rect.w * current.scale}px`,
                                 height: `${current.rect.h * current.scale}px`,
@@ -1978,9 +1978,15 @@ type ClientWindowFrame = {
     fullscreen: boolean;
     maximized: boolean;
     appid: string;
+    /** xdg surface id（WindowInfo.renderId），渲染层尺寸回调按它反查 */
+    renderId: string;
+    /** 最近一次实际提交的 surface 显示尺寸（CSS px） */
+    surfaceWidth: number;
+    surfaceHeight: number;
 };
 
 const clientWindowFrames = new Map<WinHandle, ClientWindowFrame>();
+const clientFrameByRenderId = new Map<string, ClientWindowFrame>();
 
 /** 标题栏占用的视觉高度；全屏和未协商服务端装饰时为 0 */
 function titlebarPx(frame: ClientWindowFrame) {
@@ -2020,12 +2026,26 @@ function syncClientFrameMaximized(frame: ClientWindowFrame, maximized: boolean) 
 function applyClientFrameChrome(frame: ClientWindowFrame) {
     frame.el.el.toggleAttribute("data-decorated", frame.decorated && !frame.fullscreen);
     frame.el.el.toggleAttribute("data-fullscreen", frame.fullscreen);
+    // 标题栏高度变化只在这里写一次；surface 尺寸回调只改 frame 宽高，不动内容布局
+    frame.content.style.top = `${titlebarPx(frame)}px`;
 }
 
 /**
- * 用内容尺寸布局整窗。frame 宽高 = 内容 + 标题栏，
- * 内容绝对定位在标题栏下方（全屏时标题栏高度为 0）。
+ * 用最近一次实际提交的 surface 尺寸重算 frame：
+ * 宽高 = surface 显示尺寸 + 标题栏。由渲染层在画布尺寸写入 DOM 的同一时刻触发，
+ * 不用 ResizeObserver，避免回调晚一帧。
  */
+function applyFrameSurfaceSize(frame: ClientWindowFrame, width?: number, height?: number) {
+    if (width !== undefined) frame.surfaceWidth = Math.max(1, width);
+    if (height !== undefined) frame.surfaceHeight = Math.max(1, height);
+    const bar = titlebarPx(frame);
+    frame.el.style({
+        width: `${frame.surfaceWidth}px`,
+        height: `${frame.surfaceHeight + bar}px`,
+    });
+}
+
+/** 桌面主动设定内容尺寸（最大化/全屏），外框与内容在同一任务里对齐 */
 function setClientFrameLayout(
     frame: ClientWindowFrame,
     contentWidth: number,
@@ -2035,16 +2055,11 @@ function setClientFrameLayout(
     frame.fullscreen = fullscreen;
     const width = Math.max(1, contentWidth);
     const height = Math.max(1, contentHeight);
-    const bar = titlebarPx(frame);
-    frame.el.style({
-        width: `${width}px`,
-        height: `${height + bar}px`,
-    });
-    frame.content.style.top = `${bar}px`;
     frame.content.style.left = "0px";
     frame.content.style.width = `${width}px`;
     frame.content.style.height = `${height}px`;
     applyClientFrameChrome(frame);
+    applyFrameSurfaceSize(frame, width, height);
 }
 
 function setClientFramePosition(frame: ClientWindowFrame, left: number, top: number) {
@@ -2225,16 +2240,22 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
             position: "absolute",
             left: "0",
             top: "0",
-            // zoom 把视觉尺寸放大到和窗口内容一致；宽度反过来除，视觉上仍是 100%
+            // 用 transform 而不是 zoom：zoom 下百分比宽度/命中区的视觉尺寸会缩水，
+            // 高缩放时标题栏按钮会整体向左偏移。宽度先除回缩放倍率，再整体放大。
             width: "calc(100% / var(--desktop-ui-scale, 1))",
             height: `${CLIENT_TITLEBAR_HEIGHT}px`,
-            zoom: "var(--desktop-ui-scale, 1)",
+            transform: "scale(var(--desktop-ui-scale, 1))",
+            transformOrigin: "top left",
             alignItems: "center",
             gap: "6px",
             paddingLeft: "14px",
             paddingRight: "14px",
             boxSizing: "border-box",
             borderBottom: "1px solid #00000012",
+            background: "rgba(245, 245, 245, 0.97)",
+            backdropFilter: "blur(18px)",
+            borderTopLeftRadius: "var(--window-radius, 18px)",
+            borderTopRightRadius: "var(--window-radius, 18px)",
             zIndex: "6",
             cursor: "default",
             fontFamily: "sans-serif",
@@ -2267,10 +2288,15 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
         fullscreen: false,
         maximized: false,
         appid: "",
+        renderId: info.renderId,
+        surfaceWidth: 1,
+        surfaceHeight: 1,
     };
     updateClientFrameInfo(frame, info);
     applyClientFrameChrome(frame);
     syncClientFrameMaximized(frame, info.states.maximized);
+    clientFrameByRenderId.set(info.renderId, frame);
+    applyFrameSurfaceSize(frame);
     return frame;
 }
 
@@ -2955,6 +2981,14 @@ render.on({
             el.remove();
         }
     },
+    // 渲染层把 surface 尺寸写进画布的同一任务里同步外框；不用异步的 ResizeObserver
+    onXdgSurfaceSize: (xdgId, width, height) => {
+        const frame = clientFrameByRenderId.get(xdgId);
+        if (!frame) return;
+        frame.surfaceWidth = Math.max(1, width);
+        frame.surfaceHeight = Math.max(1, height);
+        if (frame.decorated && !frame.fullscreen) applyFrameSurfaceSize(frame);
+    },
 });
 const server = MSysApi.server({ render });
 // 剪贴板字节、历史、持久化都在桌面；server 只发事件、按需要数据
@@ -3088,7 +3122,7 @@ server.server.on("window.created", (info) => {
     const winEl = render.getXdgSurfaceEle(info.renderId)!;
     const frame = createClientWindowFrame(info, winEl);
     clientWindowFrames.set(wid, frame);
-    setClientFrameLayout(frame, info.rect.w * info.scale, info.rect.h * info.scale);
+    applyFrameSurfaceSize(frame);
     setClientFramePosition(frame, wino.l, wino.t);
     addWindow(screen, frame.el.el, wid);
     addResizeHandles(frame.el.el, wid, true, winEl);
@@ -3106,7 +3140,10 @@ server.server.on("window.closed", (wid) => {
     windowCenterManager.removeWindow(wid);
     const frame = clientWindowFrames.get(wid);
     clientWindowFrames.delete(wid);
-    frame?.el.el.remove();
+    if (frame) {
+        clientFrameByRenderId.delete(frame.renderId);
+        frame.el.el.remove();
+    }
     viewData.closeWin(wid);
     // 指针还停在刚关闭的窗口上时，立刻回到默认光标；
     // 否则客户端退出流程补发的 hidden 会把光标留成空白
@@ -3167,7 +3204,10 @@ server.server.on("window.changed", (info) => {
 
     // 服务端装饰协商结果变化：标题栏出现/消失会改变 frame 总高，即使内容尺寸没变也要重排
     const decorationChanged = frame !== undefined && frame.decorated !== info.decorated;
-    if (frame && decorationChanged) frame.decorated = info.decorated;
+    if (frame && decorationChanged) {
+        frame.decorated = info.decorated;
+        applyClientFrameChrome(frame);
+    }
 
     // 全屏状态变化（由客户端发起）：窗口铺满整块输出，工具栏随之避让
     if (applied.fullscreen !== info.states.fullscreen) {
@@ -3215,11 +3255,12 @@ server.server.on("window.changed", (info) => {
                 const available = availableStageSize();
                 setClientFrameLayout(frame, available.width, Math.max(1, available.height - titlebarPx(frame)));
                 setClientFramePosition(frame, available.x, available.y);
+            } else if (frame.decorated) {
+                // 服务端装饰窗口只跟随渲染层回报的 surface 尺寸；window.changed 里的 rect 可能会早到
+                if (decorationChanged) applyFrameSurfaceSize(frame);
             } else {
+                // 没有桌面外框/阴影的窗口维持原来的内容几何
                 setClientFrameLayout(frame, info.rect.w * info.scale, info.rect.h * info.scale);
-                if (windowCenterManager.isEnabled() && !windowCenterManager.isPaused(info.handle)) {
-                    windowCenterManager.centerWindow(info.handle);
-                }
             }
         }
     }
@@ -6089,11 +6130,13 @@ function applyUiScale(scale: number) {
     cursor.setScale(value);
     ime?.setUiScale(value);
     measureChromeInsets();
-    // 标题栏高度跟着界面缩放走；最大/全屏窗口由 measureChromeInsets 里的重排处理
+    // 标题栏高度跟着界面缩放走；内容尺寸由渲染层按新 scale 更新，frame 再从内容盒子同步
     for (const [handle, frame] of clientWindowFrames) {
         const info = server.server.windows.get(handle);
         if (!info || info.states.maximized || info.states.fullscreen) continue;
-        setClientFrameLayout(frame, info.rect.w * info.scale, info.rect.h * info.scale);
+        applyClientFrameChrome(frame);
+        if (frame.decorated) applyFrameSurfaceSize(frame);
+        else setClientFrameLayout(frame, info.rect.w * info.scale, info.rect.h * info.scale);
     }
     // 界面缩放会改变设置窗口的外层尺寸；只重排这个内部窗口，不动用户自己摆放的应用窗口
     if (internalWindows.has(SETTINGS_WINDOW_ID) && !windowCenterManager.isPaused(SETTINGS_WINDOW_ID)) {

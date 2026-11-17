@@ -3,6 +3,7 @@ import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools"
 export class MockRenderTools implements renderTools {
     private canvasMap = new Map<string, { canvas: HTMLCanvasElement; container: HTMLElement }>();
     private xdgElMap = new Map<string, { element: HTMLElement; canvasId: string }>();
+    private xdgSizes = new Map<string, { width: number; height: number }>();
     private _on: renderToolsOn = {};
     private idGen = 0;
 
@@ -26,7 +27,7 @@ export class MockRenderTools implements renderTools {
         this.canvasMap.set(id, { canvas, container });
     }
 
-    renderCanvas(canvas: OffscreenCanvas, id: string): void {
+    renderCanvas(canvas: OffscreenCanvas, id: string, op?: { logicalWidth: number; logicalHeight: number }): void {
         const info = this.canvasMap.get(id);
         if (!info) return;
 
@@ -37,6 +38,16 @@ export class MockRenderTools implements renderTools {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(canvas, 0, 0);
         }
+
+        // 与真实渲染器一致：xdg 根 surface 的画布尺寸变化时同步通知桌面
+        const xdg = [...this.xdgElMap].find(([, e]) => e.canvasId === id);
+        if (!xdg) return;
+        const width = Math.max(1, op?.logicalWidth ?? canvas.width);
+        const height = Math.max(1, op?.logicalHeight ?? canvas.height);
+        const prev = this.xdgSizes.get(xdg[0]);
+        if (prev?.width === width && prev.height === height) return;
+        this.xdgSizes.set(xdg[0], { width, height });
+        this._on.onXdgSurfaceSize?.(xdg[0], width, height);
     }
 
     destroyCanvas(id: string): void {
@@ -95,6 +106,7 @@ export class MockRenderTools implements renderTools {
             info.element.remove();
         }
         this.xdgElMap.delete(id);
+        this.xdgSizes.delete(id);
     }
 
     setXdgSurfaceGeo(id: string, width: number, height: number, offsetX: number, offsetY: number): void {
@@ -145,6 +157,7 @@ export class MockRenderTools implements renderTools {
             info.element.remove();
         }
         this.xdgElMap.clear();
+        this.xdgSizes.clear();
         for (const [, info] of this.canvasMap) {
             info.container.remove();
         }

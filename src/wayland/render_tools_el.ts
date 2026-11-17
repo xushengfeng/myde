@@ -12,6 +12,8 @@ type CanvasEntry = {
     warpOffset: { x: number; y: number };
     /** 该 canvas 是 xdg 根 surface：warp 偏移由 setXdgSurfaceGeo 管理，subsurface 偏移不要覆盖它 */
     xdgRoot?: boolean;
+    /** 该 canvas 所属的 xdg surface id（surface 尺寸回调用） */
+    xdgId?: string;
 };
 
 type XdgEntry = {
@@ -44,6 +46,16 @@ export class renderToolsHtmlEl implements renderTools {
         this.scale = scale;
         for (const id of this.canvasMap.keys()) this.applyCanvas(id);
         for (const id of this.xdgElMap.keys()) this.applyXdg(id);
+        // 逻辑尺寸没变但 CSS/物理尺寸变了，外框也要跟着换
+        for (const entry of this.canvasMap.values()) {
+            if (entry.xdgId && entry.logical) {
+                this._on.onXdgSurfaceSize?.(
+                    entry.xdgId,
+                    entry.logical.width * this.scale,
+                    entry.logical.height * this.scale,
+                );
+            }
+        }
     }
     bindCanvas(id: string) {
         const canvasEl = ele("canvas").attr({ id: id }).style({ position: "absolute" });
@@ -92,8 +104,13 @@ export class renderToolsHtmlEl implements renderTools {
             ctx.clearRect(0, 0, entry.canvas.el.width, entry.canvas.el.height);
             ctx.drawImage(canvas, 0, 0);
         }
+        const prevLogical = entry.logical;
         if (op) entry.logical = { width: op.logicalWidth, height: op.logicalHeight };
         this.applyCanvas(id);
+        if (entry.xdgId && op && (prevLogical?.width !== op.logicalWidth || prevLogical?.height !== op.logicalHeight)) {
+            // 画布 CSS 尺寸写进 DOM 之后再通知，外框和 surface 在同一任务里对齐
+            this._on.onXdgSurfaceSize?.(entry.xdgId, op.logicalWidth * this.scale, op.logicalHeight * this.scale);
+        }
     }
     destroyCanvas(id: string): void {
         const canvasInfo = this.canvasMap.get(id);
@@ -159,6 +176,7 @@ export class renderToolsHtmlEl implements renderTools {
         }
         const el = view().attr({ id: id }).style({ position: "absolute" }).add(canvasEl.warpEl);
         canvasEl.xdgRoot = true;
+        canvasEl.xdgId = id;
 
         this.xdgElMap.set(id, { warpEl: el, canvasWrap: canvasEl.warpEl });
     }

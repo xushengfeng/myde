@@ -1,6 +1,12 @@
 export type renderToolsOn = {
     onToplevelCreate?: (wid: string) => void;
     onToplevelRemove?: (wid: string) => void;
+    /**
+     * xdg 根 surface 实际提交的显示尺寸（CSS px，已乘输出 scale）。
+     * 在像素/画布尺寸写进 DOM 的同一时刻发出，供桌面让窗口外框跟随 surface，
+     * 避免用 ResizeObserver 之类异步观察产生一帧偏差。
+     */
+    onXdgSurfaceSize?: (xdgId: string, width: number, height: number) => void;
     // canvas为string时是语义光标（wp_cursor_shape_device_v1.shape的枚举名，热点为0），undefined表示隐藏光标
     // hx/hy 是 surface-local 热点；scale 是当前输出缩放，桌面显示热点 = hx/hy × scale
     onCursorUpdata?: (canvas: OffscreenCanvas | string | undefined, hx: number, hy: number, scale: number) => void;
