@@ -1472,11 +1472,16 @@ const stateLock = new stateMachine({
     out: { next: [] },
 });
 
-/** 退出桌面（关闭桌面窗口，结束当前桌面进程）：Super+Shift+E 或 Ctrl+Alt+Delete */
-const EXIT_BINDINGS: KeyBinding[] = [
-    { code: "KeyE", meta: true, shift: true },
-    { code: "Delete", ctrl: true, alt: true },
-];
+/** 退出桌面的按键：Super+Shift+E 或 Ctrl+Alt+Delete。
+ * 在输入聚合层判定，早于桌面 UI 和状态机，页面部分逻辑失效时仍能退出。 */
+const EXIT_KEY = {
+    e: MInputMap.mapKeyCode("KeyE"),
+    delete: MInputMap.mapKeyCode("Delete"),
+    meta: [MInputMap.mapKeyCode("MetaLeft"), MInputMap.mapKeyCode("MetaRight")],
+    shift: [MInputMap.mapKeyCode("ShiftLeft"), MInputMap.mapKeyCode("ShiftRight")],
+    ctrl: [MInputMap.mapKeyCode("ControlLeft"), MInputMap.mapKeyCode("ControlRight")],
+    alt: [MInputMap.mapKeyCode("AltLeft"), MInputMap.mapKeyCode("AltRight")],
+};
 
 /** 虚拟屏切换：Super+←/→ 左右跳，Super+Tab 开关全局预览 */
 const DESKTOP_BINDINGS: KeyBinding[] = [
@@ -5731,8 +5736,29 @@ tools.registerTool(
 const inputSim = MSysApi.inputSim;
 const inputApi = MSysApi.input;
 
+const exitModifiers = { meta: false, shift: false, ctrl: false, alt: false };
+
+/** 在进入 inputSim 和桌面 UI 之前处理退出键；返回 true 表示已触发退出 */
+function checkExitKey(e: UniInputEvent): boolean {
+    if (e.kind !== "key") return false;
+    const down = e.type === "down";
+    if (EXIT_KEY.meta.includes(e.code)) exitModifiers.meta = down;
+    else if (EXIT_KEY.shift.includes(e.code)) exitModifiers.shift = down;
+    else if (EXIT_KEY.ctrl.includes(e.code)) exitModifiers.ctrl = down;
+    else if (EXIT_KEY.alt.includes(e.code)) exitModifiers.alt = down;
+
+    if (!down || e.repeat) return false;
+    if (e.code === EXIT_KEY.e && exitModifiers.meta && exitModifiers.shift) return true;
+    if (e.code === EXIT_KEY.delete && exitModifiers.ctrl && exitModifiers.alt) return true;
+    return false;
+}
+
 /** 分发：统一传入新 api（当前行为为模拟 DOM 事件） */
 function dispatchInput(e: UniInputEvent) {
+    if (checkExitKey(e)) {
+        window.close();
+        return;
+    }
     if (screenOffState !== "on") {
         // 用任意输入唤醒，唤醒这一下不交给应用；锁屏息屏时回到锁屏界面
         // 被吞掉的按下/抬起不会成对到达，清掉指针归属避免一直停在某个客户端上
@@ -6130,11 +6156,6 @@ function isLauncherInputFocused() {
 }
 
 body.on("keydown", (e) => {
-    if (!e.repeat && matchBindings(e, EXIT_BINDINGS)) {
-        e.preventDefault();
-        window.close();
-        return;
-    }
     if (state.getState() !== "normal") return;
     if (!e.repeat && matchBindings(e, LOCK_BINDINGS)) {
         e.preventDefault();

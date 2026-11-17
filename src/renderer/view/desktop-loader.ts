@@ -155,7 +155,9 @@ async function loadDesktop(p: string) {
     // todo 隔离
     const script = document.createElement("script");
     script.type = "module";
-    script.text = indexData;
+    // 只有入口脚本完整执行到末尾才回应 wrap 心跳（初始化抛错/卡住时
+    // 不会回 Pong，wrap 会在启动超时后退出）
+    script.text = `${indexData}\n;globalThis.myde?.MSysApi.display.markReady();`;
     document.body.appendChild(script);
 }
 

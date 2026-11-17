@@ -40,8 +40,10 @@ use crate::winit::WinitBackend;
 
 /// 向页面发送 Ping 的间隔
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
-/// 连接建立后多久没有任何控制消息就判定页面卡死
+/// 页面就绪后，多久没有任何控制消息就判定卡死
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
+/// 控制连接建立后，等待桌面入口执行到末尾（首次 Pong）的最长时间
+const HEARTBEAT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Parser)]
 #[command(name = "myde-wrap")]
@@ -333,16 +335,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 渲染后端交给事件循环线程独占（vblank/commit 事件驱动渲染需要直接访问它）
     state.set_backend(backend, renderer.clone());
 
-    // 页面心跳：控制连接建立后，wrap 每 3 秒发 Ping，页面收到后回 Pong。
-    // 页面卡死时事件循环不再处理消息，超时后让主循环退出，避免把最后一帧
+    // 页面心跳：控制连接建立后，wrap 每 3 秒发 Ping。桌面入口脚本执行到
+    // 末尾后才会回 Pong，因此 Pong 同时证明“页面逻辑跑完了”，而不只是
+    // socket 层还活着。页面卡死/初始化失败时让主循环退出，避免把最后一帧
     // 一直留在屏幕上（此时也无法再通过输入恢复）。
     let heartbeat_base = Instant::now();
     let heartbeat_last = Arc::new(AtomicU64::new(0));
+    let heartbeat_connected_at = Arc::new(AtomicU64::new(0));
     let heartbeat_armed = Arc::new(AtomicBool::new(false));
+    let heartbeat_ready = Arc::new(AtomicBool::new(false));
     let heartbeat_lost = Arc::new(AtomicBool::new(false));
     {
         let last = heartbeat_last.clone();
+        let connected_at = heartbeat_connected_at.clone();
         let armed = heartbeat_armed.clone();
+        let ready = heartbeat_ready.clone();
         let lost = heartbeat_lost.clone();
         let shutdown = shutdown.clone();
         let loop_signal = event_loop.get_signal();
@@ -351,16 +358,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !armed.load(Ordering::Acquire) {
                 continue;
             }
-            let idle = heartbeat_base.elapsed().as_millis();
-            let last = last.load(Ordering::Acquire) as u128;
-            let idle = idle.saturating_sub(last);
-            if idle < HEARTBEAT_TIMEOUT.as_millis() {
+            let now = heartbeat_base.elapsed().as_millis();
+            let ready = ready.load(Ordering::Acquire);
+            // 就绪前按连接建立时间算启动超时；就绪后按最后一条消息算心跳超时。
+            // 启动阶段不能用“最后消息”计时，否则初始化时不停发请求的页面永远
+            // 等不到 Pong 也不会被判定为启动失败。
+            let since = if ready {
+                now.saturating_sub(last.load(Ordering::Acquire) as u128)
+            } else {
+                now.saturating_sub(connected_at.load(Ordering::Acquire) as u128)
+            };
+            let timeout = if ready {
+                HEARTBEAT_TIMEOUT.as_millis()
+            } else {
+                HEARTBEAT_STARTUP_TIMEOUT.as_millis()
+            };
+            if since < timeout {
                 continue;
             }
-            error!(
-                "控制连接心跳超时（{:.1} 秒没有收到页面消息），页面可能已卡死，退出",
-                idle as f64 / 1000.0
-            );
+            if ready {
+                error!(
+                    "控制连接心跳超时（{:.1} 秒没有收到页面消息），页面可能已卡死，退出",
+                    since as f64 / 1000.0
+                );
+            } else {
+                error!(
+                    "等待页面就绪超时（{:.1} 秒没有收到首次 Pong），桌面入口可能没有正常执行，退出",
+                    since as f64 / 1000.0
+                );
+            }
             lost.store(true, Ordering::Release);
             shutdown.store(true, Ordering::Release);
             loop_signal.wakeup();
@@ -371,22 +397,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 克隆socket_server以在事件循环中使用
     let socket_server_clone = socket_server.clone();
     let heartbeat_last_for_accept = heartbeat_last.clone();
+    let heartbeat_connected_at_for_accept = heartbeat_connected_at.clone();
     let heartbeat_armed_for_accept = heartbeat_armed.clone();
+    let heartbeat_ready_for_accept = heartbeat_ready.clone();
 
     // 在单独的线程中接受和处理socket连接，完全不阻塞主事件循环
     std::thread::spawn(move || {
         let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
         loop {
             if let Some(stream) = socket_server_clone.accept() {
-                // 新连接先刷新心跳，避免页面重载的间隔被误判为卡死
-                heartbeat_last_for_accept.store(
-                    heartbeat_base.elapsed().as_millis() as u64,
-                    Ordering::Release,
-                );
+                // 新连接先刷新心跳并重新等待桌面就绪，避免页面重载被误判为卡死
+                let now = heartbeat_base.elapsed().as_millis() as u64;
+                heartbeat_last_for_accept.store(now, Ordering::Release);
+                heartbeat_connected_at_for_accept.store(now, Ordering::Release);
                 heartbeat_armed_for_accept.store(true, Ordering::Release);
+                heartbeat_ready_for_accept.store(false, Ordering::Release);
                 let compositor = compositor.clone();
                 let rt_clone = rt.clone();
                 let last = heartbeat_last_for_accept.clone();
+                let ready = heartbeat_ready_for_accept.clone();
                 // 为每个连接单独分配一个线程，长连接完全不干扰主循环
                 std::thread::spawn(move || {
                     info!("received new socket connection");
@@ -400,7 +429,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let write_stream = Arc::new(std::sync::Mutex::new(stream));
                     let alive = Arc::new(AtomicBool::new(true));
 
-                    // 主动 Ping 页面，页面用 Pong 证明事件循环还活着。
+                    // 主动 Ping 页面，页面用 Pong 证明桌面入口已经跑完。
                     // 读和写在不同线程，写用同一把锁避免消息交错。
                     {
                         let write_stream = write_stream.clone();
@@ -427,8 +456,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     heartbeat_base.elapsed().as_millis() as u64,
                                     Ordering::Release,
                                 );
-                                // 心跳每 3 秒一次，不刷日志
-                                if !matches!(msg, ClientMessage::Pong) {
+                                if matches!(msg, ClientMessage::Pong) {
+                                    ready.store(true, Ordering::Release);
+                                } else {
+                                    // 心跳每 3 秒一次，不刷日志
                                     info!("received message: {:?}", msg);
                                 }
                                 let response = rt_clone.block_on(compositor.handle_message(msg));
@@ -512,6 +543,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let signaled = shutdown.load(Ordering::Acquire);
     let heartbeat_lost = heartbeat_lost.load(Ordering::Acquire);
+    let heartbeat_ready = heartbeat_ready.load(Ordering::Acquire);
     if signaled {
         info!("正在退出并恢复显示…");
     }
@@ -541,9 +573,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     loop_result?;
 
-    // 页面卡死导致的退出要带错误码，方便调用方决定是否重启
+    // 页面卡死/未就绪导致的退出要带错误码，方便调用方决定是否重启
     if heartbeat_lost {
-        return Err("控制连接心跳超时，页面可能已卡死".into());
+        return Err(if heartbeat_ready {
+            "控制连接心跳超时，页面可能已卡死".into()
+        } else {
+            "等待页面就绪超时，桌面入口可能没有正常执行".into()
+        });
     }
 
     // 应用异常退出时以非零退出码结束，方便调用方发现问题

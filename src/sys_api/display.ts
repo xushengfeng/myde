@@ -49,6 +49,8 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
     private buffer: ArrayBuffer = new ArrayBuffer(0);
     private type: "desktop" | "window" = "window";
     private features = new Set<string>();
+    /** 桌面脚本执行到末尾后才回应 wrap 心跳；加载器在桌面入口末尾调用 markReady() */
+    private ready = false;
 
     setType(type: "desktop" | "window") {
         this.type = type;
@@ -63,6 +65,14 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         return this.features.has(feature);
     }
 
+    /**
+     * 桌面入口脚本已执行到末尾，此后才回应 wrap 的 Ping。
+     * 加载器在注入的桌面脚本末尾自动调用，不需要桌面自己处理。
+     */
+    markReady(): void {
+        this.ready = true;
+    }
+
     async connect(op: {
         socketPath: string;
         mus: typeof import("myde-unix-socket");
@@ -72,6 +82,7 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
             return;
         }
 
+        this.ready = false;
         this.features = new Set(op.features ?? []);
         const mus = op.mus;
         this.socket = new mus.USocket({ path: op.socketPath });
@@ -124,9 +135,9 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
     private handleMessage(message: DisplayMessage): void {
         const { type, ...data } = message;
 
-        // wrap 的心跳：立即回 Pong 证明页面事件循环还在运行。
-        // 页面卡死时没有回包，wrap 会在超时后退出并释放屏幕。
-        if (type === "Ping") {
+        // wrap 的心跳：桌面已执行到入口末尾才回 Pong，证明页面逻辑正常跑完。
+        // 页面卡死或初始化失败时没有回包，wrap 会在超时后退出并释放屏幕。
+        if (type === "Ping" && this.ready) {
             try {
                 this.send({ type: "Pong" });
             } catch {
