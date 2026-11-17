@@ -4,6 +4,7 @@ import type {
     ConnectConnection,
     DesktopIconConfig,
     DeviceInfo,
+    FileChooserRequest,
     InputManager,
     UniInputEvent,
     WinHandle,
@@ -18,6 +19,7 @@ import type { DragStartInfo, WindowInfo } from "../../../src/wayland";
 import { type ClipboardItem, type ClipboardStation, initClipboard } from "./clipboard";
 import { createClipboardStationTool } from "./clipboard_tool";
 import { Cursor } from "./cursor";
+import { createFileChooserContent, fileChooserHeaderIcon, fileChooserTitle } from "./file_chooser";
 import { getIconXEl } from "./icon";
 import { ImeController } from "./ime/ime";
 import { DEFAULT_IME_BINDINGS, type KeyBinding, matchBindings } from "./ime/shortcut";
@@ -189,6 +191,7 @@ const fs = MSysApi.fs;
 type InternalWindowEntry = {
     el: ElType<HTMLDivElement>;
     setActive(active: boolean): void;
+    close(): void;
     dispose?: () => void;
 };
 
@@ -2312,30 +2315,50 @@ function jump2Win(winid: MWinId) {
 }
 
 // ── 桌面自己的 DOM 窗口 ────────────────────────────────────────────────────────────────────────
-// 设置窗口不是 Wayland 客户端，但仍然占用一个虚拟桌面、参与总览、聚焦和关闭，
+// 设置窗口、文件选择器不是 Wayland 客户端，但仍然占用一个虚拟桌面、参与总览、聚焦和关闭，
 // 与客户端窗口走同一套 ViewData / WindowCenterManager 逻辑。
 const SETTINGS_WINDOW_ID = "internal:settings";
 
-function openSettingsWindow() {
+type InternalWindowContent = {
+    el: ElType<HTMLElement>;
+    dispose?: () => void;
+};
+
+type InternalWindowOptions = {
+    id: string;
+    title: string;
+    icon?: HTMLElement | { el: HTMLElement };
+    width: number;
+    height: number;
+    build(host: { inner: ElType<HTMLDivElement>; close: () => void }): InternalWindowContent;
+    /** 关闭前调用，例如取消尚未结束的文件选择请求 */
+    onClose?(): void;
+    /** 窗口完全回收后调用，例如显示下一个排队请求 */
+    onClosed?(): void;
+};
+
+function openInternalWindow(op: InternalWindowOptions) {
     if (viewData.overview) viewData.setOverview(false);
-    if (internalWindows.has(SETTINGS_WINDOW_ID)) {
-        jump2Win(SETTINGS_WINDOW_ID);
+    if (internalWindows.has(op.id)) {
+        jump2Win(op.id);
         return;
     }
 
-    const screen = viewData.addWindowScreen(SETTINGS_WINDOW_ID);
-    const root = view("y").data({ "internal-window": SETTINGS_WINDOW_ID }).style({
-        position: "absolute",
-        width: "calc(760px * var(--desktop-ui-scale, 1))",
-        height: "calc(540px * var(--desktop-ui-scale, 1))",
-        maxWidth: "calc(100vw - 24px)",
-        maxHeight: "calc(100vh - 24px)",
-        borderRadius: "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))",
-        background: "rgba(245, 245, 245, 0.97)",
-        backdropFilter: "blur(18px)",
-        boxShadow: "0 12px 40px #00000033",
-        boxSizing: "border-box",
-    });
+    const screen = viewData.addWindowScreen(op.id);
+    const root = view("y")
+        .data({ "internal-window": op.id })
+        .style({
+            position: "absolute",
+            width: `calc(${op.width}px * var(--desktop-ui-scale, 1))`,
+            height: `calc(${op.height}px * var(--desktop-ui-scale, 1))`,
+            maxWidth: "calc(100vw - 24px)",
+            maxHeight: "calc(100vh - 24px)",
+            borderRadius: "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))",
+            background: "rgba(245, 245, 245, 0.97)",
+            backdropFilter: "blur(18px)",
+            boxShadow: "0 12px 40px #00000033",
+            boxSizing: "border-box",
+        });
     // 内容单独裁剪圆角；根节点不裁剪，缩放热区才能跨到窗口外
     const clip = view().style({
         position: "absolute",
@@ -2363,81 +2386,40 @@ function openSettingsWindow() {
             height: "48px",
             alignItems: "center",
             gap: "10px",
-            padding: "0 16px",
+            padding: "0 46px 0 16px",
             flexShrink: "0",
             borderBottom: "1px solid #00000012",
             boxSizing: "border-box",
+            minWidth: "0",
         })
         .add([
-            getIconXEl("settings", { size: 18, width: 20, height: 20 }).el,
-            txt("设置").style({ fontWeight: "600" }),
+            ...(op.icon ? [op.icon] : []),
+            txt(op.title).style({
+                fontWeight: "600",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+            }),
         ]);
 
-    const settingsContent = createSettingsContent({
-        getIconTheme: () => setting.get("icon.theme") || "breeze",
-        setIconTheme: (theme) => setting.set("icon.theme", theme),
-        getWindowRadius: () => windowRadius,
-        setWindowRadius,
-        getImePanelPreedit: () => (imeSetting.nget("panelPreedit") ?? "auto") as ImePanelPreeditMode,
-        setImePanelPreedit: (mode) => imeSetting.nset("panelPreedit", mode),
-        getCenterWindows: () => desktopSetting.nget("centerWindows") ?? true,
-        setCenterWindows: (enabled) => {
-            desktopSetting.nset("centerWindows", enabled);
-            windowCenterManager.setEnabled(enabled);
-        },
-        getScale: () => screenManager.getScale(),
-        setScale: (scale) => screenManager.setScale(scale),
-        scaleFollowsHost: () => screenManager.scaleFollowsHost(),
-        getResolution: () => screenManager.getResolution(),
-        getResolutions: () => screenManager.getResolutions(),
-        setResolution: (width, height) => screenManager.setResolution(width, height),
-        getRefreshRate: () => screenManager.getRefreshRate(),
-        getRefreshRates: () => screenManager.getRefreshRates(),
-        setRefreshRate: (refreshRate) => screenManager.setRefreshRate(refreshRate),
-        screenModeAvailable: () => MSysApi.display.supports("screen-mode"),
-        getTouchpadScrollGain: () => touchpadScrollGain,
-        setTouchpadScrollGain: (gain) => {
-            touchpadScrollGain = gain;
-            desktopSetting.nset("touchpadScrollGain", gain);
-        },
-        getNaturalScroll: () => naturalScroll,
-        setNaturalScroll: (enabled) => {
-            naturalScroll = enabled;
-            desktopSetting.nset("naturalScroll", enabled);
-        },
-        getSwitchGestureGain: () => gestureSwitchGain,
-        setSwitchGestureGain: (gain) => {
-            gestureSwitchGain = normalizeGestureGain(gain);
-            desktopSetting.nset("switchGestureGain", gestureSwitchGain);
-        },
-        getReorderDelay: () => reorderDelay,
-        setReorderDelay: (delay) => {
-            reorderDelay = normalizeReorderDelay(delay);
-            desktopSetting.nset("reorderDelay", reorderDelay);
-        },
-        inputMethodAvailable: !!MSysApi.inputMethod,
-        connectAvailable: !!myde.MConnect,
-        getConnectEnabled,
-        setConnectEnabled: (enabled) => {
-            void setConnectEnabled(enabled);
-        },
-        getConnectId: () => connect.getId(),
-        listConnectDevices,
-        forgetConnectDevice,
-        setConnectRemember: (targetId, remember) => connect.setRemember(targetId, remember),
-        createConnectPairing,
-        subscribeConnect,
-        restartDesktop: async () => {
-            const ok = await confirm("重启桌面会关闭所有窗口，继续？");
-            if (ok) location.reload();
-        },
-        modalHost: inner.el,
-    });
-    const content = settingsContent.el;
+    function closeWindow() {
+        const entry = internalWindows.get(op.id);
+        if (!entry) return;
+        internalWindows.delete(op.id);
+        op.onClose?.();
+        viewData.closeWin(op.id);
+        windowCenterManager.removeWindow(op.id);
+        removeResizeHandles(op.id);
+        entry.dispose?.();
+        entry.el.remove();
+        op.onClosed?.();
+    }
+
+    const content = op.build({ inner, close: closeWindow });
 
     const closeBtn = createWindowCloseButton({
         size: 24,
-        onClick: () => closeSettingsWindow(),
+        onClick: closeWindow,
     }).style({
         position: "absolute",
         top: "12px",
@@ -2450,13 +2432,13 @@ function openSettingsWindow() {
     };
     setActive(false);
 
-    inner.add([header, content, closeBtn]);
-    root.on("pointerdown", () => viewData.focusWin(SETTINGS_WINDOW_ID));
+    inner.add([header, content.el, closeBtn]);
+    root.on("pointerdown", () => viewData.focusWin(op.id));
 
     // 标题栏拖动。拖动后暂停自动居中，避免父容器变化时把窗口拽回中间。
     header.on("pointerdown", (e) => {
         if ((e.target as HTMLElement).closest("button, input, select, textarea")) return;
-        windowCenterManager.pauseCentering(SETTINGS_WINDOW_ID);
+        windowCenterManager.pauseCentering(op.id);
         const startX = e.clientX;
         const startY = e.clientY;
         const rect = root.el.getBoundingClientRect();
@@ -2480,23 +2462,122 @@ function openSettingsWindow() {
         window.addEventListener("pointercancel", cleanup, { once: true });
     });
 
-    internalWindows.set(SETTINGS_WINDOW_ID, { el: root, setActive, dispose: settingsContent.dispose });
-    addWindow(screen, root.el, SETTINGS_WINDOW_ID);
-    addResizeHandles(root.el, SETTINGS_WINDOW_ID, false);
-    createOverviewWindowCloseButton(closeSettingsWindow).addInto(root.el);
-    viewData.focusWin(SETTINGS_WINDOW_ID);
+    internalWindows.set(op.id, { el: root, setActive, close: closeWindow, dispose: content.dispose });
+    addWindow(screen, root.el, op.id);
+    addResizeHandles(root.el, op.id, false);
+    createOverviewWindowCloseButton(closeWindow).addInto(root.el);
+    viewData.focusWin(op.id);
 }
 
-function closeSettingsWindow() {
-    const entry = internalWindows.get(SETTINGS_WINDOW_ID);
-    if (!entry) return;
-    internalWindows.delete(SETTINGS_WINDOW_ID);
-    viewData.closeWin(SETTINGS_WINDOW_ID);
-    windowCenterManager.removeWindow(SETTINGS_WINDOW_ID);
-    removeResizeHandles(SETTINGS_WINDOW_ID);
-    entry.dispose?.();
-    entry.el.remove();
+function openSettingsWindow() {
+    openInternalWindow({
+        id: SETTINGS_WINDOW_ID,
+        title: "设置",
+        icon: getIconXEl("settings", { size: 18, width: 20, height: 20 }),
+        width: 760,
+        height: 540,
+        build: ({ inner }) => {
+            const settingsContent = createSettingsContent({
+                getIconTheme: () => setting.get("icon.theme") || "breeze",
+                setIconTheme: (theme) => setting.set("icon.theme", theme),
+                getWindowRadius: () => windowRadius,
+                setWindowRadius,
+                getImePanelPreedit: () => (imeSetting.nget("panelPreedit") ?? "auto") as ImePanelPreeditMode,
+                setImePanelPreedit: (mode) => imeSetting.nset("panelPreedit", mode),
+                getCenterWindows: () => desktopSetting.nget("centerWindows") ?? true,
+                setCenterWindows: (enabled) => {
+                    desktopSetting.nset("centerWindows", enabled);
+                    windowCenterManager.setEnabled(enabled);
+                },
+                getScale: () => screenManager.getScale(),
+                setScale: (scale) => screenManager.setScale(scale),
+                scaleFollowsHost: () => screenManager.scaleFollowsHost(),
+                getResolution: () => screenManager.getResolution(),
+                getResolutions: () => screenManager.getResolutions(),
+                setResolution: (width, height) => screenManager.setResolution(width, height),
+                getRefreshRate: () => screenManager.getRefreshRate(),
+                getRefreshRates: () => screenManager.getRefreshRates(),
+                setRefreshRate: (refreshRate) => screenManager.setRefreshRate(refreshRate),
+                screenModeAvailable: () => MSysApi.display.supports("screen-mode"),
+                getTouchpadScrollGain: () => touchpadScrollGain,
+                setTouchpadScrollGain: (gain) => {
+                    touchpadScrollGain = gain;
+                    desktopSetting.nset("touchpadScrollGain", gain);
+                },
+                getNaturalScroll: () => naturalScroll,
+                setNaturalScroll: (enabled) => {
+                    naturalScroll = enabled;
+                    desktopSetting.nset("naturalScroll", enabled);
+                },
+                getSwitchGestureGain: () => gestureSwitchGain,
+                setSwitchGestureGain: (gain) => {
+                    gestureSwitchGain = normalizeGestureGain(gain);
+                    desktopSetting.nset("switchGestureGain", gestureSwitchGain);
+                },
+                getReorderDelay: () => reorderDelay,
+                setReorderDelay: (delay) => {
+                    reorderDelay = normalizeReorderDelay(delay);
+                    desktopSetting.nset("reorderDelay", reorderDelay);
+                },
+                inputMethodAvailable: !!MSysApi.inputMethod,
+                connectAvailable: !!myde.MConnect,
+                getConnectEnabled,
+                setConnectEnabled: (enabled) => {
+                    void setConnectEnabled(enabled);
+                },
+                getConnectId: () => connect.getId(),
+                listConnectDevices,
+                forgetConnectDevice,
+                setConnectRemember: (targetId, remember) => connect.setRemember(targetId, remember),
+                createConnectPairing,
+                subscribeConnect,
+                restartDesktop: async () => {
+                    const ok = await confirm("重启桌面会关闭所有窗口，继续？");
+                    if (ok) location.reload();
+                },
+                modalHost: inner.el,
+            });
+            return { el: settingsContent.el, dispose: settingsContent.dispose };
+        },
+    });
 }
+
+const FILE_CHOOSER_WINDOW_ID = "internal:file-chooser";
+const fileChooserQueue: FileChooserRequest[] = [];
+
+function openFileChooserWindow(request: FileChooserRequest) {
+    if (internalWindows.has(FILE_CHOOSER_WINDOW_ID)) {
+        fileChooserQueue.push(request);
+        return;
+    }
+    openInternalWindow({
+        id: FILE_CHOOSER_WINDOW_ID,
+        title: fileChooserTitle(request),
+        icon: fileChooserHeaderIcon(request),
+        width: 860,
+        height: 580,
+        onClose: () => {
+            void request.cancel();
+        },
+        onClosed: () => {
+            const next = fileChooserQueue.shift();
+            if (next) openFileChooserWindow(next);
+        },
+        build: ({ close }) => {
+            const content = createFileChooserContent({ request, close });
+            return { el: content.el, dispose: content.dispose };
+        },
+    });
+}
+
+MSysApi.portal?.on("fileChooser.request", (request) => {
+    try {
+        openFileChooserWindow(request);
+    } catch (error) {
+        console.error("[file-chooser] 打开失败:", error);
+        void request.cancel();
+    }
+});
 
 function appLauncher(iconPath: () => Promise<string>, name: string, exec: string, env?: Record<string, string>) {
     const p = appIconEl(exec, env);
@@ -6145,9 +6226,9 @@ function applyUiScale(scale: number) {
         if (frame.decorated) applyFrameSurfaceSize(frame);
         else setClientFrameLayout(frame, info.rect.w * info.scale, info.rect.h * info.scale);
     }
-    // 界面缩放会改变设置窗口的外层尺寸；只重排这个内部窗口，不动用户自己摆放的应用窗口
-    if (internalWindows.has(SETTINGS_WINDOW_ID) && !windowCenterManager.isPaused(SETTINGS_WINDOW_ID)) {
-        windowCenterManager.centerWindow(SETTINGS_WINDOW_ID);
+    // 界面缩放会改变内部窗口的外层尺寸；只重排未被用户拖动的内部窗口，不动应用窗口
+    for (const id of internalWindows.keys()) {
+        if (!windowCenterManager.isPaused(id)) windowCenterManager.centerWindow(id);
     }
 }
 

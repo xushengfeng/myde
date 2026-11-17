@@ -127,6 +127,24 @@ resize ↔ `move` / `all_scroll` / `all_resize` 过渡时优先用十字的一�
 
 `test/frametime` 用同一份 `src/frame_chart.ts` 做独立预览：`pnpm test:frametime` 启动 vite 后，在 myde 里用浏览器打开终端输出的地址；可切换窗口与刷新率、实测刷新率，并用持续负载或一次性长帧验证图表。
 
+## 文件选择器
+
+监听 `MSysApi.portal` 的 `fileChooser.request`，用和设置窗口相同的内部 DOM 窗口呈现；一个窗口同时只显示一个请求，后续请求排队，关闭后自动显示下一个。
+
+- 左侧位置栏来自 `portal.browse.places()`，portal 不可用时退回主目录扫描；主目录、桌面、文档、下载、音乐、图片、视频和根目录按是否存在显示
+- 目录枚举用 `MSysApi.nativefs.list`，显示名称、大小和修改时间；目录项优先自然排序，符号链接标注“链接”
+- 工具栏提供后退、上一级、刷新和面包屑；点击目录进入，双击文件按模式打开或填入保存文件名
+- 打开文件支持 `multiple`：点击文件切换选中，再次点击取消，双击只打开当前文件；按过滤器筛选文件。保存支持单文件名和每行一个文件名的多文件模式；目录请求未选择子目录时返回当前目录
+- portal 的 `filters` 显示为筛选下拉框，`choices` 渲染为下拉框或开关，`accept_label` 作为确认按钮文字
+- `Esc` 取消，`Enter` 确认；窗口右上角关闭和系统 `Request.Close` 都走 `req.cancel()`
+
+手动测试：
+
+- UI 调试（浏览器 + mock 文件树）：`pnpm test:file-chooser`
+- 真实 portal 弹窗：`cd test/electron_app && npm run file`，用窗口里的文件输入框或保存下载按钮触发；在 MyDE internal portal 环境里启动该应用即可看到官方桌面的选择器
+
+UI 调试页在 `desktop/offical/test/file_chooser`，直接复用真实的 `file_chooser.ts`，只替换 `nativefs.list` 和 `portal.browse.places` 的 mock 数据。
+
 ## 输入法
 
 通过 `MSysApi.inputMethod` 连接 fcitx5，桌面作为输入上下文客户端处理按键，不实现 Wayland 的 input-method 协议。

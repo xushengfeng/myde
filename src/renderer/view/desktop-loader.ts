@@ -17,6 +17,7 @@ import { inputMethod } from "../../sys_api/input_method";
 import { inputSim } from "../../sys_api/input_sim";
 import { lid } from "../../sys_api/lid";
 import { mpris } from "../../sys_api/mpris";
+import { nativefs } from "../../sys_api/nativefs";
 import { network } from "../../sys_api/network";
 import { notification } from "../../sys_api/notification";
 import { polkit } from "../../sys_api/polkit";
@@ -57,6 +58,7 @@ async function loadDesktop(p: string) {
         });
     }
     myde.MSysApi.fs = new vfs(dirPath);
+    myde.MSysApi.nativefs = new nativefs();
     myde.MSysApi.verifyUserPassword = async (password: string) => {
         return new Promise<boolean>((resolve) => {
             loginService.authenticate(getEnv().USER, password, (e) => {

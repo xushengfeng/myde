@@ -11,3 +11,5 @@
 `run.ts` 负责启动应用。`runApp()` 必须读取应用的 stdout/stderr（否则写满 64 KiB 后应用阻塞），输出写到 `$XDG_STATE_HOME/myde/logs/apps/`。`runApp(exec, { env })` 可以把应用自带的环境变量合并进子进程环境（最后合并，优先级最高）。子进程会拿到 `USER`/`LOGNAME`/`HOME`；启动身份取桌面进程自身，不依赖启动环境里的 `USER`（应用内再启动的桌面可能没有这个变量，按 `USER` 兜底会变成 root 并 `spawn EPERM`）。
 
 `application.ts` 解析 .desktop：除 Name/Comment/Icon/Exec 外，还会从 `Exec=env A=1 cmd` 的前缀取出环境变量放进 `DesktopEntry.env`（`Exec` 同时还原成 `cmd`），交给 `runApp()`。
+
+`nativefs.ts` 提供原生文件系统的只读目录枚举（当前只有 `list`），路径支持绝对路径和 `~`；文件选择器用它列目录。它不提供读取文件内容的接口。

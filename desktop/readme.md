@@ -85,6 +85,20 @@ const stat = await fs.stat("file.txt"); // { size, mtime, isFile, isDirectory }
 
 所有方法都有同步版本（如 `readTextFileSync`）。
 
+### nativefs
+
+原生文件系统的只读枚举接口，目前只提供目录列表，不读取文件内容。支持绝对路径和 `~`，默认列主目录：
+
+```typescript
+const listing = await MSysApi.nativefs.list("~/Documents", { showHidden: false });
+// listing.path: 解析后的绝对路径
+// listing.entries: [{ name, path, kind, targetKind?, size, mtime, hidden, mime }]
+
+await MSysApi.nativefs.list("/", { showHidden: true });
+```
+
+目录项按目录优先、名称自然排序。符号链接的 `kind` 为 `symlink`，指向目录时 `targetKind` 为 `directory`。文件选择器用它列出目录。
+
 ### login
 
 设置系统关机、挂起等，锁屏自己实现
@@ -154,7 +168,8 @@ portal.on("fileChooser.request", async (req) => {
     // req.mode: "open" | "save" | "save-many"
     // req.filters / req.choices / req.currentFolder / req.currentName ...
     const places = await portal.browse.places();
-    const entries = await portal.browse.list(req.currentFolder ?? places[0].path);
+    const listing = await MSysApi.nativefs.list(req.currentFolder ?? places[0].path);
+    const entries = listing.entries;
 
     // 用户确认后返回绝对路径，后端负责转成 file:// URI
     const result = await req.accept({
@@ -169,7 +184,7 @@ portal.on("fileChooser.request", async (req) => {
 });
 ```
 
-- `browse` 只提供 `list` / `stat` / `places` / `home` / `matchFilter`，不提供 `readFile`
+- 目录枚举用 `MSysApi.nativefs.list`；portal 自带的 `browse` 也保留 `list` / `stat` / `places` / `home` / `matchFilter`，不提供 `readFile`
 - `accept` 的路径由后端校验：打开要求存在，保存要求父目录存在、文件本身可以不存在
 - `parent_window` 目前只保留原始字符串；没有 `xdg-foreign` 时不解析，模态由桌面自己用遮罩实现
 - 需要系统安装 xdg-desktop-portal，并安装 `assets/portal` 里的 `myde.portal` 和 `myde-portals.conf`；会话设置 `XDG_CURRENT_DESKTOP=MyDE`。开发测试用 `XDG_DESKTOP_PORTAL_DIR` 指向 `assets/portal/portals`，不要改系统配置

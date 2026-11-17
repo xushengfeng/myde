@@ -16,6 +16,7 @@ import type { inputSim } from "./sys_api/input_sim";
 import type { lid } from "./sys_api/lid";
 import { setPowerState } from "./sys_api/login";
 import type { mpris } from "./sys_api/mpris";
+import type { nativefs } from "./sys_api/nativefs";
 import type { network } from "./sys_api/network";
 import type { notification } from "./sys_api/notification";
 import type { polkit } from "./sys_api/polkit";
@@ -54,6 +55,7 @@ export const _myde = {
         inputMethod: undefined as unknown as inputMethod,
         volume: undefined as unknown as volumeControl,
         portal: undefined as unknown as xdgDesktopPortal,
+        nativefs: undefined as unknown as nativefs,
         appControl: {
             getPidTree,
             getPid,
@@ -104,6 +106,7 @@ export type {
     UniKeyEvent,
     UniPointerEvent,
 } from "./sys_api/input_sim";
+export type { NativeFsEntry, NativeFsFileKind, NativeFsListOptions, NativeFsListResult } from "./sys_api/nativefs";
 export type { PolkitAuthRequest, PolkitAuthResult, PolkitEvents, PolkitIdentity } from "./sys_api/polkit";
 export type {
     FileChooserMode,
