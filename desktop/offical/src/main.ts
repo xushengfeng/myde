@@ -392,7 +392,7 @@ type ViewScreen = {
     empty: boolean;
     /** 启动台：固定在最右的应用图标屏，和空桌面一样不参与全局预览 */
     launchpad: boolean;
-    /** 最近一次成为当前屏的顺序，重排时从小到大（旧的到新的） */
+    /** 最近一次停留满缓冲期、成为当前屏的顺序，重排时从小到大（旧的到新的） */
     used: number;
     el: ElType<HTMLElement>;
     gear: AnimationGear<ViewTransform>;
@@ -629,14 +629,14 @@ class ViewData {
 
     /**
      * 切到某个虚拟屏。缓冲期内 `screens` 的空间顺序不变，只改当前屏；
-     * 到点后按最近使用顺序重排。
+     * 到点后把当前屏记为一次使用，再按最近使用顺序重排。
+     * 途经的屏不算使用，否则连续切几屏会把中间屏也算成更新的。
      */
     setCurrentScreen(id: string, animate = true) {
         const screen = this.screens.find((s) => s.id === id);
         if (!screen) return;
         this.cancelGesture();
         this.currentId = screen.id;
-        screen.used = ++this.usedSeq;
         if (screen.winId) this.focusWin(screen.winId);
         else this.blurAll();
         this.scheduleReorder();
@@ -995,10 +995,15 @@ class ViewData {
         }
     }
 
-    /** 缓冲到点：按最近使用重排，当前屏保持不动，只换左右邻居，不需要动画 */
+    /** 缓冲到点：当前屏记为一次使用，按最近使用重排，不需要动画 */
     private reorder() {
-        if (this.overview || this.gesture) return;
+        if (this.overview) return;
+        if (this.gesture) {
+            this.scheduleReorder();
+            return;
+        }
         const current = this.currentScreen();
+        if (current) current.used = ++this.usedSeq;
         const empty = this.screens.find((s) => s.empty);
         const launchpad = this.screens.find((s) => s.launchpad);
         const ordered = this.screens.filter((s) => !s.empty && !s.launchpad).toSorted((a, b) => a.used - b.used);
