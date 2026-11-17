@@ -19,7 +19,7 @@ import type { mpris } from "./sys_api/mpris";
 import type { nativefs } from "./sys_api/nativefs";
 import type { network } from "./sys_api/network";
 import type { notification } from "./sys_api/notification";
-import type { polkit } from "./sys_api/polkit";
+import type { PolkitApi } from "./sys_api/polkit";
 import type { power, powerProfiles } from "./sys_api/power";
 import { server } from "./sys_api/run";
 import type { volumeControl } from "./sys_api/volume";
@@ -48,7 +48,7 @@ export const _myde = {
         powerProfiles: undefined as unknown as powerProfiles,
         blue: undefined as unknown as blue,
         network: undefined as unknown as network,
-        polkit: undefined as unknown as polkit,
+        polkit: undefined as unknown as PolkitApi,
         display: undefined as unknown as display,
         input: undefined as unknown as InputManager,
         inputSim: undefined as unknown as inputSim,
@@ -107,7 +107,13 @@ export type {
     UniPointerEvent,
 } from "./sys_api/input_sim";
 export type { NativeFsEntry, NativeFsFileKind, NativeFsListOptions, NativeFsListResult } from "./sys_api/nativefs";
-export type { PolkitAuthRequest, PolkitAuthResult, PolkitEvents, PolkitIdentity } from "./sys_api/polkit";
+export type {
+    PolkitApi,
+    PolkitAuthRequest,
+    PolkitAuthResult,
+    PolkitEvents,
+    PolkitIdentity,
+} from "./sys_api/polkit";
 export type {
     FileChooserMode,
     FileChooserRequest,

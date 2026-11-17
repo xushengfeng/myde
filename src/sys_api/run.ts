@@ -313,6 +313,11 @@ export function runApp(
         gid: op.user?.gid,
     });
 
+    // 会话级 polkit agent 由主进程提前启动的 helper 注册；这里再给应用补一个
+    // 进程级 agent，helper 不在登录会话里（退化成进程注册）时仍能弹认证
+    const appPid = subprocess.pid;
+    if (appPid) void globalThis.myde?.MSysApi?.polkit?.watchProcess(appPid);
+
     // stdout/stderr 是 pipe 就必须读：否则写满 64 KiB 后应用会阻塞在 write()，
     // 表现为窗口画面卡死而桌面仍然流畅；同时把输出留到文件里供事后排查。
     pruneAppLogs();
@@ -334,6 +339,7 @@ export function runApp(
         appLog.close();
     };
     subprocess.on("close", (code, signal) => {
+        if (appPid) void globalThis.myde?.MSysApi?.polkit?.unwatchProcess(appPid);
         finish(`exited: code=${code} signal=${signal} duration=${Date.now() - startedAt}ms`);
     });
     subprocess.on("error", (e) => {

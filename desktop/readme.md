@@ -196,7 +196,7 @@ portal.on("fileChooser.request", async (req) => {
 
 ### polkit
 
-polkit 认证前端 agent。加载器会在系统总线注册当前 logind session；需要用户认证时 polkitd 调用 agent，桌面通过事件弹窗，密码等输入交回 request。PAM 由 `polkit-agent-helper-1`（socket 激活或 setuid helper）完成，API 不包含 UI。
+polkit 认证前端 agent。主进程启动最早阶段会拉起一个 helper 进程（在 Electron 把主进程搬进 `app-*.scope` 之前），helper 留在登录会话里注册会话级 agent；需要用户认证时 polkitd 调用 agent，事件经主进程转到桌面，密码等输入再回传。PAM 由 `polkit-agent-helper-1`（socket 激活或 setuid helper）完成，API 不包含 UI。`MYDE_POLKIT_HELPER=0` 可关闭 helper。
 
 ```typescript
 const polkit = MSysApi.polkit;
@@ -225,7 +225,9 @@ polkit.on("auth-end", (req, { success, cancelled }) => closeDialog(req));
 - 同一时间只处理一个请求，后续请求排队；当前请求结束后才会为下一个发出 `auth-request`
 - `req.id` 是进程内唯一编号（不是 polkit cookie），用于日志和自建状态表；`auth-end` 可能来自没发出过 `auth-request` 的排队请求，按 `id` 忽略即可
 - `req` 只在 `auth-request` 之后可用；`submitPassword` 应在 `auth-prompt` 回调里调用，且每次 prompt 只调用一次（helper 的 stdin 会缓存，提前或重复发送会被后续 PAM 问题消费）；`cancel` / `selectIdentity` 可在 `auth-request` 到 `auth-end` 之间调用；`auth-end` 之后所有操作静默无效
-- 依赖 `XDG_SESSION_ID` 或 logind 查询 session；认证依赖 `polkit-agent-helper-1`（`/run/polkit/agent-helper.socket` 或带 setuid 的 helper）
+- helper 注册会话级 agent，覆盖会话内所有进程（包括应用派生的子进程）；helper 不在会话里（例如从没有 logind 会话的环境启动）时，会话按 polkitd 的方式查找（PID → 用户 display session → `XDG_SESSION_ID`），失败则退化为按进程（`unix-process`）注册，`runApp` 启动的应用会再按应用 pid 补注册
+- 只有桌面模式（`runAsDesktop`）启动 helper；窗口模式的认证交给宿主桌面，避免抢占宿主 agent
+- 认证依赖 `polkit-agent-helper-1`（`/run/polkit/agent-helper.socket` 或带 setuid 的 helper）
 - 初始化失败（无 system bus、无 logind、无可用 helper）时只告警，`MSysApi.polkit` 保持 `undefined`；polkitd 重启后会自动重新注册
 
 ### verifyUserPassword

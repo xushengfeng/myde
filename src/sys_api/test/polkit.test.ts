@@ -23,8 +23,8 @@ describe("polkit", () => {
     let env: DBusTestEnv;
     let agent: polkit;
     let helperDir: string;
-    let registered: Registration | undefined;
-    let unregistered = false;
+    const registrations: Registration[] = [];
+    let unregisteredCount = 0;
     let firstRequestId = 0;
 
     beforeAll(async () => {
@@ -36,10 +36,10 @@ describe("polkit", () => {
         await authority.init();
         authority.addObject(AUTHORITY_PATH, AUTHORITY_IFACE, {
             RegisterAuthenticationAgent: (subject: unknown, locale: string, objectPath: string) => {
-                registered = { subject, locale, objectPath };
+                registrations.push({ subject, locale, objectPath });
             },
             UnregisterAuthenticationAgent: () => {
-                unregistered = true;
+                unregisteredCount++;
             },
         });
 
@@ -78,18 +78,28 @@ describe("polkit", () => {
 
     afterAll(async () => {
         await agent?.destroy();
-        expect(unregistered).toBe(true);
+        expect(unregisteredCount).toBe(registrations.length);
         fs.rmSync(helperDir, { recursive: true, force: true });
         await env.stop();
     });
 
     it("注册到 polkitd 并完成密码认证", { timeout: 20000 }, async () => {
-        expect(registered?.locale).toBe("C");
-        expect(registered?.objectPath).toBe(AGENT_PATH);
-        expect(registered?.subject).toEqual([
+        expect(registrations.length).toBeGreaterThanOrEqual(2);
+        for (const registration of registrations) {
+            expect(registration.locale).toBe("C");
+            expect(registration.objectPath).toBe(AGENT_PATH);
+        }
+        const sessionRegistration = registrations.find(
+            (registration) => (registration.subject as [string])[0] === "unix-session",
+        );
+        expect(sessionRegistration?.subject).toEqual([
             "unix-session",
             [["session-id", { signature: "s", value: ["test-session"] }]],
         ]);
+        const processRegistration = registrations.find(
+            (registration) => (registration.subject as [string])[0] === "unix-process",
+        );
+        expect(processRegistration).toBeDefined();
 
         const client = await env.createConnection();
         const service = await new dbusClient({ io: client }).getService(AGENT_BUS);
@@ -144,6 +154,21 @@ describe("polkit", () => {
         expect(endedRequest).toBe(request);
         expect(result).toEqual({ success: true, cancelled: false });
         expect(request.info).toBe("Authenticated");
+    });
+
+    it("按进程补注册与注销 agent", async () => {
+        const before = registrations.length;
+        await expect(agent.watchProcess(process.pid)).resolves.toBe(true);
+        expect(registrations).toHaveLength(before + 1);
+        const subject = registrations[registrations.length - 1].subject as [string, [string, unknown][]];
+        expect(subject[0]).toBe("unix-process");
+        expect(subject[1].find(([key]) => key === "pid")?.[1]).toEqual({
+            signature: "u",
+            value: [process.pid],
+        });
+
+        await agent.unwatchProcess(process.pid);
+        await expect(agent.unwatchProcess(process.pid)).resolves.toBeUndefined();
     });
 
     it("取消认证", { timeout: 20000 }, async () => {

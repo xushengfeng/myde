@@ -324,6 +324,49 @@ function isSetuidExecutable(filePath: string): boolean {
     }
 }
 
+/** /proc/<pid>/stat 第 22 字段（1 起）；用来给 unix-process subject 填 start-time */
+function processStartTime(pid = process.pid): bigint {
+    try {
+        const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+        const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+        const ticks = fields[19];
+        return ticks && /^\d+$/.test(ticks) ? BigInt(ticks) : 0n;
+    } catch {
+        return 0n;
+    }
+}
+
+/** /proc/<pid>/status 里的真实 uid；进程已退出返回 undefined */
+function processUid(pid = process.pid): number | undefined {
+    try {
+        const match = /^Uid:\s+(\d+)/m.exec(fs.readFileSync(`/proc/${pid}/status`, "utf8"));
+        return match ? Number(match[1]) : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+function errorText(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 取 dbus 属性值里的第一个字符串。
+ *
+ * myde-dbus 的 get() 会把 variant 的 value 数组原样返回，结构体属性（如
+ * logind User.Display 的 `(so)`）会多一层：`[["2", "/org/..."]]`。
+ */
+function firstString(value: unknown): string | undefined {
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            const found = firstString(item);
+            if (found) return found;
+        }
+    }
+    return undefined;
+}
+
 /**
  * polkit 认证前端 agent。
  *
@@ -339,7 +382,8 @@ export class polkit extends EventEmitter<PolkitEvents> {
     private readonly helperSocketPath: string;
     private readonly options: polkitOptions;
 
-    private sessionId = "";
+    private readonly registeredSubjects: DBusType<"(sa{sv})">[] = [];
+    private readonly appProcesses = new Map<number, DBusType<"(sa{sv})">>();
     private nextRequestId = 1;
     private current?: ActiveAuth;
     private queue: ActiveAuth[] = [];
@@ -364,7 +408,6 @@ export class polkit extends EventEmitter<PolkitEvents> {
     async init(): Promise<void> {
         try {
             await this.io.connect();
-            this.sessionId = this.options.sessionId || (await this.resolveSessionId());
 
             if (this.options.busName) {
                 try {
@@ -420,6 +463,14 @@ export class polkit extends EventEmitter<PolkitEvents> {
             // polkitd 可能已经退出
         }
         this.registered = false;
+        for (const subject of this.appProcesses.values()) {
+            try {
+                await this.unregisterSubject(subject);
+            } catch {
+                // polkitd 可能已经退出
+            }
+        }
+        this.appProcesses.clear();
 
         this.io.removeMessageHandler(this.messageHandler);
 
@@ -443,45 +494,146 @@ export class polkit extends EventEmitter<PolkitEvents> {
         return object.getInterface(AUTHORITY_IFACE);
     }
 
-    private subject(): DBusType<"(sa{sv})"> {
+    private sessionSubject(sessionId: string): DBusType<"(sa{sv})"> {
+        return ["unix-session", [["session-id", dbusVariant<"s">("s", sessionId)]]] as unknown as DBusType<"(sa{sv})">;
+    }
+
+    /**
+     * 以本进程为范围的 agent。
+     *
+     * Electron/Chromium 会把主进程搬进 `app-*.scope`，这个 cgroup 不在
+     * `session-*.scope` 下；polkitd 按 PID 查会话会失败，用登录会话注册 agent
+     * 会报 "session ... differs"。unix-process subject 不查会话，只要 subject
+     * 的 uid 和调用者一致就能注册，所以会话注册失败时退到它。
+     * 这样 logind 等系统服务在为本进程做 polkit 检查时仍能找到这个 agent。
+     */
+    private processSubjectFor(pid: number, uid: number): DBusType<"(sa{sv})"> {
         return [
-            "unix-session",
-            [["session-id", dbusVariant<"s">("s", this.sessionId)]],
+            "unix-process",
+            [
+                ["pid", dbusVariant<"u">("u", pid)],
+                ["start-time", dbusVariant<"t">("t", processStartTime(pid))],
+                ["uid", dbusVariant<"i">("i", uid)],
+            ],
         ] as unknown as DBusType<"(sa{sv})">;
     }
 
-    private async registerWithAuthority(allowAlreadyExists = false) {
+    private processSubject(): DBusType<"(sa{sv})"> {
+        return this.processSubjectFor(process.pid, process.getuid?.() ?? 0);
+    }
+
+    /**
+     * 给 myde 启动的应用补一个进程级 agent。
+     *
+     * 会话级注册不可用时（app-*.scope），用 unix-process 注册只能覆盖本进程；
+     * 应用由桌面启动，pid 已知，就对每个应用进程各注册一次，让这些应用
+     * 自己发起、或系统服务代它们发起的认证也能转到桌面。
+     */
+    async watchProcess(pid: number): Promise<boolean> {
+        if (this.destroyed || pid <= 0 || this.appProcesses.has(pid)) return false;
+        const uid = processUid(pid);
+        if (uid === undefined) return false;
+        const subject = this.processSubjectFor(pid, uid);
         try {
             const authority = await this.getAuthority();
             await authority
-                .call("RegisterAuthenticationAgent", "(sa{sv})ss", this.subject(), this.locale, this.objectPath)
+                .call("RegisterAuthenticationAgent", "(sa{sv})ss", subject, this.locale, this.objectPath)
                 .await();
-            this.registered = true;
+            this.appProcesses.set(pid, subject);
+            return true;
         } catch (error) {
-            const text = error instanceof Error ? error.message : String(error);
-            if (allowAlreadyExists && (/already exists/i.test(text) || text.includes("AlreadyExists"))) {
-                this.registered = true;
-                return;
-            }
-            throw error;
+            console.warn(`[polkit] 为进程 ${pid} 注册认证 agent 失败:`, errorText(error));
+            return false;
         }
     }
 
-    private async unregisterFromAuthority() {
-        const authority = await this.getAuthority();
-        await authority.call("UnregisterAuthenticationAgent", "(sa{sv})s", this.subject(), this.objectPath).await();
+    /** 应用退出后注销它的 agent；进程已消失时注销会失败，忽略即可 */
+    async unwatchProcess(pid: number): Promise<void> {
+        const subject = this.appProcesses.get(pid);
+        if (!subject) return;
+        this.appProcesses.delete(pid);
+        try {
+            await this.unregisterSubject(subject);
+        } catch {
+            // 总线上没有这个 agent 了（polkitd 重启/进程已退出）
+        }
     }
 
-    private async resolveSessionId(): Promise<string> {
-        if (process.env.XDG_SESSION_ID) return process.env.XDG_SESSION_ID;
+    private async registerWithAuthority(allowAlreadyExists = false) {
+        const authority = await this.getAuthority();
+        const sessionIds = this.options.sessionId ? [this.options.sessionId] : await this.resolveSessionIds();
+        this.registeredSubjects.length = 0;
 
+        let lastError: unknown;
+        const tryRegister = async (subject: DBusType<"(sa{sv})">): Promise<boolean> => {
+            try {
+                await authority
+                    .call("RegisterAuthenticationAgent", "(sa{sv})ss", subject, this.locale, this.objectPath)
+                    .await();
+                return true;
+            } catch (error) {
+                if (allowAlreadyExists && /already exists|AlreadyExists/i.test(errorText(error))) return true;
+                lastError = error;
+                return false;
+            }
+        };
+
+        const registeredSessions: string[] = [];
+        for (const sessionId of sessionIds) {
+            const subject = this.sessionSubject(sessionId);
+            if (await tryRegister(subject)) {
+                this.registeredSubjects.push(subject);
+                registeredSessions.push(sessionId);
+            }
+        }
+
+        const processSubject = this.processSubject();
+        const processRegistered = await tryRegister(processSubject);
+        if (processRegistered) this.registeredSubjects.push(processSubject);
+
+        if (this.registeredSubjects.length === 0) {
+            throw lastError instanceof Error ? lastError : new Error(errorText(lastError));
+        }
+        this.registered = true;
+
+        if (registeredSessions.length > 0) {
+            console.log(`[polkit] 已注册会话级认证 agent（session ${registeredSessions.join(",")}）`);
+        } else if (processRegistered) {
+            console.warn(
+                "[polkit] 登录会话不可用（运行在 app-*.scope），已按进程注册认证 agent；桌面启动的应用会按 pid 补注册",
+            );
+        }
+    }
+
+    private async unregisterSubject(subject: DBusType<"(sa{sv})">) {
+        const authority = await this.getAuthority();
+        await authority.call("UnregisterAuthenticationAgent", "(sa{sv})s", subject, this.objectPath).await();
+    }
+
+    private async unregisterFromAuthority() {
+        for (const subject of this.registeredSubjects) {
+            await this.unregisterSubject(subject);
+        }
+        this.registeredSubjects.length = 0;
+    }
+
+    /**
+     * 收集可能要注册的会话，按 polkitd 的解析方式排序：
+     * PID 所在会话（helper 在 session scope 时可用）、用户 display session
+     * （app-*.scope 里的进程会被 polkitd 回退到这个会话）、最后是 XDG_SESSION_ID。
+     */
+    private async resolveSessionIds(): Promise<string[]> {
+        const ids: string[] = [];
+        const add = (id: string | undefined) => {
+            const value = id?.trim();
+            if (value && !ids.includes(value)) ids.push(value);
+        };
         const uid = process.getuid?.() ?? 0;
         try {
             const manager = await this.getLoginManager();
             const [sessionPath] = await manager.call("GetSessionByPID", "u", process.pid).as<"o">();
             const session = await (await this.loginService()).getObject(sessionPath);
-            const [id] = await (await session.getInterface(LOGIN_SESSION_IFACE)).get<"s">("Id");
-            if (id) return id;
+            add(firstString(await (await session.getInterface(LOGIN_SESSION_IFACE)).get<"s">("Id")));
         } catch {
             // 继续尝试 User.Display
         }
@@ -490,13 +642,13 @@ export class polkit extends EventEmitter<PolkitEvents> {
             const manager = await this.getLoginManager();
             const [userPath] = await manager.call("GetUser", "u", uid).as<"o">();
             const user = await (await this.loginService()).getObject(userPath);
-            const [id] = await (await user.getInterface(LOGIN_USER_IFACE)).get<"so">("Display");
-            if (id) return id;
+            add(firstString(await (await user.getInterface(LOGIN_USER_IFACE)).get<"so">("Display")));
         } catch (error) {
             console.warn("[polkit] 无法从 logind 获取 session:", error);
         }
 
-        throw new Error("无法确定当前 logind session，缺少 XDG_SESSION_ID 且 logind 查询失败");
+        add(process.env.XDG_SESSION_ID);
+        return ids;
     }
 
     private async loginService() {
@@ -1010,3 +1162,11 @@ export class polkit extends EventEmitter<PolkitEvents> {
         }
     }
 }
+
+/**
+ * 桌面侧可用的 polkit agent 接口。
+ *
+ * 本地 agent（helper 里）和主进程代理（polkitRemote）都实现这些成员；
+ * 桌面只依赖这部分，不关心 agent 实际跑在哪个进程。
+ */
+export type PolkitApi = Pick<polkit, "on" | "off" | "once" | "getRequest" | "watchProcess" | "unwatchProcess">;

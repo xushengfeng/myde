@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import { closeSync, rmSync } from "node:fs";
+import { closeSync, existsSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { format } from "node:util";
@@ -8,12 +8,14 @@ import { app, BrowserWindow, globalShortcut, ipcMain, nativeTheme, sharedTexture
 import { uniqueSocketPath } from "../socket-name";
 import { formatLogTime, getLogDir, RotatingLogFile } from "../utils/log";
 import { startInternalPortal, stopInternalPortal } from "./internal_portal";
+import type { PolkitHelperCommand, PolkitHelperEvent } from "./polkit_ipc";
 
 const run_path = path.join(path.resolve(__dirname, ""), "../../");
 
 import url from "node:url";
 
 const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
+const childProcess = require("node:child_process") as typeof import("node:child_process");
 
 let /** 是否开启开发模式 */ dev: boolean;
 
@@ -51,6 +53,49 @@ mainLog(
     `start: version=${app.getVersion()} electron=${process.versions.electron} node=${process.versions.node} pid=${process.pid} argv=${JSON.stringify(process.argv)}`,
 );
 mainLog("info", `log file: ${mainLogFile.filePath}`);
+
+// polkit agent 的 helper 必须在 Chromium 把主进程搬进 app-*.scope 之前启动：
+// 它继承当前 cgroup，会留在登录会话里，从而能注册会话级 agent（覆盖应用子进程）。
+// 放到 app.whenReady 里就太晚了。
+const polkitHelperPath = path.join(__dirname, "polkit_helper.js");
+let polkitHelper: import("node:child_process").ChildProcess | undefined;
+let polkitBridgeReady = false;
+const polkitPending: PolkitHelperEvent[] = [];
+
+function startPolkitHelper() {
+    // 窗口模式下认证由宿主桌面处理，注册我们自己的 agent 反而会把宿主的弹窗抢过来
+    if (!process.env.runAsDesktop) return;
+    if (process.env.testMode === "on") return;
+    if (process.env.MYDE_POLKIT_HELPER === "0") return;
+    if (!existsSync(polkitHelperPath)) {
+        mainLog("warn", `[polkit-helper] 找不到 ${polkitHelperPath}，跳过`);
+        return;
+    }
+    try {
+        polkitHelper = childProcess.spawn(process.execPath, [polkitHelperPath], {
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+            stdio: ["ignore", "pipe", "pipe", "ipc"],
+        });
+    } catch (error) {
+        mainLog("warn", `[polkit-helper] 启动失败: ${String(error)}`);
+        return;
+    }
+    polkitHelper.stdout?.on("data", (data: Buffer) => mainLog("info", `[polkit-helper] ${data.toString().trimEnd()}`));
+    polkitHelper.stderr?.on("data", (data: Buffer) => mainLog("warn", `[polkit-helper] ${data.toString().trimEnd()}`));
+    polkitHelper.on("message", (message: PolkitHelperEvent) => {
+        if (polkitBridgeReady && mainWin && !mainWin.isDestroyed()) {
+            mainWin.webContents.send("polkit:event", message);
+        } else {
+            polkitPending.push(message);
+        }
+    });
+    polkitHelper.on("error", (error) => mainLog("warn", `[polkit-helper] 错误: ${String(error)}`));
+    polkitHelper.once("exit", (code, signal) => {
+        mainLog("warn", `[polkit-helper] 退出 code=${code} signal=${signal}`);
+        polkitHelper = undefined;
+    });
+}
+startPolkitHelper();
 
 let the_icon = path.join(run_path, "assets/logo/1024x1024.png");
 if (process.platform === "win32") {
@@ -113,6 +158,13 @@ async function createWin() {
         roundedCorners: !runAsDesktop,
     });
     mainWin = main_window;
+    main_window.webContents.once("did-finish-load", () => {
+        polkitBridgeReady = true;
+        if (!mainWin || mainWin.isDestroyed()) return;
+        for (const message of polkitPending.splice(0)) {
+            mainWin.webContents.send("polkit:event", message);
+        }
+    });
     main_window.on("closed", () => {
         sharedLog("main window closed");
         mainLog("info", "main window closed");
@@ -215,6 +267,8 @@ app.whenReady().then(async () => {
 
 app.on("will-quit", () => {
     stopInternalPortal();
+    polkitHelper?.kill();
+    polkitHelper = undefined;
     // Unregister all shortcuts.
     globalShortcut.unregisterAll();
 });
@@ -387,6 +441,14 @@ server.on("connection", (socket) => {
         closeFds();
     });
     socket.on("end", closeFds);
+});
+
+ipcMain.on("polkit:action", (_event, action: PolkitHelperCommand) => {
+    try {
+        polkitHelper?.send(action);
+    } catch {
+        // helper 正在退出，IPC 通道已关闭
+    }
 });
 
 ipcMain.on("test", (_, data) => {
