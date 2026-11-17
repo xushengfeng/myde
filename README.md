@@ -67,7 +67,7 @@ myde --no-internal-portal
 
 ### 运行在主机上
 
-如果不想以窗口模式运行，需要使用[myde-wrap](https://github.com/xushengfeng/myde-wrap/tree/1c22ee9ed0caf697025210d61d966aa16c4afe93)项目，用`cargo build`编译后即可通过`./myde-wrap myde`运行，`myde`可以从release获取。
+如果不想以窗口模式运行，仓库内的 [`myde-wrap/`](./myde-wrap) 就是用于此目的的 Rust 合成器（开发说明见 [`myde-wrap/AGENTS.md`](./myde-wrap/AGENTS.md)），`cargo build --release` 编译后即可通过 `./myde-wrap myde` 运行，`myde` 可以从 release 获取。
 
 release 的安装包已内置编译好的 `myde-wrap`；本地执行 `npm run build:myde-wrap` 编译后，`npm run pack`/`npm run dist` 打包时也会自动带上（没有编译过则不打包）。
 

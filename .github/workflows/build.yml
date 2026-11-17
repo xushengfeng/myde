@@ -5,10 +5,6 @@ on:
         tags:
             - "*"
 
-env:
-    # myde-wrap 固定版本（完整 commit hash），与 script/myde_wrap/build.sh 的默认值一致
-    MYDE_WRAP_REF: 1c22ee9ed0caf697025210d61d966aa16c4afe93
-
 permissions:
     contents: write
 
@@ -39,8 +35,8 @@ jobs:
             - name: Cache myde-wrap target
               uses: actions/cache@v4
               with:
-                  path: ${{ runner.temp }}/myde-wrap/target
-                  key: myde-wrap-${{ runner.os }}-${{ matrix.arch }}-${{ env.MYDE_WRAP_REF }}
+                  path: myde-wrap/target
+                  key: myde-wrap-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('myde-wrap/Cargo.lock') }}
 
             - name: Install Linux dependencies
               run: |
@@ -49,8 +45,6 @@ jobs:
                   sudo apt-get install -y pkg-config libdrm-dev libgbm-dev libudev-dev libinput-dev libseat-dev libpixman-1-dev libxkbcommon-dev
 
             - name: Build myde-wrap
-              env:
-                  MYDE_WRAP_DIR: ${{ runner.temp }}/myde-wrap
               run: bash script/myde_wrap/build.sh
 
             - name: Build (Linux ${{ matrix.arch }})

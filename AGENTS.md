@@ -32,6 +32,13 @@
 
 大部分api用了dbus，但是dbus的具体创建、连接在外部。class创建时应该传入dbus作为参数
 
+## myde-wrap
+
+`myde-wrap/` 是 Rust 实现的轻量 Wayland 合成器：没有宿主桌面时用它把 `myde` 直接输出到 DRM，也提供 winit 后端便于在宿主桌面上调试。
+
+- 编译：`npm run build:myde-wrap`（产物 `resources/myde-wrap`，打包时自动带上），或进入 `myde-wrap/` 直接 `cargo build`
+- 应用通过 `MYDE_WRAP_SOCKET` 连接 Unix Socket 与它交互；消息格式、屏幕语义和开发说明见 [`myde-wrap/AGENTS.md`](myde-wrap/AGENTS.md)
+
 ## 测试工具
 
 可以自定义应用，实现针对性测试
