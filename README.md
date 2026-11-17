@@ -53,15 +53,17 @@ pnpm i
 
 执行后将会弹出窗口，你可以在其中启动系统已安装的应用程序。
 
-窗口模式下如果需要使用 MyDE 自己的文件选择器，可以开启内部 portal（私有 dbus + xdg-desktop-portal 子进程）：
+MyDE 默认启动内部 portal（私有 dbus + xdg-desktop-portal 子进程），由 MyDE 启动的应用会连到私有总线，从而使用 MyDE 的文件选择器。
+
+该模式只影响由 MyDE 启动的应用，不会修改宿主的 session bus 或 portal 配置；代价是这些应用只连私有总线，看不到宿主的 MPRIS、通知等服务。如需改回宿主 session bus：
 
 ```shell
-MYDE_INTERNAL_PORTAL=1 pnpm run desktop:offical
+MYDE_INTERNAL_PORTAL=0 pnpm run desktop:offical
 # 或给已安装的 myde 可执行文件加参数
-myde --internal-portal
+myde --no-internal-portal
 ```
 
-该模式只影响由 MyDE 启动的应用，不会修改宿主的 session bus 或 portal 配置；代价是这些应用只连私有总线，看不到宿主的 MPRIS、通知等服务。
+`MYDE_INTERNAL_PORTAL=1` / `--internal-portal` 仍可显式开启；测试实例默认不启动内部 portal。
 
 ### 运行在主机上
 

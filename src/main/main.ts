@@ -179,8 +179,13 @@ dev = true;
 
 const isTestMode = process.env.testMode === "on";
 
-// 全局开关：窗口模式下启动私有 dbus + xdg-desktop-portal，避免影响宿主 portal。
-const useInternalPortal = process.env.MYDE_INTERNAL_PORTAL === "1" || process.argv.includes("--internal-portal");
+// 默认启动私有 dbus + xdg-desktop-portal，避免依赖宿主 portal；--no-internal-portal
+// 或 MYDE_INTERNAL_PORTAL=0 可关闭。测试实例默认关闭，显式开启时仍会启动。
+const internalPortalForced = process.env.MYDE_INTERNAL_PORTAL === "1" || process.argv.includes("--internal-portal");
+const internalPortalDisabled =
+    process.env.MYDE_INTERNAL_PORTAL === "0" || process.argv.includes("--no-internal-portal");
+const useInternalPortal = internalPortalDisabled ? false : isTestMode ? internalPortalForced : true;
+mainLog("info", `internal portal: ${useInternalPortal ? "on" : "off"}`);
 
 if (isTestMode) {
     dev = false;
@@ -196,10 +201,11 @@ app.commandLine.appendSwitch("enable-experimental-web-platform-features", "enabl
 app.whenReady().then(async () => {
     if (useInternalPortal) {
         try {
-            await startInternalPortal({
+            const handle = await startInternalPortal({
                 userDataDir: app.getPath("userData"),
                 runtimeDir: process.env.XDG_RUNTIME_DIR || app.getPath("temp"),
             });
+            console.log(`[portal] 内部 portal 已启动: ${handle.busAddress}`);
         } catch (e) {
             console.warn("[portal] 内部 portal 启动失败，回退到宿主 session bus:", e);
         }

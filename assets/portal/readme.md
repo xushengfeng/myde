@@ -8,5 +8,6 @@
 会话需要设置 `XDG_CURRENT_DESKTOP=MyDE`。开发和测试时可以用
 `XDG_DESKTOP_PORTAL_DIR` 指向 `assets/portal/portals`，不要改系统文件。
 
-窗口模式可以用 `myde --internal-portal` 启动私有 dbus + xdg-desktop-portal；
-配置文件会写到 MyDE 的 userData 目录，不会写入系统目录。
+MyDE 默认启动私有 dbus + xdg-desktop-portal，把 MyDE 启动的应用连到内部 portal；
+用 `--no-internal-portal` 或 `MYDE_INTERNAL_PORTAL=0` 关闭。配置文件会写到 MyDE 的
+userData 目录，不会写入系统目录。
