@@ -103,6 +103,9 @@ export function server(op: { dev?: boolean; render: renderTools }) {
         LANGUAGE: env.LANGUAGE,
         PATH: env.PATH,
         DBUS_SESSION_BUS_ADDRESS: env.MYDE_INTERNAL_BUS_ADDRESS || env.DBUS_SESSION_BUS_ADDRESS,
+        // 应用（以及嵌套启动的桌面）靠它找登录会话，logind 在 app-*.scope 里
+        // 无法按 PID 反查会话
+        XDG_SESSION_ID: env.XDG_SESSION_ID,
         XDG_CURRENT_DESKTOP: env.XDG_CURRENT_DESKTOP || "MyDE",
         ...(op?.dev ? { WAYLAND_DEBUG: "1" } : {}),
     };
@@ -267,6 +270,7 @@ export function runApp(
             WAYLAND_DEBUG?: string;
             PATH?: string;
             DBUS_SESSION_BUS_ADDRESS?: string;
+            XDG_SESSION_ID?: string;
             XDG_CURRENT_DESKTOP?: string;
         };
         server: {
@@ -293,6 +297,7 @@ export function runApp(
             LANG: lang,
             ...(language ? { LANGUAGE: language } : {}),
             XDG_SESSION_TYPE: "wayland",
+            ...(op.deEnv.XDG_SESSION_ID ? { XDG_SESSION_ID: op.deEnv.XDG_SESSION_ID } : {}),
             XDG_RUNTIME_DIR: op.server.socketDir,
             XDG_CURRENT_DESKTOP: op.deEnv.XDG_CURRENT_DESKTOP || "MyDE",
             XDG_SESSION_DESKTOP: "MyDE",

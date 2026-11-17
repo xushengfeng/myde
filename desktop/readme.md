@@ -340,13 +340,13 @@ if (input.isInitialized()) {
 方法：
 
 - `input.getDevices()` / `input.getDevice(path)` / `input.isInitialized()` / `input.destroy()`
-- `input.getAccessMode()`（实际：`"logind"` / `"direct"`）/ `input.getAccessError()`（回退 direct 时 logind 的失败原因）
+- `input.getAccessMode()`（实际：`"logind"` / `"direct"` / `"none"`）/ `input.getAccessError()`（回退 direct 时 logind 的失败原因）
 - `dev.startReading()` / `dev.stopReading()` / `dev.isReading()`
 - 方法返回 `Result`：`{ ok: true, value }` 或 `{ ok: false, error: { code, message, detail? } }`，不会抛出异常
 
 按键码为 Linux evdev 键码（如 30=KEY_A、272=BTN_LEFT），浏览器 `e.code` 可用 `MInputMap.mapKeyCode` 转换
 
-权限要求：logind 模式下只需从登录会话（TTY/显示管理器）启动；回退到 direct 时用户需要能读 `/dev/input/event*`（`input` 组或 `uaccess` 规则，`script/input_access.sh` 可一键配置），否则设备列表为空或 `errors` 提示 Permission denied。VT 切走时 logind 会让读取暂停，切回后用新的 fd 继续。
+权限要求：logind 模式下只需从登录会话（TTY/显示管理器）启动；找不到会话时还会用环境变量 `XDG_SESSION_ID` 定位登录会话（Electron 会把主进程移进 `app-*.scope`，此时按 PID 查不到会话）。回退到 direct 时用户需要能读 `/dev/input/event*`（`input` 组或 `uaccess` 规则，`script/input_access.sh` 可一键配置），否则设备列表为空或 `errors` 提示 Permission denied。VT 切走时 logind 会让读取暂停，切回后用新的 fd 继续。
 
 ### inputSim
 

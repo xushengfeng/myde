@@ -34,7 +34,7 @@
         "ini": "^5.0.0",
         "myde-dbus": "^0.4.0",
         "myde-drm": "^0.1.6",
-        "myde-input": "^1.0.4",
+        "myde-input": "^1.0.5",
         "msgpackr": "^1.11.0",
         "myde-pam-client": "^0.1.3",
         "myde-remote-connect": "^0.0.5",
