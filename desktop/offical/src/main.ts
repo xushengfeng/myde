@@ -1555,6 +1555,8 @@ type ResizeEdge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
 const RESIZE_EDGE_SIZE = 6;
 const RESIZE_CORNER_SIZE = 14;
+/** 热区跨在窗口边界上时露在窗口外的比例，0.5 为居中 */
+const RESIZE_OUTSIDE_RATIO = 0.5;
 /** 最小窗口尺寸（逻辑 px，Wayland 窗口再按输出缩放换算成 CSS px） */
 const RESIZE_MIN_WIDTH = 200;
 const RESIZE_MIN_HEIGHT = 150;
@@ -1665,25 +1667,23 @@ function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
             })
             .data({ "resize-cursor": resizeCursors[edge], "desktop-ui": "resize-handle" });
 
-        // 贴边：竖边左右贯通到角热区，横边上下贯通，角热区最后添加且层级更高
-        if (edge.includes("n")) handle.style({ top: "0px" });
-        if (edge.includes("s")) handle.style({ bottom: "0px" });
-        if (edge.includes("w")) handle.style({ left: "0px" });
-        if (edge.includes("e")) handle.style({ right: "0px" });
-        if (edge === "n" || edge === "s") {
-            handle.style({
-                left: uiSized(RESIZE_CORNER_SIZE),
-                right: uiSized(RESIZE_CORNER_SIZE),
-                height: uiSized(size),
-            });
-        } else if (edge === "w" || edge === "e") {
-            handle.style({
-                top: uiSized(RESIZE_CORNER_SIZE),
-                bottom: uiSized(RESIZE_CORNER_SIZE),
-                width: uiSized(size),
-            });
-        } else {
+        // 热区跨在窗口边界上：内外各占一半，避免靠边的客户端内容被整条挡住；
+        // 边热区贯通整条边，角热区最后添加且层级更高，盖住交叠处
+        if (corner) {
+            const offset = uiSized(-size * RESIZE_OUTSIDE_RATIO);
+            if (edge.includes("n")) handle.style({ top: offset });
+            if (edge.includes("s")) handle.style({ bottom: offset });
+            if (edge.includes("w")) handle.style({ left: offset });
+            if (edge.includes("e")) handle.style({ right: offset });
             handle.style({ width: uiSized(size), height: uiSized(size) });
+        } else if (edge === "n" || edge === "s") {
+            const offset = uiSized(-size * RESIZE_OUTSIDE_RATIO);
+            handle.style(edge === "n" ? { top: offset } : { bottom: offset });
+            handle.style({ left: "0px", right: "0px", height: uiSized(size) });
+        } else {
+            const offset = uiSized(-size * RESIZE_OUTSIDE_RATIO);
+            handle.style(edge === "w" ? { left: offset } : { right: offset });
+            handle.style({ top: "0px", bottom: "0px", width: uiSized(size) });
         }
 
         handle.on("pointerdown", (e) => beginWindowResize(e, edge, el, windowId, wayland));
@@ -1882,12 +1882,19 @@ function openSettingsWindow() {
         maxWidth: "calc(100vw - 24px)",
         maxHeight: "calc(100vh - 24px)",
         borderRadius: "18px",
-        overflow: "hidden",
         background: "rgba(245, 245, 245, 0.97)",
         backdropFilter: "blur(18px)",
         boxShadow: "0 12px 40px #00000033",
         boxSizing: "border-box",
     });
+    // 内容单独裁剪圆角；根节点不裁剪，缩放热区才能跨到窗口外
+    const clip = view().style({
+        position: "absolute",
+        inset: "0",
+        borderRadius: "18px",
+        overflow: "hidden",
+    });
+    root.add(clip);
     // 外层窗口尺寸用视觉 px（居中/拖动/缩放沿用通用窗口逻辑）；内容在内层按屏幕缩放放大
     const inner = view("y").style({
         width: "100%",
@@ -1900,7 +1907,7 @@ function openSettingsWindow() {
         flexDirection: "column",
         zoom: "var(--desktop-ui-scale, 1)",
     });
-    root.add(inner);
+    clip.add(inner);
 
     const header = view("x")
         .style({
