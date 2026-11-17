@@ -1177,6 +1177,8 @@ function createScreenEl(id: string, onClick: () => void) {
 
 function applyScreenTransform(el: ElType<HTMLElement>, value: ViewTransform) {
     el.style({
+        // 屏幕内容整体被预览缩放；覆盖层用倒数抵消，保持固定视觉尺寸
+        "--view-inv-scale": `${1 / Math.max(value.scale, 0.0001)}`,
         transform: `translate3d(${value.x}px, ${value.y}px, 0) scale(${value.scale})`,
         opacity: `${value.opacity}`,
         filter: value.blur > 0 ? `blur(${value.blur}px)` : "none",
@@ -1551,6 +1553,25 @@ function createWindowCloseButton(op: { size: number; onClick: () => void }) {
     return btn;
 }
 
+/**
+ * 全局预览里窗口右上角的关闭按钮。
+ * 挂在窗口元素上，虚拟屏以后放多个窗口时每个窗口仍各自定位；
+ * 卡片整体按预览比例缩小，这里用 `--view-inv-scale` 抵消，同时乘上桌面 UI 缩放，
+ * 让按钮在任何缩放和卡片大小下都保持固定的视觉尺寸。
+ */
+function createOverviewWindowCloseButton(onClose: () => void) {
+    return createWindowCloseButton({ size: 24, onClick: onClose })
+        .style({
+            position: "absolute",
+            top: "calc(10px * var(--desktop-ui-scale, 1) * var(--view-inv-scale, 1))",
+            right: "calc(10px * var(--desktop-ui-scale, 1) * var(--view-inv-scale, 1))",
+            transformOrigin: "top right",
+            transform: "scale(calc(var(--desktop-ui-scale, 1) * var(--view-inv-scale, 1)))",
+            zIndex: "30",
+        })
+        .data({ "desktop-ui": "window-close" });
+}
+
 // ── 鼠标缩放窗口 ─────────────────────────────────────────────────────────────────────────────
 // 窗口四周铺一圈透明热区（8 个方向），按住后按鼠标位移改 DOM 尺寸；Wayland 客户端窗口再同步
 // window.setSize，让客户端按新尺寸重绘。窗口没有标题栏/边框，热区贴边覆盖在内容上。
@@ -1587,6 +1608,16 @@ addStyle({
     // 总览里内容不再接收指针，点击整张卡片只用于切换
     "[data-overview] [data-view-id] > *": {
         pointerEvents: "none",
+    },
+    // 卡片关闭按钮只在全局预览里出现，且要抢在内容禁指针之上
+    "[data-desktop-ui='window-close']": {
+        opacity: "0",
+        pointerEvents: "none",
+        transition: "opacity 120ms ease-out",
+    },
+    "[data-overview] [data-view-id] [data-desktop-ui='window-close']": {
+        opacity: "1",
+        pointerEvents: "auto",
     },
 });
 
@@ -2038,6 +2069,7 @@ function openSettingsWindow() {
     internalWindows.set(SETTINGS_WINDOW_ID, { el: root, setActive, dispose: settingsContent.dispose });
     addWindow(screen, root.el, SETTINGS_WINDOW_ID);
     addResizeHandles(root.el, SETTINGS_WINDOW_ID, false);
+    createOverviewWindowCloseButton(closeSettingsWindow).addInto(root.el);
     viewData.focusWin(SETTINGS_WINDOW_ID);
 }
 
@@ -2665,6 +2697,7 @@ server.server.on("window.created", (info) => {
     });
     addWindow(screen, winEl, wid);
     addResizeHandles(winEl, wid, true);
+    createOverviewWindowCloseButton(() => server.server.notify("window.close", wid)).addInto(winEl);
     viewData.focusWin(wid);
     server.server.notify("window.setBox", wid, { width: 800, height: 600 });
 });
