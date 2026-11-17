@@ -23,7 +23,7 @@ use smithay::reexports::{
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -32,10 +32,16 @@ use tracing::{error, info, warn};
 use crate::backend::RenderBackend;
 use crate::compositor::Compositor;
 use crate::drm::DrmBackend;
+use crate::protocol::{ClientMessage, ServerResponse};
 use crate::renderer::Renderer as MyRenderer;
 use crate::socket::SocketServer;
 use crate::wayland::App;
 use crate::winit::WinitBackend;
+
+/// 向页面发送 Ping 的间隔
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
+/// 连接建立后多久没有任何控制消息就判定页面卡死
+const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Parser)]
 #[command(name = "myde-wrap")]
@@ -327,29 +333,111 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 渲染后端交给事件循环线程独占（vblank/commit 事件驱动渲染需要直接访问它）
     state.set_backend(backend, renderer.clone());
 
+    // 页面心跳：控制连接建立后，wrap 每 3 秒发 Ping，页面收到后回 Pong。
+    // 页面卡死时事件循环不再处理消息，超时后让主循环退出，避免把最后一帧
+    // 一直留在屏幕上（此时也无法再通过输入恢复）。
+    let heartbeat_base = Instant::now();
+    let heartbeat_last = Arc::new(AtomicU64::new(0));
+    let heartbeat_armed = Arc::new(AtomicBool::new(false));
+    let heartbeat_lost = Arc::new(AtomicBool::new(false));
+    {
+        let last = heartbeat_last.clone();
+        let armed = heartbeat_armed.clone();
+        let lost = heartbeat_lost.clone();
+        let shutdown = shutdown.clone();
+        let loop_signal = event_loop.get_signal();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(500));
+            if !armed.load(Ordering::Acquire) {
+                continue;
+            }
+            let idle = heartbeat_base.elapsed().as_millis();
+            let last = last.load(Ordering::Acquire) as u128;
+            let idle = idle.saturating_sub(last);
+            if idle < HEARTBEAT_TIMEOUT.as_millis() {
+                continue;
+            }
+            error!(
+                "控制连接心跳超时（{:.1} 秒没有收到页面消息），页面可能已卡死，退出",
+                idle as f64 / 1000.0
+            );
+            lost.store(true, Ordering::Release);
+            shutdown.store(true, Ordering::Release);
+            loop_signal.wakeup();
+            break;
+        });
+    }
+
     // 克隆socket_server以在事件循环中使用
     let socket_server_clone = socket_server.clone();
+    let heartbeat_last_for_accept = heartbeat_last.clone();
+    let heartbeat_armed_for_accept = heartbeat_armed.clone();
 
     // 在单独的线程中接受和处理socket连接，完全不阻塞主事件循环
     std::thread::spawn(move || {
         let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
         loop {
-            if let Some(mut stream) = socket_server_clone.accept() {
+            if let Some(stream) = socket_server_clone.accept() {
+                // 新连接先刷新心跳，避免页面重载的间隔被误判为卡死
+                heartbeat_last_for_accept.store(
+                    heartbeat_base.elapsed().as_millis() as u64,
+                    Ordering::Release,
+                );
+                heartbeat_armed_for_accept.store(true, Ordering::Release);
                 let compositor = compositor.clone();
                 let rt_clone = rt.clone();
+                let last = heartbeat_last_for_accept.clone();
                 // 为每个连接单独分配一个线程，长连接完全不干扰主循环
                 std::thread::spawn(move || {
                     info!("received new socket connection");
-                    // 控制连接是长连接：空闲是正常状态，不能因为一段时间没消息就断开。
-                    // 连接关闭由客户端断开或读写错误驱动。
+                    let mut read_stream = match stream.try_clone() {
+                        Ok(stream) => stream,
+                        Err(e) => {
+                            error!("failed to clone control socket: {}", e);
+                            return;
+                        }
+                    };
+                    let write_stream = Arc::new(std::sync::Mutex::new(stream));
+                    let alive = Arc::new(AtomicBool::new(true));
+
+                    // 主动 Ping 页面，页面用 Pong 证明事件循环还活着。
+                    // 读和写在不同线程，写用同一把锁避免消息交错。
+                    {
+                        let write_stream = write_stream.clone();
+                        let alive = alive.clone();
+                        std::thread::spawn(move || loop {
+                            std::thread::sleep(HEARTBEAT_INTERVAL);
+                            if !alive.load(Ordering::Acquire) {
+                                break;
+                            }
+                            let mut stream = write_stream.lock().unwrap();
+                            if let Err(e) =
+                                socket::write_message(&mut stream, &ServerResponse::Ping)
+                            {
+                                error!("failed to send heartbeat: {}", e);
+                                break;
+                            }
+                        });
+                    }
+
                     loop {
-                        match socket::read_message(&mut stream) {
+                        match socket::read_message(&mut read_stream) {
                             Ok(msg) => {
-                                info!("received message: {:?}", msg);
+                                last.store(
+                                    heartbeat_base.elapsed().as_millis() as u64,
+                                    Ordering::Release,
+                                );
+                                // 心跳每 3 秒一次，不刷日志
+                                if !matches!(msg, ClientMessage::Ping | ClientMessage::Pong) {
+                                    info!("received message: {:?}", msg);
+                                }
                                 let response = rt_clone.block_on(compositor.handle_message(msg));
-                                if let Err(e) = socket::write_message(&mut stream, &response) {
-                                    error!("failed to send response: {}", e);
-                                    break;
+                                if let Some(response) = response {
+                                    let mut stream = write_stream.lock().unwrap();
+                                    if let Err(e) = socket::write_message(&mut stream, &response) {
+                                        error!("failed to send response: {}", e);
+                                        break;
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -359,6 +447,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
+                    alive.store(false, Ordering::Release);
                 });
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -422,6 +511,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let signaled = shutdown.load(Ordering::Acquire);
+    let heartbeat_lost = heartbeat_lost.load(Ordering::Acquire);
     if signaled {
         info!("正在退出并恢复显示…");
     }
@@ -445,11 +535,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 恢复显示放在子进程之后，避免它最后几帧又盖回去
     state.shutdown_backend();
-    if signaled {
+    if signaled && !heartbeat_lost {
         // 信号退出（Ctrl+C）是主动行为，不当作应用异常报错
         eprintln!("myde-wrap: 已退出");
     }
     loop_result?;
+
+    // 页面卡死导致的退出要带错误码，方便调用方决定是否重启
+    if heartbeat_lost {
+        return Err("控制连接心跳超时，页面可能已卡死".into());
+    }
 
     // 应用异常退出时以非零退出码结束，方便调用方发现问题
     if !signaled {

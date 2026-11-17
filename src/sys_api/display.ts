@@ -154,6 +154,16 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
     private handleMessage(message: DisplayMessage): void {
         const { type, ...data } = message;
 
+        // wrap 的心跳：立即回 Pong 证明页面事件循环还在运行。
+        // 页面卡死时没有回包，wrap 会在超时后退出并释放屏幕。
+        if (type === "Ping") {
+            try {
+                this.send({ type: "Pong" });
+            } catch {
+                // socket 已断开，close 事件会停止心跳
+            }
+        }
+
         if (type === "Error") {
             // Reject all pending requests on error
             for (const [id, pending] of this.pendingRequests) {

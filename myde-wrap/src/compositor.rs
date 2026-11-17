@@ -20,10 +20,10 @@ impl Compositor {
         self.redraw.store(true, Ordering::Release);
     }
 
-    pub async fn handle_message(&self, msg: ClientMessage) -> ServerResponse {
+    pub async fn handle_message(&self, msg: ClientMessage) -> Option<ServerResponse> {
         let mut renderer = self.renderer.lock().await;
 
-        match msg {
+        let response = match msg {
             ClientMessage::SetWindowSize { width, height } => {
                 renderer.set_window_size(width, height);
                 self.invalidate();
@@ -101,6 +101,10 @@ impl Compositor {
                 }
             }
             ClientMessage::Ping => ServerResponse::Pong,
-        }
+            // 心跳回包没有响应，避免 Pong 再触发一轮 Pong
+            ClientMessage::Pong => return None,
+        };
+
+        Some(response)
     }
 }
