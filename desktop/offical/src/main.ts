@@ -1477,6 +1477,9 @@ const FULLSCREEN_BINDINGS: KeyBinding[] = [{ code: "KeyF", meta: true }];
 /** 顶部启动器：Alt+Space 拉出/收起 */
 const LAUNCHER_BINDINGS: KeyBinding[] = [{ code: "Space", alt: true }];
 
+/** 锁屏：Super+L */
+const LOCK_BINDINGS: KeyBinding[] = [{ code: "KeyL", meta: true }];
+
 class Timer {
     private timerId: number | undefined;
     private onxcb: () => void = () => {};
@@ -5531,6 +5534,11 @@ body.on("keydown", (e) => {
         return;
     }
     if (state.getState() !== "normal") return;
+    if (!e.repeat && matchBindings(e, LOCK_BINDINGS)) {
+        e.preventDefault();
+        state.setState("lock");
+        return;
+    }
     if (!e.repeat && matchBindings(e, LAUNCHER_BINDINGS)) {
         e.preventDefault();
         viewData.toggleLauncher();
