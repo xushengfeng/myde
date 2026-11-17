@@ -429,6 +429,8 @@ type LauncherController = {
     setStageSize(height: number): void;
     /** 舞台铺满视口时顶部工具栏仍覆盖在 stage 上，总览/搜索栏要额外下移这么多 */
     setTopInset(px: number): void;
+    /** 桌面 UI 缩放；内部按缩放后的局部像素计算位置 */
+    setUiScale(scale: number): void;
 };
 
 /** 三指横滑的当前倍率 */
@@ -1218,9 +1220,9 @@ class WindowCenterManager {
         });
     }
 
-    setViewport(x: number, y: number, width: number, height: number) {
+    setViewport(x: number, y: number, width: number, height: number, recenter = true) {
         this.config.viewport = { x, y, width, height };
-        this.recenterAll();
+        if (recenter) this.recenterAll();
     }
 
     setViewportFromElement(element: HTMLElement) {
@@ -1557,6 +1559,11 @@ const RESIZE_CORNER_SIZE = 14;
 const RESIZE_MIN_WIDTH = 200;
 const RESIZE_MIN_HEIGHT = 150;
 
+/** 热区是桌面 UI；窗口本身不缩放，只让热区尺寸跟随界面缩放 */
+function uiSized(px: number) {
+    return `calc(${px}px * var(--desktop-ui-scale, 1))`;
+}
+
 // 拖拽预览尺寸走样式表 !important：渲染层在客户端提交时会直接写 xdg surface 元素的 inline 宽高，
 // 普通 inline 样式会被它盖掉，加 !important 才能稳定显示桌面自己的预览，抬手后再摘掉属性
 addStyle({
@@ -1645,11 +1652,19 @@ function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
         if (edge.includes("w")) handle.style({ left: "0px" });
         if (edge.includes("e")) handle.style({ right: "0px" });
         if (edge === "n" || edge === "s") {
-            handle.style({ left: `${RESIZE_CORNER_SIZE}px`, right: `${RESIZE_CORNER_SIZE}px`, height: `${size}px` });
+            handle.style({
+                left: uiSized(RESIZE_CORNER_SIZE),
+                right: uiSized(RESIZE_CORNER_SIZE),
+                height: uiSized(size),
+            });
         } else if (edge === "w" || edge === "e") {
-            handle.style({ top: `${RESIZE_CORNER_SIZE}px`, bottom: `${RESIZE_CORNER_SIZE}px`, width: `${size}px` });
+            handle.style({
+                top: uiSized(RESIZE_CORNER_SIZE),
+                bottom: uiSized(RESIZE_CORNER_SIZE),
+                width: uiSized(size),
+            });
         } else {
-            handle.style({ width: `${size}px`, height: `${size}px` });
+            handle.style({ width: uiSized(size), height: uiSized(size) });
         }
 
         handle.on("pointerenter", () => {
@@ -1858,8 +1873,8 @@ function openSettingsWindow() {
     const screen = viewData.addWindowScreen(SETTINGS_WINDOW_ID);
     const root = view("y").data({ "internal-window": SETTINGS_WINDOW_ID }).style({
         position: "absolute",
-        width: "760px",
-        height: "540px",
+        width: "calc(760px * var(--desktop-ui-scale, 1))",
+        height: "calc(540px * var(--desktop-ui-scale, 1))",
         maxWidth: "calc(100vw - 24px)",
         maxHeight: "calc(100vh - 24px)",
         borderRadius: "18px",
@@ -1867,12 +1882,21 @@ function openSettingsWindow() {
         background: "rgba(245, 245, 245, 0.97)",
         backdropFilter: "blur(18px)",
         boxShadow: "0 12px 40px #00000033",
+        boxSizing: "border-box",
+    });
+    // 外层窗口尺寸用视觉 px（居中/拖动/缩放沿用通用窗口逻辑）；内容在内层按屏幕缩放放大
+    const inner = view("y").style({
+        width: "100%",
+        height: "100%",
+        position: "relative",
         color: "#111",
         fontFamily: "sans-serif",
         boxSizing: "border-box",
         display: "flex",
         flexDirection: "column",
+        zoom: "var(--desktop-ui-scale, 1)",
     });
+    root.add(inner);
 
     const header = view("x")
         .style({
@@ -1945,7 +1969,7 @@ function openSettingsWindow() {
             const ok = await confirm("重启桌面会关闭所有窗口，继续？");
             if (ok) location.reload();
         },
-        modalHost: root.el,
+        modalHost: inner.el,
     });
     const content = settingsContent.el;
 
@@ -1967,7 +1991,7 @@ function openSettingsWindow() {
     };
     setActive(false);
 
-    root.add([header, content, closeBtn]);
+    inner.add([header, content, closeBtn]);
     root.on("pointerdown", () => viewData.focusWin(SETTINGS_WINDOW_ID));
 
     // 标题栏拖动。拖动后暂停自动居中，避免父容器变化时把窗口拽回中间。
@@ -2459,6 +2483,11 @@ const desktopSetting = MSetting.init({
 // 滚轮在每帧回调里都会读到，缓存设置避免每次同步读配置文件
 let touchpadScrollGain = desktopSetting.nget("touchpadScrollGain") ?? 1;
 let naturalScroll = desktopSetting.nget("naturalScroll") ?? true;
+/** 桌面自绘 UI 的缩放，跟随屏幕/客户端缩放；窗口模式和 winit 下由宿主 DPR 负责 */
+let uiScale = 1;
+/** 桌面 UI 元素是否已创建；屏幕缩放可能在初始化期间先到 */
+let uiScaleReady = false;
+document.documentElement.style.setProperty("--desktop-ui-scale", "1");
 gestureSwitchGain = normalizeGestureGain(desktopSetting.nget("switchGestureGain"));
 reorderDelay = normalizeReorderDelay(desktopSetting.nget("reorderDelay"));
 
@@ -2553,10 +2582,13 @@ const screenManager = new ScreenManager({
     },
     setScaleSetting: (scale) => desktopSetting.nset("scale", scale),
     applyOutput: (output) => server.server.outputs.set(output),
-    onScaleChanged: reconfigureMaximizedWindows,
+    onScaleChanged: (scale) => applyUiScale(scale),
     onModeChanged: reconfigureMaximizedWindows,
 });
-void screenManager.init().catch((e) => console.error("[screen] 初始化失败", e));
+void screenManager
+    .init()
+    .then(() => applyUiScale(screenManager.getScale()))
+    .catch((e) => console.error("[screen] 初始化失败", e));
 
 // 桌面提供窗口可用空间（surface-local 逻辑尺寸）：工具栏通过内缩体现，stage 本身仍是整块视口
 server.server.respond("surfaceBounds.request", () => {
@@ -2801,6 +2833,8 @@ const bg = image(fs.readFileAsDataURLSync("/assets/wallpaper/1.svg"), "wallpaper
 
 /** 顶部/底部/左右工具栏占用的空间；只用于“可用区”计算，不限制 windowElWarp 的 DOM 尺寸 */
 const wino = { t: 0, l: 0, r: 0, b: 0 };
+/** 工具栏容器；界面缩放变化后按视觉尺寸重新计算 wino */
+const chromePlants: { el: ElType<HTMLElement>; posi: Plant["posi"] }[] = [];
 
 /**
  * 虚拟桌面包装始终铺满视口；工具栏避让只体现为窗口的可用区内缩（最大化、居中、surfaceBounds）。
@@ -2816,7 +2850,15 @@ const windowElWarp = view().style({
 });
 
 const toolsEl = view()
-    .style({ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", zIndex: "10" })
+    .style({
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: "100%",
+        height: "100%",
+        zIndex: "10",
+        zoom: "var(--desktop-ui-scale, 1)",
+    })
     .class(
         addClass(
             { pointerEvents: "none" },
@@ -2849,8 +2891,20 @@ const lockScreen = view().class(
     ),
 );
 
-const lockScreenView = view().style({ width: "100%", height: "100%" }).addInto(lockScreen); // 图片 信息等
-const lockScreenPassword = view().style({ width: "100%", height: "100%" }).addInto(lockScreen);
+const lockScreenView = view()
+    .style({
+        width: "100%",
+        height: "100%",
+        zoom: "var(--desktop-ui-scale, 1)",
+    })
+    .addInto(lockScreen); // 图片 信息等
+const lockScreenPassword = view()
+    .style({
+        width: "100%",
+        height: "100%",
+        zoom: "var(--desktop-ui-scale, 1)",
+    })
+    .addInto(lockScreen);
 
 function xPosition(x: number, y: number) {
     return {
@@ -3086,6 +3140,7 @@ const windowEl = view()
 viewData = new ViewData();
 const launcher = createLauncher();
 viewData.setLauncher(launcher);
+launcher.setUiScale(uiScale);
 const launchpadScreen = viewData.launchpadScreen;
 if (launchpadScreen) launchpadScreen.el.add(createLaunchpadContent());
 
@@ -3159,6 +3214,7 @@ ime = new ImeController({
         prevIM: imeSetting.nget("prevIM"),
     }),
 });
+ime.setUiScale(uiScale);
 void ime.init();
 
 const initRect = windowEl.el.getBoundingClientRect();
@@ -4210,11 +4266,15 @@ function createLauncher(): LauncherController {
     let stageHeight = Math.max(1, windowEl.el.getBoundingClientRect().height || window.innerHeight);
     let progress = 0;
     let overviewMix = 0;
+    /** 桌面 UI 缩放；stageHeight/topInset 是视觉 px，位置计算改用局部 px */
+    let scale = uiScale;
     /** 舞台铺满视口，顶部工具栏仍覆盖在上面 */
     let topInset = 0;
+    const localStageHeight = () => stageHeight / scale;
+    const localTopInset = () => topInset / scale;
     const restingTop = () => {
-        const normalTop = stageHeight / 3 - LAUNCHER_HEIGHT / 2;
-        return normalTop + (OVERVIEW_LAUNCHER_TOP + topInset - normalTop) * overviewMix;
+        const normalTop = localStageHeight() / 3 - LAUNCHER_HEIGHT / 2;
+        return normalTop + (OVERVIEW_LAUNCHER_TOP + localTopInset() - normalTop) * overviewMix;
     };
     const hiddenOffset = () => Math.max(0, restingTop() + LAUNCHER_HEIGHT + 12);
 
@@ -4225,6 +4285,7 @@ function createLauncher(): LauncherController {
             overflow: "hidden",
             pointerEvents: "none",
             zIndex: "2",
+            zoom: "var(--desktop-ui-scale, 1)",
         })
         .addInto(windowElWarp);
     const shell = view("x")
@@ -4232,7 +4293,7 @@ function createLauncher(): LauncherController {
             position: "absolute",
             top: "0px",
             left: "50%",
-            width: "min(560px, 80vw)",
+            width: "min(560px, calc(80vw / var(--desktop-ui-scale, 1)))",
             height: `${LAUNCHER_HEIGHT}px`,
             padding: "0 18px",
             boxSizing: "border-box",
@@ -4329,6 +4390,11 @@ function createLauncher(): LauncherController {
             topInset = Math.max(0, px);
             apply();
         },
+        setUiScale: (value) => {
+            if (value <= 0 || value === scale) return;
+            scale = value;
+            apply();
+        },
     };
 }
 
@@ -4344,6 +4410,7 @@ function createLaunchpadContent() {
             justifyContent: "center",
             gap: "18px",
             overflowY: "auto",
+            zoom: "var(--desktop-ui-scale, 1)",
         })
         .data({ "desktop-ui": "launchpad" });
     const loadingEl = txt("正在加载应用…").style({ padding: "8px", opacity: "0.6" }).addInto(grid);
@@ -4386,8 +4453,8 @@ function createStartMenu(
     };
     const menu = view("x", "wrap")
         .style({
-            width: "80vw",
-            height: "80vh",
+            width: "calc(80vw / var(--desktop-ui-scale, 1))",
+            height: "calc(80vh / var(--desktop-ui-scale, 1))",
             padding: "20px",
             borderRadius: "20px",
             // 内容滚动交给菜单自身，避免整个桌面参与滚动和重排
@@ -5191,33 +5258,35 @@ for (const p of planteData) {
         }
         plantEl.add(tt.getEl(({ top: "bottom", bottom: "top", left: "right", right: "left" } as const)[p.posi]));
     }
-    if (d === "x") {
-        const x = plantEl.el.offsetHeight;
-        if (p.posi === "top") {
-            wino.t = Math.max(wino.t, x);
-        }
-        if (p.posi === "bottom") {
-            wino.b = Math.max(wino.b, x);
-        }
-    }
-    if (d === "y") {
-        const x = plantEl.el.offsetWidth;
-        if (p.posi === "left") {
-            wino.l = Math.max(wino.l, x);
-        }
-        if (p.posi === "right") {
-            wino.r = Math.max(wino.r, x);
-        }
-    }
+    chromePlants.push({ el: plantEl, posi: p.posi });
 }
-// wino 不限制舞台尺寸，只用于窗口可用区：居中使用区、最大化尺寸、surfaceBounds 与总览布局
-windowCenterManager.setViewport(
-    wino.l,
-    wino.t,
-    Math.max(1, windowEl.el.offsetWidth - wino.l - wino.r),
-    Math.max(1, windowEl.el.offsetHeight - wino.t - wino.b),
-);
-viewData.setChromeInsets({ top: wino.t, bottom: wino.b, left: wino.l, right: wino.r });
+
+/** 工具栏在 toolsEl 里跟着界面缩放；窗口可用区要用缩放后的视觉尺寸 */
+function measureChromeInsets() {
+    wino.t = 0;
+    wino.b = 0;
+    wino.l = 0;
+    wino.r = 0;
+    for (const plant of chromePlants) {
+        const rect = plant.el.el.getBoundingClientRect();
+        if (plant.posi === "top") wino.t = Math.max(wino.t, rect.height);
+        else if (plant.posi === "bottom") wino.b = Math.max(wino.b, rect.height);
+        else if (plant.posi === "left") wino.l = Math.max(wino.l, rect.width);
+        else wino.r = Math.max(wino.r, rect.width);
+    }
+    // wino 不限制舞台尺寸，只用于窗口可用区：居中使用区、最大化尺寸、surfaceBounds 与总览布局
+    windowCenterManager.setViewport(
+        wino.l,
+        wino.t,
+        Math.max(1, windowEl.el.offsetWidth - wino.l - wino.r),
+        Math.max(1, windowEl.el.offsetHeight - wino.t - wino.b),
+        false,
+    );
+    viewData.setChromeInsets({ top: wino.t, bottom: wino.b, left: wino.l, right: wino.r });
+    reconfigureMaximizedWindows();
+}
+
+measureChromeInsets();
 
 // ── 全屏渲染：工具栏不改变层级，而是模糊淡出；窗口本来就在整块舞台上，不需要改外部 DOM ──
 // 用户进入全局预览，或切到没有全屏窗口的虚拟屏时，工具栏原样恢复。
@@ -5496,6 +5565,27 @@ body.on("keyup", (e) => {
 });
 
 const cursor = new Cursor(cursorEl);
+cursor.setScale(uiScale);
+
+/** 桌面 UI 跟随屏幕缩放；窗口模式/winit 下 screenManager 固定 1x，宿主 DPR 负责缩放 */
+function applyUiScale(scale: number) {
+    const value = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    uiScale = value;
+    document.documentElement.style.setProperty("--desktop-ui-scale", String(value));
+    if (!uiScaleReady) return;
+    // 先更新带 zoom 的子树，再按视觉尺寸重新测量工具栏占位
+    launcher.setUiScale(value);
+    cursor.setScale(value);
+    ime?.setUiScale(value);
+    measureChromeInsets();
+    // 界面缩放会改变设置窗口的外层尺寸；只重排这个内部窗口，不动用户自己摆放的应用窗口
+    if (internalWindows.has(SETTINGS_WINDOW_ID) && !windowCenterManager.isPaused(SETTINGS_WINDOW_ID)) {
+        windowCenterManager.centerWindow(SETTINGS_WINDOW_ID);
+    }
+}
+
+uiScaleReady = true;
+applyUiScale(screenManager.getScale());
 
 // 光标形态改由 server 事件下发（renderToolsOn.onCursorUpdata 保留给渲染侧，语义相同）
 server.server.on("cursor.changed", (clientId, state) => {

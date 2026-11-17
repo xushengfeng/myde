@@ -108,7 +108,7 @@ resize ↔ `move` / `all_scroll` / `all_resize` 过渡时优先用十字的一�
 设置项：
 - 外观：`icon.theme` 应用图标主题
 - 显示：Wayland 客户端缩放 `desktop.scale`（100% / 125% / 150% / 175% / 200%）。缩放后 surface 逻辑坐标不变，
-  客户端 buffer 与窗口 DOM 尺寸按比例放大；桌面面板暂不缩放。winit 后端和普通窗口模式跟随宿主桌面，固定 1x。
+  客户端 buffer 与窗口 DOM 尺寸按比例放大，桌面自绘 UI（工具栏、启动台、设置窗口、输入法候选、光标和窗口 resize 热区）也跟随同一个缩放。winit 后端和普通窗口模式跟随宿主桌面，myde 内部固定 1x。
   下方帧时间图表按需启动，实时采样桌面界面的 `requestAnimationFrame` 帧间隔，并按当前输出刷新率画出预算线
 - 滚动：触摸板双指滚动速度 `desktop.touchpadScrollGain`、自然滚动 `desktop.naturalScroll`
 - 手势：三指横滑切屏倍率 `desktop.switchGestureGain`（默认 4×）、切屏后重排延迟 `desktop.reorderDelay`（默认 3000ms）

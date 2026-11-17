@@ -838,7 +838,7 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
         .style({
             position: "absolute",
             display: "none",
-            maxWidth: "min(560px, 90vw)",
+            maxWidth: "min(560px, calc(90vw / var(--desktop-ui-scale, 1)))",
             padding: px(sSize2.padding),
             borderRadius: px(sSize2.radius2),
             boxSizing: "border-box",
@@ -851,6 +851,8 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
 
     let anchor: ImeCandidateAnchor | undefined;
     let wheelAt = 0;
+    /** 桌面 UI 缩放；候选窗自身带 zoom，left/top 要写回局部坐标 */
+    let scale = 1;
 
     el.on("wheel", (e) => {
         e.preventDefault();
@@ -865,25 +867,25 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
     const visible = () => el.el.style.display !== "none";
 
     function place() {
+        // 元素自身带 zoom；用视觉尺寸计算，再除回局部坐标写 left/top
+        const rect = el.el.getBoundingClientRect();
+        const w = rect.width;
+        const h = rect.height;
         if (!anchor) {
-            const w = el.el.offsetWidth;
-            const h = el.el.offsetHeight;
             el.style({
-                left: `${Math.max(4, (window.innerWidth - w) / 2)}px`,
-                top: `${Math.max(4, window.innerHeight - h - 24)}px`,
+                left: `${Math.max(4, (window.innerWidth - w) / 2) / scale}px`,
+                top: `${Math.max(4, window.innerHeight - h - 24) / scale}px`,
             });
             return;
         }
         const margin = 6;
         const pad = 4;
-        const w = el.el.offsetWidth;
-        const h = el.el.offsetHeight;
         let x = anchor.x;
         let y = anchor.y + anchor.h + margin;
         if (y + h > window.innerHeight - pad) y = anchor.y - margin - h;
         x = Math.min(Math.max(x, pad), Math.max(pad, window.innerWidth - w - pad));
         y = Math.min(Math.max(y, pad), Math.max(pad, window.innerHeight - h - pad));
-        el.style({ left: `${x}px`, top: `${y}px` });
+        el.style({ left: `${x / scale}px`, top: `${y / scale}px` });
     }
 
     function pagerButton(arrow: "left" | "right", enabled: boolean, click: () => void) {
@@ -908,6 +910,12 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
         el,
         setAnchor(a: ImeCandidateAnchor | undefined) {
             anchor = a;
+            if (visible()) place();
+        },
+        setScale(value: number) {
+            if (!Number.isFinite(value) || value <= 0) return;
+            scale = value;
+            el.style({ zoom: `${value}` });
             if (visible()) place();
         },
         hide() {
@@ -941,7 +949,7 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
                 display: "flex",
                 flexDirection: horizontal ? "row" : "column",
                 alignItems: "stretch",
-                maxWidth: horizontal ? "min(540px, 86vw)" : "320px",
+                maxWidth: horizontal ? "min(540px, calc(86vw / var(--desktop-ui-scale, 1)))" : "320px",
             });
             state.candidates.forEach((text, i) => {
                 if (!text) return;

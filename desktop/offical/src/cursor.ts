@@ -461,6 +461,7 @@ type CursorShapeView = {
     el: ElType<HTMLElement>;
     setBody(metrics: CursorShapeMetrics): void;
     setDesign(design: CursorDesign, duration: number): void;
+    setScale(scale: number): void;
 };
 
 function createCursorShapeView(): CursorShapeView {
@@ -502,12 +503,21 @@ function createCursorShapeView(): CursorShapeView {
     let backLayer: ElType<HTMLElement> | undefined;
     let frontLayer: ElType<HTMLElement> | undefined;
 
-    /** 整个视觉内容按 -hotspot 平移，让热点落到指针/单元格中心 */
-    function applyHotspot(design: CursorDesign, duration: number) {
-        const x = design.hotspot?.x ?? 0;
-        const y = design.hotspot?.y ?? 0;
+    /** 桌面 UI 缩放；光标位置仍由外层 warpEl 用视口坐标控制 */
+    let scale = 1;
+    let hotspotX = 0;
+    let hotspotY = 0;
+
+    /** 整个视觉内容按 -hotspot 平移，让热点落到指针/单元格中心；缩放包在外层 */
+    function applyTransform(duration: number) {
         el.el.style.transition = duration > 0 ? `transform ${duration}ms ease-out` : "none";
-        el.el.style.transform = `translate(${-x}px, ${-y}px)`;
+        el.el.style.transform = `scale(${scale}) translate(${-hotspotX}px, ${-hotspotY}px)`;
+    }
+
+    function applyHotspot(design: CursorDesign, duration: number) {
+        hotspotX = design.hotspot?.x ?? 0;
+        hotspotY = design.hotspot?.y ?? 0;
+        applyTransform(duration);
     }
 
     return {
@@ -527,6 +537,11 @@ function createCursorShapeView(): CursorShapeView {
                 backLayer = swapDecorationLayer(backHost, backLayer, design.back, duration);
                 frontLayer = swapDecorationLayer(frontHost, frontLayer, design.front, duration);
             }
+        },
+        setScale(value: number) {
+            if (value <= 0 || value === scale) return;
+            scale = value;
+            applyTransform(0);
         },
     };
 }
@@ -557,6 +572,11 @@ class CursorShapeAnimator {
             this.metrics = metrics;
             this.view.setBody(metrics);
         });
+    }
+
+    /** 桌面 UI 缩放；形状几何和装饰一起缩放，热点仍落在指针位置 */
+    setScale(scale: number) {
+        this.view.setScale(scale);
     }
 
     setShape(shape: string, duration: number, instant = false) {
@@ -768,6 +788,8 @@ export class Cursor {
     private localShape: string | undefined;
     /** 当前形状动画器；图片/隐藏状态时不存在 */
     private shapeAnimator: CursorShapeAnimator | undefined;
+    /** 桌面 UI 缩放；只作用于形状光标，位置仍是视口坐标 */
+    private scale = 1;
 
     constructor(parent: ElType<HTMLElement>) {
         this.warpEl = view()
@@ -785,6 +807,13 @@ export class Cursor {
     /** 移动光标位置 */
     move(x: number, y: number) {
         this.warpEl.style({ left: `${x}px`, top: `${y}px` });
+    }
+
+    /** 桌面 UI 缩放（只影响形状光标；图片光标由调用方按输出/界面缩放设置尺寸） */
+    setScale(scale: number) {
+        if (!Number.isFinite(scale) || scale <= 0 || scale === this.scale) return;
+        this.scale = scale;
+        this.shapeAnimator?.setScale(scale);
     }
 
     /** 桌面覆盖层指定的光标形状（如缩放热区的 ew-resize），传 undefined 取消 */
@@ -880,6 +909,7 @@ export class Cursor {
     private showShape(shape: string, instant = false) {
         if (this.shapeAnimator === undefined) {
             this.shapeAnimator = new CursorShapeAnimator();
+            this.shapeAnimator.setScale(this.scale);
             this.warpEl.clear().add(this.shapeAnimator.el);
         }
         this.shapeAnimator.setShape(shape, SHAPE_TRANSITION.duration, instant);

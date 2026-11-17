@@ -481,12 +481,12 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
                 return view("y")
                     .style({ gap: px(sSize2.padding + 8) })
                     .add([
-                        sectionTitle("显示", "Wayland 客户端与窗口的缩放、输出分辨率与刷新率。"),
+                        sectionTitle("显示", "Wayland 客户端缩放、输出分辨率与刷新率。"),
                         settingRow(
                             "客户端缩放",
                             op.scaleFollowsHost()
                                 ? "winit / 窗口模式由宿主桌面负责缩放，myde 内部固定 1x。"
-                                : "按比例渲染 Wayland 应用窗口；桌面面板暂不缩放。",
+                                : "按比例渲染 Wayland 应用窗口，桌面自绘 UI 也跟随该缩放；不改变 surface 逻辑坐标。",
                             control,
                         ),
                         settingRow(

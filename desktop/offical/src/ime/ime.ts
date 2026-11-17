@@ -116,6 +116,11 @@ export class ImeController {
         this.readBindings();
     }
 
+    /** 桌面 UI 缩放：候选窗尺寸和锚点位置都按视觉坐标换算 */
+    setUiScale(scale: number) {
+        this.candidate.setScale(scale);
+    }
+
     async init(): Promise<boolean> {
         if (!this.im) {
             this.emitStatus();
