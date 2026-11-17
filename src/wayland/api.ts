@@ -80,6 +80,12 @@ export interface WindowInfo {
     appid: string;
     title: string;
     /**
+     * 是否协商为服务端装饰（xdg-decoration server_side）。
+     * 为 true 时桌面应绘制自己的标题栏/边框，客户端不再画 CSD；
+     * 为 false 时窗口内容已包含客户端自己的装饰，桌面不要再加一层。
+     */
+    decorated: boolean;
+    /**
      * 窗口几何。
      * - `w`/`h`：客户端 `xdg_surface.set_window_geometry` 声明的尺寸（未设置时为 surface 尺寸）。
      * - `x`/`y`：客户端声明的几何偏移（surface 局部坐标），**不是屏幕位置**——
@@ -260,7 +266,7 @@ export interface ScrollCommand {
 export type ServerEvents = {
     /** 新窗口，`renderId` 内嵌在 `info` 里 */
     "window.created": [info: WindowInfo];
-    /** rect / states / title / appid 任一变化；payload 自包含，无需反查 */
+    /** rect / states / title / appid / decorated 任一变化；payload 自包含，无需反查 */
     "window.changed": [info: WindowInfo];
     /** 窗口关闭，**含客户端断开时由 server 统一补发的关闭** */
     "window.closed": [handle: WinHandle];

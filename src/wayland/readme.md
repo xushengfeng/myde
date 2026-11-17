@@ -31,6 +31,12 @@
     - xdg_popup 部分
     - xdg_positioner 部分
 
+- xdg-decoration-unstable-v1
+    - zxdg_decoration_manager_v1
+    - zxdg_toplevel_decoration_v1
+    - 尊重客户端 `set_mode`：`server_side` 时桌面绘制标题栏（`WindowInfo.decorated`），
+      `client_side` 时保留客户端 CSD；未表态默认 `server_side`。
+
 - linux-dmabuf-v1
     - zwp_linux_dmabuf_v1 部分，只支持 LINEAR modifier；32 位 RGB(A)
       （ARGB/ABGR/XRGB/XBGR/RGBX/BGRX/RGBA/BGRA）、NV12、NV16、P010。不透明格式必须

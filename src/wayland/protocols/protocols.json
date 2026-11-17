@@ -3928,5 +3928,90 @@
         }
       ]
     }
+  ],
+  "xdg-decoration-unstable-v1": [
+    {
+      "name": "zxdg_decoration_manager_v1",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "get_toplevel_decoration",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "zxdg_toplevel_decoration_v1"
+            },
+            {
+              "name": "toplevel",
+              "type": "object",
+              "interface": "xdg_toplevel"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": []
+    },
+    {
+      "name": "zxdg_toplevel_decoration_v1",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "set_mode",
+          "args": [
+            {
+              "name": "mode",
+              "type": "uint",
+              "summary": "the decoration mode"
+            }
+          ]
+        },
+        {
+          "name": "unset_mode",
+          "args": []
+        }
+      ],
+      "event": [
+        {
+          "name": "configure",
+          "args": [
+            {
+              "name": "mode",
+              "type": "uint",
+              "summary": "the decoration mode"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "unconfigured_buffer": 0,
+            "already_constructed": 1,
+            "orphaned": 2,
+            "invalid_mode": 3
+          }
+        },
+        {
+          "name": "mode",
+          "enum": {
+            "client_side": 1,
+            "server_side": 2
+          }
+        }
+      ]
+    }
   ]
 }

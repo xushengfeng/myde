@@ -68,6 +68,7 @@ export interface MockWindowInfo {
     handle: string;
     clientId: string;
     appid: string;
+    decorated: boolean;
     title: string;
     rect: { x: number; y: number; w: number; h: number };
     /** 输出缩放：桌面显示尺寸 = rect × scale */
@@ -116,7 +117,15 @@ export interface MockWaylandServer {
         set(output: { scale: number }): void;
     };
     /** 造窗口：分配全局 handle 并发出 `window.created` */
-    openWindow(op: { clientId: string; winId?: string; renderId: string; width?: number; height?: number }): string;
+    openWindow(op: {
+        clientId: string;
+        winId?: string;
+        renderId: string;
+        width?: number;
+        height?: number;
+        /** 是否绘制服务端装饰，默认 false */
+        decorated?: boolean;
+    }): string;
     closeWindow(handle: string): void;
     closeWindowOf(clientId: string, winId: string): void;
     handleOf(clientId: string, winId: string): string | undefined;
@@ -329,6 +338,7 @@ export function createMockServer(): MockWaylandServer {
                 handle,
                 clientId: op.clientId,
                 appid: clients.get(op.clientId)?.getAppid() ?? "",
+                decorated: op.decorated ?? false,
                 title: "",
                 rect: { x: 0, y: 0, w: op.width ?? 0, h: op.height ?? 0 },
                 scale: output.scale,

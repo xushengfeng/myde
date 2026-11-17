@@ -14,7 +14,7 @@ import type { MenuItem } from "../../../src/sys_api/menu";
 import type { wifiDevice } from "../../../src/sys_api/network";
 import type { powerDevice } from "../../../src/sys_api/power";
 import { TouchpadInput } from "../../../src/utils/touchpad";
-import type { DragStartInfo } from "../../../src/wayland";
+import type { DragStartInfo, WindowInfo } from "../../../src/wayland";
 import { type ClipboardItem, type ClipboardStation, initClipboard } from "./clipboard";
 import { createClipboardStationTool } from "./clipboard_tool";
 import { Cursor } from "./cursor";
@@ -1125,6 +1125,9 @@ class ViewData {
         for (const [id, win] of internalWindows) {
             win.setActive(id === winid);
         }
+        for (const [id, frame] of clientWindowFrames) {
+            frame.el.el.toggleAttribute("data-active", id === winid);
+        }
         // 目标聚焦、其余失焦，全部经 server 下发；内部窗口没有 Wayland 焦点，只清掉客户端焦点
         for (const info of server.server.windows.list()) {
             if (!internal && info.handle === winid) {
@@ -1146,6 +1149,7 @@ class ViewData {
         for (const win of internalWindows.values()) {
             win.setActive(false);
         }
+        for (const frame of clientWindowFrames.values()) frame.el.el.removeAttribute("data-active");
         for (const info of server.server.windows.list()) {
             server.server.notify("window.blur", info.handle);
         }
@@ -1597,12 +1601,50 @@ addStyle({
         width: "var(--resize-preview-width) !important",
         height: "var(--resize-preview-height) !important",
     },
+    // 服务端装饰：外观与设置窗口一致（浅色半透明、圆角、阴影）
+    "[data-client-frame][data-decorated]": {
+        background: "rgba(245, 245, 245, 0.97)",
+        backdropFilter: "blur(18px)",
+        boxShadow: "0 12px 40px #0000002a",
+        borderRadius: "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))",
+    },
+    "[data-client-frame][data-decorated][data-active]": {
+        boxShadow: "0 16px 48px #00000044",
+    },
+    // 最大化窗口默认与工作区边缘齐平，不再保留圆角
+    "[data-client-frame][data-decorated][data-maximized]": {
+        borderRadius: "0",
+    },
+    // 只给根 surface 的画布做底部圆角；popup/subsurface 的 canvas 层级更深，不会被选中
+    "[data-client-frame][data-decorated] > [id] > div > canvas": {
+        borderBottomLeftRadius: "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))",
+        borderBottomRightRadius: "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))",
+    },
+    "[data-client-frame][data-decorated][data-maximized] > [id] > div > canvas": {
+        borderBottomLeftRadius: "0",
+        borderBottomRightRadius: "0",
+    },
+    // 标题栏由 view("x") 的 inline display:flex 创建，隐藏/显示要用 !important 压过它
+    "[data-client-frame] [data-client-titlebar]": {
+        display: "none !important",
+    },
+    "[data-client-frame][data-decorated] [data-client-titlebar]": {
+        display: "flex !important",
+    },
+    // 总览里的关闭按钮用单独的覆盖层，避免和标题栏关闭按钮重叠
+    "[data-overview] [data-client-titlebar-close]": {
+        opacity: "0",
+        pointerEvents: "none",
+    },
     // 总览里隐藏缩放热区，避免缩小后挡住窗口缩略图
     "[data-overview] [data-desktop-ui='resize-handle']": {
         display: "none",
     },
-    // 全屏窗口没有可拖拽的边框
+    // 全屏/最大化窗口没有可拖拽的边框；否则热区会盖住标题栏按钮扩大的命中区
     "[data-fullscreen] [data-desktop-ui='resize-handle']": {
+        display: "none",
+    },
+    "[data-client-frame][data-maximized] [data-desktop-ui='resize-handle']": {
         display: "none",
     },
     // 总览里内容不再接收指针，点击整张卡片只用于切换
@@ -1685,7 +1727,7 @@ function removeResizeHandles(windowId: string) {
  * `wayland` 为 true 时，拖拽中通过 `window.setSize` 把逻辑尺寸下发给客户端；否则只改 DOM 尺寸
  * （设置窗口这类桌面自己创建的窗口）。
  */
-function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
+function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean, contentEl: HTMLElement = el) {
     removeResizeHandles(windowId);
 
     const handles: ElType<HTMLElement>[] = [];
@@ -1720,7 +1762,7 @@ function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
             handle.style({ top: "0px", bottom: "0px", width: uiSized(size) });
         }
 
-        handle.on("pointerdown", (e) => beginWindowResize(e, edge, el, windowId, wayland));
+        handle.on("pointerdown", (e) => beginWindowResize(e, edge, el, windowId, wayland, contentEl));
 
         handle.addInto(el);
         handles.push(handle);
@@ -1728,7 +1770,14 @@ function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
     windowResizeHandles.set(windowId, handles);
 }
 
-function beginWindowResize(e: PointerEvent, edge: ResizeEdge, el: HTMLElement, windowId: string, wayland: boolean) {
+function beginWindowResize(
+    e: PointerEvent,
+    edge: ResizeEdge,
+    el: HTMLElement,
+    windowId: string,
+    wayland: boolean,
+    contentEl: HTMLElement = el,
+) {
     if (e.button !== 0 || e.isPrimary === false || viewData.overview || resizingWindowId !== undefined) return;
     const info = wayland ? server.server.windows.get(windowId) : undefined;
     if (wayland && (!info || info.states.maximized || info.states.fullscreen)) return;
@@ -1754,11 +1803,13 @@ function beginWindowResize(e: PointerEvent, edge: ResizeEdge, el: HTMLElement, w
     const scale = info?.scale || 1;
     const parentRect = el.parentElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
     const rect = el.getBoundingClientRect();
+    // 服务端装饰的窗口：热区在 frame 上，尺寸按内容算（标题栏不参与 configure）
+    const contentRect = contentEl === el ? rect : contentEl.getBoundingClientRect();
     const start = {
         left: rect.left - parentRect.left,
         top: rect.top - parentRect.top,
-        width: rect.width,
-        height: rect.height,
+        width: contentRect.width,
+        height: contentRect.height,
     };
     const startX = e.clientX;
     const startY = e.clientY;
@@ -1832,15 +1883,25 @@ function beginWindowResize(e: PointerEvent, edge: ResizeEdge, el: HTMLElement, w
         }
 
         resized = true;
-        el.style.left = `${Math.round(left)}px`;
-        el.style.top = `${Math.round(top)}px`;
-        if (wayland) {
-            el.setAttribute("data-resize-preview", "");
-            el.style.setProperty("--resize-preview-width", `${width}px`);
-            el.style.setProperty("--resize-preview-height", `${height}px`);
+        const frame = wayland ? clientWindowFrames.get(windowId) : undefined;
+        if (frame) {
+            // frame 负责标题栏与内容的总尺寸；内容尺寸用预览属性压住客户端提交前的旧几何
+            setClientFramePosition(frame, left, top);
+            setClientFrameLayout(frame, width, height);
+            contentEl.setAttribute("data-resize-preview", "");
+            contentEl.style.setProperty("--resize-preview-width", `${width}px`);
+            contentEl.style.setProperty("--resize-preview-height", `${height}px`);
         } else {
-            el.style.width = `${width}px`;
-            el.style.height = `${height}px`;
+            el.style.left = `${Math.round(left)}px`;
+            el.style.top = `${Math.round(top)}px`;
+            if (wayland) {
+                el.setAttribute("data-resize-preview", "");
+                el.style.setProperty("--resize-preview-width", `${width}px`);
+                el.style.setProperty("--resize-preview-height", `${height}px`);
+            } else {
+                el.style.width = `${width}px`;
+                el.style.height = `${height}px`;
+            }
         }
     }
 
@@ -1861,10 +1922,14 @@ function beginWindowResize(e: PointerEvent, edge: ResizeEdge, el: HTMLElement, w
                         surfaceEl.removeAttribute("data-resize-preview");
                         surfaceEl.style.removeProperty("--resize-preview-width");
                         surfaceEl.style.removeProperty("--resize-preview-height");
-                        pack(surfaceEl).style({
-                            width: `${current.rect.w * current.scale}px`,
-                            height: `${current.rect.h * current.scale}px`,
-                        });
+                        const frame = clientWindowFrames.get(windowId);
+                        if (frame)
+                            setClientFrameLayout(frame, current.rect.w * current.scale, current.rect.h * current.scale);
+                        else
+                            pack(surfaceEl).style({
+                                width: `${current.rect.w * current.scale}px`,
+                                height: `${current.rect.h * current.scale}px`,
+                            });
                     }
                 }, 250);
                 resizeSettleTimers.set(windowId, timer);
@@ -1892,6 +1957,323 @@ function addWindow(screen: ViewScreen, el: HTMLElement, windowId?: string) {
     }
 }
 
+// ── 服务端装饰（xdg-decoration）────────────────────────────────────────────────
+// 窗口内容仍是 render 的 xdg 元素；外面包一层 frame 负责标题栏、阴影和缩放热区。
+// 客户端没有协商 server_side（decorated=false）时 frame 只剩内容，行为与以前一致。
+
+const CLIENT_TITLEBAR_HEIGHT = 38;
+
+type ClientWindowFrame = {
+    el: ElType<HTMLElement>;
+    header: ElType<HTMLElement>;
+    icon: ElType<HTMLElement>;
+    title: ElType<HTMLElement>;
+    /** 客户端内容元素（render 的 xdg surface） */
+    content: HTMLElement;
+    /** 标题栏右上角的窗口控制按钮（最大化/恢复、关闭） */
+    controls: ElType<HTMLElement>[];
+    maximizeIcon: ElType<HTMLElement>;
+    restoreIcon: ElType<HTMLElement>;
+    decorated: boolean;
+    fullscreen: boolean;
+    maximized: boolean;
+    appid: string;
+};
+
+const clientWindowFrames = new Map<WinHandle, ClientWindowFrame>();
+
+/** 标题栏占用的视觉高度；全屏和未协商服务端装饰时为 0 */
+function titlebarPx(frame: ClientWindowFrame) {
+    return frame.decorated && !frame.fullscreen ? Math.round(CLIENT_TITLEBAR_HEIGHT * uiScale) : 0;
+}
+
+/** 视觉按钮固定 22px；最大化时只放大透明点击区，不改变图标和圆底的大小 */
+const CLIENT_CONTROL_VISUAL_SIZE = 22;
+
+/**
+ * 最大化时把命中区撑满整条标题栏高度，图标本身不放大。
+ * 关闭按钮的命中区贴到外框右边、上边，圆角不裁剪它（frame 没有 overflow:hidden）。
+ */
+function clientFrameControlHitSize(frame: ClientWindowFrame) {
+    return frame.maximized ? CLIENT_TITLEBAR_HEIGHT : CLIENT_CONTROL_VISUAL_SIZE;
+}
+
+/**
+ * 标题栏按钮与外框圆角对齐：视觉按钮圆心落在圆角圆心上
+ * （距右边 = 圆角半径），内外留白因此随圆角设置变化。
+ */
+function updateClientFrameControls(frame: ClientWindowFrame) {
+    const hitSize = clientFrameControlHitSize(frame);
+    for (const control of frame.controls) control.style({ width: `${hitSize}px`, height: `${hitSize}px` });
+    const inset = frame.maximized ? 0 : Math.max(4, Math.round(windowRadius - CLIENT_CONTROL_VISUAL_SIZE / 2));
+    frame.header.style({ paddingRight: `${inset}px` });
+}
+
+function syncClientFrameMaximized(frame: ClientWindowFrame, maximized: boolean) {
+    frame.maximized = maximized;
+    frame.el.el.toggleAttribute("data-maximized", maximized);
+    frame.maximizeIcon.style({ display: maximized ? "none" : "flex" });
+    frame.restoreIcon.style({ display: maximized ? "flex" : "none" });
+    updateClientFrameControls(frame);
+}
+
+function applyClientFrameChrome(frame: ClientWindowFrame) {
+    frame.el.el.toggleAttribute("data-decorated", frame.decorated && !frame.fullscreen);
+    frame.el.el.toggleAttribute("data-fullscreen", frame.fullscreen);
+}
+
+/**
+ * 用内容尺寸布局整窗。frame 宽高 = 内容 + 标题栏，
+ * 内容绝对定位在标题栏下方（全屏时标题栏高度为 0）。
+ */
+function setClientFrameLayout(
+    frame: ClientWindowFrame,
+    contentWidth: number,
+    contentHeight: number,
+    fullscreen = false,
+) {
+    frame.fullscreen = fullscreen;
+    const width = Math.max(1, contentWidth);
+    const height = Math.max(1, contentHeight);
+    const bar = titlebarPx(frame);
+    frame.el.style({
+        width: `${width}px`,
+        height: `${height + bar}px`,
+    });
+    frame.content.style.top = `${bar}px`;
+    frame.content.style.left = "0px";
+    frame.content.style.width = `${width}px`;
+    frame.content.style.height = `${height}px`;
+    applyClientFrameChrome(frame);
+}
+
+function setClientFramePosition(frame: ClientWindowFrame, left: number, top: number) {
+    frame.el.style({ left: `${Math.round(left)}px`, top: `${Math.round(top)}px` });
+}
+
+function updateClientFrameIcon(frame: ClientWindowFrame, appid: string) {
+    frame.icon.clear();
+    if (!appid) return;
+    void (async () => {
+        const desk = await MSysApi.getDesktopEntry(appid);
+        const path = desk ? await MSysApi.getDesktopIcon(desk.icon || "", { theme: setting.get("icon.theme") }) : "";
+        // await 期间 appid 可能又变了
+        if (!path || frame.appid !== appid) return;
+        frame.icon.add(
+            image(path, desk?.name || appid).style({
+                width: "100%",
+                height: "100%",
+                objectFit: "contain",
+            }),
+        );
+    })().catch(() => {});
+}
+
+function updateClientFrameInfo(frame: ClientWindowFrame, info: WindowInfo) {
+    frame.title.sv(info.title || info.appid || "窗口");
+    if (frame.appid !== info.appid) {
+        frame.appid = info.appid;
+        updateClientFrameIcon(frame, info.appid);
+    }
+}
+
+function beginClientFrameMove(frame: ClientWindowFrame, handle: WinHandle, e: PointerEvent) {
+    viewData.focusWin(handle);
+    windowCenterManager.pauseCentering(handle);
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const rect = frame.el.el.getBoundingClientRect();
+    const parentRect = frame.el.el.parentElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
+    const origLeft = rect.left - parentRect.left;
+    const origTop = rect.top - parentRect.top;
+
+    function onPointerMove(ev: PointerEvent) {
+        frame.el.style({
+            left: `${Math.round(ev.clientX - startX + origLeft)}px`,
+            top: `${Math.round(ev.clientY - startY + origTop)}px`,
+        });
+    }
+    function cleanup() {
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", cleanup);
+        window.removeEventListener("pointercancel", cleanup);
+    }
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", cleanup, { once: true });
+    window.addEventListener("pointercancel", cleanup, { once: true });
+}
+
+function createMaximizeGlyph() {
+    return view()
+        .style({ width: "12px", height: "12px", display: "flex", alignItems: "center", justifyContent: "center" })
+        .add(
+            view().style({
+                width: "10px",
+                height: "10px",
+                border: "1.5px solid #111",
+                borderRadius: "2px",
+                boxSizing: "border-box",
+            }),
+        );
+}
+
+function createRestoreGlyph() {
+    const glyph = view().style({ position: "relative", width: "12px", height: "12px" });
+    const back = view().style({
+        position: "absolute",
+        top: "0",
+        right: "0",
+        width: "9px",
+        height: "9px",
+        border: "1.5px solid #111",
+        borderRadius: "2px",
+        boxSizing: "border-box",
+    });
+    const front = view().style({
+        position: "absolute",
+        left: "0",
+        bottom: "0",
+        width: "9px",
+        height: "9px",
+        border: "1.5px solid #111",
+        borderRadius: "2px",
+        boxSizing: "border-box",
+        // 盖住背后方框穿过来的边，形成两个叠放的窗口
+        background: "#f5f5f5",
+    });
+    glyph.add([back, front]);
+    return glyph;
+}
+
+/** 标题栏按钮：外层是透明命中区，内层是 22px 圆底和图标 */
+function createTitlebarControl(content: ElType<HTMLElement> | { el: HTMLElement }, onClick: () => void) {
+    const visual = view()
+        .style({
+            width: `${CLIENT_CONTROL_VISUAL_SIZE}px`,
+            height: `${CLIENT_CONTROL_VISUAL_SIZE}px`,
+            borderRadius: "50%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(255, 255, 255, 0.92)",
+            boxShadow: "0 1px 4px #00000055",
+        })
+        .add(content);
+    const btn = button(visual)
+        .style({
+            width: `${CLIENT_CONTROL_VISUAL_SIZE}px`,
+            height: `${CLIENT_CONTROL_VISUAL_SIZE}px`,
+            padding: "0",
+            border: "none",
+            background: "transparent",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            zIndex: "10",
+            flexShrink: "0",
+        })
+        .data({ "desktop-ui": "window-control" });
+    btn.on("click", (e) => {
+        e.stopPropagation();
+        onClick();
+    });
+    return btn;
+}
+
+function createClientWindowFrame(info: WindowInfo, content: HTMLElement): ClientWindowFrame {
+    const title = txt("").style({
+        flex: "1",
+        minWidth: "0",
+        overflow: "hidden",
+        whiteSpace: "nowrap",
+        textOverflow: "ellipsis",
+        fontSize: "13px",
+        fontWeight: "500",
+        color: "#111",
+        userSelect: "none",
+    });
+    const icon = view().style({
+        width: "18px",
+        height: "18px",
+        flexShrink: "0",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+    });
+    const close = createTitlebarControl(getIconXEl("cross", { size: 12 }), () =>
+        server.server.notify("window.close", info.handle),
+    ).data({ "client-titlebar-close": "", "client-control": "close" });
+
+    const maximizeIcon = createMaximizeGlyph();
+    const restoreIcon = createRestoreGlyph();
+    restoreIcon.style({ display: "none" });
+    const maximize = createTitlebarControl(
+        view()
+            .style({ display: "flex", alignItems: "center", justifyContent: "center" })
+            .add([maximizeIcon, restoreIcon]),
+        () => {
+            viewData.focusWin(info.handle);
+            toggleMaximizeWindow(info.handle);
+        },
+    ).data({ "client-control": "maximize" });
+
+    const header = view("x")
+        .data({ "desktop-ui": "client-titlebar", "client-titlebar": "" })
+        .style({
+            position: "absolute",
+            left: "0",
+            top: "0",
+            // zoom 把视觉尺寸放大到和窗口内容一致；宽度反过来除，视觉上仍是 100%
+            width: "calc(100% / var(--desktop-ui-scale, 1))",
+            height: `${CLIENT_TITLEBAR_HEIGHT}px`,
+            zoom: "var(--desktop-ui-scale, 1)",
+            alignItems: "center",
+            gap: "6px",
+            paddingLeft: "14px",
+            paddingRight: "14px",
+            boxSizing: "border-box",
+            borderBottom: "1px solid #00000012",
+            zIndex: "6",
+            cursor: "default",
+            fontFamily: "sans-serif",
+        })
+        .add([icon, title, maximize, close]);
+
+    header.on("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        if ((e.target as HTMLElement).closest("button, input, select, textarea")) return;
+        e.stopPropagation();
+        beginClientFrameMove(frame, info.handle, e);
+    });
+
+    const el = view().data({ "client-frame": "", "client-window": info.handle }).style({
+        position: "absolute",
+        boxSizing: "border-box",
+    });
+    el.add([header, content]);
+
+    const frame: ClientWindowFrame = {
+        el,
+        header,
+        icon,
+        title,
+        content,
+        controls: [maximize, close],
+        maximizeIcon,
+        restoreIcon,
+        decorated: info.decorated,
+        fullscreen: false,
+        maximized: false,
+        appid: "",
+    };
+    updateClientFrameInfo(frame, info);
+    applyClientFrameChrome(frame);
+    syncClientFrameMaximized(frame, info.states.maximized);
+    return frame;
+}
+
 function jump2Win(winid: MWinId) {
     viewData.jumpToWin(winid);
 }
@@ -1915,7 +2297,7 @@ function openSettingsWindow() {
         height: "calc(540px * var(--desktop-ui-scale, 1))",
         maxWidth: "calc(100vw - 24px)",
         maxHeight: "calc(100vh - 24px)",
-        borderRadius: "18px",
+        borderRadius: "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))",
         background: "rgba(245, 245, 245, 0.97)",
         backdropFilter: "blur(18px)",
         boxShadow: "0 12px 40px #00000033",
@@ -1925,7 +2307,7 @@ function openSettingsWindow() {
     const clip = view().style({
         position: "absolute",
         inset: "0",
-        borderRadius: "18px",
+        borderRadius: "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))",
         overflow: "hidden",
     });
     root.add(clip);
@@ -1961,6 +2343,8 @@ function openSettingsWindow() {
     const settingsContent = createSettingsContent({
         getIconTheme: () => setting.get("icon.theme") || "breeze",
         setIconTheme: (theme) => setting.set("icon.theme", theme),
+        getWindowRadius: () => windowRadius,
+        setWindowRadius,
         getImePanelPreedit: () => (imeSetting.nget("panelPreedit") ?? "auto") as ImePanelPreeditMode,
         setImePanelPreedit: (mode) => imeSetting.nset("panelPreedit", mode),
         getCenterWindows: () => desktopSetting.nget("centerWindows") ?? true,
@@ -2029,10 +2413,7 @@ function openSettingsWindow() {
     });
 
     const setActive = (active: boolean) => {
-        root.style({
-            boxShadow: active ? "0 16px 48px #00000044" : "0 12px 40px #0000002a",
-            outline: active ? "1px solid #00aaff88" : "1px solid transparent",
-        });
+        root.style({ boxShadow: active ? "0 16px 48px #00000044" : "0 12px 40px #0000002a" });
     };
     setActive(false);
 
@@ -2330,11 +2711,11 @@ async function dropDragToStation() {
     clipboardStationTool?.setDragActive(false);
     let item: ClipboardItem | undefined;
     try {
-        item = await clipboard?.add(
-            drag.mimes,
-            (mime) => server.server.request("dnd.read", drag.token, mime),
-            { appid: drag.appid, seat: drag.seat, kind: "drag" },
-        );
+        item = await clipboard?.add(drag.mimes, (mime) => server.server.request("dnd.read", drag.token, mime), {
+            appid: drag.appid,
+            seat: drag.seat,
+            kind: "drag",
+        });
     } finally {
         // 数据已经读完（或读失败）；取消让源客户端退出 drag 状态
         server.server.notify("dnd.cancel", drag.token);
@@ -2522,8 +2903,18 @@ const desktopSetting = MSetting.init({
         switchGestureGain: DEFAULT_GESTURE_GAIN,
         /** 切屏后重排新旧顺序的延迟（毫秒） */
         reorderDelay: DEFAULT_REORDER_DELAY,
+        /** 桌面绘制的窗口圆角（px，视觉值） */
+        windowRadius: 18,
     },
 });
+
+const DEFAULT_WINDOW_RADIUS = 18;
+function normalizeWindowRadius(value: unknown) {
+    const n = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_WINDOW_RADIUS;
+    return Math.min(24, Math.max(0, Math.round(n)));
+}
+let windowRadius = normalizeWindowRadius(desktopSetting.nget("windowRadius"));
+document.documentElement.style.setProperty("--window-radius", `${windowRadius}px`);
 
 // 滚轮在每帧回调里都会读到，缓存设置避免每次同步读配置文件
 let touchpadScrollGain = desktopSetting.nget("touchpadScrollGain") ?? 1;
@@ -2608,9 +2999,15 @@ function reconfigureMaximizedWindows() {
             }
             if (!info.states.maximized) continue;
             const scale = screenManager.getScale();
+            const frame = clientWindowFrames.get(info.handle);
+            const contentHeight = Math.max(1, available.height - (frame ? titlebarPx(frame) : 0));
+            if (frame) {
+                setClientFrameLayout(frame, available.width, contentHeight);
+                setClientFramePosition(frame, available.x, available.y);
+            }
             server.server.notify("window.maximize", info.handle, {
                 width: Math.max(1, Math.floor(available.width / scale)),
-                height: Math.max(1, Math.floor(available.height / scale)),
+                height: Math.max(1, Math.floor(contentHeight / scale)),
             });
         }
         if (hasFullscreen) syncFullscreenWindowBoxes();
@@ -2689,15 +3086,13 @@ server.server.on("window.created", (info) => {
     const screen = viewData.addWindowScreen(wid);
     // biome-ignore lint/style/noNonNullAssertion: 刚刚创建的，一定有
     const winEl = render.getXdgSurfaceEle(info.renderId)!;
-    pack(winEl).style({
-        width: `${info.rect.w * info.scale}px`,
-        height: `${info.rect.h * info.scale}px`,
-        left: `${wino.l}px`,
-        top: `${wino.t}px`,
-    });
-    addWindow(screen, winEl, wid);
-    addResizeHandles(winEl, wid, true);
-    createOverviewWindowCloseButton(() => server.server.notify("window.close", wid)).addInto(winEl);
+    const frame = createClientWindowFrame(info, winEl);
+    clientWindowFrames.set(wid, frame);
+    setClientFrameLayout(frame, info.rect.w * info.scale, info.rect.h * info.scale);
+    setClientFramePosition(frame, wino.l, wino.t);
+    addWindow(screen, frame.el.el, wid);
+    addResizeHandles(frame.el.el, wid, true, winEl);
+    createOverviewWindowCloseButton(() => server.server.notify("window.close", wid)).addInto(frame.el);
     viewData.focusWin(wid);
     server.server.notify("window.setBox", wid, { width: 800, height: 600 });
 });
@@ -2709,6 +3104,9 @@ server.server.on("window.closed", (wid) => {
     fullscreenCenteringPaused.delete(wid);
     removeResizeHandles(wid);
     windowCenterManager.removeWindow(wid);
+    const frame = clientWindowFrames.get(wid);
+    clientWindowFrames.delete(wid);
+    frame?.el.el.remove();
     viewData.closeWin(wid);
     // 指针还停在刚关闭的窗口上时，立刻回到默认光标；
     // 否则客户端退出流程补发的 hidden 会把光标留成空白
@@ -2723,28 +3121,24 @@ server.server.on("window.closed", (wid) => {
 });
 
 server.server.on("window.startMove", (wid) => {
-    const info = server.server.windows.get(wid);
-    if (!info) return;
-
-    const winEl = render.getXdgSurfaceEle(info.renderId);
-    if (!winEl) return;
-    const rect = winEl.getBoundingClientRect();
+    const frame = clientWindowFrames.get(wid);
+    if (!frame) return;
+    const movingFrame = frame;
+    const rect = movingFrame.el.el.getBoundingClientRect();
 
     windowCenterManager.pauseCentering(wid);
 
     const startX = mousePos.x;
     const startY = mousePos.y;
 
-    const parentRect = winEl.parentElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
+    const parentRect = movingFrame.el.el.parentElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
     const origLeft = rect.left - parentRect.left;
     const origTop = rect.top - parentRect.top;
 
     function onPointerMove() {
         const newLeft = Math.round(mousePos.x - startX + origLeft);
         const newTop = Math.round(mousePos.y - startY + origTop);
-        if (!winEl) return;
-        winEl.style.left = `${newLeft}px`;
-        winEl.style.top = `${newTop}px`;
+        setClientFramePosition(movingFrame, newLeft, newTop);
     }
 
     function cleanup() {
@@ -2765,12 +3159,19 @@ server.server.on("window.startMove", (wid) => {
 server.server.on("window.changed", (info) => {
     const applied = appliedState.get(info.handle);
     if (!applied) return;
-    const winEl = render.getXdgSurfaceEle(info.renderId);
+    const frame = clientWindowFrames.get(info.handle);
+    if (frame) {
+        updateClientFrameInfo(frame, info);
+        syncClientFrameMaximized(frame, info.states.maximized && !info.states.fullscreen);
+    }
+
+    // 服务端装饰协商结果变化：标题栏出现/消失会改变 frame 总高，即使内容尺寸没变也要重排
+    const decorationChanged = frame !== undefined && frame.decorated !== info.decorated;
+    if (frame && decorationChanged) frame.decorated = info.decorated;
 
     // 全屏状态变化（由客户端发起）：窗口铺满整块输出，工具栏随之避让
     if (applied.fullscreen !== info.states.fullscreen) {
         applied.fullscreen = info.states.fullscreen;
-        winEl?.toggleAttribute("data-fullscreen", info.states.fullscreen);
         if (info.states.fullscreen) {
             // 最大化与全屏互斥；进入全屏时把本地最大化快照一起收敛，避免走恢复分支
             applied.maximized = info.states.maximized;
@@ -2785,16 +3186,17 @@ server.server.on("window.changed", (info) => {
         if (!info.states.maximized) {
             const width = 800;
             const height = 600;
-            if (winEl) {
-                pack(winEl).style({
-                    width: `${width * info.scale}px`,
-                    height: `${height * info.scale}px`,
-                    left: `${wino.l}px`,
-                    top: `${wino.t}px`,
-                });
+            if (frame) {
+                setClientFrameLayout(frame, width * info.scale, height * info.scale);
+                setClientFramePosition(frame, wino.l, wino.t);
             }
             server.server.notify("window.unfullscreen", info.handle, { width, height });
         } else {
+            if (frame) {
+                const available = availableStageSize();
+                setClientFrameLayout(frame, available.width, Math.max(1, available.height - titlebarPx(frame)));
+                setClientFramePosition(frame, available.x, available.y);
+            }
             server.server.notify("window.unfullscreen", info.handle);
         }
         syncFullscreenChrome();
@@ -2802,19 +3204,22 @@ server.server.on("window.changed", (info) => {
 
     // 尺寸变化（来自 xdg_surface.set_window_geometry）或输出缩放变化。
     // 全屏窗口的 DOM 尺寸由桌面按输出铺满，不跟随客户端提交的普通几何。
-    if (applied.w !== info.rect.w || applied.h !== info.rect.h || applied.scale !== info.scale) {
+    if (applied.w !== info.rect.w || applied.h !== info.rect.h || applied.scale !== info.scale || decorationChanged) {
         applied.w = info.rect.w;
         applied.h = info.rect.h;
         applied.scale = info.scale;
         // 拖拽缩放期间 DOM 尺寸是桌面自己的预览，等客户端提交或超时后再以客户端几何为准
         const previewingResize = resizingWindowId === info.handle || resizeSettleTimers.has(info.handle);
-        if (winEl && !previewingResize && !info.states.fullscreen) {
-            pack(winEl).style({
-                width: `${info.rect.w * info.scale}px`,
-                height: `${info.rect.h * info.scale}px`,
-            });
-            if (windowCenterManager.isEnabled() && !windowCenterManager.isPaused(info.handle)) {
-                windowCenterManager.centerWindow(info.handle);
+        if (frame && !previewingResize && !info.states.fullscreen) {
+            if (info.states.maximized) {
+                const available = availableStageSize();
+                setClientFrameLayout(frame, available.width, Math.max(1, available.height - titlebarPx(frame)));
+                setClientFramePosition(frame, available.x, available.y);
+            } else {
+                setClientFrameLayout(frame, info.rect.w * info.scale, info.rect.h * info.scale);
+                if (windowCenterManager.isEnabled() && !windowCenterManager.isPaused(info.handle)) {
+                    windowCenterManager.centerWindow(info.handle);
+                }
             }
         }
     }
@@ -2822,31 +3227,39 @@ server.server.on("window.changed", (info) => {
     // 最大化状态变化（由客户端发起）
     if (applied.maximized !== info.states.maximized) {
         applied.maximized = info.states.maximized;
-        if (!winEl) return;
         if (info.states.fullscreen) return;
+        if (!frame) return;
         if (info.states.maximized) {
             const available = availableStageSize();
-            pack(winEl).style({
-                width: `${available.width}px`,
-                height: `${available.height}px`,
-                left: `${available.x}px`,
-                top: `${available.y}px`,
-            });
+            const contentHeight = Math.max(1, available.height - titlebarPx(frame));
+            setClientFrameLayout(frame, available.width, contentHeight);
+            setClientFramePosition(frame, available.x, available.y);
             server.server.notify("window.maximize", info.handle, {
                 width: Math.max(1, Math.floor(available.width / info.scale)),
-                height: Math.max(1, Math.floor(available.height / info.scale)),
+                height: Math.max(1, Math.floor(contentHeight / info.scale)),
             });
         } else {
             // 恢复尺寸是 surface 逻辑尺寸；DOM 按输出缩放放大
             const width = 800;
             const height = 600;
-            pack(winEl).style({
-                width: `${width * info.scale}px`,
-                height: `${height * info.scale}px`,
-                left: `${wino.l}px`,
-                top: `${wino.t}px`,
-            });
+            setClientFrameLayout(frame, width * info.scale, height * info.scale);
+            setClientFramePosition(frame, wino.l, wino.t);
             server.server.notify("window.unmaximize", info.handle, { width, height });
+        }
+    }
+
+    // 装饰协商变化时如果窗口正最大化，标题栏占位变了，需要重新给客户端下发可用内容尺寸
+    if (decorationChanged && frame && info.states.maximized && !info.states.fullscreen) {
+        const previewingResize = resizingWindowId === info.handle || resizeSettleTimers.has(info.handle);
+        if (!previewingResize) {
+            const available = availableStageSize();
+            const contentHeight = Math.max(1, available.height - titlebarPx(frame));
+            setClientFrameLayout(frame, available.width, contentHeight);
+            setClientFramePosition(frame, available.x, available.y);
+            server.server.notify("window.maximize", info.handle, {
+                width: Math.max(1, Math.floor(available.width / info.scale)),
+                height: Math.max(1, Math.floor(contentHeight / info.scale)),
+            });
         }
     }
 
@@ -4451,29 +4864,26 @@ function createLauncher(): LauncherController {
 /** 启动台：放在空桌面右边，显示应用图标，和空桌面一样是特殊虚拟屏 */
 function createLaunchpadContent() {
     // 外层用未缩放的视觉 px 避让工具栏；内部 grid 再按界面缩放
-    const root = view()
-        .data({ "desktop-ui": "launchpad" })
-        .style({
-            position: "absolute",
-            top: "0px",
-            left: "0px",
-            right: "0px",
-            bottom: "0px",
-            boxSizing: "border-box",
-            overflow: "hidden",
-        });
-    const grid = view("x", "wrap")
-        .style({
-            width: "100%",
-            height: "100%",
-            padding: "48px",
-            boxSizing: "border-box",
-            alignContent: "flex-start",
-            justifyContent: "flex-start",
-            gap: "18px",
-            overflowY: "auto",
-            zoom: "var(--desktop-ui-scale, 1)",
-        });
+    const root = view().data({ "desktop-ui": "launchpad" }).style({
+        position: "absolute",
+        top: "0px",
+        left: "0px",
+        right: "0px",
+        bottom: "0px",
+        boxSizing: "border-box",
+        overflow: "hidden",
+    });
+    const grid = view("x", "wrap").style({
+        width: "100%",
+        height: "100%",
+        padding: "48px",
+        boxSizing: "border-box",
+        alignContent: "flex-start",
+        justifyContent: "flex-start",
+        gap: "18px",
+        overflowY: "auto",
+        zoom: "var(--desktop-ui-scale, 1)",
+    });
     root.add(grid);
     const loadingEl = txt("正在加载应用…").style({ padding: "8px", opacity: "0.6" }).addInto(grid);
     const tileFactory = createAppTileFactory({
@@ -5381,14 +5791,10 @@ function syncFullscreenWindowBoxes() {
     const out = fullOutputSize();
     for (const info of server.server.windows.list()) {
         if (!info.states.fullscreen) continue;
-        const el = render.getXdgSurfaceEle(info.renderId);
-        if (!el) continue;
-        pack(el).style({
-            width: `${out.width}px`,
-            height: `${out.height}px`,
-            left: "0px",
-            top: "0px",
-        });
+        const frame = clientWindowFrames.get(info.handle);
+        if (!frame) continue;
+        setClientFrameLayout(frame, out.width, out.height, true);
+        setClientFramePosition(frame, 0, 0);
         const width = Math.max(1, Math.floor(out.width / info.scale));
         const height = Math.max(1, Math.floor(out.height / info.scale));
         const key = `${width}x${height}@${info.scale}`;
@@ -5432,6 +5838,46 @@ function syncFullscreenChrome(animate = true) {
     fullscreenChromeGear.moveTo({ mix: hide ? 1 : 0 }, animate ? undefined : 0);
 }
 
+/** 标题栏最大化/恢复按钮：桌面主动下发，窗口命令不会回 window.changed */
+function toggleMaximizeWindow(winid = viewData.focusHandle) {
+    if (winid === undefined || isInternalWindow(winid)) return;
+    const info = server.server.windows.get(winid);
+    const frame = clientWindowFrames.get(winid);
+    if (!info || !frame || info.states.fullscreen) return;
+    const applied = appliedState.get(winid);
+    const maximized = !info.states.maximized;
+
+    syncClientFrameMaximized(frame, maximized);
+    if (maximized) {
+        const available = availableStageSize();
+        const contentHeight = Math.max(1, available.height - titlebarPx(frame));
+        setClientFrameLayout(frame, available.width, contentHeight);
+        setClientFramePosition(frame, available.x, available.y);
+        if (applied) {
+            applied.maximized = true;
+            applied.w = Math.max(1, Math.floor(available.width / info.scale));
+            applied.h = Math.max(1, Math.floor(contentHeight / info.scale));
+            applied.scale = info.scale;
+        }
+        server.server.notify("window.maximize", winid, {
+            width: Math.max(1, Math.floor(available.width / info.scale)),
+            height: Math.max(1, Math.floor(contentHeight / info.scale)),
+        });
+    } else {
+        const width = 800;
+        const height = 600;
+        setClientFrameLayout(frame, width * info.scale, height * info.scale);
+        setClientFramePosition(frame, wino.l, wino.t);
+        if (applied) {
+            applied.maximized = false;
+            applied.w = width;
+            applied.h = height;
+            applied.scale = info.scale;
+        }
+        server.server.notify("window.unmaximize", winid, { width, height });
+    }
+}
+
 /** 桌面主动切换当前聚焦窗口的全屏（Super+F） */
 function toggleFullscreen(winid = viewData.focusHandle) {
     if (winid === undefined || isInternalWindow(winid)) return;
@@ -5439,7 +5885,7 @@ function toggleFullscreen(winid = viewData.focusHandle) {
     if (!info) return;
     const next = !info.states.fullscreen;
     const applied = appliedState.get(winid);
-    const winEl = render.getXdgSurfaceEle(info.renderId);
+    const frame = clientWindowFrames.get(winid);
 
     if (next) {
         const out = fullOutputSize();
@@ -5453,7 +5899,6 @@ function toggleFullscreen(winid = viewData.focusHandle) {
             applied.maximized = false;
         }
         pauseCenteringForFullscreen(winid);
-        winEl?.toggleAttribute("data-fullscreen", true);
         syncFullscreenChrome();
         syncFullscreenWindowBoxes();
         return;
@@ -5470,27 +5915,19 @@ function toggleFullscreen(winid = viewData.focusHandle) {
         applied.fullscreen = false;
         applied.maximized = restoredMaximized;
     }
-    winEl?.toggleAttribute("data-fullscreen", false);
-    if (winEl) {
+    if (frame) {
         if (restoredMaximized) {
             const available = availableStageSize();
-            pack(winEl).style({
-                width: `${available.width}px`,
-                height: `${available.height}px`,
-                left: `${available.x}px`,
-                top: `${available.y}px`,
-            });
+            const contentHeight = Math.max(1, available.height - titlebarPx(frame));
+            setClientFrameLayout(frame, available.width, contentHeight);
+            setClientFramePosition(frame, available.x, available.y);
             server.server.notify("window.maximize", winid, {
                 width: Math.max(1, Math.floor(available.width / info.scale)),
-                height: Math.max(1, Math.floor(available.height / info.scale)),
+                height: Math.max(1, Math.floor(contentHeight / info.scale)),
             });
         } else {
-            pack(winEl).style({
-                width: `${800 * info.scale}px`,
-                height: `${600 * info.scale}px`,
-                left: `${wino.l}px`,
-                top: `${wino.t}px`,
-            });
+            setClientFrameLayout(frame, 800 * info.scale, 600 * info.scale);
+            setClientFramePosition(frame, wino.l, wino.t);
         }
     }
 }
@@ -5652,10 +6089,26 @@ function applyUiScale(scale: number) {
     cursor.setScale(value);
     ime?.setUiScale(value);
     measureChromeInsets();
+    // 标题栏高度跟着界面缩放走；最大/全屏窗口由 measureChromeInsets 里的重排处理
+    for (const [handle, frame] of clientWindowFrames) {
+        const info = server.server.windows.get(handle);
+        if (!info || info.states.maximized || info.states.fullscreen) continue;
+        setClientFrameLayout(frame, info.rect.w * info.scale, info.rect.h * info.scale);
+    }
     // 界面缩放会改变设置窗口的外层尺寸；只重排这个内部窗口，不动用户自己摆放的应用窗口
     if (internalWindows.has(SETTINGS_WINDOW_ID) && !windowCenterManager.isPaused(SETTINGS_WINDOW_ID)) {
         windowCenterManager.centerWindow(SETTINGS_WINDOW_ID);
     }
+}
+
+/** 窗口圆角设置：CSS 变量负责视觉，按钮内缩量需要按新半径重算 */
+function setWindowRadius(value: number) {
+    const next = normalizeWindowRadius(value);
+    if (next === windowRadius) return;
+    windowRadius = next;
+    desktopSetting.nset("windowRadius", next);
+    document.documentElement.style.setProperty("--window-radius", `${next}px`);
+    for (const frame of clientWindowFrames.values()) updateClientFrameControls(frame);
 }
 
 uiScaleReady = true;

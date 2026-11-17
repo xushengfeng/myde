@@ -225,7 +225,7 @@ interface MockConfig {
 | `on/off/emit` | ✅ | `window.*` / `cursor.*` / `clipboard.*` / `client.*` 域事件 |
 | `notify` | ✅ | 窗口命令与输入注入（mock 不模拟客户端） |
 | `respond/request` | ✅ | `surfaceBounds.request`、`window.get`、`window.getBounds` |
-| `openWindow/closeWindow/touchAppid` | ✅ | mock 侧造窗口、关窗口、改 appid |
+| `openWindow/closeWindow/touchAppid` | ✅ | mock 侧造窗口、关窗口、改 appid；`openWindow({ decorated })` 可模拟服务端装饰 |
 | `startXwayland` | ✅ | 返回 `undefined`，不启动真实 Xwayland |
 | `clients` | ✅ | Map |
 | `destroy` | ✅ | 清理 |

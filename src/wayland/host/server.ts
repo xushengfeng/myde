@@ -383,6 +383,7 @@ class WaylandServer {
             handle,
             clientId: entry.client.id,
             appid: record?.appid ?? "",
+            decorated: record?.decorated ?? false,
             title: record?.title ?? "",
             rect: entry.client.windowRect(entry.winId) ?? { x: 0, y: 0, w: 0, h: 0 },
             scale: this.output.scale,
@@ -517,6 +518,8 @@ class WaylandServer {
         client.on("title", (winId, title) => this.emitChanged(clientId, winId, (info) => ({ ...info, title })));
         // app_id 按 toplevel 变化：同一连接里可以有多个应用（xwayland-satellite）
         client.on("windowAppid", (winId) => this.emitChanged(clientId, winId));
+        // 服务端装饰协商结果变化：桌面据此挂上/摘掉标题栏
+        client.on("windowDecorated", (winId) => this.emitChanged(clientId, winId));
     }
 
     /** 断开：先补发该客户端全部窗口的关闭，再报 client.closed —— 残留窗口由 server 兜底 */

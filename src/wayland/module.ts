@@ -310,6 +310,8 @@ export interface XdgSurfaceApi {
     setXdgSurfaceSize(id: XdgSurfaceId, x: number, y: number, w: number, h: number): void;
     /** 无 `set_window_geometry` 时，按当前 surface 尺寸同步渲染元素（不写 winGeo） */
     setSurfaceGeo(id: XdgSurfaceId): void;
+    /** 外部状态（如装饰模式）变化后请求一次 configure；初始 commit 前会转成 pending */
+    requestConfigure(id: XdgSurfaceId): void;
     getXdgSurfaceByToplevel(id: XdgToplevelId): XdgSurfaceId | undefined;
     getXdgSurfaceByPopup(id: XdgPopupId): XdgSurfaceId | undefined;
     setAsToplevel(id: XdgSurfaceId, toplevelId: XdgToplevelId): void;
@@ -482,6 +484,8 @@ export interface WaylandClientEventMap {
     windowFullscreen: (xdgToplevelId: WaylandWinId) => void;
     windowUnFullscreen: (xdgToplevelId: WaylandWinId) => void;
     windowAppid: (xdgToplevelId: WaylandWinId, appid: string) => void;
+    /** 服务端装饰（xdg-decoration server_side）开关变化 */
+    windowDecorated: (xdgToplevelId: WaylandWinId, decorated: boolean) => void;
     title: (xdgToplevelId: WaylandWinId, title: string) => void;
 }
 
@@ -492,6 +496,8 @@ export interface WindowRecord {
     box: { width: number; height: number };
     /** 该窗口最近一次 `xdg_toplevel.set_app_id`；同一连接的不同窗口可以不同 */
     appid: string;
+    /** 是否由桌面绘制服务端装饰（xdg-decoration 协商为 server_side） */
+    decorated: boolean;
     title: string;
     /** 由桌面命令或客户端 set/unset_maximized 维护，进 WindowInfo.states */
     maximized: boolean;
@@ -514,6 +520,7 @@ export interface WindowsApi {
     remove(id: WaylandWinId): void;
     notifyClosed(id: WaylandWinId): void;
     setAppid(id: WaylandWinId, appid: string): void;
+    setDecorated(id: WaylandWinId, decorated: boolean): void;
     setTitle(id: WaylandWinId, title: string): void;
     resized(id: WaylandWinId, width: number, height: number): void;
     startMove(id: WaylandWinId): void;

@@ -7,6 +7,7 @@ import { presentationModule } from "./ext/presentation";
 import { textInputV1Module } from "./ext/text_input_v1";
 import { textInputV3Module } from "./ext/text_input_v3";
 import { viewporterModule } from "./ext/viewporter";
+import { xdgDecorationModule } from "./ext/xdg_decoration";
 import { xdgShellModule } from "./ext/xdg_shell";
 
 /**
@@ -23,6 +24,7 @@ export const protocolModules: readonly ProtocolModule[] = [
     dmabufModule,
     presentationModule,
     xdgShellModule,
+    xdgDecorationModule,
     textInputV1Module,
     textInputV3Module,
 ];

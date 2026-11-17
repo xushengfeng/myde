@@ -9,6 +9,9 @@ export type ImePanelPreeditMode = "auto" | "always" | "never";
 export type SettingsContentOptions = {
     getIconTheme(): string;
     setIconTheme(theme: string): void;
+    /** 桌面绘制的窗口圆角（视觉 px） */
+    getWindowRadius(): number;
+    setWindowRadius(radius: number): void;
     getImePanelPreedit(): ImePanelPreeditMode;
     setImePanelPreedit(mode: ImePanelPreeditMode): void;
     getCenterWindows(): boolean;
@@ -390,6 +393,15 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
                     .add([
                         sectionTitle("外观", "调整桌面的显示方式。"),
                         settingRow("图标主题", "应用图标的主题名称，修改后重新打开应用列表或桌面后生效。", themeInput),
+                        settingRow(
+                            "窗口圆角",
+                            "桌面绘制的窗口标题栏和内容四角半径；0 为直角。",
+                            createSegmented(
+                                [0, 6, 12, 18, 24].map((value) => ({ name: `${value}`, value })),
+                                op.getWindowRadius,
+                                op.setWindowRadius,
+                            ),
+                        ),
                         settingRow("壁纸", "当前使用默认桌面自带壁纸。", txt("默认").style({ opacity: "0.6" })),
                     ]);
             },

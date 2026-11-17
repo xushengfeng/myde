@@ -2,7 +2,7 @@
 import type { WaylandObjectId } from "../utils/wayland-binary";
 type WaylandObjectId2<T extends string> = WaylandObjectId & { __interface: T };
 
-export type WaylandInterfaces = "wl_display" | "wl_registry" | "wl_callback" | "wl_compositor" | "wl_shm_pool" | "wl_shm" | "wl_buffer" | "wl_surface" | "wl_seat" | "wl_pointer" | "wl_keyboard" | "wl_output" | "wl_region" | "wl_data_device" | "wl_data_device_manager" | "wl_data_offer" | "wl_data_source" | "wl_subcompositor" | "wl_subsurface" | "xdg_wm_base" | "xdg_surface" | "xdg_toplevel" | "xdg_popup" | "xdg_positioner" | "wp_viewporter" | "wp_viewport" | "wp_fractional_scale_manager_v1" | "wp_fractional_scale_v1" | "wp_presentation" | "wp_presentation_feedback" | "zwp_linux_dmabuf_v1" | "zwp_linux_buffer_params_v1" | "zwp_linux_dmabuf_feedback_v1" | "zwp_text_input_v3" | "zwp_text_input_manager_v3" | "zwp_text_input_v1" | "zwp_text_input_manager_v1" | "wp_cursor_shape_manager_v1" | "wp_cursor_shape_device_v1";
+export type WaylandInterfaces = "wl_display" | "wl_registry" | "wl_callback" | "wl_compositor" | "wl_shm_pool" | "wl_shm" | "wl_buffer" | "wl_surface" | "wl_seat" | "wl_pointer" | "wl_keyboard" | "wl_output" | "wl_region" | "wl_data_device" | "wl_data_device_manager" | "wl_data_offer" | "wl_data_source" | "wl_subcompositor" | "wl_subsurface" | "xdg_wm_base" | "xdg_surface" | "xdg_toplevel" | "xdg_popup" | "xdg_positioner" | "wp_viewporter" | "wp_viewport" | "wp_fractional_scale_manager_v1" | "wp_fractional_scale_v1" | "wp_presentation" | "wp_presentation_feedback" | "zwp_linux_dmabuf_v1" | "zwp_linux_buffer_params_v1" | "zwp_linux_dmabuf_feedback_v1" | "zwp_text_input_v3" | "zwp_text_input_manager_v3" | "zwp_text_input_v1" | "zwp_text_input_manager_v1" | "wp_cursor_shape_manager_v1" | "wp_cursor_shape_device_v1" | "zxdg_decoration_manager_v1" | "zxdg_toplevel_decoration_v1";
 
 export enum WaylandEventOpcode {
     wl_display__error = 0,
@@ -100,6 +100,7 @@ export enum WaylandEventOpcode {
     zwp_text_input_v1__keysym = 10,
     zwp_text_input_v1__language = 11,
     zwp_text_input_v1__text_direction = 12,
+    zxdg_toplevel_decoration_v1__configure = 0,
 }
 
 export type WaylandEventObj = {
@@ -565,6 +566,10 @@ export type WaylandEventObj = {
         /** serial of the latest known text input state*/
         serial: number;
         direction: number;
+    };
+    "zxdg_toplevel_decoration_v1.configure": {
+        /** the decoration mode*/
+        mode: number;
     };
 };
 
@@ -1113,6 +1118,17 @@ export type WaylandRequestObj = {
         serial: number;
         shape: number;
     };
+    "zxdg_decoration_manager_v1.destroy": {};
+    "zxdg_decoration_manager_v1.get_toplevel_decoration": {
+        id: WaylandObjectId2<"zxdg_toplevel_decoration_v1">;
+        toplevel: WaylandObjectId2<"xdg_toplevel">;
+    };
+    "zxdg_toplevel_decoration_v1.destroy": {};
+    "zxdg_toplevel_decoration_v1.set_mode": {
+        /** the decoration mode*/
+        mode: number;
+    };
+    "zxdg_toplevel_decoration_v1.unset_mode": {};
 };
 
 export type WaylandEnumObj = {
@@ -1166,4 +1182,6 @@ export type WaylandEnumObj = {
     "zwp_text_input_v1.text_direction": "auto" | "ltr" | "rtl";
     "wp_cursor_shape_device_v1.shape": "default" | "context_menu" | "help" | "pointer" | "progress" | "wait" | "cell" | "crosshair" | "text" | "vertical_text" | "alias" | "copy" | "move" | "no_drop" | "not_allowed" | "grab" | "grabbing" | "e_resize" | "n_resize" | "ne_resize" | "nw_resize" | "s_resize" | "se_resize" | "sw_resize" | "w_resize" | "ew_resize" | "ns_resize" | "nesw_resize" | "nwse_resize" | "col_resize" | "row_resize" | "all_scroll" | "zoom_in" | "zoom_out" | "dnd_ask" | "all_resize";
     "wp_cursor_shape_device_v1.error": "invalid_shape";
+    "zxdg_toplevel_decoration_v1.error": "unconfigured_buffer" | "already_constructed" | "orphaned" | "invalid_mode";
+    "zxdg_toplevel_decoration_v1.mode": "client_side" | "server_side";
 };

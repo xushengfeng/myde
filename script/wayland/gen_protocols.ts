@@ -96,6 +96,13 @@ const supportedProtocols: Array<{
             { name: "wp_cursor_shape_device_v1", version: 2 },
         ],
     },
+    {
+        name: "xdg-decoration-unstable-v1",
+        interfaces: [
+            { name: "zxdg_decoration_manager_v1", version: 1 },
+            { name: "zxdg_toplevel_decoration_v1", version: 1 },
+        ],
+    },
 ];
 
 // 支持遍历 supportedProtocols，按 name 读取对应 xml 文件并处理

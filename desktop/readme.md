@@ -577,12 +577,16 @@ interface WindowInfo {
     clientId: string; // 需要按连接过滤时才用
     appid: string; // 该窗口自己的 set_app_id；同一连接里的窗口可以不同
     title: string;
+    decorated: boolean; // xdg-decoration 是否协商为 server_side，桌面据此画标题栏
     rect: { x: number; y: number; w: number; h: number };
     scale: number; // 输出缩放：显示尺寸 = rect × scale，输入坐标 = 桌面坐标 ÷ scale
     states: { activated: boolean; maximized: boolean; minimized: boolean; fullscreen: boolean };
     renderId: string; // render.getXdgSurfaceEle(info.renderId)
 }
 ```
+
+`decorated` 为 true 时，客户端已把装饰交给桌面：桌面画标题栏/边框，客户端不再画 CSD；
+标题栏高度属于桌面布局，`rect`/configure 仍只表示客户端内容尺寸。为 false 时不要再加一层装饰。
 
 `rect` 的 `w`/`h` 是客户端 `set_window_geometry` 声明的 **surface 逻辑尺寸**；客户端不声明时按协议退化为 surface 尺寸
 （xwayland-satellite 就属于这种，靠 size 变化补发 `window.changed`）。`x`/`y` 是 surface 局部的几何偏移，
@@ -595,7 +599,7 @@ interface WindowInfo {
 
 ```typescript
 server.on("window.created", (info: WindowInfo) => {});
-server.on("window.changed", (info) => {}); // rect/states/title/appid 任一变化，payload 自包含
+server.on("window.changed", (info) => {}); // rect/states/title/appid/decorated 任一变化，payload 自包含
 server.on("window.closed", (handle) => {});
 server.on("window.startMove", (handle) => {});
 server.on("cursor.changed", (clientId, state: CursorState) => {});

@@ -154,8 +154,15 @@ function sendConfigure(ctx: ModuleCtx, xdgSurfaceId: WaylandObjectId2<"xdg_surfa
             height: p.height,
         });
     } else {
-        const win = ctx.domain.windows.get(role as WaylandObjectId2<"xdg_toplevel">);
+        const toplevelId = role as WaylandObjectId2<"xdg_toplevel">;
+        const win = ctx.domain.windows.get(toplevelId);
         if (win === undefined) return;
+        // 装饰模式是随 xdg configure 一起交付的状态：先发 decoration.configure，
+        // 再由下面的 xdg_surface.configure 提供同一个 ack serial。
+        const decoration = ctx.domain.decoration.takeConfigure(toplevelId);
+        if (decoration !== undefined) {
+            send(decoration.decoration, "zxdg_toplevel_decoration_v1.configure", { mode: decoration.mode });
+        }
         const states: number[] = [];
         if (win.actived) states.push(getEnumValue("xdg_toplevel.state", "activated"));
         if (win.maximized) states.push(getEnumValue("xdg_toplevel.state", "maximized"));
@@ -236,6 +243,7 @@ export interface WindowsSink {
     created(id: WaylandWinId, renderId: string): void;
     closed(id: WaylandWinId): void;
     appidChanged(id: WaylandWinId, appid: string): void;
+    decoratedChanged(id: WaylandWinId, decorated: boolean): void;
     resized(id: WaylandWinId, width: number, height: number): void;
     startMove(id: WaylandWinId): void;
     maximized(id: WaylandWinId): void;
@@ -276,6 +284,7 @@ export class WindowsStore {
             actived: false,
             box: { width: 0, height: 0 },
             appid: "",
+            decorated: false,
             title: "",
             maximized: false,
             minimized: false,
@@ -313,6 +322,14 @@ export class WindowsStore {
         // 先改记录再发事件：window.changed 的 payload 要自包含
         w.appid = appid;
         this.#sink.appidChanged(id, appid);
+    }
+
+    /** xdg-decoration 协商结果：桌面据此决定是否绘制自己的标题栏 */
+    setDecorated(id: WaylandWinId, decorated: boolean): void {
+        const w = this.#wins.get(id);
+        if (w === undefined || w.decorated === decorated) return;
+        w.decorated = decorated;
+        this.#sink.decoratedChanged(id, decorated);
     }
 
     /** xdg_surface.set_window_geometry —— 只通知，不改 box（box 由桌面命令维护） */
@@ -413,7 +430,9 @@ export class xdgSurfaceData {
     /** core 的 subsurface 树与对象表：`hitTest` 的正向依赖（ext → core 允许） */
     private subsurface: SubSurfaceApi;
     private objects: ObjectApi;
+    private ctx: ModuleCtx;
     constructor(ctx: ModuleCtx) {
+        this.ctx = ctx;
         this.wl_surface = ctx.core.surface;
         this.render = this.wl_surface.render;
         this.idScope = this.wl_surface.idScope;
@@ -436,6 +455,10 @@ export class xdgSurfaceData {
     }
     getXdgSurfaceByWlSurface(id: WaylandObjectId2<"wl_surface">) {
         return this.byWlSurface.get(id);
+    }
+    /** 外部状态（如装饰模式）变化后请求一次 configure；初始 commit 前会转成 pending */
+    requestConfigure(id: WaylandObjectId2<"xdg_surface">) {
+        sendConfigure(this.ctx, id, true);
     }
     nextConfigureSerial() {
         const serial = this.#configureSerial;
@@ -793,6 +816,7 @@ export const xdgShellModule = defineModule({
                 created: (wid, renderId) => ctx.client.emit("windowCreated", wid, renderId),
                 closed: (wid) => ctx.client.emit("windowClosed", wid),
                 appidChanged: (wid, appid) => ctx.client.emit("windowAppid", wid, appid),
+                decoratedChanged: (wid, decorated) => ctx.client.emit("windowDecorated", wid, decorated),
                 resized: (wid, width, height) => ctx.client.emit("windowResized", wid, width, height),
                 startMove: (wid) => ctx.client.emit("windowStartMove", wid),
                 maximized: (wid) => ctx.client.emit("windowMaximized", wid),
@@ -1022,6 +1046,8 @@ export const xdgShellModule = defineModule({
         "xdg_toplevel.destroy": (x, ctx) => {
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(x.id);
             if (xdgSurfaceId === undefined) return;
+            // 客户端应先销毁 decoration；这里兜底，避免域里的映射留下已死的 toplevel
+            ctx.domain.decoration.forgetToplevel(x.id);
             // 关窗时仍在的 grabbing popup 一并 dismiss（否则关闭流程里可能漏掉）
             ctx.domain.xdgSurface.dismissGrabsForWindow(x.id, ctx);
             // 顺序对桌面可见：记录删除 → onToplevelRemove → windowClosed
