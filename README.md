@@ -220,7 +220,7 @@ npx tsx cli.ts monitor --event=key
 npx tsx cli.ts monitor /dev/input/event3 --event=key,rel
 ```
 
-> **注意**：`direct` 模式需要访问 `/dev/input/event*` 的权限（`input` 组或 uaccess 规则，或以 root 运行）；`logind` 模式则要求进程属于一个前台登录会话。
+> **注意**：`direct` 模式需要访问 `/dev/input/event*` 的权限（`input` 组或 uaccess 规则，或以 root 运行）；`logind` 模式则要求进程属于一个前台登录会话。程序先用 logind 的 `GetSessionByPID` 按进程所在 cgroup 找会话，找不到时退回环境变量 `XDG_SESSION_ID`（例如 Electron/Chromium 会把主进程搬进 `app-*.scope`，此时 cgroup 不在 `session-*.scope` 下）。
 
 ## 开发
 

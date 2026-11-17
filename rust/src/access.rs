@@ -260,22 +260,59 @@ impl Drop for LogindSession {
     }
 }
 
+/// 解析要控制的 logind 会话。
+///
+/// 优先按进程所在的会话查（GetSessionByPID）。Chromium/Electron 会把浏览器
+/// 进程搬进自己创建的 `app-*.scope`（用于 portal 识别应用），该 cgroup 不在
+/// 任何 `session-*.scope` 下，logind 会返回 NoSessionForPID；此时退回启动
+/// 环境里的 XDG_SESSION_ID（pam_systemd 设置，仍指向用户的登录会话）。
+fn find_session(conn: &Connection) -> Result<OwnedObjectPath, String> {
+    let by_pid = conn.call_method(
+        Some("org.freedesktop.login1"),
+        "/org/freedesktop/login1",
+        Some("org.freedesktop.login1.Manager"),
+        "GetSessionByPID",
+        &(std::process::id(),),
+    );
+    let pid_error = match by_pid {
+        Ok(reply) => {
+            return reply
+                .body()
+                .deserialize::<OwnedObjectPath>()
+                .map_err(|e| format!("解析会话路径失败: {e}"))
+        }
+        Err(e) => e,
+    };
+
+    let Ok(session_id) = std::env::var("XDG_SESSION_ID") else {
+        return Err(format!("GetSessionByPID 失败: {pid_error}；XDG_SESSION_ID 未设置"));
+    };
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err(format!("GetSessionByPID 失败: {pid_error}；XDG_SESSION_ID 为空"));
+    }
+
+    let reply = conn
+        .call_method(
+            Some("org.freedesktop.login1"),
+            "/org/freedesktop/login1",
+            Some("org.freedesktop.login1.Manager"),
+            "GetSession",
+            &(session_id,),
+        )
+        .map_err(|e| {
+            format!("GetSessionByPID 失败: {pid_error}；GetSession({session_id}) 失败: {e}")
+        })?;
+    reply
+        .body()
+        .deserialize::<OwnedObjectPath>()
+        .map_err(|e| format!("解析会话路径失败: {e}"))
+}
+
 impl LogindSession {
     fn connect(events: Sender<AccessEvent>) -> Result<Self, String> {
         let conn = Connection::system().map_err(|e| format!("连接系统总线失败: {e}"))?;
-        let reply = conn
-            .call_method(
-                Some("org.freedesktop.login1"),
-                "/org/freedesktop/login1",
-                Some("org.freedesktop.login1.Manager"),
-                "GetSessionByPID",
-                &(std::process::id(),),
-            )
-            .map_err(|e| format!("GetSessionByPID 失败: {e}"))?;
-        let path: OwnedObjectPath = reply
-            .body()
-            .deserialize()
-            .map_err(|e| format!("解析会话路径失败: {e}"))?;
+        let path = find_session(&conn)?;
 
         let proxy = Proxy::new_owned(
             conn.clone(),
