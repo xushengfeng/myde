@@ -87,7 +87,7 @@ function makeCtx() {
             throw new Error("protocol error");
         },
         domain,
-        client: { id: "test", displayId: 1, protoVersions: new Map(), emit: () => {} },
+        client: { id: "test", displayId: 1, emit: () => {} },
         transfer: {
             selectionChanged: (seat: string, sourceId: number, mimes: string[]) =>
                 selections.push({ seat, sourceId, mimes }),

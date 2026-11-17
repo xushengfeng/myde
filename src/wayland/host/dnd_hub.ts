@@ -258,7 +258,7 @@ export class DndHub implements DndHubApi {
     private enter(session: Session, peer: DndPeer, hit: HitTestResult): void {
         const dataDeviceId = peer.dataDevices(session.seat)[0];
         if (dataDeviceId === undefined) return;
-        const offerId = peer.objects.create("wl_data_offer");
+        const offerId = peer.objects.create("wl_data_offer", peer.objects.getOption(dataDeviceId)?.version);
         peer.objects.setData(offerId, {
             mimeTypes: [...session.mimes],
             drag: true,

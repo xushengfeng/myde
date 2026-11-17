@@ -117,6 +117,8 @@ export interface BindMsg {
     name: WaylandName;
     id: WaylandObjectId;
     protocol: WaylandProtocol;
+    /** 客户端 `bind` 时协商的版本；事件只能发到这个版本的范围内 */
+    version: number;
 }
 
 export interface ModuleGlobal {
@@ -183,6 +185,11 @@ export function defineModule(def: ProtocolModuleDef): ProtocolModule {
 export interface ObjectInfo<I extends WaylandInterfaces> {
     protocol: WaylandProtocol;
     data: DataOf<I>;
+    /**
+     * 这个对象自己的版本：`bind` 时客户端协商的值，客户端 `new_id` 创建时继承父对象，
+     * 服务端创建时由 `create` 指定。事件按它过滤（`since` 超过版本的一律不发）。
+     */
+    version: number;
 }
 
 export interface ObjectApi {
@@ -191,8 +198,8 @@ export interface ObjectApi {
     getOption<I extends WaylandInterfaces>(id: WaylandObjectId2<I> | undefined): ObjectInfo<I> | undefined;
     getData<I extends WaylandInterfaces>(id: WaylandObjectId2<I>): DataOf<I>;
     setData<I extends WaylandInterfaces>(id: WaylandObjectId2<I>, data: DataOf<I>): void;
-    /** 服务端自发对象（wl_callback、wl_data_offer…） */
-    create<I extends WaylandInterfaces>(iface: I): WaylandObjectId2<I>;
+    /** 服务端自发对象（wl_callback、wl_data_offer…）；`version` 一般取相关父对象的版本，缺省用接口最大版本 */
+    create<I extends WaylandInterfaces>(iface: I, version?: number): WaylandObjectId2<I>;
     delete(id: WaylandObjectId): void;
     has(id: WaylandObjectId): boolean;
     /** 遍历全部对象（按协议名过滤等场景） */
@@ -595,8 +602,6 @@ export interface ClientApi {
     /** 连接 id，仅日志用 */
     id: string;
     displayId: WaylandObjectId2<"wl_display">;
-    /** 协议版本继承表（bind 时按父对象版本补） */
-    protoVersions: Map<string, number>;
     /** client 级事件；server 订阅后 fan-in 成 server 级事件（见 api.ts） */
     emit<K extends keyof WaylandClientEventMap>(event: K, ...args: Parameters<WaylandClientEventMap[K]>): void;
     /**

@@ -55,6 +55,7 @@ type ParsedMessage = { id: WaylandObjectId; proto: WaylandProtocol; op: WaylandO
 type WaylandObjectX<T extends WaylandInterfaces> = {
     protocol: WaylandProtocol;
     data: DataOf<T>;
+    version: number;
 };
 
 const globalsByInterface = new Map(protocolModules.flatMap((m) => m.globals.map((g) => [g.name, g] as const)));
@@ -129,8 +130,7 @@ export class WaylandClient implements Client {
     private decodeRestCache: { data: Uint8Array; fds: number[] } = { data: new Uint8Array(0), fds: [] };
     private opa = this.newOp();
     private displayId = waylandObjectId(1, "wl_display");
-    private objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any }>; // 客户端拥有的对象
-    private protoVersions: Map<string, number> = new Map();
+    private objects: Map<WaylandObjectId, { protocol: WaylandProtocol; data: any; version: number }>; // 客户端拥有的对象
     private toSend: { objectId: WaylandObjectId; opcode: number; args: Record<string, any> }[] = [];
     private nextObjectId: number = 0xff000000;
     private render: renderTools;
@@ -251,16 +251,25 @@ export class WaylandClient implements Client {
                 setData: (id, data) => {
                     this.getObject(id).data = data;
                 },
-                create: (iface) => {
+                create: (iface, version) => {
                     const id = this.allocateObjectId();
-                    this.objects.set(id, { protocol: WaylandProtocols[iface], data: undefined });
+                    this.objects.set(id, {
+                        protocol: WaylandProtocols[iface],
+                        data: undefined,
+                        // 不知道父对象版本时按接口最大版本建，事件过滤仍以调用方给的版本为准
+                        version: version ?? WaylandProtocols[iface].version,
+                    });
                     return id as WaylandObjectId2<typeof iface>;
                 },
                 delete: (id) => this.deleteObj(id),
                 entries: () => this.objects.entries(),
                 has: (id) => this.objects.has(id),
                 bind: (msg) => {
-                    this.objects.set(msg.id, { protocol: msg.protocol, data: undefined });
+                    this.objects.set(msg.id, {
+                        protocol: msg.protocol,
+                        data: undefined,
+                        version: msg.version > 0 ? msg.version : msg.protocol.version,
+                    });
                 },
             },
             /** 入队，本批消息处理完统一 flush */
@@ -311,7 +320,6 @@ export class WaylandClient implements Client {
             client: {
                 id: this.id,
                 displayId: this.displayId,
-                protoVersions: this.protoVersions,
                 emit: this.emit.bind(this),
                 surfaceBounds: () => this.host.surfaceBounds(),
                 output: () => this.host.output(),
@@ -465,14 +473,15 @@ export class WaylandClient implements Client {
                         console.error("NEW_ID argument has unknown interface:", v.interface);
                         continue;
                     }
-                    this.objects.set(id, { protocol: _interface, data: undefined });
-
-                    const parentObjVer = this.protoVersions.get(_x.proto.name);
-                    const thisObjVer = this.protoVersions.get(v.interface);
-                    if (parentObjVer && !thisObjVer) {
-                        this.protoVersions.set(v.interface, parentObjVer);
-                        console.log(`${v.interface} version inherited ${parentObjVer}`);
-                    }
+                    this.objects.set(id, {
+                        protocol: _interface,
+                        data: undefined,
+                        // 新对象版本继承请求的目标对象（与 libwayland 客户端创建代理时一致）
+                        version: Math.min(
+                            objectVersion(this.objects, header.objectId) ?? _interface.version,
+                            _interface.version,
+                        ),
+                    });
 
                     this.receiveLog(`Client ${this.id} created ${v.interface} with id ${id}`);
                 }
@@ -522,14 +531,12 @@ export class WaylandClient implements Client {
         }
         const { op } = p;
 
-        const protoVersion = this.protoVersions.get(p.proto.name);
-        if (protoVersion) {
-            if (p.op.since && protoVersion < p.op.since) {
-                console.warn(
-                    `Protocol version mismatch for ${p.proto.name}.${p.op.name}: ${protoVersion} < ${p.op.since}`,
-                );
-                return;
-            }
+        // 事件只能发到对象自己的版本范围：客户端 bind 得低（或从低版本对象继承）时
+        // 发更高 `since` 的事件，libwayland 客户端会当作错误直接断开。
+        const version = objectVersion(this.objects, objectId) ?? p.proto.version;
+        if (op.since && version < op.since) {
+            console.warn(`Protocol version mismatch for ${p.proto.name}.${p.op.name}: ${version} < ${op.since}`);
+            return;
         }
 
         if (op.isDestructor) {
@@ -830,6 +837,12 @@ export class WaylandClient implements Client {
         this.socket.end();
         this.socket.destroy();
     }
+}
+
+/** 对象自己的协议版本。`wl_display`（id 1）不在对象表里，恒为版本 1；没有记录时返回 undefined */
+function objectVersion(objects: Map<WaylandObjectId, { version: number }>, id: WaylandObjectId): number | undefined {
+    if (id === 1) return 1;
+    return objects.get(id)?.version;
 }
 
 function getX(map: WaylandClient["objects"], type: "request" | "event", objectId: WaylandObjectId, opcode: number) {

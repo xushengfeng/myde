@@ -204,7 +204,7 @@ function sendOutputState(outputId: WaylandObjectId2<"wl_output">, output: Output
  * 支持分数的客户端会从 wp_fractional_scale_v1 拿到精确值；这里给只认整数的客户端。
  */
 function sendPreferredScale(ctx: ModuleCtx, surface: SurfaceId, output: OutputInfo, send: ModuleCtx["send"]) {
-    const version = ctx.client.protoVersions.get("wl_surface") ?? 0;
+    const version = ctx.objects.getOption(surface)?.version ?? 0;
     if (version < 6) return;
     const factor = integerScale(output.scale);
     send(surface, "wl_surface.preferred_buffer_scale", { factor });
@@ -779,11 +779,12 @@ function sendScroll(ctx: ModuleCtx, seat: SeatRecord, ev: ScrollCommand): void {
     const { deltaX, deltaY } = ev;
     const stop = ev.stop === true;
     if (!stop && deltaX === 0 && deltaY === 0) return;
-    const pointerVersion = ctx.client.protoVersions.get("wl_pointer") ?? 0;
     // 一格滚轮在桌面 delta 里是 100px，在 Wayland axis 里是 10px、在 value120 里是 120
     const axisPerPx = 10 / 100;
     const value120PerPx = 120 / 100;
     for (const pointer of pointers) {
+        // 同一把 seat 上可能有多把不同版本的指针，按各自的版本挑事件
+        const pointerVersion = ctx.objects.getOption(pointer)?.version ?? 0;
         if (pointerVersion >= 5) {
             ctx.sendNow(pointer, "wl_pointer.axis_source", {
                 axis_source: getEnumValue("wl_pointer.axis_source", source),
@@ -900,7 +901,7 @@ function sendDragEnter(ctx: ModuleCtx, drag: DataDrag, surface: SurfaceId, x: nu
         return;
     }
     if (drag.offerId !== undefined) ctx.sendNow(drag.dataDeviceId, "wl_data_device.leave", {});
-    const offerId = ctx.objects.create("wl_data_offer");
+    const offerId = ctx.objects.create("wl_data_offer", ctx.objects.getOption(drag.dataDeviceId)?.version);
     ctx.objects.setData(offerId, { mimeTypes: [...src.data.offers], sourceId: drag.sourceId, drag: true });
     ctx.sendNow(drag.dataDeviceId, "wl_data_device.data_offer", { id: offerId });
     for (const mime of src.data.offers) ctx.sendNow(offerId, "wl_data_offer.offer", { mime_type: mime });
@@ -991,7 +992,7 @@ function offerTo(ctx: ModuleCtx, selection: ClipboardOffer | null, seatName?: st
             });
             continue;
         }
-        const dataOfferId = ctx.objects.create("wl_data_offer");
+        const dataOfferId = ctx.objects.create("wl_data_offer", ctx.objects.getOption(ddId)?.version);
         ctx.objects.setData(dataOfferId, { mimeTypes: [...selection.mimes], token: selection.token });
         ctx.sendNow(ddId, "wl_data_device.data_offer", { id: dataOfferId });
         for (const mime of selection.mimes) {
@@ -1096,15 +1097,13 @@ export const waylandCoreModule = defineModule({
                 console.warn(`Unknown global name: ${name}`);
                 return;
             }
-            ctx.objects.bind({ name, id: x.args.id, protocol: proto });
-            // 注意：协议元数据里 bind 只有 name/id 两个参数，没有 version，
-            // 所以这里记到的始终是 undefined（勿当成已生效的版本记录）
-            // 值恒为 undefined，用 0 兜底仅为了匹配 Map<string, number> 的类型（falsy 语义与 undefined 相同）
-            ctx.client.protoVersions.set(proto.name, (x.args as unknown as { _version?: number })._version ?? 0);
-            console.log(`Client ${ctx.client.id} bound ${proto.name} to id ${x.args.id}`);
+            // 协议元数据里 bind 只有 name/id 两个参数，版本从解码时另存的 `_version` 取
+            const version = (x.args as unknown as { _version?: number })._version ?? 0;
+            ctx.objects.bind({ name, id: x.args.id, protocol: proto, version });
+            console.log(`Client ${ctx.client.id} bound ${proto.name} to id ${x.args.id} (v${version})`);
 
             // 各 global 的模块级副作用走本模块声明的 globals[].onBind（如 xdg_wm_base 见 ext/xdg_shell.ts）
-            ctx.core.registry.globalOf(proto.name)?.onBind?.({ name, id: x.args.id, protocol: proto }, ctx);
+            ctx.core.registry.globalOf(proto.name)?.onBind?.({ name, id: x.args.id, protocol: proto, version }, ctx);
         },
         "wl_compositor.create_surface": (x, ctx) => {
             const surfaceId = x.args.id;

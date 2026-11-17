@@ -16,6 +16,7 @@ function makePeer(clientId: string) {
         clientId,
         objects: {
             create: () => nextId++,
+            getOption: () => ({ version: 3 }),
             setData: () => {},
         },
         sendNow: (id: number, event: string, args: Record<string, unknown>) => sent.push({ id, event, args }),
