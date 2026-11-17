@@ -27,18 +27,27 @@ declare module "../../module" {
 }
 
 /**
- * 只广播 Electron 能直接导入的格式（ARGB8888/ABGR8888 → bgra/rgba，以及视频格式）。
+ * 广播 Electron 能直接导入的格式（ARGB8888/ABGR8888 → bgra/rgba，以及视频格式），
+ * 以及其余 32 位 RGB(A) 格式（XRGB/XBGR/RGBX/BGRX/RGBA/BGRA）。
  *
- * XRGB/XBGR/RGBX/BGRX/RGBA/BGRA 需要经过 myde-drm 的 GPU/CPU 转换：每帧多一次
- * EGL 导入 + GBM 分配，1080p 下会吃掉 120Hz 的帧预算。Chromium 对不透明窗口
- * 优先选 BGRX/XRGB，只要列表里有它就不会选 ARGB；把这些格式移出 feedback 后
- * 客户端会改用 ARGB8888，合成器就能零拷贝导入。
+ * 不透明格式不能省：Mesa 的 EGL 平台实现了 `EGL_EXT_present_opaque`，客户端
+ * （如 Blender）请求该属性时，`eglCreateWindowSurface` 会要求合成器同时广播
+ * 透明格式对应的不透明格式，并且两者有共同的 modifier，否则直接返回
+ * `EGL_BAD_MATCH`（Blender 的表现是启动即退出）。只给 wl_shm 的 xrgb8888 不够，
+ * 那条路径没有 modifier，无法通过共同 modifier 检查。
  *
- * 客户端显式提交这些格式时，下面的 commit 处理仍然支持（走转换回退）。
+ * 需要转换的格式走 myde-drm 的 GPU 拷贝（默认路径本来就把 dmabuf 拷贝成 ARGB8888
+ * 稳定副本），不需要额外的导入路径。
  */
 const FEEDBACK_FORMATS = [
     DRM_FORMAT.DRM_FORMAT_ARGB8888,
     DRM_FORMAT.DRM_FORMAT_ABGR8888,
+    DRM_FORMAT.DRM_FORMAT_XRGB8888,
+    DRM_FORMAT.DRM_FORMAT_XBGR8888,
+    DRM_FORMAT.DRM_FORMAT_RGBX8888,
+    DRM_FORMAT.DRM_FORMAT_BGRX8888,
+    DRM_FORMAT.DRM_FORMAT_RGBA8888,
+    DRM_FORMAT.DRM_FORMAT_BGRA8888,
     DRM_FORMAT.DRM_FORMAT_NV12,
     DRM_FORMAT.DRM_FORMAT_NV16,
     DRM_FORMAT.DRM_FORMAT_P010,

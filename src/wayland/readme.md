@@ -32,7 +32,10 @@
     - xdg_positioner 部分
 
 - linux-dmabuf-v1
-    - zwp_linux_dmabuf_v1 部分，只支持 LINEAR modifier；32 位 RGB(A)、NV12、NV16、P010
+    - zwp_linux_dmabuf_v1 部分，只支持 LINEAR modifier；32 位 RGB(A)
+      （ARGB/ABGR/XRGB/XBGR/RGBX/BGRX/RGBA/BGRA）、NV12、NV16、P010。不透明格式必须
+      广播：Mesa 客户端请求 `EGL_EXT_present_opaque` 时，缺了对应不透明格式会让
+      `eglCreateWindowSurface` 返回 `EGL_BAD_MATCH`（Blender 因此启动即退出）
     - zwp_linux_buffer_params_v1 部分
     - zwp_linux_dmabuf_feedback_v1
 
