@@ -55,12 +55,22 @@ pnpm i
 
 MyDE 默认启动内部 portal（私有 dbus + xdg-desktop-portal 子进程），由 MyDE 启动的应用会连到私有总线，从而使用 MyDE 的文件选择器。
 
-该模式只影响由 MyDE 启动的应用，不会修改宿主的 session bus 或 portal 配置；代价是这些应用只连私有总线，看不到宿主的 MPRIS、通知等服务。如需改回宿主 session bus：
+该模式只影响由 MyDE 启动的应用，不会修改宿主的 session bus 或 portal 配置；代价是这些应用只连私有总线，看不到宿主的 MPRIS、通知等服务。
+
+总线归属用 `--bus-mode=internal|mixed|external` 或环境变量 `MYDE_BUS_MODE` 指定，默认 `mixed`：
+
+- `internal`：应用、通知、portal、tray、mpris 和输入法都走私有总线（输入法需要在私有总线里启动 fcitx5）
+- `mixed`：应用、通知、portal、tray、mpris 走私有总线，输入法用宿主的 fcitx5
+- `external`：不启动私有总线，应用和桌面服务都走宿主 session bus（等价于 `--no-internal-portal`）
+
+如需改回宿主 session bus：
 
 ```shell
 MYDE_INTERNAL_PORTAL=0 pnpm run desktop:offical
 # 或给已安装的 myde 可执行文件加参数
 myde --no-internal-portal
+# 也可以显式指定模式
+myde --bus-mode=external
 ```
 
 `MYDE_INTERNAL_PORTAL=1` / `--internal-portal` 仍可显式开启；测试实例默认不启动内部 portal。

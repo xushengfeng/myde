@@ -37,6 +37,19 @@ try {
     console.warn("[input] myde-input 加载失败:", e);
 }
 
+type BusMode = "internal" | "mixed" | "external";
+
+/** 总线模式：internal 全部走内部总线；mixed 除输入法外走内部；external 全部走宿主会话总线。 */
+function parseBusMode(value: string | undefined): BusMode {
+    if (value === "internal" || value === "external") return value;
+    if (value !== undefined && value !== "mixed") {
+        console.warn(`[bus] 未知总线模式 ${value}，使用 mixed`);
+    }
+    return "mixed";
+}
+
+const busMode = parseBusMode(getEnv().MYDE_BUS_MODE);
+
 async function loadDesktop(p: string) {
     const dirPath = p.replace(/\/$/, "");
     const packagePath = `${dirPath}/package.json`;
@@ -106,7 +119,7 @@ async function loadDesktop(p: string) {
     // xdg-desktop-portal 后端。窗口模式下只是占一个唯一的 impl 名字，
     // 不会抢占宿主的 org.freedesktop.portal.Desktop。
     try {
-        const portal = new xdgDesktopPortal(await newDBusIO(false, getEnv().MYDE_INTERNAL_BUS_ADDRESS));
+        const portal = new xdgDesktopPortal(await newDBusIO());
         await portal.init();
         myde.MSysApi.portal = portal;
     } catch (e) {
@@ -114,9 +127,10 @@ async function loadDesktop(p: string) {
     }
     // 统一输入事件 → 模拟 DOM 事件（无外部依赖，始终可用）
     myde.MSysApi.inputSim = new inputSim();
-    // 输入法（fcitx5），不可用时保留空实现不影响桌面加载
+    // 输入法（fcitx5），不可用时保留空实现不影响桌面加载。
+    // mixed/external 用宿主的 fcitx5；internal 才用内部总线，避免内部总线激活出隔离配置的新实例。
     try {
-        const im = new inputMethod(await newDBusIO());
+        const im = new inputMethod(await newDBusIO(false, busMode === "internal" ? "session" : "host"));
         if (await im.init()) {
             myde.MSysApi.inputMethod = im;
         } else {
@@ -161,12 +175,19 @@ async function loadDesktop(p: string) {
     document.body.appendChild(script);
 }
 
-async function newDBusIO(system = false, address?: string) {
+type BusScope = "session" | "host";
+
+/**
+ * 连接 dbus。
+ * system=true 走系统总线；否则 scope=session 用桌面/应用总线（有内部总线时优先内部），
+ * scope=host 固定用宿主会话总线（mixed 模式的输入法等）。
+ */
+async function newDBusIO(system = false, scope: BusScope = "session") {
     const socket = new mus.USocket();
     if (system) {
         socket.connect("/run/dbus/system_bus_socket");
     } else {
-        socket.connect((address ? busPathFromAddress(address) : undefined) ?? sessionBusPath());
+        socket.connect(scope === "host" ? hostBusPath() : sessionBusPath());
     }
     const io = new dbusIO({ socket });
     await io.connect();
@@ -185,13 +206,18 @@ function busPathFromAddress(address: string | undefined) {
     }
 }
 
-/** 会话总线路径：优先 DBUS_SESSION_BUS_ADDRESS，其次 XDG_RUNTIME_DIR/bus。 */
-function sessionBusPath() {
+/** 宿主会话总线路径：优先 DBUS_SESSION_BUS_ADDRESS，其次 XDG_RUNTIME_DIR/bus。 */
+function hostBusPath() {
     const env = getEnv();
     const fromAddress = busPathFromAddress(env.DBUS_SESSION_BUS_ADDRESS);
     if (fromAddress) return fromAddress;
     if (env.XDG_RUNTIME_DIR) return `${env.XDG_RUNTIME_DIR}/bus`;
     return `/run/user/${process.getuid?.() ?? 1000}/bus`;
+}
+
+/** 桌面服务总线：有内部总线时优先内部（应用都在这里），否则回落到宿主会话总线。 */
+function sessionBusPath() {
+    return busPathFromAddress(getEnv().MYDE_INTERNAL_BUS_ADDRESS) ?? hostBusPath();
 }
 
 initDKH({ pureStyle: true });

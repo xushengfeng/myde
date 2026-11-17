@@ -193,6 +193,7 @@ portal.on("fileChooser.request", async (req) => {
 - `parent_window` 目前只保留原始字符串；没有 `xdg-foreign` 时不解析，模态由桌面自己用遮罩实现
 - 需要系统安装 xdg-desktop-portal，并安装 `assets/portal` 里的 `myde.portal` 和 `myde-portals.conf`；会话设置 `XDG_CURRENT_DESKTOP=MyDE`。开发测试用 `XDG_DESKTOP_PORTAL_DIR` 指向 `assets/portal/portals`，不要改系统配置
 - 默认启动私有 dbus 和 xdg-desktop-portal，MyDE 启动的应用会连到私有总线，不影响宿主 portal；用 `--no-internal-portal` 或 `MYDE_INTERNAL_PORTAL=0` 关闭，测试实例默认关闭
+- 总线归属用 `--bus-mode=internal|mixed|external` / `MYDE_BUS_MODE` 选择，默认 `mixed`：`internal` 连输入法也走私有总线，`mixed` 只有输入法走宿主，`external` 不启动私有总线、全部走宿主
 
 ### polkit
 
