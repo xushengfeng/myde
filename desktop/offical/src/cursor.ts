@@ -580,6 +580,10 @@ class CursorShapeAnimator {
     }
 
     setShape(shape: string, duration: number, instant = false) {
+        // 同一目标重复渲染时保持正在进行的过渡：指针进出热区会同时触发 localShape 和
+        // setSurfaceFocus 两次 render，若再走线 resize 的 delta=0 分支会直接跳到静止帧
+        if (!instant && this.shape === shape) return;
+
         const design = cursorDesign(shape);
         const line = lineResizeInfo(shape);
         const prevLine = this.shape ? lineResizeInfo(this.shape) : undefined;

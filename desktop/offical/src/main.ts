@@ -1601,11 +1601,31 @@ const windowResizeHandles = new Map<string, ElType<HTMLElement>[]>();
 /** 刚结束缩放、等客户端按新尺寸提交的窗口；期间 window.changed 不覆盖拖拽预览 */
 const resizeSettleTimers = new Map<string, number>();
 
+/** 指针目标对应的缩放光标；总览、最大化/全屏窗口不出缩放光标 */
+function resizeCursorForTarget(target: EventTarget | null): string | undefined {
+    const handle = target instanceof Element ? target.closest<HTMLElement>("[data-resize-cursor]") : undefined;
+    if (!handle || viewData.overview) return undefined;
+    const windowId = handle.closest<HTMLElement>("[data-window-id]")?.dataset.windowId;
+    const info = windowId === undefined ? undefined : server.server.windows.get(windowId);
+    if (info?.states.maximized || info?.states.fullscreen) return undefined;
+    return handle.dataset.resizeCursor;
+}
+
 /** 指针下的热区形状；热区随窗口关闭/隐藏时用来恢复光标 */
 function syncResizeCursorAt(x = mousePos.x, y = mousePos.y) {
-    const under = document.elementFromPoint(x, y) as HTMLElement | null;
-    cursor.setLocalShape(under?.closest<HTMLElement>("[data-resize-cursor]")?.dataset.resizeCursor);
+    cursor.setLocalShape(resizeCursorForTarget(document.elementFromPoint(x, y)));
 }
+
+// 热区悬停统一在 window 上按目标判定：pointerout 先于 pointerover 触发，若离开热区时
+// 直接复位，相邻热区之间会经过 default 形状，resize 形状之间的旋转过渡就丢了
+window.addEventListener("pointerover", (e) => {
+    if (resizingWindowId !== undefined) return;
+    cursor.setLocalShape(resizeCursorForTarget(e.target));
+});
+window.addEventListener("pointerout", (e) => {
+    if (resizingWindowId !== undefined) return;
+    cursor.setLocalShape(resizeCursorForTarget(e.relatedTarget));
+});
 
 function removeResizeHandles(windowId: string) {
     for (const handle of windowResizeHandles.get(windowId) ?? []) handle.remove();
@@ -1642,7 +1662,6 @@ function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
                 position: "absolute",
                 zIndex: corner ? "10" : "9",
                 touchAction: "none",
-                cursor: resizeCursors[edge],
             })
             .data({ "resize-cursor": resizeCursors[edge], "desktop-ui": "resize-handle" });
 
@@ -1667,21 +1686,6 @@ function addResizeHandles(el: HTMLElement, windowId: string, wayland: boolean) {
             handle.style({ width: uiSized(size), height: uiSized(size) });
         }
 
-        handle.on("pointerenter", () => {
-            if (viewData.overview) return;
-            if (
-                wayland &&
-                (server.server.windows.get(windowId)?.states.maximized ||
-                    server.server.windows.get(windowId)?.states.fullscreen)
-            )
-                return;
-            cursor.setLocalShape(resizeCursors[edge]);
-        });
-        handle.on("pointerleave", () => {
-            // 拖拽中指针会离开热区，缩放光标要保持到抬手
-            if (resizingWindowId === windowId) return;
-            cursor.setLocalShape(undefined);
-        });
         handle.on("pointerdown", (e) => beginWindowResize(e, edge, el, windowId, wayland));
 
         handle.addInto(el);
