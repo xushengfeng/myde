@@ -382,7 +382,7 @@ class WaylandServer {
         return {
             handle,
             clientId: entry.client.id,
-            appid: entry.client.getAppid() ?? "",
+            appid: record?.appid ?? "",
             title: record?.title ?? "",
             rect: entry.client.windowRect(entry.winId) ?? { x: 0, y: 0, w: 0, h: 0 },
             scale: this.output.scale,
@@ -515,15 +515,8 @@ class WaylandServer {
         client.on("windowUnFullscreen", (winId) => this.emitChanged(clientId, winId));
         // setTitle 是「先发事件再改记录」，payload 里的 title 必须用事件带下来的值
         client.on("title", (winId, title) => this.emitChanged(clientId, winId, (info) => ({ ...info, title })));
-        // appid 是 client 级的：该客户端的每个窗口都要通知一次
-        client.on("appid", () => {
-            const handles = this.handlesByClient.get(clientId);
-            if (handles === undefined) return;
-            for (const handle of [...handles]) {
-                const info = this.windowInfo(handle);
-                if (info) this.emitEvent("window.changed", info);
-            }
-        });
+        // app_id 按 toplevel 变化：同一连接里可以有多个应用（xwayland-satellite）
+        client.on("windowAppid", (winId) => this.emitChanged(clientId, winId));
     }
 
     /** 断开：先补发该客户端全部窗口的关闭，再报 client.closed —— 残留窗口由 server 兜底 */

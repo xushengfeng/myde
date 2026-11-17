@@ -72,6 +72,11 @@ export interface WindowInfo {
     handle: WinHandle;
     /** 所属连接；需要按客户端过滤时才用 */
     clientId: string;
+    /**
+     * 该窗口的 `xdg_toplevel.set_app_id`（WM_CLASS）。
+     * 是**窗口级**而不是连接级：xwayland-satellite 用一个连接承载全部 X11 窗口，
+     * 每个应用的窗口有不同的 app_id，任务栏按它分组。
+     */
     appid: string;
     title: string;
     /**

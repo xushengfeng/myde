@@ -575,7 +575,7 @@ Wayland 对象 id 由**客户端本地分配**（实测两个客户端可同时�
 interface WindowInfo {
     handle: string; // 全局身份，所有命令/查询都用它
     clientId: string; // 需要按连接过滤时才用
-    appid: string;
+    appid: string; // 该窗口自己的 set_app_id；同一连接里的窗口可以不同
     title: string;
     rect: { x: number; y: number; w: number; h: number };
     scale: number; // 输出缩放：显示尺寸 = rect × scale，输入坐标 = 桌面坐标 ÷ scale
@@ -584,7 +584,8 @@ interface WindowInfo {
 }
 ```
 
-`rect` 的 `w`/`h` 是客户端 `set_window_geometry` 声明的 **surface 逻辑尺寸**；`x`/`y` 是 surface 局部的几何偏移，
+`rect` 的 `w`/`h` 是客户端 `set_window_geometry` 声明的 **surface 逻辑尺寸**；客户端不声明时按协议退化为 surface 尺寸
+（xwayland-satellite 就属于这种，靠 size 变化补发 `window.changed`）。`x`/`y` 是 surface 局部的几何偏移，
 **不是屏幕位置**（摆放由桌面负责，渲染时几何原点即窗口元素左上角）。
 桌面显示尺寸是 `rect × scale`：渲染侧会按 scale 放大窗口 DOM，桌面输入转发前要除回 scale。
 命中检测用 `server.windows.hitTest(handle, p)`（窗口元素的局部坐标）：它包含 popup 树、subsurface

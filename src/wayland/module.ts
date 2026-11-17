@@ -289,6 +289,8 @@ export interface XdgSurfaceInfo {
     initialCommitDone: boolean;
     configurePending: boolean;
     lastConfigureSerial?: number;
+    /** 最近一次广播给桌面的窗口尺寸（显式 winGeo 或退化的 surface 尺寸） */
+    reportedSize?: { w: number; h: number };
     popupConfigure?: { x: number; y: number; width: number; height: number };
 }
 
@@ -306,6 +308,8 @@ export interface XdgSurfaceApi {
     /** 窗口失焦/销毁：关掉属于该 toplevel 的 grabbing popup */
     dismissGrabsForWindow(winId: WaylandWinId, ctx: ModuleCtx): void;
     setXdgSurfaceSize(id: XdgSurfaceId, x: number, y: number, w: number, h: number): void;
+    /** 无 `set_window_geometry` 时，按当前 surface 尺寸同步渲染元素（不写 winGeo） */
+    setSurfaceGeo(id: XdgSurfaceId): void;
     getXdgSurfaceByToplevel(id: XdgToplevelId): XdgSurfaceId | undefined;
     getXdgSurfaceByPopup(id: XdgPopupId): XdgSurfaceId | undefined;
     setAsToplevel(id: XdgSurfaceId, toplevelId: XdgToplevelId): void;
@@ -477,7 +481,7 @@ export interface WaylandClientEventMap {
     windowUnMaximized: (xdgToplevelId: WaylandWinId) => void;
     windowFullscreen: (xdgToplevelId: WaylandWinId) => void;
     windowUnFullscreen: (xdgToplevelId: WaylandWinId) => void;
-    appid: (id: string) => void;
+    windowAppid: (xdgToplevelId: WaylandWinId, appid: string) => void;
     title: (xdgToplevelId: WaylandWinId, title: string) => void;
 }
 
@@ -486,6 +490,8 @@ export interface WaylandClientEventMap {
 export interface WindowRecord {
     actived: boolean;
     box: { width: number; height: number };
+    /** 该窗口最近一次 `xdg_toplevel.set_app_id`；同一连接的不同窗口可以不同 */
+    appid: string;
     title: string;
     /** 由桌面命令或客户端 set/unset_maximized 维护，进 WindowInfo.states */
     maximized: boolean;
@@ -507,6 +513,7 @@ export interface WindowsApi {
     /** 仅移除记录；destroy 流程里 xdg 清理夹在 remove 与 notifyClosed 之间（顺序对桌面可见） */
     remove(id: WaylandWinId): void;
     notifyClosed(id: WaylandWinId): void;
+    setAppid(id: WaylandWinId, appid: string): void;
     setTitle(id: WaylandWinId, title: string): void;
     resized(id: WaylandWinId, width: number, height: number): void;
     startMove(id: WaylandWinId): void;

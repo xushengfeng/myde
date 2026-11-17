@@ -41,7 +41,11 @@ declare module "../../module" {
         xdg: {
             /** 已绑定的 `xdg_wm_base` 对象；host 的 `ping()` 遍历它 */
             wmBase: Set<WaylandObjectId2<"xdg_wm_base">>;
-            /** 首个 `set_app_id`：语义是 **client 级**，server 把它广播给该客户端的所有窗口 */
+            /**
+             * 最近一次 `set_app_id` 的副本。窗口身份以每个 toplevel 的 `WindowRecord.appid` 为准
+             *（xwayland-satellite 的所有 X11 窗口共用一个连接，app_id 各不相同）；
+             * 这里只给剪贴板/拖拽这类没有窗口上下文的出口兜底。
+             */
             appid?: string;
         };
         /** 窗口记录（`WindowsStore` 在本文件旁边的 `windows_store.ts`），`window.*` 的 fan-in 单写入点 */
@@ -176,6 +180,30 @@ function configureWin(ctx: ModuleCtx, winId: WaylandWinId): void {
 }
 
 /**
+ * 客户端没有 `set_window_geometry` 时，用 surface 尺寸当窗口尺寸（xdg-shell 的缺省语义）。
+ *
+ * xwayland-satellite 就是这样：它只 attach buffer + 设置 viewport destination，从不设
+ * window geometry。只依赖 set_window_geometry 的话，桌面拿到的 rect 会永远停在
+ * `window.created` 时的 0×0，窗口元素也就一直不显示。
+ */
+function syncToplevelSize(
+    ctx: ModuleCtx,
+    xdgSurfaceId: WaylandObjectId2<"xdg_surface">,
+    role: WaylandObjectId2<"xdg_toplevel">,
+): void {
+    const xdg = ctx.domain.xdgSurface;
+    const s = xdg.getXdgSurface(xdgSurfaceId);
+    // 显式几何由 set_window_geometry 请求自己同步与广播
+    if (s === undefined || s.winGeo !== undefined) return;
+    const size = xdg.getReRect(xdgSurfaceId);
+    if (size.w <= 0 || size.h <= 0) return;
+    if (s.reportedSize?.w === size.w && s.reportedSize?.h === size.h) return;
+    s.reportedSize = size;
+    xdg.setSurfaceGeo(xdgSurfaceId);
+    ctx.domain.windows.resized(role, size.w, size.h);
+}
+
+/**
  * 初始 commit（无 buffer）后才允许 map：此时回一份 configure。
  * 之后的 commit 只在桌面改了状态（configurePending）时补发，避免同一状态反复 configure。
  */
@@ -185,6 +213,10 @@ function onSurfaceCommit(ctx: ModuleCtx, surfaceId: SurfaceId): void {
     if (xdgSurfaceId === undefined) return;
     const s = xdg.getXdgSurface(xdgSurfaceId);
     if (s.xdg_role === undefined) return;
+    const role = s.xdg_role;
+    if (ctx.objects.get(role).protocol.name === "xdg_toplevel") {
+        syncToplevelSize(ctx, xdgSurfaceId, role as WaylandObjectId2<"xdg_toplevel">);
+    }
     if (!s.initialCommitDone) {
         s.initialCommitDone = true;
         sendConfigure(ctx, xdgSurfaceId, false);
@@ -203,6 +235,7 @@ function onSurfaceCommit(ctx: ModuleCtx, surfaceId: SurfaceId): void {
 export interface WindowsSink {
     created(id: WaylandWinId, renderId: string): void;
     closed(id: WaylandWinId): void;
+    appidChanged(id: WaylandWinId, appid: string): void;
     resized(id: WaylandWinId, width: number, height: number): void;
     startMove(id: WaylandWinId): void;
     maximized(id: WaylandWinId): void;
@@ -242,6 +275,7 @@ export class WindowsStore {
         this.#wins.set(id, {
             actived: false,
             box: { width: 0, height: 0 },
+            appid: "",
             title: "",
             maximized: false,
             minimized: false,
@@ -270,6 +304,15 @@ export class WindowsStore {
         this.#sink.titleChanged(id, title);
         const w = this.#wins.get(id);
         if (w) w.title = title;
+    }
+
+    /** 只改该窗口的身份：同一连接里的不同 toplevel 各有自己的 app_id */
+    setAppid(id: WaylandWinId, appid: string): void {
+        const w = this.#wins.get(id);
+        if (w === undefined || w.appid === appid) return;
+        // 先改记录再发事件：window.changed 的 payload 要自包含
+        w.appid = appid;
+        this.#sink.appidChanged(id, appid);
     }
 
     /** xdg_surface.set_window_geometry —— 只通知，不改 box（box 由桌面命令维护） */
@@ -341,6 +384,12 @@ export class xdgSurfaceData {
             configurePending: boolean;
             /** 最近一次下发的 xdg_surface.configure serial，ack 时对账 */
             lastConfigureSerial?: number;
+            /**
+             * 最近一次广播给桌面的窗口尺寸。
+             * 客户端可以不调用 `set_window_geometry`（xdg-shell 允许），此时尺寸取 surface 尺寸；
+             * 两个来源都汇总到这里，避免同一尺寸重复发 `window.changed`。
+             */
+            reportedSize?: { w: number; h: number };
             /** popup 的初始 configure 参数，get_popup 时按 positioner 算好 */
             popupConfigure?: { x: number; y: number; width: number; height: number };
         }
@@ -477,6 +526,14 @@ export class xdgSurfaceData {
         this.xdg_surface[id].winGeo = { x, y, w, h };
 
         this.render.setXdgSurfaceGeo(this.idScope(id), w, h, x, y);
+    }
+    /**
+     * 没有 `set_window_geometry` 时的窗口几何：协议规定就是 surface 尺寸。
+     * 不写 `winGeo`（客户端可能之后才第一次调用 set_window_geometry），只同步渲染元素。
+     */
+    setSurfaceGeo(id: WaylandObjectId2<"xdg_surface">) {
+        const size = this.getReRect(id);
+        this.render.setXdgSurfaceGeo(this.idScope(id), size.w, size.h, 0, 0);
     }
     getXdgSurfaceByToplevel(id: WaylandObjectId2<"xdg_toplevel">) {
         return this.xdg_toplevel.get(id);
@@ -735,6 +792,7 @@ export const xdgShellModule = defineModule({
             new WindowsStore({
                 created: (wid, renderId) => ctx.client.emit("windowCreated", wid, renderId),
                 closed: (wid) => ctx.client.emit("windowClosed", wid),
+                appidChanged: (wid, appid) => ctx.client.emit("windowAppid", wid, appid),
                 resized: (wid, width, height) => ctx.client.emit("windowResized", wid, width, height),
                 startMove: (wid) => ctx.client.emit("windowStartMove", wid),
                 maximized: (wid) => ctx.client.emit("windowMaximized", wid),
@@ -847,6 +905,7 @@ export const xdgShellModule = defineModule({
             const role = thisXdgSurface.xdg_role;
             // popup 的几何只影响自身渲染，不该冒充窗口变化广播给桌面
             if (role !== undefined && ctx.objects.get(role).protocol.name === "xdg_toplevel") {
+                thisXdgSurface.reportedSize = { w: x.args.width, h: x.args.height };
                 ctx.domain.windows.resized(role as WaylandObjectId2<"xdg_toplevel">, x.args.width, x.args.height);
             }
         },
@@ -935,10 +994,11 @@ export const xdgShellModule = defineModule({
             ctx.domain.xdgSurface.popupDestroyed(xid, ctx);
         },
         "xdg_toplevel.set_app_id": (x, ctx) => {
-            if (!ctx.domain.xdg.appid) {
-                ctx.domain.xdg.appid = x.args.app_id;
-                ctx.client.emit("appid", x.args.app_id);
-            }
+            // 窗口身份按 toplevel 存：xwayland-satellite 用一个连接承载所有 X11 窗口，
+            // 每个窗口的 WM_CLASS 不同，按连接只留一个会让任务栏把所有 X11 应用并成一个图标
+            ctx.domain.windows.setAppid(x.id, x.args.app_id);
+            // 连接级副本仅供剪贴板/拖拽等无窗口上下文的出口使用
+            ctx.domain.xdg.appid = x.args.app_id;
         },
         "xdg_toplevel.set_title": (x, ctx) => {
             ctx.domain.windows.setTitle(x.id, x.args.title);
