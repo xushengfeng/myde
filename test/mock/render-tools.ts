@@ -87,6 +87,7 @@ export class MockRenderTools implements renderTools {
         if (!canvasInfo) return;
 
         const element = document.createElement("div");
+        element.id = id;
         element.style.position = "absolute";
         element.appendChild(canvasInfo.container);
         this.xdgElMap.set(id, { element, canvasId });

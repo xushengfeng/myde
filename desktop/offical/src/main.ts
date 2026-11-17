@@ -1609,15 +1609,21 @@ addStyle({
     "[data-client-frame][data-decorated][data-active]": {
         boxShadow: "0 16px 48px #00000044",
     },
-    // 最大化窗口默认与工作区边缘齐平，不再保留圆角
+    // 最大化窗口与工作区边缘齐平：无圆角、无外阴影
     "[data-client-frame][data-decorated][data-maximized]": {
         borderRadius: "0",
+        boxShadow: "none",
+    },
+    "[data-client-frame][data-decorated][data-maximized] [data-client-titlebar]": {
+        borderTopLeftRadius: "0",
+        borderTopRightRadius: "0",
     },
     // 只给根 surface 的画布做底部圆角；popup/subsurface 的 canvas 层级更深，不会被选中
     "[data-client-frame][data-decorated] > [id] > div > canvas": {
         borderBottomLeftRadius: "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))",
         borderBottomRightRadius: "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))",
     },
+    // 必须和上面的根画布选择器同结构：否则普通状态的圆角选择器特异性更高，最大化仍会保留底部圆角
     "[data-client-frame][data-decorated][data-maximized] > [id] > div > canvas": {
         borderBottomLeftRadius: "0",
         borderBottomRightRadius: "0",
@@ -1628,6 +1634,9 @@ addStyle({
     },
     "[data-client-frame][data-decorated] [data-client-titlebar]": {
         display: "flex !important",
+        // 标题栏自己的顶部圆角要单独处理，否则最大化时 frame 直角了、标题栏还是圆的
+        borderTopLeftRadius: "var(--window-radius, 18px)",
+        borderTopRightRadius: "var(--window-radius, 18px)",
     },
     // 总览里的关闭按钮用单独的覆盖层，避免和标题栏关闭按钮重叠
     "[data-overview] [data-client-titlebar-close]": {
@@ -2254,8 +2263,6 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
             borderBottom: "1px solid #00000012",
             background: "rgba(245, 245, 245, 0.97)",
             backdropFilter: "blur(18px)",
-            borderTopLeftRadius: "var(--window-radius, 18px)",
-            borderTopRightRadius: "var(--window-radius, 18px)",
             zIndex: "6",
             cursor: "default",
             fontFamily: "sans-serif",
