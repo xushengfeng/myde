@@ -2301,8 +2301,7 @@ async function dropDragToStation() {
         item = await clipboard?.add(
             drag.mimes,
             (mime) => server.server.request("dnd.read", drag.token, mime),
-            drag.appid || "拖拽",
-            drag.seat,
+            { appid: drag.appid, seat: drag.seat, kind: "drag" },
         );
     } finally {
         // 数据已经读完（或读失败）；取消让源客户端退出 drag 状态
@@ -2317,7 +2316,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): Pointe
 
     // 拖拽会话由桌面驱动：不把指针转给源窗口，改发 dnd.move/drop
     if (activeDrag) {
-        // 自动弹出的下拉会盖住最大化窗口的 tab 栏；只有指针移到剪贴板图标上才展开
+        // 弹窗被收起时，指针移到剪贴板图标上重新展开
         if (type === "move" && clipboardToolEl && clipboardToolEl.contains(document.elementFromPoint(p.x, p.y))) {
             showClipboardTip?.({ state: "show", anchorEl: clipboardToolEl });
         }
@@ -2537,14 +2536,13 @@ render.on({
 const server = MSysApi.server({ render });
 // 剪贴板字节、历史、持久化都在桌面；server 只发事件、按需要数据
 clipboard = initClipboard(server.server);
-// 客户端开始拖拽 → 自动展开中转站弹窗；结束时收起拖拽态
+// 客户端开始拖拽 → 自动展开中转站弹窗，作为拖拽落点；结束时收起拖拽态
 server.server.on("dnd.started", (drag) => {
     activeDrag = drag;
     stationHoverAt = 0;
     stationWasHover = false;
     clipboardStationTool?.setDragActive(true);
-    // 收起可能正好盖住 tab 栏的下拉；指针移到图标上时会再展开
-    showClipboardTip?.({ state: "hide" });
+    showClipboardTip?.({ state: "show", anchorEl: clipboardToolEl });
 });
 server.server.on("dnd.finished", (token) => {
     if (activeDrag?.token !== token) return;

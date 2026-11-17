@@ -1,13 +1,21 @@
-import { button, type ElType, image, spacer, view } from "dkh-ui";
-import type { ClipboardItem, ClipboardStation } from "./clipboard";
+import { button, type ElType, image, spacer, txt, view } from "dkh-ui";
+import type { ClipboardItem, ClipboardItemKind, ClipboardStation } from "./clipboard";
 import { getIconXEl } from "./icon";
 import { dynamicScrollList } from "./scroll-list";
-import { aLineText, iItem, px, sSize, sSize2 } from "./ui";
+import { aLineText, gGlassStyle, iItem, px, sSize, sSize2, ui } from "./ui";
+
+/** 弹窗和列表固定宽度，内容多少不影响布局 */
+const CONTENT_WIDTH = sSize(8);
+/** 列表固定高度，无内容时也保留同样大小 */
+const LIST_HEIGHT = sSize(1.5) * 4;
+const DROP_IDLE_BG = gGlassStyle.itemInBg.backgroundColor;
+const DROP_READY_BG = "rgba(74,158,255,0.08)";
+const DROP_HOVER_BG = "rgba(74,158,255,0.18)";
 
 export interface ClipboardStationTool {
     /** 顶栏图标 */
     el: ElType<HTMLElement>;
-    /** 拖拽开始/结束：显示“松开存入中转站” */
+    /** 拖拽开始/结束：切换列表的落点底色 */
     setDragActive(active: boolean): void;
     /** 指针是否落在弹窗内；拖拽经过时高亮 */
     setDropHover(hover: boolean): void;
@@ -33,7 +41,7 @@ function timeOf(t: number): string {
  * 剪贴板历史 + 拖拽中转站共用一个顶栏工具。
  *
  * 正常点击图标打开历史；客户端开始拖拽时由桌面调用 `setDragActive(true)` 自动展开，
- * 弹窗顶部出现放置提示，指针进入后高亮。
+ * 拖入的内容标记为“拖拽”，与普通复制内容共用列表、分别清空。
  */
 export function createClipboardStationTool(op: {
     station: ClipboardStation;
@@ -58,25 +66,23 @@ export function createClipboardStationTool(op: {
         .style({ alignItems: "center" })
         .add(getIconXEl("clipboard", { size: 20, width: 24, height: 24 }));
 
-    const dropHint = view("x")
+    const empty = view("x")
         .style({
-            display: "none",
+            position: "absolute",
+            top: "0",
+            left: "0",
+            width: "100%",
+            height: "100%",
             alignItems: "center",
             justifyContent: "center",
-            padding: px(sSize2.padding),
-            borderRadius: px(sSize2.radius1),
-            background: "rgba(0,0,0,0.05)",
-            border: "1px dashed rgba(0,0,0,0.25)",
+            opacity: 0.6,
+            pointerEvents: "none",
         })
-        .add(aLineText().sv("松开存入中转站"));
-
-    const empty = view("x")
-        .style({ justifyContent: "center", padding: px(sSize2.padding), opacity: 0.6 })
-        .add(aLineText().sv("暂无剪贴板内容"));
+        .add(aLineText().sv("暂无内容").style({ width: "auto" }));
 
     const list = dynamicScrollList<string>({
         itemSize: sSize(1.5),
-        containerSize: sSize(1.5) * 4,
+        containerSize: LIST_HEIGHT,
         direction: "down",
         keyExtractor: (id) => id,
         renderItem: (id) => {
@@ -86,6 +92,7 @@ export function createClipboardStationTool(op: {
                 justifyContent: "center",
                 gap: "2px",
                 padding: `0 ${px(sSize2.paddingx)}`,
+                overflow: "hidden",
                 cursor: "pointer",
             });
             const item = station.items.find((it) => it.id === id);
@@ -104,8 +111,8 @@ export function createClipboardStationTool(op: {
                     }
                     image(url, item.appid)
                         .style({
-                            width: px(sSize(1.5)),
-                            height: px(sSize(1.5)),
+                            width: px(sSize(1)),
+                            height: px(sSize(1)),
                             objectFit: "cover",
                             borderRadius: px(6),
                             flexShrink: 0,
@@ -124,12 +131,29 @@ export function createClipboardStationTool(op: {
                 });
             del.addInto(head);
 
-            row.add([
-                head,
+            const meta = view("x").style({ alignItems: "center", gap: px(4) });
+            if (item.kind === "drag") {
+                meta.add(
+                    view("x")
+                        .style({
+                            flexShrink: 0,
+                            alignItems: "center",
+                            padding: `0 ${px(4)}`,
+                            borderRadius: px(4),
+                            fontSize: "0.75em",
+                            backgroundColor: "rgba(74,158,255,0.18)",
+                            color: "#2f6fdd",
+                        })
+                        .add(txt("拖拽")),
+                );
+            }
+            meta.add(
                 aLineText()
                     .sv(`${item.appid || "未知应用"} · ${timeOf(item.time)}`)
                     .style({ opacity: 0.55, fontSize: "0.8em" }),
-            ]);
+            );
+
+            row.add([head, meta]);
             row.on("click", () => {
                 if (dragActive || Date.now() < suppressClicksUntil) return;
                 station.copy(id);
@@ -147,28 +171,48 @@ export function createClipboardStationTool(op: {
         },
     });
 
-    const clearBtn = button()
+    list.el.style({ width: px(CONTENT_WIDTH) });
+
+    function clearButton(label: string, kind: ClipboardItemKind) {
+        return button()
+            .style({
+                width: "fit-content",
+                height: "fit-content",
+                flexShrink: 0,
+                padding: `2px ${px(6)}`,
+                borderRadius: px(6),
+            })
+            .add(aLineText().sv(label))
+            .on("click", () => {
+                if (Date.now() < suppressClicksUntil) return;
+                station.clear(kind);
+            });
+    }
+
+    const listItem = ui
+        .barItem()
         .style({
-            width: "fit-content",
-            height: "fit-content",
-            flexShrink: 0,
-            padding: `2px ${px(6)}`,
-            borderRadius: px(6),
+            position: "relative",
+            width: px(CONTENT_WIDTH),
+            height: px(LIST_HEIGHT),
+            transition: "background-color 120ms",
         })
-        .add(aLineText().sv("清空"))
-        .on("click", () => {
-            if (Date.now() < suppressClicksUntil) return;
-            station.clear();
-        });
+        .add([list.el, empty]);
 
-    const header = view("x")
-        .style({ alignItems: "center", gap: px(6) })
-        .add([aLineText().sv("剪贴板").style({ fontWeight: "600" }), spacer(), clearBtn]);
+    const actions = ui
+        .barItem()
+        .style({
+            display: "flex",
+            alignItems: "center",
+            height: px(sSize(1)),
+            padding: `0 ${px(sSize2.paddingx)}`,
+            boxSizing: "border-box",
+            gap: px(6),
+        })
+        .add([clearButton("清空拖拽", "drag"), spacer(), clearButton("清空剪贴板", "clipboard")]);
 
-    const panel = view("y")
-        .style({ width: px(sSize(6)), gap: px(sSize2.padding) })
-        .add([dropHint, header, empty, list.el]);
-    panel.addInto(op.tipEl);
+    const panel = ui.bar([listItem, actions]);
+    panel.el.addInto(op.tipEl);
 
     const onPointerMove = (e: PointerEvent) => {
         if (!dragItem) return;
@@ -198,8 +242,7 @@ export function createClipboardStationTool(op: {
             imageUrls.delete(key);
         }
         list.setList(ids);
-        list.el.style({ display: ids.length > 0 ? "" : "none" });
-        empty.style({ display: ids.length > 0 ? "none" : "" });
+        empty.style({ display: ids.length > 0 ? "none" : "flex" });
     };
     station.subscribe(update);
     update();
@@ -208,29 +251,19 @@ export function createClipboardStationTool(op: {
         el: icon,
         setDragActive(active) {
             dragActive = active;
-            dropHint.style({ display: active ? "" : "none" });
-            if (active) {
-                dropHint.style({ background: "rgba(0,0,0,0.05)" });
-            } else {
-                suppressClicksUntil = Date.now() + 400;
-                panel.style({ outline: "none" });
-            }
+            listItem.style({ backgroundColor: active ? DROP_READY_BG : DROP_IDLE_BG });
+            if (!active) suppressClicksUntil = Date.now() + 400;
         },
         setDropHover(hover) {
             if (!dragActive) {
-                panel.style({ outline: "none" });
+                listItem.style({ backgroundColor: DROP_IDLE_BG });
                 return;
             }
-            panel.style({
-                outline: hover ? "2px solid rgba(74,158,255,0.9)" : "none",
-            });
-            dropHint.style({
-                background: hover ? "rgba(74,158,255,0.18)" : "rgba(0,0,0,0.05)",
-            });
+            listItem.style({ backgroundColor: hover ? DROP_HOVER_BG : DROP_READY_BG });
         },
         containsPoint(x, y) {
             const target = document.elementFromPoint(x, y);
-            return panel.el.contains(target) || icon.el.contains(target);
+            return panel.el.el.contains(target) || icon.el.contains(target);
         },
     };
 }

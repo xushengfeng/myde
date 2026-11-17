@@ -776,7 +776,7 @@ server.respond("dnd.requestData", (id, mime) => items.get(id)?.bytes.get(mime) ?
 
 中转站收下客户端拖拽仍走 `dnd.read(token, mime)` + `dnd.cancel(token)`（先读后取消）。
 官方桌面把剪贴板历史和中转站做成同一个顶栏工具（`src/clipboard_tool.ts`），`dnd.started` 时自动展开，
-指针落在弹窗上松手就收进历史；条目也可以拖出到应用窗口。
+指针落在弹窗上松手就收进拖拽分组；条目也可以拖出到应用窗口。
 
 ### 桌面提供可用空间
 

@@ -1,5 +1,8 @@
 import type { ClipboardChange, WaylandServer, WinHandle } from "../../../src/wayland";
 
+/** 条目来源：应用复制，或拖入中转站 */
+export type ClipboardItemKind = "clipboard" | "drag";
+
 /** 桌面侧剪贴板条目：字节、历史、预览都在这里，wayland server 不保存 */
 export interface ClipboardItem {
     id: string;
@@ -13,6 +16,15 @@ export interface ClipboardItem {
     /** 来源 seat；回放时放回同一把 seat */
     seat: string;
     time: number;
+    kind: ClipboardItemKind;
+}
+
+export interface ClipboardAddOptions {
+    appid: string;
+    seat?: string;
+    time?: number;
+    /** 缺省为应用复制 */
+    kind?: ClipboardItemKind;
 }
 
 export interface ClipboardStation {
@@ -23,13 +35,13 @@ export interface ClipboardStation {
     /** 把历史条目放回剪贴板；客户端真正粘贴时 server 会回来要字节 */
     copy(id: string): void;
     remove(id: string): void;
-    clear(): void;
+    /** 省略 kind 时清空全部 */
+    clear(kind?: ClipboardItemKind): void;
     /** 把外部数据（例如拖拽）存入历史；`read` 按 mime 取字节 */
     add(
         mimes: string[],
         read: (mime: string) => Promise<Uint8Array | null>,
-        appid: string,
-        seat?: string,
+        op: ClipboardAddOptions,
     ): Promise<ClipboardItem | undefined>;
     subscribe(fn: () => void): () => void;
     dispose(): void;
@@ -87,6 +99,7 @@ export function initClipboard(server: WaylandServer): ClipboardStation {
             const removed = items.pop();
             if (!removed) break;
             total -= removed.size;
+            if (removed.id === lastId) lastId = items[0]?.id;
         }
     };
 
@@ -96,9 +109,7 @@ export function initClipboard(server: WaylandServer): ClipboardStation {
     const add = async (
         mimes: string[],
         read: (mime: string) => Promise<Uint8Array | null>,
-        appid: string,
-        seat = "seat0",
-        time = Date.now(),
+        op: ClipboardAddOptions,
     ): Promise<ClipboardItem | undefined> => {
         let kept = mimes.filter(isKept);
         // 同一份文本通常同时 offer utf-8 和裸 text/plain；只留 utf-8
@@ -124,9 +135,10 @@ export function initClipboard(server: WaylandServer): ClipboardStation {
             bytes,
             size: total,
             text: text.slice(0, MAX_TEXT_PREVIEW),
-            appid,
-            seat,
-            time,
+            appid: op.appid,
+            seat: op.seat ?? "seat0",
+            time: op.time ?? Date.now(),
+            kind: op.kind ?? "clipboard",
         };
         items.unshift(item);
         lastId = item.id;
@@ -138,13 +150,11 @@ export function initClipboard(server: WaylandServer): ClipboardStation {
 
     const readChange = async (change: ClipboardChange) => {
         if (change.mimes.some((mime) => SENSITIVE_MIMES.includes(mime))) return;
-        await add(
-            change.mimes,
-            (mime) => server.request("clipboard.read", change.token, mime),
-            change.appid,
-            change.seat,
-            change.time,
-        );
+        await add(change.mimes, (mime) => server.request("clipboard.read", change.token, mime), {
+            appid: change.appid,
+            seat: change.seat,
+            time: change.time,
+        });
     };
 
     server.on("clipboard.changed", (change, reason) => {
@@ -178,9 +188,15 @@ export function initClipboard(server: WaylandServer): ClipboardStation {
             if (lastId === id) lastId = items[0]?.id;
             notify();
         },
-        clear: () => {
-            items.length = 0;
-            lastId = undefined;
+        clear: (kind) => {
+            if (kind) {
+                for (let i = items.length - 1; i >= 0; i--) {
+                    if (items[i]?.kind === kind) items.splice(i, 1);
+                }
+            } else {
+                items.length = 0;
+            }
+            if (lastId !== undefined && !items.some((it) => it.id === lastId)) lastId = items[0]?.id;
             notify();
         },
         add,
