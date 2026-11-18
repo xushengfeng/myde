@@ -1499,7 +1499,7 @@ const EXIT_KEY = {
     alt: [MInputMap.mapKeyCode("AltLeft"), MInputMap.mapKeyCode("AltRight")],
 };
 
-/** 虚拟屏切换：Super+←/→ 左右跳，Super+Tab 开关全局预览 */
+/** 虚拟屏切换：Super+← 去右屏、Super+→ 去左屏，Super+Tab 开关全局预览 */
 const DESKTOP_BINDINGS: KeyBinding[] = [
     { code: "ArrowLeft", meta: true },
     { code: "ArrowRight", meta: true },
@@ -6293,8 +6293,8 @@ body.on("keydown", (e) => {
     }
     if (!e.repeat && matchBindings(e, DESKTOP_BINDINGS)) {
         e.preventDefault();
-        if (e.code === "ArrowLeft") viewData.moveCurrent(-1);
-        else if (e.code === "ArrowRight") viewData.moveCurrent(1);
+        if (e.code === "ArrowLeft") viewData.moveCurrent(1);
+        else if (e.code === "ArrowRight") viewData.moveCurrent(-1);
         else viewData.toggleOverview();
         return;
     }
