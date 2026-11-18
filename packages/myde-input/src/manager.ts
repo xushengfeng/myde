@@ -79,16 +79,27 @@ export class InputManager extends EventEmitter {
    */
   private handleMessage(msg: RustMessage) {
     switch (msg.type) {
-      case "device_list":
+      case "device_list": {
         this.onFirstDeviceList?.();
         this.onFirstDeviceList = undefined;
         this.accessMode = msg.access_mode;
         this.accessError = msg.access_error;
+        // 设备列表是完整快照：补齐新增，清掉已经不存在的设备（避免漏掉移除事件）
+        const listed = new Set<string>();
         for (const rustDevice of msg.devices) {
+          if (!rustDevice.path) continue;
           const info = convertDeviceInfo(rustDevice);
+          listed.add(info.path);
           this.addDevice(info);
         }
+        // /proc 解析失败时会带一个 path 为空的错误项，此时不做删除
+        if (msg.devices.every((device) => device.path)) {
+          for (const path of this.devices.keys()) {
+            if (!listed.has(path)) this.removeDevice(path);
+          }
+        }
         break;
+      }
 
       case "device_added": {
         const info = convertDeviceInfo(msg.device);

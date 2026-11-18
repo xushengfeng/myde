@@ -33,7 +33,8 @@ packages/myde-input/
 │       ├── main.rs               # 二进制入口（命令循环 + 事件分发）
 │       ├── protocol.rs           # 消息类型定义（RustMessage, TsCommand, DeviceFullInfo 等）
 │       ├── scanner.rs            # 设备扫描器（解析 /proc/bus/input/devices + ioctl）
-│       ├── reader.rs             # epoll 多设备事件读取器
+│       ├── reader.rs             # epoll 多设备事件读取器（拔出错时摘除设备）
+│       ├── hotplug.rs            # udev 热插拔监听（device_added/device_removed）
 │       └── device_info.rs        # 设备能力读取（ioctl EVIOCGBIT, EVIOCGABS 等）
 │
 ├── cli.ts                        # CLI 工具（类似 evtest 的设备监控）
@@ -56,6 +57,7 @@ packages/myde-input/
 | `evdev-rs` | 0.6 | Linux evdev 绑定 |
 | `nix` | 0.27 | POSIX API（epoll, ioctl, fs） |
 | `libc` | 0.2 | 底层 C 库绑定 |
+| `udev` | 0.9 | 输入设备热插拔监听（libudev） |
 | `serde` + `rmp-serde` | 1.x / 1.1 | MessagePack 序列化 |
 
 构建命令：

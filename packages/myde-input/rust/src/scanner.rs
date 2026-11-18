@@ -38,17 +38,29 @@ pub fn scan_devices(access: &mut DeviceAccess) -> Vec<(DeviceFullInfo, Option<St
 
     for (event_name, proc_info) in proc_devices {
         let path = format!("/dev/input/{}", event_name);
-        let (info, error) = scan_single_device(&path, &proc_info, access);
+        let (info, error) = scan_single_device(&path, Some(&proc_info), access);
         results.push((info, error));
     }
 
     results
 }
 
+/// 扫描单个设备（热插拔新增时使用）。
+///
+/// udev 事件可能先于 /proc/bus/input/devices 刷新，proc 里找不到时退回 ioctl 读取。
+pub fn scan_device(path: &str, access: &mut DeviceAccess) -> (DeviceFullInfo, Option<String>) {
+    let event_name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let proc_devices = parse_proc_devices().unwrap_or_default();
+    scan_single_device(path, proc_devices.get(event_name), access)
+}
+
 /// 扫描单个设备
 fn scan_single_device(
     path: &str,
-    proc_info: &ProcDeviceInfo,
+    proc_info: Option<&ProcDeviceInfo>,
     access: &mut DeviceAccess,
 ) -> (DeviceFullInfo, Option<String>) {
     let mut errors = Vec::new();
@@ -65,12 +77,12 @@ fn scan_single_device(
             return (
                 DeviceFullInfo {
                     path: path.to_string(),
-                    name: proc_info.name.clone(),
+                    name: proc_info.map(|p| p.name.clone()).unwrap_or_default(),
                     device_type: "unknown".to_string(),
-                    phys: proc_info.phys.clone(),
-                    vendor: proc_info.vendor,
-                    product: proc_info.product,
-                    version: proc_info.version,
+                    phys: proc_info.and_then(|p| p.phys.clone()),
+                    vendor: proc_info.map(|p| p.vendor).unwrap_or(0),
+                    product: proc_info.map(|p| p.product).unwrap_or(0),
+                    version: proc_info.map(|p| p.version).unwrap_or(0),
                     capabilities: empty_capabilities(),
                     touch_info: None,
                     abs_info: HashMap::new(),
@@ -117,18 +129,30 @@ fn scan_single_device(
         }
     };
 
-    // 读取设备名称（如果 proc 中没有）
-    let name = if proc_info.name.is_empty() {
-        device_info::read_name(fd).unwrap_or_else(|e| {
+    // 名称/ID/物理路径：优先用 proc，热插拔时 proc 可能还没刷新，退回 ioctl
+    let mut name = proc_info.map(|p| p.name.clone()).unwrap_or_default();
+    if name.is_empty() {
+        name = device_info::read_name(fd).unwrap_or_else(|e| {
             errors.push(DeviceError {
                 field: "name".to_string(),
                 message: e,
             });
             "Unknown Device".to_string()
-        })
-    } else {
-        proc_info.name.clone()
+        });
+    }
+    let (vendor, product, version) = match proc_info {
+        Some(p) => (p.vendor, p.product, p.version),
+        None => device_info::read_id(fd).unwrap_or_else(|e| {
+            errors.push(DeviceError {
+                field: "id".to_string(),
+                message: e,
+            });
+            (0, 0, 0)
+        }),
     };
+    let phys = proc_info
+        .and_then(|p| p.phys.clone())
+        .or_else(|| device_info::read_phys(fd).ok().filter(|p| !p.is_empty()));
 
     // 检测设备类型
     let device_type = detect_device_type_from_caps(&capabilities, &name);
@@ -162,10 +186,10 @@ fn scan_single_device(
             path: path.to_string(),
             name,
             device_type,
-            phys: proc_info.phys.clone(),
-            vendor: proc_info.vendor,
-            product: proc_info.product,
-            version: proc_info.version,
+            phys,
+            vendor,
+            product,
+            version,
             capabilities: caps_with_slots,
             touch_info,
             abs_info,

@@ -397,7 +397,7 @@ if (input.isInitialized()) {
 - `"raw"` - `(event)` 原始事件 `{ devicePath, type, code, value, timestamp }`
 - `"error"` - `(error)` 读取错误
 
-管理器 (`input`) 事件：`"deviceAdded"` `(info: DeviceInfo)`、`"deviceRemoved"` `(path: string)`、`"error"` `(error)`
+管理器 (`input`) 事件：`"deviceAdded"` `(info: DeviceInfo)`、`"deviceRemoved"` `(path: string)`、`"error"` `(error)`。热插拔由 Rust 侧 udev 监听推送，拔出也会在读取返回 `ENODEV` 时发现；`device_list` 是完整快照，不在列表里的设备按已移除处理
 
 方法：
 
