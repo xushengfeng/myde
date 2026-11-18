@@ -16,7 +16,7 @@
     }
   },
   "scripts": {
-    "build:rust": "cargo build --release --manifest-path rust/Cargo.toml && mkdir -p bin && cp rust/target/release/myde-input-reader ./bin/myde-input-reader-$(node -e \"console.log(process.platform + '-' + process.arch)\")",
+    "build:rust": "cargo build --release --manifest-path rust/Cargo.toml && node script/copy-bin.mjs",
     "build:ts": "vite build",
     "build": "pnpm build:rust && pnpm build:ts",
     "dev": "vite",
