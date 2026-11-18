@@ -241,6 +241,8 @@ polkit.on("auth-end", (req, { success, cancelled }) => closeDialog(req));
 
 托盘项新增/移除发出 `new` / `remove`，菜单变化发出 `menuUpdate`，图标、标题等属性变化发出 `changed`
 
+`init()` 会在当前会话总线上提供 `org.kde.StatusNotifierWatcher`（内部总线模式下由 MyDE 自己承担 watcher；外部已有 watcher 时排队并使用已有的那个），应用通过 `RegisterStatusNotifierItem` 注册托盘项；项所属连接断开后自动移除。
+
 ### power
 
 电量获取，包括笔记本电池、蓝牙设备电源等
