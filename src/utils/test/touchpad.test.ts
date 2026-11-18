@@ -40,6 +40,7 @@ function setup() {
     });
     const events: unknown[][] = [];
     for (const name of [
+        "move",
         "scroll",
         "scrollEnd",
         "pinchStart",
@@ -133,6 +134,43 @@ describe("TouchpadInput gestures", () => {
         expect(events.at(-1)?.[0]).toBe("scrollEnd");
     });
 
+    it("continues single-finger movement after a two-finger gesture loses one finger", () => {
+        const { events, sync, contact, move, lift } = setup();
+        contact(0, 1, 1000, 2000);
+        contact(1, 2, 4000, 2000);
+        sync();
+        move(0, 1000, 1800);
+        move(1, 4000, 1800);
+        sync();
+        expect(events.some((e) => e[0] === "scroll")).toBe(true);
+        lift(1);
+        sync();
+        expect(events.at(-1)?.[0]).toBe("scrollEnd");
+        const countBefore = events.length;
+        move(0, 800, 1600);
+        sync();
+        // 2→1 是例外：剩下的单指继续移动光标
+        expect(events.slice(countBefore).some((e) => e[0] === "move")).toBe(true);
+        lift(0);
+        sync();
+    });
+
+    it("can upgrade a single-finger move to two-finger scroll", () => {
+        const { events, sync, contact, move } = setup();
+        contact(0, 1, 1000, 2000);
+        sync();
+        move(0, 1000, 1800);
+        sync();
+        expect(events.some((e) => e[0] === "move")).toBe(true);
+        // 第二指落下后继续两指同向移动：升级为滚动
+        contact(1, 2, 4000, 1800);
+        sync();
+        move(0, 1000, 1600);
+        move(1, 4000, 1600);
+        sync();
+        expect(events.some((e) => e[0] === "scroll")).toBe(true);
+    });
+
     it("does not switch to pinch after the contact is already scrolling", () => {
         const { events, sync, contact, move, lift } = setup();
         contact(0, 1, 1000, 2000);
@@ -217,5 +255,38 @@ describe("TouchpadInput gestures", () => {
         lift(2);
         sync();
         expect(events.at(-1)?.[0]).toBe("multiEnd");
+    });
+
+    it("does not start scroll, pinch or cursor move after a multi gesture loses fingers", () => {
+        const { events, sync, contact, move, lift } = setup();
+        contact(0, 1, 1000, 2000);
+        contact(1, 2, 2000, 2000);
+        contact(2, 3, 3000, 2000);
+        sync();
+        expect(events[0]).toEqual(["multiStart", 3]);
+        move(0, 900, 2000);
+        move(1, 1900, 2000);
+        move(2, 2900, 2000);
+        sync();
+        expect(events.some((e) => e[0] === "multiMove")).toBe(true);
+
+        // 先抬起一根，剩下两指继续移动：不应产生 scroll/pinch
+        lift(2);
+        sync();
+        expect(events.some((e) => e[0] === "multiEnd")).toBe(true);
+        move(0, 800, 2100);
+        move(1, 1800, 2100);
+        sync();
+        expect(events.some((e) => e[0] === "scroll")).toBe(false);
+        expect(events.some((e) => e[0] === "pinchStart")).toBe(false);
+
+        // 再抬起一根，最后一根移动也不应移动光标
+        lift(1);
+        sync();
+        move(0, 700, 2300);
+        sync();
+        expect(events.some((e) => e[0] === "move")).toBe(false);
+        lift(0);
+        sync();
     });
 });

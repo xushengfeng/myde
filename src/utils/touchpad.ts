@@ -172,6 +172,8 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     private suppressedMoveY = 0;
     /** 当前三指及以上手势的手指数，0 表示没有 */
     private multiFingers = 0;
+    /** 本轮接触出现过多指：之后残留的两指/单指不再产生滚动、捏合、hold 或光标移动 */
+    private multiRound = false;
     /** 是否正在双指滚动，手指数量变化时补一次 scrollEnd */
     private scrolling = false;
     /** 双指捏合状态；存在但 active=false 表示还在等阈值 */
@@ -274,6 +276,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         this.phase = "idle";
         this.roundActive = false;
         this.roundMaxFingers = 0;
+        this.multiRound = false;
         this.suppressedMoveX = 0;
         this.suppressedMoveY = 0;
     }
@@ -286,6 +289,8 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
 
         if (!this.roundActive && count > 0) this.startRound(count);
         if (this.roundActive) this.roundMaxFingers = Math.max(this.roundMaxFingers, count);
+        // 本轮已经出现过多指：之后即使只抬起一部分，也不再从残留手指开始滚动/捏合
+        if (count >= 3) this.multiRound = true;
 
         // 双指滚动在手指数量变化（抬手、加入第三根）时结束
         if (this.scrolling && count !== 2) {
@@ -346,7 +351,8 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             if (dx !== 0 || dy !== 0) {
                 // 抬起的那一帧也可能带着最后一小段位移：单指接触（含本帧抬起）照发 move
                 if (single) {
-                    if (!ignoreAbs) actions.push({ type: "move", dx, dy });
+                    // 多指手势之后残留的单指不再移动光标；两指降为单指是允许的例外
+                    if (!ignoreAbs && !this.multiRound) actions.push({ type: "move", dx, dy });
                 } else if (count === 2 && !twoFingerHandled) {
                     // 自然滚动：内容跟随手指，手指上移对应内容向下滚
                     this.scrolling = true;
@@ -443,6 +449,8 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         dy: number,
         actions: TouchpadAction[],
     ): boolean {
+        // 多指手势之后残留的两指不再判 pinch/滚动
+        if (this.multiRound) return true;
         if (count !== 2) return false;
         const pair = this.pairGeometry(contacts);
         if (!pair) return false;
@@ -572,6 +580,11 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     private updateHold(contacts: TouchContact[], count: number): void {
         if (count === 0) {
             this.endHold(false);
+            return;
+        }
+        // 多指手势中途只剩 1-2 指时不再开始 hold；三指按住本身仍算 hold
+        if (this.multiRound && count < 3) {
+            this.endHold(true);
             return;
         }
         if (this.pinch?.active) {
@@ -842,6 +855,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         this.roundMaxFingers = count;
         this.pinch = undefined;
         this.holdBlocked = false;
+        this.multiRound = false;
         switch (this.phase) {
             case "tapped":
                 // 轻触后的第二下：按下保持，忽略这一下的 down，等移动/超时决定拖拽或双击
@@ -906,6 +920,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         this.roundActive = false;
         this.roundMaxFingers = 0;
         this.multiFingers = 0;
+        this.multiRound = false;
         this.scrolling = false;
         this.pinch = undefined;
         this.endHold(false);
