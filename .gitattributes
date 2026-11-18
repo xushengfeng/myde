@@ -1,0 +1,2 @@
+# README 截图是二进制，统一按二进制处理，避免无意义文本 diff 和合并冲突
+assets/readme/* binary
