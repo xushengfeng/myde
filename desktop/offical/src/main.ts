@@ -37,9 +37,11 @@ import {
     ratioToView,
     WHEEL_STEP,
 } from "./input_evdev";
+import { latinVariants } from "./latin";
 import { Registry } from "./registry";
 import { ScreenManager } from "./screen";
 import { dynamicScrollList } from "./scroll-list";
+import { type SearchAiHandler, SearchEngine, type SearchProvider, type SearchResult, scoreLatin } from "./search";
 import { createSettingsContent, type ImePanelPreeditMode } from "./settings";
 import {
     aLineText,
@@ -206,6 +208,7 @@ const fs = MSysApi.fs;
 
 type InternalWindowEntry = {
     el: ElType<HTMLDivElement>;
+    title: string;
     setActive(active: boolean): void;
     close(): void;
     dispose?: () => void;
@@ -445,6 +448,15 @@ type LauncherController = {
     settle(): void;
     isVisible(): boolean;
     blur(): void;
+    /** 打开搜索栏并聚焦输入 */
+    open(): void;
+    /** 关闭搜索栏；全局预览中只失焦，启动器本身保持可见 */
+    close(): void;
+    /** Copilot 键：未展开时打开，有输入时交给 AI，空输入时收起 */
+    copilot(): void;
+    setAiHandler(handler: SearchAiHandler | undefined): void;
+    /** 供后续处理器/AI 面板接入 */
+    readonly search: SearchEngine;
     setStageSize(height: number): void;
     /** 舞台铺满视口时顶部工具栏仍覆盖在 stage 上，总览/搜索栏要额外下移这么多 */
     setTopInset(px: number): void;
@@ -672,6 +684,69 @@ class ViewData {
         if (!screen) return;
         this.setOverviewInternal(false);
         this.setCurrentScreen(screen.id, true);
+    }
+
+    /** 搜索栏用：当前全部虚拟屏（含空桌面、启动台），按空间顺序 */
+    listScreens() {
+        return this.screens.map((screen, index) => {
+            let title = "空桌面";
+            let kind: "empty" | "launchpad" | "window" = "empty";
+            let appid = "";
+            if (screen.launchpad) {
+                title = "启动台";
+                kind = "launchpad";
+            } else if (screen.winId) {
+                kind = "window";
+                title = this.windowTitle(screen.winId);
+                appid = internalWindows.has(screen.winId)
+                    ? "桌面窗口"
+                    : server.server.windows.get(screen.winId)?.appid || "";
+            }
+            return {
+                id: screen.id,
+                title,
+                subtitle: `虚拟屏 ${index + 1}`,
+                kind,
+                appid,
+                current: screen.id === this.currentId,
+            };
+        });
+    }
+
+    /** 搜索栏用：占着虚拟屏的窗口，包含设置、文件选择器等内部窗口 */
+    listWindows() {
+        const out: {
+            handle: MWinId;
+            title: string;
+            appid: string;
+            screenId: string;
+            current: boolean;
+        }[] = [];
+        for (const screen of this.screens) {
+            const handle = screen.winId;
+            if (!handle) continue;
+            const internal = internalWindows.get(handle);
+            const info = internal ? undefined : server.server.windows.get(handle);
+            out.push({
+                handle,
+                title: internal ? internal.title : info?.title || info?.appid || "窗口",
+                appid: internal ? "桌面窗口" : info?.appid || "",
+                screenId: screen.id,
+                current: screen.id === this.currentId,
+            });
+        }
+        return out;
+    }
+
+    switchScreen(id: string) {
+        this.setOverviewInternal(false);
+        this.setCurrentScreen(id, true);
+    }
+
+    private windowTitle(winid: MWinId) {
+        if (internalWindows.has(winid)) return internalWindows.get(winid)?.title || "桌面窗口";
+        const info = server.server.windows.get(winid);
+        return info?.title || info?.appid || "窗口";
     }
 
     closeWin(winid: MWinId) {
@@ -1511,6 +1586,14 @@ const FULLSCREEN_BINDINGS: KeyBinding[] = [{ code: "KeyF", meta: true }];
 
 /** 顶部启动器：Alt+Space 拉出/收起 */
 const LAUNCHER_BINDINGS: KeyBinding[] = [{ code: "Space", alt: true }];
+
+/**
+ * Copilot 键：键盘固件通常发 Shift+Super+F23，部分实现只发 F23。
+ * 浏览器统一落到 `F23`，这里忽略修饰键，避免不同固件组合漏判。
+ */
+function isCopilotKey(e: KeyboardEvent) {
+    return e.code === "F23";
+}
 
 /** 锁屏：Super+L */
 const LOCK_BINDINGS: KeyBinding[] = [{ code: "KeyL", meta: true }];
@@ -2488,7 +2571,13 @@ function openInternalWindow(op: InternalWindowOptions) {
         window.addEventListener("pointercancel", cleanup, { once: true });
     });
 
-    internalWindows.set(op.id, { el: root, setActive, close: closeWindow, dispose: content.dispose });
+    internalWindows.set(op.id, {
+        el: root,
+        title: op.title,
+        setActive,
+        close: closeWindow,
+        dispose: content.dispose,
+    });
     addWindow(screen, root.el, op.id);
     addResizeHandles(root.el, op.id, false);
     createOverviewWindowCloseButton(closeWindow).addInto(root.el);
@@ -3777,6 +3866,10 @@ viewData = new ViewData();
 const launcher = createLauncher();
 viewData.setLauncher(launcher);
 launcher.setUiScale(uiScale);
+// AI 面板接入点：launcher.setAiHandler(({ text }) => ...)；未注册时 Copilot 显示「AI 未接入」
+// 额外搜索处理器：launcher.search.register(provider)
+// AI 面板接入点：launcher.setAiHandler(({ text }) => { ... })；
+// 处理器也通过 launcher.search.register(provider) 增加，未注册 AI 时 Copilot 只提示“AI 未接入”。
 const launchpadScreen = viewData.launchpadScreen;
 if (launchpadScreen) {
     launchpadContentEl = createLaunchpadContent();
@@ -4794,6 +4887,148 @@ tools.registerTool("showAllView", () => {
 
 type DesktopApp = Awaited<ReturnType<typeof MSysApi.getDesktopEntries>>[number];
 
+/** 应用名/本地名的拉丁候选，按应用缓存；应用列表本身由 sys_api 缓存 */
+const searchAppVariants = new WeakMap<DesktopApp, string[]>();
+function appSearchVariants(app: DesktopApp) {
+    let variants = searchAppVariants.get(app);
+    if (!variants) {
+        variants = latinVariants(app.name, app.nameLocal);
+        searchAppVariants.set(app, variants);
+    }
+    return variants;
+}
+
+function searchIcon(icon: string) {
+    return async () => {
+        if (!icon) return undefined;
+        try {
+            return (await MSysApi.getDesktopIcon(icon, { theme: setting.get("icon.theme") })) || undefined;
+        } catch {
+            return undefined;
+        }
+    };
+}
+
+/** 按 appid 找应用图标；内部窗口没有 appid 时返回首字母 */
+function searchIconByAppid(appid: string) {
+    return async () => {
+        if (!appid || appid === "桌面窗口") return undefined;
+        try {
+            const app = await MSysApi.getDesktopEntry(appid);
+            if (!app?.icon) return undefined;
+            return (await MSysApi.getDesktopIcon(app.icon, { theme: setting.get("icon.theme") })) || undefined;
+        } catch {
+            return undefined;
+        }
+    };
+}
+
+type ScoredSearchResult = { score: number; result: SearchResult };
+
+function finishSearch(scored: ScoredSearchResult[], limit: number) {
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, limit).map((item) => item.result);
+}
+
+/** 内置处理器：应用（原始 name 和本地化 nameLocal，中文转拼音） */
+function createAppSearchProvider(): SearchProvider {
+    return {
+        id: "apps",
+        order: 10,
+        limit: 8,
+        async search(query, signal) {
+            const apps = await MSysApi.getDesktopEntries().catch(() => [] as DesktopApp[]);
+            if (signal.aborted) return [];
+            const scored: ScoredSearchResult[] = [];
+            for (const app of apps) {
+                const score = scoreLatin(query, appSearchVariants(app));
+                if (score === -Infinity) continue;
+                scored.push({
+                    score,
+                    result: {
+                        id: `app:${app.desktopFile}`,
+                        score,
+                        title: app.nameLocal || app.name,
+                        subtitle: app.nameLocal && app.nameLocal !== app.name ? app.name : undefined,
+                        badge: "应用",
+                        icon: searchIcon(app.icon),
+                        run: async () => {
+                            await server.startXwayland();
+                            server.runApp(app.exec, { env: app.env });
+                        },
+                    },
+                });
+            }
+            return finishSearch(scored, 8);
+        },
+    };
+}
+
+/** 内置处理器：跳到窗口（Windows 客户端窗口 + 设置/文件选择器等内部窗口） */
+function createWindowSearchProvider(): SearchProvider {
+    return {
+        id: "windows",
+        order: 20,
+        limit: 6,
+        search(query) {
+            const scored: ScoredSearchResult[] = [];
+            for (const win of viewData.listWindows()) {
+                const score = scoreLatin(query, latinVariants(win.title, win.appid));
+                if (score === -Infinity) continue;
+                scored.push({
+                    score,
+                    result: {
+                        id: `window:${win.handle}`,
+                        score,
+                        title: win.title,
+                        subtitle: win.current ? `${win.appid || "窗口"} · 当前` : win.appid || undefined,
+                        badge: "窗口",
+                        icon: searchIconByAppid(win.appid),
+                        run: () => jump2Win(win.handle),
+                    },
+                });
+            }
+            return finishSearch(scored, 6);
+        },
+    };
+}
+
+/** 内置处理器：切换虚拟屏（含空桌面和启动台） */
+function createScreenSearchProvider(): SearchProvider {
+    return {
+        id: "screens",
+        order: 30,
+        limit: 5,
+        search(query) {
+            const scored: ScoredSearchResult[] = [];
+            for (const screen of viewData.listScreens()) {
+                if (screen.current) continue;
+                const aliases =
+                    screen.kind === "launchpad"
+                        ? latinVariants("launchpad", "app launcher")
+                        : screen.kind === "empty"
+                          ? latinVariants("empty desktop")
+                          : [];
+                const score = scoreLatin(query, [...latinVariants(screen.title, screen.subtitle), ...aliases]);
+                if (score === -Infinity) continue;
+                scored.push({
+                    score,
+                    result: {
+                        id: `screen:${screen.id}`,
+                        score,
+                        title: screen.title,
+                        subtitle: screen.subtitle,
+                        badge: screen.kind === "launchpad" ? "启动台" : "虚拟屏",
+                        icon: searchIconByAppid(screen.appid),
+                        run: () => viewData.switchScreen(screen.id),
+                    },
+                });
+            }
+            return finishSearch(scored, 5);
+        },
+    };
+}
+
 /** 开始菜单和启动台共用：应用格子、设置格子、图标懒加载 */
 type AppTileFactoryOptions = {
     iconConfig: DesktopIconConfig;
@@ -4928,7 +5163,7 @@ function createAppTileFactory(op: AppTileFactoryOptions) {
     return { createAppTile, createSettingsTile };
 }
 
-/** 顶部启动器输入框：默认藏在工作区上方，可跟手下拉/上推 */
+/** 顶部搜索栏：默认藏在工作区上方，可跟手下拉/上推；结果由 SearchEngine 异步汇总 */
 function createLauncher(): LauncherController {
     const LAUNCHER_TRANSITION = { duration: 260, map: timingFunction.easeOut };
     let stageHeight = Math.max(1, windowEl.el.getBoundingClientRect().height || window.innerHeight);
@@ -4946,6 +5181,11 @@ function createLauncher(): LauncherController {
     };
     const hiddenOffset = () => Math.max(0, restingTop() + LAUNCHER_HEIGHT + 12);
 
+    const search = new SearchEngine();
+    search.register(createAppSearchProvider());
+    search.register(createWindowSearchProvider());
+    search.register(createScreenSearchProvider());
+
     const layer = view()
         .style({
             position: "absolute",
@@ -4956,16 +5196,17 @@ function createLauncher(): LauncherController {
             zoom: "var(--desktop-ui-scale, 1)",
         })
         .addInto(windowElWarp);
-    const shell = view("x")
+    const shell = view("y")
         .style({
             position: "absolute",
             top: "0px",
             left: "50%",
             width: "min(560px, calc(80vw / var(--desktop-ui-scale, 1)))",
-            height: `${LAUNCHER_HEIGHT}px`,
-            padding: "0 18px",
+            padding: "0",
             boxSizing: "border-box",
-            alignItems: "center",
+            alignItems: "stretch",
+            gap: "0",
+            overflow: "hidden",
             borderRadius: "16px",
             background: "rgba(255,255,255,0.94)",
             backdropFilter: "blur(20px)",
@@ -4979,6 +5220,13 @@ function createLauncher(): LauncherController {
         })
         .data({ "desktop-ui": "launcher", "launcher-input": "" })
         .addInto(layer);
+    const inputRow = view("x").style({
+        height: `${LAUNCHER_HEIGHT}px`,
+        padding: "0 18px",
+        boxSizing: "border-box",
+        alignItems: "center",
+        flexShrink: "0",
+    });
     const field = input("text")
         .style({
             width: "100%",
@@ -4990,8 +5238,18 @@ function createLauncher(): LauncherController {
             fontSize: "16px",
             color: "#111",
         })
-        .attr({ placeholder: "搜索或输入命令" });
-    shell.add(field);
+        .attr({ placeholder: "搜索应用、窗口或虚拟屏" });
+    inputRow.add(field);
+    const resultsEl = view("y").style({
+        display: "none",
+        maxHeight: "min(360px, 50vh)",
+        overflowY: "auto",
+        padding: "6px",
+        gap: "2px",
+        boxSizing: "border-box",
+        borderTop: "1px solid #0000000f",
+    });
+    shell.add([inputRow, resultsEl]);
     shell.on("click", () => field.el.focus());
 
     const gear = new AnimationGear({ progress: 0, overview: 0 }, { transition: LAUNCHER_TRANSITION });
@@ -5024,6 +5282,280 @@ function createLauncher(): LauncherController {
 
     const settle = () => gear.moveTo({ progress, overview: overviewMix }, 0);
 
+    // ── 搜索结果 ──────────────────────────────────────────────────────────────────────────────
+    let results: SearchResult[] = [];
+    let resultEls: ElType<HTMLElement>[] = [];
+    let selectedIndex = 0;
+    /** 每次重绘递增；旧的图标异步加载回来时用它丢弃结果 */
+    let renderSeq = 0;
+    let querySeq = 0;
+    let aiSeq = 0;
+    let queryTimer: number | undefined;
+
+    function setSelected(index: number) {
+        if (results.length === 0) return;
+        selectedIndex = (index + results.length) % results.length;
+        for (let i = 0; i < resultEls.length; i++) {
+            resultEls[i].style({ background: i === selectedIndex ? "rgba(0,0,0,0.06)" : "transparent" });
+        }
+        resultEls[selectedIndex]?.el.scrollIntoView({ block: "nearest" });
+    }
+
+    function hideResults() {
+        renderSeq++;
+        resultsEl.clear();
+        resultsEl.style({ display: "none" });
+        resultEls = [];
+    }
+
+    function showNotice(text: string) {
+        results = [];
+        selectedIndex = 0;
+        renderSeq++;
+        resultEls = [];
+        resultsEl.clear().style({ display: "flex" });
+        view("x")
+            .style({ height: "44px", padding: "0 12px", alignItems: "center", fontSize: "13px", color: "#666" })
+            .add(txt(text))
+            .addInto(resultsEl);
+    }
+
+    function createResultEl(result: SearchResult, index: number, seq: number) {
+        const row = view("x").style({
+            height: "48px",
+            padding: "0 12px",
+            borderRadius: "10px",
+            boxSizing: "border-box",
+            alignItems: "center",
+            gap: "10px",
+            cursor: "pointer",
+            flexShrink: "0",
+            background: "transparent",
+        });
+        row.on("pointerenter", () => setSelected(index));
+        row.on("click", (e) => {
+            e.stopPropagation();
+            activateResult(index);
+        });
+
+        const iconBox = view().style({
+            width: "30px",
+            height: "30px",
+            borderRadius: "9px",
+            background: "#ffffff",
+            alignItems: "center",
+            justifyContent: "center",
+            overflow: "hidden",
+            flexShrink: "0",
+        });
+        iconBox.add(
+            txt((result.title.trim()[0] || "?").toUpperCase()).style({
+                fontSize: "13px",
+                fontWeight: "600",
+                color: "#555",
+            }),
+        );
+        const iconPromise = result.icon?.();
+        if (iconPromise) {
+            void iconPromise
+                .then((url) => {
+                    if (!url || seq !== renderSeq || !row.el.isConnected) return;
+                    iconBox
+                        .clear()
+                        .add(
+                            ele("img")
+                                .style({ width: "100%", height: "100%", objectFit: "contain" })
+                                .attr({ src: url, alt: "" }),
+                        );
+                })
+                .catch(() => {});
+        }
+
+        const textCol = view("y").style({ flex: "1", minWidth: "0", gap: "1px" });
+        textCol.add(
+            txt(result.title).style({
+                fontSize: "14px",
+                color: "#111",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+            }),
+        );
+        if (result.subtitle) {
+            textCol.add(
+                txt(result.subtitle).style({
+                    fontSize: "11px",
+                    color: "#666",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                }),
+            );
+        }
+        row.add([iconBox, textCol]);
+        if (result.badge) {
+            row.add(
+                txt(result.badge).style({
+                    fontSize: "11px",
+                    color: "#666",
+                    background: "#0000000a",
+                    padding: "2px 6px",
+                    borderRadius: "6px",
+                    flexShrink: "0",
+                }),
+            );
+        }
+        return row;
+    }
+
+    function renderResults(query: string) {
+        if (!query.trim()) {
+            hideResults();
+            return;
+        }
+        const seq = ++renderSeq;
+        resultEls = [];
+        resultsEl.clear().style({ display: "flex" });
+        if (results.length === 0) {
+            view("x")
+                .style({ height: "44px", padding: "0 12px", alignItems: "center", fontSize: "13px", color: "#666" })
+                .add(txt("未找到匹配项"))
+                .addInto(resultsEl);
+            return;
+        }
+        for (let i = 0; i < results.length; i++) {
+            const row = createResultEl(results[i], i, seq);
+            resultEls.push(row);
+            resultsEl.add(row);
+        }
+        setSelected(Math.min(selectedIndex, results.length - 1));
+    }
+
+    function requestSearch(value: string, delay = 80) {
+        const seq = ++querySeq;
+        aiSeq++;
+        if (queryTimer !== undefined) {
+            clearTimeout(queryTimer);
+            queryTimer = undefined;
+        }
+        if (!value.trim()) {
+            search.cancel();
+            results = [];
+            selectedIndex = 0;
+            hideResults();
+            return;
+        }
+        queryTimer = window.setTimeout(async () => {
+            queryTimer = undefined;
+            const response = await search.search(value);
+            // 输入已经变了，或者这次搜索被中断；异步结果直接丢弃
+            if (!response || seq !== querySeq) return;
+            results = response.results;
+            selectedIndex = 0;
+            renderResults(response.query);
+        }, delay);
+    }
+
+    function activateResult(index: number) {
+        const result = results[index];
+        if (!result) return;
+        // 确认结果后先收起搜索栏；全局预览里由退出预览的流程恢复停靠位置
+        closeSearch();
+        void Promise.resolve()
+            .then(result.run)
+            .catch((error) => console.warn(`[search] 执行 ${result.id} 失败:`, error));
+    }
+
+    function clearSearch() {
+        querySeq++;
+        aiSeq++;
+        if (queryTimer !== undefined) {
+            clearTimeout(queryTimer);
+            queryTimer = undefined;
+        }
+        search.cancel();
+        results = [];
+        selectedIndex = 0;
+        field.sv("");
+        hideResults();
+    }
+
+    function closeSearch() {
+        clearSearch();
+        if (viewData.overview) {
+            // 全局预览里搜索栏固定显示，不能收进工作区外
+            blurInput();
+            return;
+        }
+        overviewMix = 0;
+        settle();
+        gear.moveTo({ progress: 0, overview: 0 }, LAUNCHER_TRANSITION);
+    }
+
+    function openSearch() {
+        if (viewData.overview) {
+            field.el.focus({ preventScroll: true });
+            return;
+        }
+        if (progress >= 1) {
+            field.el.focus({ preventScroll: true });
+            return;
+        }
+        // 从全局预览退出后可能保留着 overview=1；重新打开时先归到常规隐藏位置
+        overviewMix = 0;
+        settle();
+        gear.moveTo({ progress: 1, overview: 0 }, LAUNCHER_TRANSITION);
+    }
+
+    async function handToAi(text: string) {
+        const seq = ++aiSeq;
+        const handled = await search.askAi(text);
+        // AI 返回前搜索栏已关闭、重新输入或又发起一次 AI 请求：不要覆盖当前状态
+        if (seq !== aiSeq) return;
+        if (!handled) {
+            showNotice("AI 未接入");
+            return;
+        }
+        field.sv("");
+        results = [];
+        selectedIndex = 0;
+        hideResults();
+    }
+
+    function copilot() {
+        if (progress < 0.5) {
+            openSearch();
+            return;
+        }
+        const text = field.gv.trim();
+        if (text) void handToAi(text);
+        else closeSearch();
+    }
+
+    field.on("input", () => requestSearch(field.gv));
+    field.on("keydown", (e) => {
+        if (e.isComposing) return;
+        if (e.code === "ArrowDown" || e.code === "ArrowUp") {
+            if (results.length === 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setSelected(selectedIndex + (e.code === "ArrowDown" ? 1 : -1));
+            return;
+        }
+        if (e.code === "Enter") {
+            if (results.length === 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            activateResult(selectedIndex);
+            return;
+        }
+        if (e.code === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            closeSearch();
+        }
+    });
+
     return {
         getProgress: () => progress,
         getOverviewMix: () => overviewMix,
@@ -5049,6 +5581,11 @@ function createLauncher(): LauncherController {
         settle,
         isVisible: () => progress >= 0.5,
         blur: blurInput,
+        open: openSearch,
+        close: closeSearch,
+        copilot,
+        setAiHandler: (handler) => search.setAiHandler(handler),
+        search,
         setStageSize: (height) => {
             if (height <= 0) return;
             stageHeight = height;
@@ -6256,7 +6793,10 @@ window.addEventListener(
     (e) => {
         if (e.isTrusted) return;
         const target = e.target as HTMLElement | null;
-        if (!target?.closest("[data-launcher-input]")) launcher.blur();
+        if (!target?.closest("[data-launcher-input]")) {
+            if (launcher.isVisible()) launcher.close();
+            else launcher.blur();
+        }
         if (!isInternalWindow(viewData.focusHandle)) return;
         if (!target?.closest("[data-internal-window]")) viewData.blurAll();
     },
@@ -6278,6 +6818,11 @@ body.on("keydown", (e) => {
     if (!e.repeat && matchBindings(e, LAUNCHER_BINDINGS)) {
         e.preventDefault();
         viewData.toggleLauncher();
+        return;
+    }
+    if (!e.repeat && isCopilotKey(e)) {
+        e.preventDefault();
+        launcher.copilot();
         return;
     }
     if (viewData.overview) {
@@ -6321,6 +6866,7 @@ body.on("keyup", (e) => {
     if (
         matchBindings(e, DESKTOP_BINDINGS) ||
         matchBindings(e, LAUNCHER_BINDINGS) ||
+        isCopilotKey(e) ||
         matchBindings(e, FULLSCREEN_BINDINGS)
     ) {
         e.preventDefault();
