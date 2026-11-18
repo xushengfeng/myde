@@ -828,6 +828,10 @@ export class MockNotificationManager {
         return this.notifications.get(id);
     }
 
+    setDefaultTimeout(ms: number) {
+        this.log("notification.setDefaultTimeout", ms);
+    }
+
     createMock(): MockType<notification> {
         const manager = this;
         return {
@@ -839,6 +843,9 @@ export class MockNotificationManager {
             },
             async invokeAction(id: number, actionKey: string) {
                 return await manager.invokeAction(id, actionKey);
+            },
+            setDefaultTimeout(ms: number) {
+                manager.setDefaultTimeout(ms);
             },
             getNotification(id: number) {
                 return manager.getNotification(id);

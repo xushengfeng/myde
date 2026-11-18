@@ -161,6 +161,10 @@ mpris，获取正在播放的媒体相关信息，并控制播放暂停等
 
 新通知发出 `new`，用户或应用关闭通知时发出 `closed`，通知操作被触发时发出 `action`。桌面关闭通知用 `close(id, reason)`，触发操作事件用 `invokeAction(id, actionKey)`
 
+`Notify` 的 `expire_timeout` 由 API 自动处理：`>0` 使用该毫秒数，`0` 不自动过期，`-1` 使用默认值；默认值可在 `init({ defaultTimeout })` 时设置，也可用 `setDefaultTimeout(ms)` 修改。超时关闭会发出 `closed(id, 1)`，并发送 D-Bus `NotificationClosed` 信号；用户关闭是 `2`，`CloseNotification` 是 `3`。`replaces_id` 指向不存在的通知时会分配新 id。
+
+官方桌面的 `notification.list[]` 已导出 `appName`、`appIcon`、`actions`、`hints`、`expireTimeout`、`replacesId`、`closed`、`reason`；当前面板只显示 `title`/`content`，不区分活动与历史。关闭后的通知留在列表里作为历史；面板项的删除对活动通知先 `close(id, 2)` 再移除，对历史项直接移除；清空按钮逐项执行同样的删除逻辑。
+
 ### portal
 
 xdg-desktop-portal 后端（`org.freedesktop.impl.portal.desktop.myde`）。当前实现 `FileChooser` 的 `OpenFile` / `SaveFile` / `SaveFiles`，由系统的 xdg-desktop-portal 前端转发；桌面只负责弹窗和返回用户选择。

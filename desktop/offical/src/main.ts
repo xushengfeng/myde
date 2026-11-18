@@ -13,6 +13,7 @@ import { InputEventCodes } from "../../../src/input_codes/types";
 import type { blueDevice } from "../../../src/sys_api/blue";
 import type { MenuItem } from "../../../src/sys_api/menu";
 import type { wifiDevice } from "../../../src/sys_api/network";
+import type { NotificationData } from "../../../src/sys_api/notification";
 import type { powerDevice } from "../../../src/sys_api/power";
 import { TouchpadInput } from "../../../src/utils/touchpad";
 import type { DragStartInfo, WindowInfo } from "../../../src/wayland";
@@ -131,8 +132,20 @@ interface RegistrySchema {
     };
     "notification.list": id<"notification.list[]">[];
     "notification.list[]": {
+        /** summary */
         title: string;
+        /** body */
         content: string;
+        id: number;
+        appName: string;
+        appIcon: string;
+        actions: string[];
+        hints: Record<string, unknown>;
+        expireTimeout: number;
+        replacesId: number;
+        closed: boolean;
+        /** 1 超时 / 2 用户关闭 / 3 CloseNotification；活动通知为 0 */
+        reason: number;
     };
     "notification.list[].delete": boolean;
     "media.list": id<"media.list[]">[];
@@ -4245,7 +4258,8 @@ MSysApi.blue
     })
     .catch((e) => console.error("blue init error", e));
 
-const notifications = new Map<string, { title: string; content: string; id: string }>();
+type NotificationEntry = NotificationData & { closed: boolean; reason: number };
+const notifications = new Map<string, NotificationEntry>();
 
 MSysApi.notification
     .init()
@@ -4253,28 +4267,56 @@ MSysApi.notification
         const registry = rawRegistry;
         const notification = MSysApi.notification;
 
-        const removeNotification = (id: number) => {
-            if (!notifications.delete(String(id))) return;
+        const setList = () => {
             registry.setData("notification.list", Array.from(notifications.keys()) as id<"notification.list[]">[]);
         };
 
-        notification.on("new", (n) => {
-            const id = String(n.id);
-            notifications.set(id, { content: n.body, title: n.summary, id });
-
-            registry.setData("notification.list", Array.from(notifications.keys()) as id<"notification.list[]">[]);
-
-            registry.setData(`notification.list.${id}` as "notification.list[]", {
-                title: n.summary,
-                content: n.body,
+        const setItem = (entry: NotificationEntry) => {
+            registry.setData(`notification.list.${entry.id}` as "notification.list[]", {
+                title: entry.summary,
+                content: entry.body,
+                id: entry.id,
+                appName: entry.app_name,
+                appIcon: entry.app_icon,
+                actions: entry.actions,
+                hints: entry.hints,
+                expireTimeout: entry.expire_timeout,
+                replacesId: entry.replaces_id,
+                closed: entry.closed,
+                reason: entry.reason,
             });
-            registry.setSetCallback(`notification.list.${id}.delete` as "notification.list[].delete", () => {
-                return notification.close(n.id, 2).then(() => undefined);
+        };
+
+        const removeNotification = (id: string | number) => {
+            const key = String(id);
+            if (!notifications.delete(key)) return;
+            setList();
+        };
+
+        notification.on("new", (n) => {
+            const key = String(n.id);
+            const entry: NotificationEntry = { ...n, closed: false, reason: 0 };
+            notifications.set(key, entry);
+            setList();
+            setItem(entry);
+            registry.setSetCallback(`notification.list.${key}.delete` as "notification.list[].delete", async () => {
+                const item = notifications.get(key);
+                if (!item) return;
+                // 活动通知先按“用户关闭”关闭；历史项只从面板移除
+                if (!item.closed) {
+                    await notification.close(item.id, 2).catch(() => undefined);
+                }
+                removeNotification(key);
             });
         });
 
-        notification.on("closed", (id) => {
-            removeNotification(id);
+        notification.on("closed", (id, reason) => {
+            const key = String(id);
+            const entry = notifications.get(key);
+            if (!entry) return;
+            entry.closed = true;
+            entry.reason = reason;
+            setItem(entry);
         });
     })
     .catch((e) => console.error("notification init error", e));

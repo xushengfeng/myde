@@ -93,7 +93,7 @@ describe("notification（内部总线）", () => {
             notification.on("new", (data) => log({ type: "new", id: data.id, summary: data.summary, body: data.body }));
             notification.on("closed", (id, reason) => log({ type: "closed", id, reason }));
             notification
-                .init()
+                .init({ defaultTimeout: 300 })
                 .then(() => log({ type: "ready" }))
                 .catch((error) => log({ type: "error", error: String(error) }));
 
@@ -144,6 +144,29 @@ describe("notification（内部总线）", () => {
 
             await ifc.call("CloseNotification", "u", id).await();
             await waitForLog((line) => line.type === "closed" && line.id === id);
+
+            // 默认超时（init 的 defaultTimeout）
+            const [defaultId] = await ifc
+                .call("Notify", "susssasa{sv}i", "TestApp", 0, "", "Default Timeout", "Body", [], hints, -1)
+                .as<"u">();
+            await waitForLog((line) => line.type === "closed" && line.id === defaultId && line.reason === 1, 3000);
+
+            // expire_timeout = 0 不自动过期
+            const [persistentId] = await ifc
+                .call("Notify", "susssasa{sv}i", "TestApp", 0, "", "Persistent", "Body", [], hints, 0)
+                .as<"u">();
+            await sleep(600);
+            expect(readLog().some((line) => line.type === "closed" && line.id === persistentId)).toBe(false);
+            await ifc.call("CloseNotification", "u", persistentId).await();
+            await waitForLog((line) => line.type === "closed" && line.id === persistentId && line.reason === 3);
+
+            // replaces_id 不存在时应生成新 id
+            const [newId] = await ifc
+                .call("Notify", "susssasa{sv}i", "TestApp", 999999, "", "Unknown Replace", "Body", [], hints, 0)
+                .as<"u">();
+            expect(newId).not.toBe(999999);
+            await ifc.call("CloseNotification", "u", newId).await();
+            await waitForLog((line) => line.type === "closed" && line.id === newId && line.reason === 3);
 
             expect(readLog().filter((line) => line.type === "error")).toEqual([]);
         } finally {
