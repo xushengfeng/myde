@@ -187,7 +187,8 @@ describe("tray watcher（内部总线）", () => {
             }
             fs.rmSync(STOP_FILE, { force: true });
             runner?.kill();
-            await runner?.waitExit();
+            // 不等待 waitExit：npx/electron-vite 的 stdout 可能被 Electron 子进程持有，
+            // 结束时 stdout 不关闭会把测试拖到超时；应用已经通过 STOP_FILE 退出。
         }
     });
 });
