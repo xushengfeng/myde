@@ -208,6 +208,15 @@ describe.skipIf(!fs.existsSync(KONSOLE))("xdg_popup", () => {
         expect(p.left + p.w, `popup 右边界越界: ${dump()}`).toBeLessThanOrEqual(geo.w + 1);
         expect(p.top + p.h, `popup 下边界越界: ${dump()}`).toBeLessThanOrEqual(geo.h + 1);
 
+        // 菜单要锚定在右键位置。缺少 zxdg_output_v1.name 时 Qt 会停在 0×0 占位屏幕，
+        // 把菜单约束到窗口左上角——这里点的右下角，按左上角摆放时点会落在菜单外。
+        if (!r.clicked) throw new Error(`没拿到点击位置: ${dump()}`);
+        const clicked = r.clicked;
+        expect(clicked.x, `popup 没有锚定在点击处: ${dump()}`).toBeGreaterThanOrEqual(p.left - 1);
+        expect(clicked.x, `popup 没有锚定在点击处: ${dump()}`).toBeLessThanOrEqual(p.left + p.w + 1);
+        expect(clicked.y, `popup 没有锚定在点击处: ${dump()}`).toBeGreaterThanOrEqual(p.top - 1);
+        expect(clicked.y, `popup 没有锚定在点击处: ${dump()}`).toBeLessThanOrEqual(p.top + p.h + 1);
+
         // 点击外部后客户端应销毁弹层：grab(-> popup_done) 的回归
         expect(r.afterClickAway, `点击外部后 popup 仍残留: ${dump()}`).toBe(0);
     });

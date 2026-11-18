@@ -31,6 +31,22 @@ function logicalSize(output: OutputInfo): { width: number; height: number } {
 }
 
 /**
+ * 版本 2 起的 `name` / `description`。
+ *
+ * 虽然版本 3 推荐客户端改用 `wl_output.name`，但 Qt 的 `QWaylandScreen` 仍把
+ * `zxdg_output_v1.name` 列为屏幕初始化的必需事件：缺了它真实屏幕永远不初始化，
+ * Qt 落到 0×0 的占位屏幕，QMenu 等弹层被约束到 (0, 0)（Konsole/Dolphin 的右键菜单
+ * 跑到左上角）。两个事件只在创建时发一次（name 在对象生命周期内不变）。
+ */
+function sendOutputIdentity(objectId: WaylandObjectId2<"zxdg_output_v1">, ctx: ModuleCtx, send: ModuleCtx["send"]) {
+    const object = ctx.objects.getOption(objectId);
+    if (object === undefined || object.version < 2) return;
+    const output = ctx.client.output();
+    send(objectId, "zxdg_output_v1.name", { name: output.name });
+    send(objectId, "zxdg_output_v1.description", { description: output.description });
+}
+
+/**
  * 发送当前输出的逻辑位置/尺寸。
  *
  * 版本 3 起 `xdg_output.done` 废弃，改由随后的 `wl_output.done` 收尾：创建对象时这里
@@ -72,6 +88,7 @@ export const xdgOutputModule = defineModule({
             const objectId = x.args.id;
             const object = ctx.objects.get(objectId);
             ctx.domain.xdgOutput.objects.add(objectId);
+            sendOutputIdentity(objectId, ctx, ctx.send);
             sendLogicalState(objectId, ctx, ctx.send);
             // v3 的收尾事件是 wl_output.done；补发一次让客户端立即拿到逻辑尺寸。
             if (object.version >= 3) ctx.send(x.args.output, "wl_output.done", {});
