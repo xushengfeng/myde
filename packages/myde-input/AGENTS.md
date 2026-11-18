@@ -10,7 +10,7 @@
 ## 项目结构
 
 ```
-myde-input/
+packages/myde-input/
 ├── src/                          # TypeScript 源码
 │   ├── index.ts                  # 入口文件，重新导出所有公共 API
 │   ├── types.ts                  # 类型定义（DeviceType, DeviceInfo, InputEvent 等）
@@ -44,7 +44,6 @@ myde-input/
 ├── vite.config.ts                # Vite 构建配置（library 模式）
 ├── vitest.config.ts              # Vitest 测试配置
 ├── biome.json                    # Biome 代码格式化/检查配置
-└── .github/workflows/release.yml # CI/CD 发布工作流
 ```
 
 ## 工具链
@@ -79,14 +78,16 @@ pnpm build:rust
 | TypeScript | ^5.6.0 | 类型检查 |
 | Vite | ^6.0.0 | 构建工具（library 模式） |
 | Vitest | ^3.0.0 | 测试框架 |
-| Biome | ^1.9.0 | 代码检查与格式化 |
+| Biome | 仓库根目录统一版本 | 代码检查与格式化 |
 | pnpm | - | 包管理器 |
 | `msgpackr` | ^1.11.0 | 运行时 MessagePack 编解码 |
 
 ## 常用命令
 
+以下命令在 `packages/myde-input` 目录内执行（依赖在仓库根目录 `pnpm install` 一次装好；也可在根目录用 `pnpm --filter myde-input <script>` 调用）。
+
 ```bash
-# 安装依赖
+# 安装依赖（仓库根目录）
 pnpm install
 
 # TypeScript 构建
@@ -155,16 +156,12 @@ Rust 子进程与 TypeScript 父进程之间通过 stdin/stdout 使用 **Message
 - **Rust -> TS 消息**：`RustMessage` 枚举（device_list, device_added, device_removed, input_event, error, ok）
 - **TS -> Rust 命令**：`TsCommand` 枚举（list_devices, start_reading, stop_reading, exit）
 
-## CI/CD
+## 在 myde 仓库中的位置
 
-GitHub Actions 工作流位于 `.github/workflows/release.yml`：
-
-- 触发条件：推送 `v*` 标签
-- 构建矩阵：`x86_64-unknown-linux-gnu` 和 `aarch64-unknown-linux-gnu`
-- 流程：Rust 交叉编译 -> 上传产物 -> TS 构建 -> 测试 -> npm 发布 -> GitHub Release
+本包是 myde 仓库的 workspace 包（`packages/myde-input`），`private: true`，只供仓库内使用，不发布到 npm。myde 通过 `"myde-input": "workspace:*"` 引用，读到的是本目录构建出的 `dist/` 与 `bin/`；根目录 `pnpm build` / `pnpm dev` 会先执行 `pnpm build:packages` 编译本包。
 
 ## 注意事项
 
 - 运行时需要 Linux 系统且有 `/dev/input/event*` 设备访问权限（通常需要 `input` 用户组或 root）。
-- `msgpackr` 是运行时依赖但列在 `devDependencies` 中，因为它在 Vite 构建中被标记为 external，消费者需要自行安装。
+- `msgpackr` 在 Vite 构建中被标记为 external，运行时由仓库根目录的依赖提供。
 - Rust 二进制在构建时复制到 `bin/` 目录，文件名包含平台和架构后缀（如 `myde-input-reader-linux-x64`）。

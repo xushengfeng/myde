@@ -1,4 +1,0 @@
-allowBuilds:
-  '@biomejs/biome': false
-  esbuild: false
-  msgpackr-extract: true

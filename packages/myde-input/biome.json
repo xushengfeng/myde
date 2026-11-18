@@ -1,12 +1,20 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.0/schema.json",
-  "organizeImports": {
-    "enabled": true
+  "$schema": "https://biomejs.dev/schemas/2.5.1/schema.json",
+  "root": false,
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "files": {
+    "includes": ["**", "!**/node_modules", "!**/dist", "!**/rust", "!**/bin"]
   },
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "correctness": {
         "noUnusedVariables": "warn"
       }
@@ -23,8 +31,5 @@
       "quoteStyle": "double",
       "semicolons": "always"
     }
-  },
-  "files": {
-    "ignore": ["node_modules", "dist", "rust", "bin"]
   }
 }

@@ -4,7 +4,7 @@
 
 主要运行在electron环境中，为了测试方便，可能要求运行在纯node（无dom）或者纯web（无本地模块）。electron环境和纯node环境需要通过`require`引入模块并通过`as typeof import()`添加类型，但是引用ts文件就使用`import`即可。
 
-由于最终需要运行在electron中，在开发node原生模块时（应该在其他仓库开发），应考虑electron内存墙，外部资源都需要先克隆
+由于最终需要运行在electron中，在开发node原生模块时（见下文 `packages`），应考虑electron内存墙，外部资源都需要先克隆
 
 ## 桌面实现
 
@@ -31,6 +31,15 @@
 `src/desktop-api.ts`定义系统api类型
 
 大部分api用了dbus，但是dbus的具体创建、连接在外部。class创建时应该传入dbus作为参数
+
+## packages
+
+`packages/` 是 pnpm workspace 内的内部包（`private: true`，不发布到 npm），主项目通过 `"myde-drm": "workspace:*"`、`"myde-input": "workspace:*"` 引用。各包由原独立仓库以 `git subtree` 并入，提交历史保留；需要同步时 `git subtree pull --prefix=packages/<name> <仓库路径> main`。
+
+- `packages/myde-drm/`：DRM dmabuf / wl_shm 像素格式转换（Rust neon 原生模块 + TS），产物 `dist/` 与 `prebuilds/<platform>-<arch>/index.node`
+- `packages/myde-input/`：evdev 输入读取（Rust 子进程 + TS），产物 `dist/` 与 `bin/myde-input-reader-<platform>-<arch>`
+
+编译：根目录 `pnpm build` / `pnpm dev` / `pnpm typecheck` 会先跑 `pnpm build:packages`（`pnpm -r --filter "./packages/*"`）。单独开发某个包时进入该目录执行它自己的 `pnpm dev` / `pnpm build` / `pnpm test`。
 
 ## myde-wrap
 

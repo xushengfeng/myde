@@ -2,20 +2,20 @@
  * myde-input - 高性能 Linux 输入设备读取库
  */
 
-export { InputManager } from "./manager.ts";
 export { InputDevice } from "./device.ts";
+export { InputManager } from "./manager.ts";
+export type { AppError, Result } from "./result.ts";
+export { ErrorCode, err, ok, okVoid } from "./result.ts";
 export type {
-  DeviceType,
   AxisInfo,
-  TouchInfo,
+  DeviceAccess,
   DeviceCapabilities,
   DeviceError,
   DeviceInfo,
+  DeviceType,
+  InputDeviceEvents,
   InputEvent,
   InputManagerEvents,
-  InputDeviceEvents,
-  DeviceAccess,
   InputManagerOptions,
+  TouchInfo,
 } from "./types.ts";
-export type { Result, AppError } from "./result.ts";
-export { ErrorCode, ok, okVoid, err } from "./result.ts";

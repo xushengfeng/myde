@@ -2,8 +2,8 @@
   "name": "myde-input",
   "version": "1.0.5",
   "description": "High-performance Linux input device reader",
+  "private": true,
   "type": "module",
-  "packageManager": "pnpm@11.26.0",
   "main": "dist/index.cjs",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,7 +15,6 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "bin"],
   "scripts": {
     "build:rust": "cargo build --release --manifest-path rust/Cargo.toml && mkdir -p bin && cp rust/target/release/myde-input-reader ./bin/myde-input-reader-$(node -e \"console.log(process.platform + '-' + process.arch)\")",
     "build:ts": "vite build",
@@ -29,17 +28,25 @@
     "format": "biome format . --write",
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["linux", "input", "evdev", "keyboard", "mouse", "touchscreen"],
+  "keywords": [
+    "linux",
+    "input",
+    "evdev",
+    "keyboard",
+    "mouse",
+    "touchscreen"
+  ],
   "author": "xsf",
   "repository": {
-    "url": "https://github.com/xushengfeng/myde-input"
+    "type": "git",
+    "url": "https://github.com/xushengfeng/myde.git",
+    "directory": "packages/myde-input"
   },
   "license": "AGPL-3.0-only",
   "dependencies": {
     "msgpackr": "^1.11.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.9.0",
     "@types/node": "^22.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.6.0",

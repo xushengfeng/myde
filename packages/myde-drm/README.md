@@ -14,8 +14,16 @@ Electron 的 `sharedTexture.importSharedTexture` 只接受 `bgra`、`rgba`、`rg
 
 ## 构建
 
+本模块是 myde 仓库内的 workspace 包（`packages/myde-drm`），不单独发布；依赖在仓库根目录安装，根目录构建时一起编译：
+
 ```bash
-pnpm install
+pnpm install                # 仓库根目录
+pnpm build:packages         # 构建全部 workspace 包（含本模块）
+```
+
+在本目录内也可单独构建、测试：
+
+```bash
 pnpm build        # cargo build --release + vite build
 pnpm test         # TS 单元测试
 cargo test        # 包含一个真实 GBM/EGL 的 GPU 冒烟测试（无 DRM 设备时跳过）
@@ -24,7 +32,7 @@ pnpm typecheck
 
 构建产物：`prebuilds/<platform>-<arch>/index.node`（Rust 原生模块，按 CPU 架构分目录）、`dist/index.js`、`dist/index.cjs`、`dist/index.d.ts`。
 
-同一个 npm 包会包含 x64 与 arm64 的预编译模块，运行时按 `process.arch` 自动选择。
+同一个 `prebuilds/<platform>-<arch>/` 目录存放本机架构的原生模块，运行时按 `process.arch` 选择。
 
 ## 用法
 

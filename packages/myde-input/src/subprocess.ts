@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pack, unpack } from "msgpackr";
 import type { RustMessage, TsCommand } from "./protocol.ts";
-import { ErrorCode, type Result, err, errFromUnknown, ok, okVoid } from "./result.ts";
+import { ErrorCode, err, errFromUnknown, ok, okVoid, type Result } from "./result.ts";
 
 // CJS 构建（require 加载）中 __dirname 可用；ESM 中从 import.meta.url 推导。
 // 注意不能在 CJS 下走 import.meta.url：rollup 的垫片在存在 document 的环境（如 Electron 渲染进程）会走错误分支。

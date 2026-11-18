@@ -14,14 +14,15 @@
 - **事件驱动**：基于 EventEmitter 的 API，支持 `keyDown`/`keyUp`/`relative`/`absolute`/`sync` 等语义事件
 - **设备能力检测**：通过 ioctl 读取设备的事件类型、按键、相对轴、绝对轴等能力信息
 - **错误容错**：Rust 风格的 `Result<T, E>` 类型，设备操作失败不会抛出异常，错误信息结构化返回
-- **跨平台构建**：CI/CD 支持 x86_64 和 aarch64 Linux 交叉编译
+- **原生读取**：Rust 侧直接读 evdev，TypeScript 侧只做协议转换与事件分发
 
 ## 安装
 
+本模块是 myde 仓库内的 workspace 包（`packages/myde-input`），不单独发布；在仓库根目录安装依赖并构建：
+
 ```bash
-npm install myde-input
-# 或
-pnpm add myde-input
+pnpm install                # 仓库根目录
+pnpm build:packages         # 编译 Rust 读取器 + TypeScript
 ```
 
 > **前置条件**：需要 Linux 系统。设备打开方式可选：

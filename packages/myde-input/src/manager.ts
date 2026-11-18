@@ -4,8 +4,8 @@
 
 import { EventEmitter } from "node:events";
 import { InputDevice } from "./device.ts";
-import { type RustMessage, convertDeviceInfo } from "./protocol.ts";
-import { type ErrorCode, type Result, err, okVoid } from "./result.ts";
+import { convertDeviceInfo, type RustMessage } from "./protocol.ts";
+import { type ErrorCode, err, okVoid, type Result } from "./result.ts";
 import { RustBridge } from "./subprocess.ts";
 import type { DeviceAccess, DeviceInfo, InputManagerEvents, InputManagerOptions } from "./types.ts";
 

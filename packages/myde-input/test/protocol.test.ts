@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type RustDeviceInfo, convertDeviceInfo } from "../src/protocol.ts";
+import { convertDeviceInfo, type RustDeviceInfo } from "../src/protocol.ts";
 
 describe("Protocol", () => {
   describe("convertDeviceInfo", () => {

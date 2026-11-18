@@ -2,8 +2,8 @@
     "name": "myde-drm",
     "version": "0.1.6",
     "description": "Convert DRM dma-buf pixel formats (XRGB, XBGR, RGBX, BGRX, ...) for Electron on GPU or CPU",
+    "private": true,
     "type": "module",
-    "packageManager": "pnpm@12.14.0",
     "os": [
         "linux"
     ],
@@ -20,16 +20,10 @@
             "require": "./dist/index.cjs"
         }
     },
-    "files": [
-        "dist",
-        "prebuilds",
-        "README.md"
-    ],
     "scripts": {
         "build": "pnpm build:native && pnpm build:ts",
         "build:native": "cargo build --release && node script/copy-native.mjs",
         "build:ts": "vite build",
-        "prepublishOnly": "pnpm build:ts",
         "dev": "vite build --watch",
         "test": "pnpm build:native && vitest run",
         "typecheck": "tsc --noEmit",
@@ -52,11 +46,12 @@
         "email": "xushengfeng_zg@163.com"
     },
     "repository": {
-        "url": "https://github.com/xushengfeng/myde-drm"
+        "type": "git",
+        "url": "https://github.com/xushengfeng/myde.git",
+        "directory": "packages/myde-drm"
     },
     "license": "AGPL-3.0-only",
     "devDependencies": {
-        "@biomejs/biome": "^2.6.2",
         "@types/node": "^24.12.0",
         "typescript": "^5.9.3",
         "vite": "^7.1.7",
