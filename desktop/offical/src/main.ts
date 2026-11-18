@@ -743,6 +743,18 @@ class ViewData {
         this.setCurrentScreen(id, true);
     }
 
+    /** Super+D：切到空桌面；已经在空桌面时回到最近使用的应用屏 */
+    toggleEmptyScreen() {
+        const empty = this.screens.find((s) => s.empty);
+        if (!empty) return;
+        if (this.currentId !== empty.id) {
+            this.switchScreen(empty.id);
+            return;
+        }
+        const previous = this.screens.filter((s) => !s.empty && !s.launchpad).sort((a, b) => b.used - a.used)[0];
+        if (previous) this.switchScreen(previous.id);
+    }
+
     private windowTitle(winid: MWinId) {
         if (internalWindows.has(winid)) return internalWindows.get(winid)?.title || "桌面窗口";
         const info = server.server.windows.get(winid);
@@ -1578,6 +1590,7 @@ const EXIT_KEY = {
 const DESKTOP_BINDINGS: KeyBinding[] = [
     { code: "ArrowLeft", meta: true },
     { code: "ArrowRight", meta: true },
+    { code: "KeyD", meta: true },
     { code: "Tab", meta: true },
 ];
 
@@ -6840,6 +6853,7 @@ body.on("keydown", (e) => {
         e.preventDefault();
         if (e.code === "ArrowLeft") viewData.moveCurrent(1);
         else if (e.code === "ArrowRight") viewData.moveCurrent(-1);
+        else if (e.code === "KeyD") viewData.toggleEmptyScreen();
         else viewData.toggleOverview();
         return;
     }
