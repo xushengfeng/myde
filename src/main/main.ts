@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import { closeSync, existsSync, rmSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { format } from "node:util";
@@ -493,6 +493,82 @@ ipcMain.on("test", (_, data) => {
 
 ipcMain.on("SetWindowSize", (_, x: { width: number; height: number }) => {
     mainWin?.setContentSize(x.width, x.height);
+});
+
+interface ScreenshotRectRequest {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+function screenshotRect(rect: ScreenshotRectRequest): Electron.Rectangle {
+    const values = [rect.x, rect.y, rect.width, rect.height];
+    if (!values.every((value) => Number.isFinite(value))) {
+        throw new Error("截屏区域无效");
+    }
+    const normalized = {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+    };
+    if (normalized.width <= 0 || normalized.height <= 0) {
+        throw new Error("截屏区域为空");
+    }
+    return normalized;
+}
+
+function screenshotFileName(now = new Date()): string {
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return `Screenshot_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.png`;
+}
+
+function screenshotName(name: string | undefined): string | undefined {
+    if (!name) return undefined;
+    const base = path
+        .basename(name)
+        .replace(/[\p{Cc}<>:"/\\|?*]/gu, "_")
+        .replace(/^\.+/, "")
+        .trim();
+    if (!base) return undefined;
+    return base.toLowerCase().endsWith(".png") ? base : `${base}.png`;
+}
+
+function uniqueScreenshotPath(dir: string, name: string): string {
+    const ext = path.extname(name);
+    const stem = name.slice(0, name.length - ext.length);
+    let file = path.join(dir, name);
+    for (let i = 2; existsSync(file); i++) {
+        file = path.join(dir, `${stem} (${i})${ext}`);
+    }
+    return file;
+}
+
+function isPng(data: Uint8Array): boolean {
+    const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    return data.length >= signature.length && signature.every((value, index) => data[index] === value);
+}
+
+// 截屏：rect 用渲染页面的 CSS 像素，返回 PNG（HiDPI 下是物理像素尺寸）
+ipcMain.handle("screenshot:capture", async (event, request?: { rect?: ScreenshotRectRequest }) => {
+    const contents = event.sender;
+    if (contents.isDestroyed()) throw new Error("页面已销毁");
+    const rect = request?.rect ? screenshotRect(request.rect) : undefined;
+    const image = await contents.capturePage(rect);
+    if (image.isEmpty()) throw new Error("截屏结果为空");
+    const size = image.getSize();
+    return { png: image.toPNG(), width: size.width, height: size.height };
+});
+
+ipcMain.handle("screenshot:save", async (_event, request: { png: Uint8Array; name?: string; directory?: string }) => {
+    const png = Buffer.from(request.png);
+    if (!isPng(png)) throw new Error("截屏数据不是 PNG");
+    const dir = path.resolve(request.directory ?? path.join(app.getPath("pictures"), "Screenshots"));
+    mkdirSync(dir, { recursive: true });
+    const file = uniqueScreenshotPath(dir, screenshotName(request.name) ?? screenshotFileName());
+    writeFileSync(file, png);
+    return { path: file, uri: url.pathToFileURL(file).href };
 });
 
 if (runAsDesktop) {

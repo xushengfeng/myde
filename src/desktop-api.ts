@@ -22,6 +22,7 @@ import type { notification } from "./sys_api/notification";
 import type { PolkitApi } from "./sys_api/polkit";
 import type { power, powerProfiles } from "./sys_api/power";
 import { server } from "./sys_api/run";
+import type { screenshot } from "./sys_api/screenshot";
 import type { volumeControl } from "./sys_api/volume";
 import type { xdgDesktopPortal } from "./sys_api/xdg_desktop_portal/xdg_desktop_portal";
 import { throttle } from "./utils/throttle";
@@ -56,6 +57,7 @@ export const _myde = {
         volume: undefined as unknown as volumeControl,
         portal: undefined as unknown as xdgDesktopPortal,
         nativefs: undefined as unknown as nativefs,
+        screenshot: undefined as unknown as screenshot,
         appControl: {
             getPidTree,
             getPid,
@@ -115,9 +117,18 @@ export type {
     PolkitIdentity,
 } from "./sys_api/polkit";
 export type {
+    SavedScreenshot,
+    ScreenshotCaptureOptions,
+    ScreenshotImage,
+    ScreenshotRect,
+    ScreenshotSaveOptions,
+} from "./sys_api/screenshot";
+export type {
+    AccessRequest,
     FileChooserMode,
     FileChooserRequest,
     FileChooserSelection,
+    PickColorRequest,
     PortalAcceptResult,
     PortalChoice,
     PortalChoiceOption,
@@ -127,6 +138,10 @@ export type {
     PortalFilterRule,
     PortalPlace,
     PortalStat,
+    ScreenshotAcceptOptions,
+    ScreenshotAcceptResult,
+    ScreenshotRequest,
+    ScreenshotTarget,
 } from "./sys_api/xdg_desktop_portal/xdg_desktop_portal";
 export type {
     Client,

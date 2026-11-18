@@ -6,12 +6,14 @@ const path = require("node:path") as typeof import("node:path");
 
 const PORTAL_FILE = `[portal]
 DBusName=org.freedesktop.impl.portal.desktop.myde
-Interfaces=org.freedesktop.impl.portal.FileChooser;
+Interfaces=org.freedesktop.impl.portal.FileChooser;org.freedesktop.impl.portal.Screenshot;org.freedesktop.impl.portal.Access;
 UseIn=MyDE
 `;
 
 const PORTAL_CONF = `[preferred]
 org.freedesktop.impl.portal.FileChooser=myde;
+org.freedesktop.impl.portal.Screenshot=myde;
+org.freedesktop.impl.portal.Access=myde;
 `;
 
 export interface InternalPortalHandle {

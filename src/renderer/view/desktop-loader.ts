@@ -22,6 +22,7 @@ import { network } from "../../sys_api/network";
 import { notification } from "../../sys_api/notification";
 import { polkitRemote } from "../../sys_api/polkit_remote";
 import { power, powerProfiles } from "../../sys_api/power";
+import { screenshot } from "../../sys_api/screenshot";
 import { volumeControl } from "../../sys_api/volume";
 import { xdgDesktopPortal } from "../../sys_api/xdg_desktop_portal/xdg_desktop_portal";
 
@@ -72,6 +73,7 @@ async function loadDesktop(p: string) {
     }
     myde.MSysApi.fs = new vfs(dirPath);
     myde.MSysApi.nativefs = new nativefs();
+    myde.MSysApi.screenshot = new screenshot();
     myde.MSysApi.verifyUserPassword = async (password: string) => {
         return new Promise<boolean>((resolve) => {
             loginService.authenticate(getEnv().USER, password, (e) => {

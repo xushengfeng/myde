@@ -5,6 +5,8 @@
 - `portals/myde.portal` → `/usr/share/xdg-desktop-portal/portals/myde.portal`
 - `myde-portals.conf` → `/usr/share/xdg-desktop-portal/myde-portals.conf`
 
+MyDE 声明 `FileChooser`、`Screenshot` 和 `Access` 三个接口。
+
 会话需要设置 `XDG_CURRENT_DESKTOP=MyDE`。开发和测试时可以用
 `XDG_DESKTOP_PORTAL_DIR` 指向 `assets/portal/portals`，不要改系统文件。
 

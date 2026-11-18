@@ -167,7 +167,7 @@ mpris，获取正在播放的媒体相关信息，并控制播放暂停等
 
 ### portal
 
-xdg-desktop-portal 后端（`org.freedesktop.impl.portal.desktop.myde`）。当前实现 `FileChooser` 的 `OpenFile` / `SaveFile` / `SaveFiles`，由系统的 xdg-desktop-portal 前端转发；桌面只负责弹窗和返回用户选择。
+xdg-desktop-portal 后端（`org.freedesktop.impl.portal.desktop.myde`）。当前实现 `FileChooser` 的 `OpenFile` / `SaveFile` / `SaveFiles`，`Screenshot` 的 `Screenshot` / `PickColor`，以及权限对话框 `Access`；由系统的 xdg-desktop-portal 前端转发，桌面只负责弹窗和返回用户选择。
 
 ```typescript
 const portal = MSysApi.portal;
@@ -198,6 +198,59 @@ portal.on("fileChooser.request", async (req) => {
 - 需要系统安装 xdg-desktop-portal，并安装 `assets/portal` 里的 `myde.portal` 和 `myde-portals.conf`；会话设置 `XDG_CURRENT_DESKTOP=MyDE`。开发测试用 `XDG_DESKTOP_PORTAL_DIR` 指向 `assets/portal/portals`，不要改系统配置
 - 默认启动私有 dbus 和 xdg-desktop-portal，MyDE 启动的应用会连到私有总线，不影响宿主 portal；用 `--no-internal-portal` 或 `MYDE_INTERNAL_PORTAL=0` 关闭，测试实例默认关闭
 - 总线归属用 `--bus-mode=internal|mixed|external` / `MYDE_BUS_MODE` 选择，默认 `mixed`：`internal` 连输入法也走私有总线，`mixed` 只有输入法走宿主，`external` 不启动私有总线、全部走宿主
+
+### screenshot
+
+截取桌面输出（所有窗口、壁纸、面板，不包含系统光标）。需要 Electron 渲染进程。
+
+```typescript
+// 整个桌面；HiDPI 下 png 的实际像素尺寸会大于 CSS 尺寸
+const image = await MSysApi.screenshot.capture();
+// 只截一块区域（CSS px，相对页面左上角）
+const area = await MSysApi.screenshot.capture({ rect: { x, y, width, height } });
+// 写到 <Pictures>/Screenshots，重名自动加序号
+const saved = await MSysApi.screenshot.save(image); // { path, uri }
+```
+
+portal 的 Screenshot 后端：
+
+```typescript
+portal.on("screenshot.request", async (req) => {
+    // req.interactive / req.target / req.permissionStoreChecked
+    const image = await MSysApi.screenshot.capture({
+        rect: req.target === "active-window" ? activeWindowRect() : undefined,
+    });
+    const result = await req.accept(image, { directory: "/home/me/Pictures/Screenshots", name: "shot.png" });
+    // if (!result.ok) await req.fail(result.error)
+});
+
+portal.on("screenshot.pickColor", async (req) => {
+    // 等用户点一个像素，返回 sRGB 0..1
+    await req.accept([0.2, 0.4, 0.8]);
+});
+```
+
+- 没有 `screenshot.request` 监听者时，后端直接截全屏并保存，应用无需桌面配合也能用
+- `accept` 由后端把 PNG 写到图片目录（缺省 `<Pictures>/Screenshots`）并返回 `file://` URI；`cancel()` = 用户取消，`fail()` = 内部错误
+- 截屏目标默认只广告 `screen`。桌面能处理窗口/区域选择时，在收到请求前调用 `portal.setScreenshotTargets(["screen", "window", "area", "active-window"])`
+- `PickColor` 需要桌面自己做取色 UI；没有 `screenshot.pickColor` 监听者时请求失败
+- 前端只有在配置了 `Access` 后端时才会提供 Screenshot portal，所以 `myde.portal` 里两个接口必须一起声明
+
+### access
+
+前端的权限对话框。需要用户确认时发出 `access.request`：
+
+```typescript
+portal.on("access.request", async (req) => {
+    // req.title / req.subtitle / req.body / req.denyLabel / req.grantLabel / req.icon / req.choices
+    const allow = await showDialog(req);
+    if (allow) await req.accept({ remember: "true" });
+    else await req.deny();
+});
+```
+
+没有 `access.request` 监听者时默认允许（权限记录与控制后续在 myde 侧做）；`accept()` = response 0，`deny()` = response 1。
+
 
 ### polkit
 

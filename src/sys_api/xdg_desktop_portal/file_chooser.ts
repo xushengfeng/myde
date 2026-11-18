@@ -1,8 +1,9 @@
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path") as typeof import("node:path");
 
-import type { DBusType } from "myde-dbus";
+import { buildChoiceResults, parseChoice } from "./choices";
 import { fromWireFilter, toWireFilter, type WireFilter } from "./filters";
+import { PortalRequestBase } from "./portal_request";
 import type {
     FileChooserMode,
     FileChooserRequest,
@@ -12,14 +13,7 @@ import type {
     PortalFilter,
 } from "./types";
 import { decodePathBytes, pathToUri } from "./uri";
-
-type WireVar = { signature: string; value: unknown[] };
-type WireDict = [string, WireVar][];
-
-function variant(signature: string, value: unknown[]): WireVar {
-    return { signature, value };
-}
-type WireChoice = [id: string, label: string, options: [id: string, label: string][], initial: string];
+import { optionValue, variant, type WireDict } from "./wire";
 
 export interface ParsedFileChooserOptions {
     acceptLabel: string;
@@ -35,28 +29,8 @@ export interface ParsedFileChooserOptions {
     files: string[];
 }
 
-export interface PortalBackendResult {
-    response: number;
-    results: WireDict;
-}
-
-function optionValue<T extends string>(options: WireDict, key: string, signature: T): DBusType<T> | undefined {
-    const entry = options.find(([k]) => k === key);
-    if (!entry || entry[1].signature !== signature) return undefined;
-    return entry[1].value[0] as DBusType<T>;
-}
-
-function parseChoice(choice: WireChoice): PortalChoice {
-    return {
-        id: choice[0],
-        label: choice[1],
-        options: choice[2].map(([id, label]) => ({ id, label })),
-        initial: choice[3],
-    };
-}
-
 export function parseFileChooserOptions(options: WireDict | undefined): ParsedFileChooserOptions {
-    const dict = options ?? [];
+    const dict = Array.isArray(options) ? options : [];
     const rawFilters = optionValue(dict, "filters", "a(sa(us))") ?? [];
     const rawCurrentFilter = optionValue(dict, "current_filter", "(sa(us))");
     const rawChoices = optionValue(dict, "choices", "a(ssa(ss)s)") ?? [];
@@ -123,14 +97,10 @@ async function resolveSavePath(filePath: string): Promise<string> {
  * 一个文件选择请求。portal 方法会 await `wait()`，桌面 UI 通过 accept/cancel/fail 结束。
  * 所有结束路径都幂等。
  */
-export class FileChooserRequestImpl implements FileChooserRequest {
-    readonly id: string;
-    readonly appId: string;
-    readonly parentWindow: string;
+export class FileChooserRequestImpl extends PortalRequestBase implements FileChooserRequest {
     readonly title: string;
     readonly mode: FileChooserMode;
     readonly acceptLabel: string;
-    readonly modal: boolean;
     readonly multiple: boolean;
     readonly directory: boolean;
     readonly filters: PortalFilter[];
@@ -141,11 +111,6 @@ export class FileChooserRequestImpl implements FileChooserRequest {
     readonly currentFile?: string;
     readonly files: string[];
 
-    private readonly resultPromise: Promise<PortalBackendResult>;
-    private resolveResult!: (result: PortalBackendResult) => void;
-    private closed = false;
-    private cancelHandlers = new Set<() => void>();
-
     constructor(op: {
         id: string;
         appId: string;
@@ -154,13 +119,15 @@ export class FileChooserRequestImpl implements FileChooserRequest {
         mode: FileChooserMode;
         options: ParsedFileChooserOptions;
     }) {
-        this.id = op.id;
-        this.appId = op.appId;
-        this.parentWindow = op.parentWindow;
+        super({
+            id: op.id,
+            appId: op.appId,
+            parentWindow: op.parentWindow,
+            modal: op.options.modal,
+        });
         this.title = op.title;
         this.mode = op.mode;
         this.acceptLabel = op.options.acceptLabel;
-        this.modal = op.options.modal;
         this.multiple = op.options.multiple;
         this.directory = op.options.directory;
         this.filters = op.options.filters;
@@ -170,67 +137,18 @@ export class FileChooserRequestImpl implements FileChooserRequest {
         this.currentName = op.options.currentName;
         this.currentFile = op.options.currentFile;
         this.files = op.options.files;
-
-        this.resultPromise = new Promise((resolve) => {
-            this.resolveResult = resolve;
-        });
-    }
-
-    wait(): Promise<PortalBackendResult> {
-        return this.resultPromise;
     }
 
     async accept(selection: FileChooserSelection): Promise<PortalAcceptResult> {
-        if (this.closed) return { ok: false, error: "请求已结束" };
+        if (this.isClosed) return { ok: false, error: "请求已结束" };
         try {
             const results = await this.buildResults(selection);
-            if (this.closed) return { ok: false, error: "请求已结束" };
+            if (this.isClosed) return { ok: false, error: "请求已结束" };
             this.finish(0, results);
             return { ok: true };
         } catch (e) {
             return { ok: false, error: e instanceof Error ? e.message : String(e) };
         }
-    }
-
-    async cancel(): Promise<void> {
-        this.finish(1, []);
-    }
-
-    async fail(message?: string): Promise<void> {
-        if (message) console.warn(`[portal] file chooser ${this.id} failed: ${message}`);
-        this.finish(2, []);
-    }
-
-    onCancel(handler: () => void): () => void {
-        if (this.closed) {
-            handler();
-            return () => {};
-        }
-        this.cancelHandlers.add(handler);
-        return () => {
-            this.cancelHandlers.delete(handler);
-        };
-    }
-
-    /** 前端调用 org.freedesktop.impl.portal.Request.Close */
-    closeFromFrontend(): void {
-        if (this.closed) return;
-        const handlers = [...this.cancelHandlers];
-        this.cancelHandlers.clear();
-        this.finish(1, []);
-        for (const handler of handlers) {
-            try {
-                handler();
-            } catch (e) {
-                console.warn("[portal] onCancel handler error:", e);
-            }
-        }
-    }
-
-    private finish(response: number, results: WireDict): void {
-        if (this.closed) return;
-        this.closed = true;
-        this.resolveResult({ response, results });
     }
 
     private async buildResults(selection: FileChooserSelection): Promise<WireDict> {
@@ -263,22 +181,7 @@ export class FileChooserRequestImpl implements FileChooserRequest {
         results.push(["uris", variant("as", [paths.map(pathToUri)])]);
 
         if (this.choices.length > 0) {
-            const selected: [string, string][] = [];
-            for (const choice of this.choices) {
-                let value = selection.choices?.[choice.id];
-                const valid =
-                    choice.options.length === 0
-                        ? value === "true" || value === "false"
-                        : choice.options.some((option) => option.id === value);
-                if (!value || !valid) {
-                    value = choice.initial || (choice.options[0]?.id ?? "false");
-                }
-                if (choice.options.length === 0 && value !== "true" && value !== "false") {
-                    value = "false";
-                }
-                selected.push([choice.id, value]);
-            }
-            results.push(["choices", variant("a(ss)", [selected])]);
+            results.push(["choices", variant("a(ss)", [buildChoiceResults(this.choices, selection.choices)])]);
         }
 
         const filter = selection.currentFilter ?? this.currentFilter;
