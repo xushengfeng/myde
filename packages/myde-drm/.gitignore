@@ -1,0 +1,10 @@
+node_modules/
+dist/
+index.node
+prebuilds/
+target/
+
+*.log
+.DS_Store
+.vscode/
+.idea/

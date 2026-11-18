@@ -1,0 +1,18 @@
+[package]
+name = "myde-drm"
+version = "0.1.0"
+description = "DRM dma-buf pixel format conversion for Node.js"
+license = "AGPL-3.0-only"
+edition = "2021"
+exclude = ["index.node", "dist", "target"]
+
+[lib]
+name = "myde_drm"
+crate-type = ["cdylib"]
+
+[dependencies]
+neon = { version = "1.1", features = ["napi-6"] }
+libc = "0.2"
+gbm = "0.18"
+khronos-egl = { version = "6", features = ["dynamic"] }
+glow = "0.16"

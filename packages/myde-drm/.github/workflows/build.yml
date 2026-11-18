@@ -1,0 +1,85 @@
+name: Release
+
+on:
+    push:
+        tags:
+            - "*"
+
+permissions:
+    id-token: write
+    contents: read
+
+jobs:
+    build:
+        strategy:
+            matrix:
+                include:
+                    - runner: ubuntu-latest
+                      arch: x64
+                    - runner: ubuntu-24.04-arm
+                      arch: arm64
+        runs-on: ${{ matrix.runner }}
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: pnpm/action-setup@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+
+            - uses: dtolnay/rust-toolchain@stable
+
+            - name: 安装系统依赖
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y pkg-config libdrm-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libwayland-dev
+
+            - name: 安装依赖
+              run: pnpm install --frozen-lockfile
+
+            - name: 构建
+              run: pnpm build
+
+            - name: 测试
+              run: pnpm test
+
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: native-linux-${{ matrix.arch }}
+                  path: prebuilds/linux-${{ matrix.arch }}
+                  if-no-files-found: error
+
+    publish:
+        needs: build
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: pnpm/action-setup@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  registry-url: https://registry.npmjs.org/
+
+            - uses: actions/download-artifact@v4
+              with:
+                  path: artifacts
+
+            - name: 合并各架构预编译模块
+              run: |
+                  mkdir -p prebuilds
+                  cp -r artifacts/native-linux-x64 prebuilds/linux-x64
+                  cp -r artifacts/native-linux-arm64 prebuilds/linux-arm64
+
+            - name: 安装依赖
+              run: pnpm install --frozen-lockfile --ignore-scripts
+
+            - name: 构建 TypeScript
+              run: pnpm build:ts
+
+            - name: 发布到 npm
+              run: |
+                  unset NODE_AUTH_TOKEN
+                  npm publish
