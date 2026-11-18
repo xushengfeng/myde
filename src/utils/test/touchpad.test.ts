@@ -79,7 +79,7 @@ afterEach(() => {
 });
 
 describe("TouchpadInput gestures", () => {
-    it("detects a symmetric pinch", () => {
+    it("starts a pinch from the trigger position without a jump", () => {
         const { events, sync, contact, move, lift } = setup();
         contact(0, 1, 1000, 2000);
         contact(1, 2, 3000, 2000);
@@ -89,12 +89,35 @@ describe("TouchpadInput gestures", () => {
         sync();
         expect(events.map((e) => e[0])).toContain("pinchStart");
         expect(events.map((e) => e[0])).not.toContain("scroll");
+        // 越过阈值前的张合不补发，否则客户端一开始就会跳一下
+        expect(events.some((e) => e[0] === "pinchUpdate")).toBe(false);
+        move(0, 400, 2000);
+        move(1, 3600, 2000);
+        sync();
         const update = events.find((e) => e[0] === "pinchUpdate");
-        expect(update?.[3]).toBeCloseTo(1.5);
+        // 以触发时的 30mm 为起点：32/30，而不是相对最初接触时的 32/20
+        expect(update?.[3]).toBeCloseTo(32 / 30);
         lift(0);
         lift(1);
         sync();
         expect(events.at(-1)?.[0]).toBe("pinchEnd");
+    });
+
+    it("prefers scrolling when two fingers converge while moving together", () => {
+        const { events, sync, contact, move, lift } = setup();
+        contact(0, 1, 1000, 2000);
+        contact(1, 2, 3000, 2000);
+        sync();
+        // 一起上移 4mm、同时收拢 3mm：质心位移大于距离变化，应判为滚动而不是捏合
+        move(0, 1150, 1600);
+        move(1, 2850, 1600);
+        sync();
+        expect(events.some((e) => e[0] === "scroll")).toBe(true);
+        expect(events.some((e) => e[0] === "pinchStart")).toBe(false);
+        lift(0);
+        lift(1);
+        sync();
+        expect(events.at(-1)?.[0]).toBe("scrollEnd");
     });
 
     it("keeps scrolling while a pinch with centroid drift is active", () => {

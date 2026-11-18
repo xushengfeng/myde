@@ -21,11 +21,11 @@ const DEFAULT_UNITS_PER_MM = 1000 / 25.4;
 /** 双指滚动量相对手指位移的比例（自然滚动：内容跟随手指） */
 export const SCROLL_GAIN = 1;
 /** 双指距离相对 begin 变化超过这个比例才算捏合，避免滚动时两指轻微张合误触 */
-export const PINCH_SCALE_THRESHOLD = 0.08;
-/** 双指距离相对 begin 至少变化这么多毫米才算捏合（两指靠得近时 8% 的绝对量太小） */
-export const PINCH_MIN_DISTANCE_CHANGE_MM = 2;
+export const PINCH_SCALE_THRESHOLD = 0.1;
+/** 双指距离相对 begin 至少变化这么多毫米才算捏合（两指靠得近时 10% 的绝对量太小） */
+export const PINCH_MIN_DISTANCE_CHANGE_MM = 2.5;
 /** 双指夹角相对 begin 变化超过这个角度（度）才算旋转 */
-export const PINCH_ROTATE_THRESHOLD = 10;
+export const PINCH_ROTATE_THRESHOLD = 15;
 /** 两指距离太近时 scale 不稳定，不启动捏合 */
 const PINCH_MIN_DISTANCE_MM = 0.5;
 /** 判定为双指滚动前，质心至少移动这么多毫米 */
@@ -472,8 +472,16 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         const scale = pinch.startDistance > 0 ? pair.distance / pinch.startDistance : 1;
         const startRotation = normalizeAngle(pair.angle - pinch.startAngle);
         const distanceChange = Math.abs(pair.distance - pinch.startDistance);
-        const scaled = Math.abs(scale - 1) >= PINCH_SCALE_THRESHOLD && distanceChange >= PINCH_MIN_DISTANCE_CHANGE_MM;
-        const shouldPinch = scaled || Math.abs(startRotation) >= PINCH_ROTATE_THRESHOLD;
+        const centerMove = Math.hypot(pair.centerX - pinch.startCenterX, pair.centerY - pinch.startCenterY);
+        // 两指张合要明显大于质心平移才像捏合：滚动是两指同向平移，距离基本不变，
+        // 只是收拢时距离变化会和质心位移同数量级，必须让滚动赢，否则容易误判
+        const scaled =
+            distanceChange >= PINCH_MIN_DISTANCE_CHANGE_MM &&
+            Math.abs(scale - 1) >= PINCH_SCALE_THRESHOLD &&
+            distanceChange > centerMove;
+        // 质心基本不动的原地扭转也算捏合，滚动时质心一定在移动，不会走到这里
+        const rotated = Math.abs(startRotation) >= PINCH_ROTATE_THRESHOLD && centerMove < TWO_FINGER_SCROLL_START_MM;
+        const shouldPinch = scaled || rotated;
         this.options.debugGesture?.({
             count,
             dx,
@@ -502,7 +510,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 return false;
             }
             if (shouldPinch) {
-                this.beginPinch(pair.angle, dx, dy, scale, startRotation, actions);
+                this.beginPinch(pair.distance, pair.angle, dx, dy, actions);
                 return true;
             }
 
@@ -510,7 +518,6 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             pinch.pendingScrollX += dx === 0 ? 0 : -dx * SCROLL_GAIN;
             pinch.pendingScrollY += dy === 0 ? 0 : -dy * SCROLL_GAIN;
             // 质心移动大于两指距离变化才像滚动；两指相互张合更像 pinch，继续等阈值
-            const centerMove = Math.hypot(pair.centerX - pinch.startCenterX, pair.centerY - pinch.startCenterY);
             if (centerMove >= TWO_FINGER_SCROLL_START_MM && centerMove > distanceChange) {
                 pinch.scrollMode = true;
                 const pendingX = pinch.pendingScrollX;
@@ -542,21 +549,20 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         return true;
     }
 
-    /** 进入 pinch：取消轻触/拖拽判定，补 begin + 第一帧 update；已攒的滚动一起放出去。 */
-    private beginPinch(
-        angle: number,
-        dx: number,
-        dy: number,
-        scale: number,
-        rotation: number,
-        actions: TouchpadAction[],
-    ): void {
+    /**
+     * 进入 pinch：以触发时的两指位置作为起点（scale=1、rotation=0），
+     * 越过阈值之前的张合量不再补发，避免客户端一开始就跳一下。
+     * 分类期间攒下的滚动照常放出去。
+     */
+    private beginPinch(distance: number, angle: number, dx: number, dy: number, actions: TouchpadAction[]): void {
         const pinch = this.pinch;
         if (!pinch) return;
         pinch.active = true;
         pinch.scrollMode = false;
+        pinch.startDistance = distance;
+        pinch.startAngle = angle;
         pinch.lastAngle = angle;
-        pinch.lastScale = scale;
+        pinch.lastScale = 1;
         // 进入捏合后不能再合成两指右键
         this.cancelTimer();
         if (this.phase === "touch" || this.phase === "hold" || this.phase === "second") {
@@ -573,7 +579,6 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             actions.push({ type: "scroll", deltaX: scrollX, deltaY: scrollY });
         }
         actions.push({ type: "pinchStart", fingers: 2 });
-        actions.push({ type: "pinchUpdate", deltaX: dx, deltaY: dy, scale, rotation });
     }
 
     /** 维护按住手势：手指不动达到 HOLD_TIMEOUT 后开始；移动或手指数变化取消。 */
