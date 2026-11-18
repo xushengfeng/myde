@@ -1,7 +1,7 @@
 // 触摸板事件工具：把 input api 的原始设备事件封装成移动/滚动/按键事件
 //
 // 只有这个工具接触 BTN_TOUCH/ABS_MT_* 等键码，桌面只订阅语义事件；
-// 轻触、双指滚动、双指/三指按键和拖拽都在这里转换成统一的按钮/滚动动作。
+// 轻触、双指滚动/捏合、按住、多指滑动、双指/三指按键和拖拽都在这里转换成统一动作。
 import type { DeviceInfo, InputDevice } from "myde-input";
 import { EventEmitter } from "../event-emitter/event-emitter";
 import { InputEventCodes } from "../input_codes/types";
@@ -20,6 +20,25 @@ export const DRAG_TIMEOUT = 180;
 const DEFAULT_UNITS_PER_MM = 1000 / 25.4;
 /** 双指滚动量相对手指位移的比例（自然滚动：内容跟随手指） */
 export const SCROLL_GAIN = 1;
+/** 双指距离相对 begin 变化超过这个比例才算捏合，避免滚动时两指轻微张合误触 */
+export const PINCH_SCALE_THRESHOLD = 0.08;
+/** 双指距离相对 begin 至少变化这么多毫米才算捏合（两指靠得近时 8% 的绝对量太小） */
+export const PINCH_MIN_DISTANCE_CHANGE_MM = 2;
+/** 双指夹角相对 begin 变化超过这个角度（度）才算旋转 */
+export const PINCH_ROTATE_THRESHOLD = 10;
+/** 两指距离太近时 scale 不稳定，不启动捏合 */
+const PINCH_MIN_DISTANCE_MM = 0.5;
+/** 判定为双指滚动前，质心至少移动这么多毫米 */
+export const TWO_FINGER_SCROLL_START_MM = 1.5;
+/** 手指保持不动多久算 hold */
+export const HOLD_TIMEOUT = 300;
+/** hold 允许的最大位移（毫米），超过后转成滚动/滑动并取消 hold */
+export const HOLD_MOVE_MM = 2;
+
+/** 把角度归一化到 [-180, 180)，用于捏合旋转。 */
+function normalizeAngle(deg: number): number {
+    return ((((deg + 180) % 360) + 360) % 360) - 180;
+}
 
 // BTN_TOOL_* 是内核上报的触摸板手指数（没有 MT tracking id 的旧设备只能靠它）
 const TOOL_FINGERS: Record<number, number> = {
@@ -38,7 +57,17 @@ export type TouchpadEvents = {
     scroll: [deltaX: number, deltaY: number];
     /** 双指滚动结束（抬手或手指数量变化），用于给客户端补 axis_stop */
     scrollEnd: [];
-    /** 三指及以上开始移动（官方桌面未订阅，留给其他桌面做多指手势） */
+    /** 双指捏合开始（缩放/旋转），与双指滚动互斥 */
+    pinchStart: [fingers: number];
+    /** 双指捏合更新：质心位移、相对 begin 的缩放、相对上一次的顺时针角度 */
+    pinchUpdate: [deltaX: number, deltaY: number, scale: number, rotation: number];
+    /** 双指捏合结束 */
+    pinchEnd: [cancelled: boolean];
+    /** 手指按住不动达到 HOLD_TIMEOUT；1 指及以上检测 */
+    holdStart: [fingers: number];
+    /** hold 结束；cancelled 表示变成滚动/滑动或手指数量变化 */
+    holdEnd: [cancelled: boolean];
+    /** 三指及以上开始移动；官方桌面用它做切屏/总览，其他桌面也可当 swipe 使用 */
     multiStart: [fingers: number];
     /** 三指及以上移动量 */
     multiMove: [fingers: number, dx: number, dy: number];
@@ -55,6 +84,16 @@ export interface TouchpadInputOptions {
     /** 伴随鼠标节点在出事件时，绝对坐标不能再用（避免双倍移动；滚动仍用触摸板 ABS） */
     ignoreAbs?(): boolean;
     now?(): number;
+    /** 调试双指分类；显式传入时每帧调用，生产环境不要设置 */
+    debugGesture?(info: {
+        count: number;
+        dx: number;
+        dy: number;
+        distance: number;
+        scale: number;
+        rotation: number;
+        mode: "undecided" | "scroll" | "pinch";
+    }): void;
 }
 
 /** 一个接触点，坐标为视口像素；raw 是设备原始值，用于按毫米判断轻触位移 */
@@ -79,6 +118,11 @@ type TouchpadAction =
     | { type: "move"; dx: number; dy: number }
     | { type: "scroll"; deltaX: number; deltaY: number }
     | { type: "scrollEnd" }
+    | { type: "pinchStart"; fingers: number }
+    | { type: "pinchUpdate"; deltaX: number; deltaY: number; scale: number; rotation: number }
+    | { type: "pinchEnd"; cancelled: boolean }
+    | { type: "holdStart"; fingers: number }
+    | { type: "holdEnd"; cancelled: boolean }
     | { type: "multiStart"; fingers: number }
     | { type: "multiMove"; fingers: number; dx: number; dy: number }
     | { type: "multiEnd"; fingers: number }
@@ -130,6 +174,28 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     private multiFingers = 0;
     /** 是否正在双指滚动，手指数量变化时补一次 scrollEnd */
     private scrolling = false;
+    /** 双指捏合状态；存在但 active=false 表示还在等阈值 */
+    private pinch:
+        | {
+              active: boolean;
+              /** 已经判定为滚动，本轮接触不再尝试 pinch */
+              scrollMode: boolean;
+              startDistance: number;
+              startAngle: number;
+              lastAngle: number;
+              lastScale: number;
+              startCenterX: number;
+              startCenterY: number;
+              /** 判定前暂存的滚动量（已按自然滚动取反） */
+              pendingScrollX: number;
+              pendingScrollY: number;
+          }
+        | undefined;
+    /** 按住状态；active=false 表示计时中 */
+    private hold: { active: boolean; fingers: number; x: number; y: number } | undefined;
+    private holdTimer: ReturnType<typeof setTimeout> | undefined;
+    /** 本轮接触已经取消过 hold（移动或手指数变化），不再重新计时 */
+    private holdBlocked = false;
 
     /** 物理按键在帧末统一发出 */
     private pending: TouchpadAction[] = [];
@@ -170,6 +236,10 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
      */
     dispose(): void {
         this.cancelTimer();
+        this.endHold(false);
+        if (this.pinch?.active) this.emit("pinchEnd", true);
+        this.pinch = undefined;
+        this.holdBlocked = false;
         // 已按下但还没抬起的物理键：等状态机的按下已经发过 down，这里补 up
         const pendingDowns = new Set<number>();
         for (const action of this.pending) {
@@ -223,6 +293,15 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             actions.push({ type: "scrollEnd" });
         }
 
+        // 捏合也只在恰好两指时有效；手指数变化就结束
+        if (this.pinch && count !== 2) {
+            if (this.pinch.active) actions.push({ type: "pinchEnd", cancelled: count >= 3 });
+            this.pinch = undefined;
+        }
+
+        // 按住不动：计时/取消/结束都在这里维护，事件直接发出（定时器不进 actions）
+        this.updateHold(contacts, count);
+
         // 按住左键时落下第二根手指：结束按键，交给多指手势（避免左键卡住）
         if (this.roundActive && count >= 2 && this.pressedButton !== undefined) {
             this.unpress(actions);
@@ -245,6 +324,9 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 }
             }
 
+            // 双指分类器优先：判定前暂存滚动，避免先发滚动导致客户端忽略随后的 pinch
+            const twoFingerHandled = this.updatePinch(contacts, count, dx, dy, actions);
+
             // 判定期间先别移动光标：轻触的按下点要落在最初接触的位置，不能带上抖动位移
             const decidingMotion = this.phase === "touch" || this.phase === "second";
             const single = count === 1 || (count === 0 && all.length === 1);
@@ -265,7 +347,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 // 抬起的那一帧也可能带着最后一小段位移：单指接触（含本帧抬起）照发 move
                 if (single) {
                     if (!ignoreAbs) actions.push({ type: "move", dx, dy });
-                } else if (count === 2) {
+                } else if (count === 2 && !twoFingerHandled) {
                     // 自然滚动：内容跟随手指，手指上移对应内容向下滚
                     this.scrolling = true;
                     actions.push({
@@ -276,7 +358,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 }
             }
 
-            // 三指及以上单独封装成多指移动事件，不参与光标/双指滚动；官方桌面不订阅
+            // 三指及以上单独封装成多指移动事件（桌面按 swipe 使用），不参与光标/双指滚动
             if (count >= 3) {
                 if (this.multiFingers === 0) actions.push({ type: "multiStart", fingers: count });
                 this.multiFingers = count;
@@ -295,11 +377,259 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             if (action.type === "button") this.emit("button", action.action, action.button);
             else if (action.type === "scroll") this.emit("scroll", action.deltaX, action.deltaY);
             else if (action.type === "scrollEnd") this.emit("scrollEnd");
+            else if (action.type === "pinchStart") this.emit("pinchStart", action.fingers);
+            else if (action.type === "pinchUpdate")
+                this.emit("pinchUpdate", action.deltaX, action.deltaY, action.scale, action.rotation);
+            else if (action.type === "pinchEnd") this.emit("pinchEnd", action.cancelled);
+            else if (action.type === "holdStart") this.emit("holdStart", action.fingers);
+            else if (action.type === "holdEnd") this.emit("holdEnd", action.cancelled);
             else if (action.type === "multiStart") this.emit("multiStart", action.fingers);
             else if (action.type === "multiMove") this.emit("multiMove", action.fingers, action.dx, action.dy);
             else if (action.type === "multiEnd") this.emit("multiEnd", action.fingers);
             else this.emit("move", action.dx, action.dy);
         }
+    }
+
+    /** 接触点位置：优先用设备原始值换算成毫米，没有原始值时退回视口像素。 */
+    private contactPoint(contact: TouchContact): { x: number; y: number } | undefined {
+        if (contact.rawX !== undefined && contact.rawY !== undefined) {
+            return { x: contact.rawX / this.unitsPerMmX, y: contact.rawY / this.unitsPerMmY };
+        }
+        if (contact.hasX && contact.hasY) return { x: contact.x, y: contact.y };
+        return undefined;
+    }
+
+    /** 两指距离、连线角度（度，屏幕坐标顺时针为正）与质心。 */
+    private pairGeometry(
+        contacts: TouchContact[],
+    ): { distance: number; angle: number; centerX: number; centerY: number } | undefined {
+        if (contacts.length !== 2) return undefined;
+        const a = this.contactPoint(contacts[0]);
+        const b = this.contactPoint(contacts[1]);
+        if (!a || !b) return undefined;
+        return {
+            distance: Math.hypot(b.x - a.x, b.y - a.y),
+            angle: (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI,
+            centerX: (a.x + b.x) / 2,
+            centerY: (a.y + b.y) / 2,
+        };
+    }
+
+    /** 接触点质心，用于判断 hold 的位移。 */
+    private contactCenter(contacts: TouchContact[]): { x: number; y: number } | undefined {
+        if (contacts.length === 0) return undefined;
+        let x = 0;
+        let y = 0;
+        for (const contact of contacts) {
+            const point = this.contactPoint(contact);
+            if (!point) return undefined;
+            x += point.x;
+            y += point.y;
+        }
+        return { x: x / contacts.length, y: y / contacts.length };
+    }
+
+    /**
+     * 双指分类器：先判断是 pinch 还是滚动，判定前暂存滚动量。
+     *
+     * 不先发滚动再切 pinch：客户端一旦收到 axis 就可能进入滚动状态，后续 pinch 会被忽略。
+     * 质心移动达到阈值且两指距离基本不变时判为滚动；距离变化达到 pinch 阈值时判为 pinch。
+     * 返回 true 表示这两指已经由本函数处理，调用方不能再发 scroll。
+     */
+    private updatePinch(
+        contacts: TouchContact[],
+        count: number,
+        dx: number,
+        dy: number,
+        actions: TouchpadAction[],
+    ): boolean {
+        if (count !== 2) return false;
+        const pair = this.pairGeometry(contacts);
+        if (!pair) return false;
+        if (!this.pinch) {
+            this.pinch = {
+                active: false,
+                scrollMode: false,
+                startDistance: pair.distance,
+                startAngle: pair.angle,
+                lastAngle: pair.angle,
+                lastScale: 1,
+                startCenterX: pair.centerX,
+                startCenterY: pair.centerY,
+                pendingScrollX: 0,
+                pendingScrollY: 0,
+            };
+        }
+        const pinch = this.pinch;
+        const scale = pinch.startDistance > 0 ? pair.distance / pinch.startDistance : 1;
+        const startRotation = normalizeAngle(pair.angle - pinch.startAngle);
+        const distanceChange = Math.abs(pair.distance - pinch.startDistance);
+        const scaled = Math.abs(scale - 1) >= PINCH_SCALE_THRESHOLD && distanceChange >= PINCH_MIN_DISTANCE_CHANGE_MM;
+        const shouldPinch = scaled || Math.abs(startRotation) >= PINCH_ROTATE_THRESHOLD;
+        this.options.debugGesture?.({
+            count,
+            dx,
+            dy,
+            distance: pair.distance,
+            scale,
+            rotation: startRotation,
+            mode: pinch.active ? "pinch" : pinch.scrollMode ? "scroll" : "undecided",
+        });
+
+        // 一旦判为滚动，本轮接触就不再改判 pinch，避免滚动中两指轻微张合误触。
+        if (pinch.scrollMode) {
+            const scrollX = dx === 0 ? 0 : -dx * SCROLL_GAIN;
+            const scrollY = dy === 0 ? 0 : -dy * SCROLL_GAIN;
+            if (scrollX !== 0 || scrollY !== 0) {
+                this.scrolling = true;
+                actions.push({ type: "scroll", deltaX: scrollX, deltaY: scrollY });
+            }
+            return true;
+        }
+
+        if (!pinch.active) {
+            if (pinch.startDistance < PINCH_MIN_DISTANCE_MM) {
+                // 起点太近（两指几乎重合），等下一次 flush 用新的距离重新开始
+                this.pinch = undefined;
+                return false;
+            }
+            if (shouldPinch) {
+                this.beginPinch(pair.angle, dx, dy, scale, startRotation, actions);
+                return true;
+            }
+
+            // 还没到 pinch 阈值：先把滚动攒着，等分类结果
+            pinch.pendingScrollX += dx === 0 ? 0 : -dx * SCROLL_GAIN;
+            pinch.pendingScrollY += dy === 0 ? 0 : -dy * SCROLL_GAIN;
+            // 质心移动大于两指距离变化才像滚动；两指相互张合更像 pinch，继续等阈值
+            const centerMove = Math.hypot(pair.centerX - pinch.startCenterX, pair.centerY - pinch.startCenterY);
+            if (centerMove >= TWO_FINGER_SCROLL_START_MM && centerMove > distanceChange) {
+                pinch.scrollMode = true;
+                const pendingX = pinch.pendingScrollX;
+                const pendingY = pinch.pendingScrollY;
+                pinch.pendingScrollX = 0;
+                pinch.pendingScrollY = 0;
+                if (pendingX !== 0 || pendingY !== 0) {
+                    this.scrolling = true;
+                    actions.push({ type: "scroll", deltaX: pendingX, deltaY: pendingY });
+                }
+                return true;
+            }
+            // 分类中：本帧不发滚动
+            return true;
+        }
+
+        // pinch 期间保留滚动：质心移动照样发 scroll，双方互不取消
+        const scrollX = dx === 0 ? 0 : -dx * SCROLL_GAIN;
+        const scrollY = dy === 0 ? 0 : -dy * SCROLL_GAIN;
+        if (scrollX !== 0 || scrollY !== 0) {
+            this.scrolling = true;
+            actions.push({ type: "scroll", deltaX: scrollX, deltaY: scrollY });
+        }
+        const rotation = normalizeAngle(pair.angle - pinch.lastAngle);
+        const changed = dx !== 0 || dy !== 0 || Math.abs(scale - pinch.lastScale) > 0.001 || Math.abs(rotation) > 0.001;
+        pinch.lastAngle = pair.angle;
+        pinch.lastScale = scale;
+        if (changed) actions.push({ type: "pinchUpdate", deltaX: dx, deltaY: dy, scale, rotation });
+        return true;
+    }
+
+    /** 进入 pinch：取消轻触/拖拽判定，补 begin + 第一帧 update；已攒的滚动一起放出去。 */
+    private beginPinch(
+        angle: number,
+        dx: number,
+        dy: number,
+        scale: number,
+        rotation: number,
+        actions: TouchpadAction[],
+    ): void {
+        const pinch = this.pinch;
+        if (!pinch) return;
+        pinch.active = true;
+        pinch.scrollMode = false;
+        pinch.lastAngle = angle;
+        pinch.lastScale = scale;
+        // 进入捏合后不能再合成两指右键
+        this.cancelTimer();
+        if (this.phase === "touch" || this.phase === "hold" || this.phase === "second") {
+            this.phase = "moving";
+        }
+        this.endHold(true);
+        // pinch 不取消滚动：把分类期间攒下的滚动和本帧位移一起放出去
+        const scrollX = pinch.pendingScrollX + (dx === 0 ? 0 : -dx * SCROLL_GAIN);
+        const scrollY = pinch.pendingScrollY + (dy === 0 ? 0 : -dy * SCROLL_GAIN);
+        pinch.pendingScrollX = 0;
+        pinch.pendingScrollY = 0;
+        if (scrollX !== 0 || scrollY !== 0) {
+            this.scrolling = true;
+            actions.push({ type: "scroll", deltaX: scrollX, deltaY: scrollY });
+        }
+        actions.push({ type: "pinchStart", fingers: 2 });
+        actions.push({ type: "pinchUpdate", deltaX: dx, deltaY: dy, scale, rotation });
+    }
+
+    /** 维护按住手势：手指不动达到 HOLD_TIMEOUT 后开始；移动或手指数变化取消。 */
+    private updateHold(contacts: TouchContact[], count: number): void {
+        if (count === 0) {
+            this.endHold(false);
+            return;
+        }
+        if (this.pinch?.active) {
+            this.endHold(true);
+            return;
+        }
+        const hold = this.hold;
+        if (hold) {
+            if (hold.fingers !== count) {
+                this.stopHold(true);
+                return;
+            }
+            const center = this.contactCenter(contacts);
+            if (center && Math.hypot(center.x - hold.x, center.y - hold.y) > HOLD_MOVE_MM) {
+                this.stopHold(true);
+            }
+            return;
+        }
+        this.startHoldTimer(contacts, count);
+    }
+
+    private startHoldTimer(contacts: TouchContact[], count: number): void {
+        if (this.holdBlocked || this.hold || count === 0 || this.pinch?.active) return;
+        const center = this.contactCenter(contacts);
+        if (!center) return;
+        const hold = { active: false, fingers: count, x: center.x, y: center.y };
+        this.hold = hold;
+        const timer = setTimeout(() => {
+            this.holdTimer = undefined;
+            if (this.hold !== hold || !this.roundActive || this.pinch?.active) {
+                if (this.hold === hold) this.hold = undefined;
+                return;
+            }
+            hold.active = true;
+            this.emit("holdStart", hold.fingers);
+        }, HOLD_TIMEOUT);
+        (timer as { unref?: () => void }).unref?.();
+        this.holdTimer = timer;
+    }
+
+    /** 结束 hold；只有已经发过 begin 才补 end。 */
+    private endHold(cancelled: boolean): void {
+        this.cancelHoldTimer();
+        const hold = this.hold;
+        this.hold = undefined;
+        if (hold?.active) this.emit("holdEnd", cancelled);
+    }
+
+    /** 本轮接触已经进入移动/换指，不再尝试 hold。 */
+    private stopHold(cancelled: boolean): void {
+        this.endHold(cancelled);
+        this.holdBlocked = true;
+    }
+
+    private cancelHoldTimer(): void {
+        if (this.holdTimer === undefined) return;
+        clearTimeout(this.holdTimer);
+        this.holdTimer = undefined;
     }
 
     private absolute(code: number, value: number): void {
@@ -510,6 +840,8 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     private startRound(count: number): void {
         this.roundActive = true;
         this.roundMaxFingers = count;
+        this.pinch = undefined;
+        this.holdBlocked = false;
         switch (this.phase) {
             case "tapped":
                 // 轻触后的第二下：按下保持，忽略这一下的 down，等移动/超时决定拖拽或双击
@@ -575,6 +907,9 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         this.roundMaxFingers = 0;
         this.multiFingers = 0;
         this.scrolling = false;
+        this.pinch = undefined;
+        this.endHold(false);
+        this.holdBlocked = false;
         this.suppressedMoveX = 0;
         this.suppressedMoveY = 0;
         this.contacts.clear();

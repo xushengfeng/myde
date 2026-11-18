@@ -3,6 +3,7 @@ import { waylandCoreModule } from "./core/wayland";
 import { cursorShapeModule } from "./ext/cursor_shape";
 import { dmabufModule } from "./ext/dmabuf";
 import { fractionalScaleModule } from "./ext/fractional_scale";
+import { pointerGesturesModule } from "./ext/pointer_gestures";
 import { presentationModule } from "./ext/presentation";
 import { textInputV1Module } from "./ext/text_input_v1";
 import { textInputV3Module } from "./ext/text_input_v3";
@@ -27,6 +28,7 @@ export const protocolModules: readonly ProtocolModule[] = [
     xdgDecorationModule,
     textInputV1Module,
     textInputV3Module,
+    pointerGesturesModule,
 ];
 
 /** 启动时校验请求键与命令键冲突，重复即抛 */

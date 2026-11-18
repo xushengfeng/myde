@@ -26,6 +26,7 @@ export type {
     DesktopClipboard,
     DragEndReason,
     DragStartInfo,
+    GestureCommand,
     OutputInfo,
     PointerCommand,
     Rect,

@@ -36,6 +36,8 @@ export interface UniPointerEvent {
     deltaMode?: number;
     /** wheel 来源：滚轮带离散步进，触摸板等为连续滚动；缺省按滚轮 */
     wheelSource?: "wheel" | "finger" | "continuous";
+    /** DOM wheel 的 Ctrl 状态；window 模式下宿主把触摸板 pinch 合成成 Ctrl+wheel */
+    ctrlKey?: boolean;
     /** 高精度滚轮的离散步数（1/120 格），不随窗口 scale 变化；缺省按 delta 换算 */
     value120X?: number;
     value120Y?: number;

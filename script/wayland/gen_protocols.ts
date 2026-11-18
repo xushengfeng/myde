@@ -103,6 +103,15 @@ const supportedProtocols: Array<{
             { name: "zxdg_toplevel_decoration_v1", version: 1 },
         ],
     },
+    {
+        name: "pointer-gestures-unstable-v1",
+        interfaces: [
+            { name: "zwp_pointer_gestures_v1", version: 3 },
+            { name: "zwp_pointer_gesture_swipe_v1", version: 3 },
+            { name: "zwp_pointer_gesture_pinch_v1", version: 3 },
+            { name: "zwp_pointer_gesture_hold_v1", version: 3 },
+        ],
+    },
 ];
 
 // 支持遍历 supportedProtocols，按 name 读取对应 xml 文件并处理

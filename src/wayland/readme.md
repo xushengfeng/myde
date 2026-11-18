@@ -37,6 +37,15 @@
     - 尊重客户端 `set_mode`：`server_side` 时桌面绘制标题栏（`WindowInfo.decorated`），
       `client_side` 时保留客户端 CSD；未表态默认 `server_side`。
 
+- pointer-gestures-unstable-v1
+    - zwp_pointer_gestures_v1
+    - zwp_pointer_gesture_swipe_v1
+    - zwp_pointer_gesture_pinch_v1（scale 相对 begin，rotation 相对上一次 update，单位度）
+    - zwp_pointer_gesture_hold_v1
+    - 手势对象挂在客户端创建的 `wl_pointer` 上，事件发给该 seat 的指针焦点 surface；
+      焦点不在目标窗口时退回目标窗口主 surface。桌面用 `input.gesture` 驱动，
+      `begin`/`end` 的 serial、time、surface 由 server 补。
+
 - linux-dmabuf-v1
     - zwp_linux_dmabuf_v1 部分，只支持 LINEAR modifier；32 位 RGB(A)
       （ARGB/ABGR/XRGB/XBGR/RGBX/BGRX/RGBA/BGRA）、NV12、NV16、P010。不透明格式必须
@@ -104,7 +113,7 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
   （`hitTest(handle, p)` 走 xdg 域的完整几何，含 popup/subsurface/input region，供桌面决定指针事件发给哪个窗口）
 - **命令**：`server.notify("window.focus" | … | "input.pointer" | …, handle, …)`
   → `host/server.ts` 按 handle 反查 `(client, winId)` → 协议模块的 `actions` 表，组包在协议文件里。
-  `input.pointer|scroll|key|text` 末尾可带 `seat`（缺省 `"seat0"`，选择器语义、不广播）：
+  `input.pointer|scroll|gesture|key|text` 末尾可带 `seat`（缺省 `"seat0"`，选择器语义、不广播）：
   桌面喂第二把光标（如远程协作者）时传 `"seat1"`。
 - **应答**：`server.respond("surfaceBounds.request", () => ({ width, height }))`
 - **输出**：`server.outputs.get()` / `server.outputs.set({ name, mode, scale, transform })`。

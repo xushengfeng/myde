@@ -2,7 +2,7 @@
 import type { WaylandObjectId } from "../utils/wayland-binary";
 type WaylandObjectId2<T extends string> = WaylandObjectId & { __interface: T };
 
-export type WaylandInterfaces = "wl_display" | "wl_registry" | "wl_callback" | "wl_compositor" | "wl_shm_pool" | "wl_shm" | "wl_buffer" | "wl_surface" | "wl_seat" | "wl_pointer" | "wl_keyboard" | "wl_output" | "wl_region" | "wl_data_device" | "wl_data_device_manager" | "wl_data_offer" | "wl_data_source" | "wl_subcompositor" | "wl_subsurface" | "xdg_wm_base" | "xdg_surface" | "xdg_toplevel" | "xdg_popup" | "xdg_positioner" | "wp_viewporter" | "wp_viewport" | "wp_fractional_scale_manager_v1" | "wp_fractional_scale_v1" | "wp_presentation" | "wp_presentation_feedback" | "zwp_linux_dmabuf_v1" | "zwp_linux_buffer_params_v1" | "zwp_linux_dmabuf_feedback_v1" | "zwp_text_input_v3" | "zwp_text_input_manager_v3" | "zwp_text_input_v1" | "zwp_text_input_manager_v1" | "wp_cursor_shape_manager_v1" | "wp_cursor_shape_device_v1" | "zxdg_decoration_manager_v1" | "zxdg_toplevel_decoration_v1";
+export type WaylandInterfaces = "wl_display" | "wl_registry" | "wl_callback" | "wl_compositor" | "wl_shm_pool" | "wl_shm" | "wl_buffer" | "wl_surface" | "wl_seat" | "wl_pointer" | "wl_keyboard" | "wl_output" | "wl_region" | "wl_data_device" | "wl_data_device_manager" | "wl_data_offer" | "wl_data_source" | "wl_subcompositor" | "wl_subsurface" | "xdg_wm_base" | "xdg_surface" | "xdg_toplevel" | "xdg_popup" | "xdg_positioner" | "wp_viewporter" | "wp_viewport" | "wp_fractional_scale_manager_v1" | "wp_fractional_scale_v1" | "wp_presentation" | "wp_presentation_feedback" | "zwp_linux_dmabuf_v1" | "zwp_linux_buffer_params_v1" | "zwp_linux_dmabuf_feedback_v1" | "zwp_text_input_v3" | "zwp_text_input_manager_v3" | "zwp_text_input_v1" | "zwp_text_input_manager_v1" | "wp_cursor_shape_manager_v1" | "wp_cursor_shape_device_v1" | "zxdg_decoration_manager_v1" | "zxdg_toplevel_decoration_v1" | "zwp_pointer_gestures_v1" | "zwp_pointer_gesture_swipe_v1" | "zwp_pointer_gesture_pinch_v1" | "zwp_pointer_gesture_hold_v1";
 
 export enum WaylandEventOpcode {
     wl_display__error = 0,
@@ -101,6 +101,14 @@ export enum WaylandEventOpcode {
     zwp_text_input_v1__language = 11,
     zwp_text_input_v1__text_direction = 12,
     zxdg_toplevel_decoration_v1__configure = 0,
+    zwp_pointer_gesture_swipe_v1__begin = 0,
+    zwp_pointer_gesture_swipe_v1__update = 1,
+    zwp_pointer_gesture_swipe_v1__end = 2,
+    zwp_pointer_gesture_pinch_v1__begin = 0,
+    zwp_pointer_gesture_pinch_v1__update = 1,
+    zwp_pointer_gesture_pinch_v1__end = 2,
+    zwp_pointer_gesture_hold_v1__begin = 0,
+    zwp_pointer_gesture_hold_v1__end = 1,
 }
 
 export type WaylandEventObj = {
@@ -570,6 +578,71 @@ export type WaylandEventObj = {
     "zxdg_toplevel_decoration_v1.configure": {
         /** the decoration mode*/
         mode: number;
+    };
+    "zwp_pointer_gesture_swipe_v1.begin": {
+        serial: number;
+        /** timestamp with millisecond granularity*/
+        time: number;
+        surface: WaylandObjectId2<"wl_surface">;
+        /** number of fingers*/
+        fingers: number;
+    };
+    "zwp_pointer_gesture_swipe_v1.update": {
+        /** timestamp with millisecond granularity*/
+        time: number;
+        /** delta x coordinate in surface coordinate space*/
+        dx: number;
+        /** delta y coordinate in surface coordinate space*/
+        dy: number;
+    };
+    "zwp_pointer_gesture_swipe_v1.end": {
+        serial: number;
+        /** timestamp with millisecond granularity*/
+        time: number;
+        /** 1 if the gesture was cancelled, 0 otherwise*/
+        cancelled: number;
+    };
+    "zwp_pointer_gesture_pinch_v1.begin": {
+        serial: number;
+        /** timestamp with millisecond granularity*/
+        time: number;
+        surface: WaylandObjectId2<"wl_surface">;
+        /** number of fingers*/
+        fingers: number;
+    };
+    "zwp_pointer_gesture_pinch_v1.update": {
+        /** timestamp with millisecond granularity*/
+        time: number;
+        /** delta x coordinate in surface coordinate space*/
+        dx: number;
+        /** delta y coordinate in surface coordinate space*/
+        dy: number;
+        /** scale relative to the initial finger position*/
+        scale: number;
+        /** angle in degrees cw relative to the previous event*/
+        rotation: number;
+    };
+    "zwp_pointer_gesture_pinch_v1.end": {
+        serial: number;
+        /** timestamp with millisecond granularity*/
+        time: number;
+        /** 1 if the gesture was cancelled, 0 otherwise*/
+        cancelled: number;
+    };
+    "zwp_pointer_gesture_hold_v1.begin": {
+        serial: number;
+        /** timestamp with millisecond granularity*/
+        time: number;
+        surface: WaylandObjectId2<"wl_surface">;
+        /** number of fingers*/
+        fingers: number;
+    };
+    "zwp_pointer_gesture_hold_v1.end": {
+        serial: number;
+        /** timestamp with millisecond granularity*/
+        time: number;
+        /** 1 if the gesture was cancelled, 0 otherwise*/
+        cancelled: number;
     };
 };
 
@@ -1129,6 +1202,22 @@ export type WaylandRequestObj = {
         mode: number;
     };
     "zxdg_toplevel_decoration_v1.unset_mode": {};
+    "zwp_pointer_gestures_v1.get_swipe_gesture": {
+        id: WaylandObjectId2<"zwp_pointer_gesture_swipe_v1">;
+        pointer: WaylandObjectId2<"wl_pointer">;
+    };
+    "zwp_pointer_gestures_v1.get_pinch_gesture": {
+        id: WaylandObjectId2<"zwp_pointer_gesture_pinch_v1">;
+        pointer: WaylandObjectId2<"wl_pointer">;
+    };
+    "zwp_pointer_gestures_v1.release": {};
+    "zwp_pointer_gestures_v1.get_hold_gesture": {
+        id: WaylandObjectId2<"zwp_pointer_gesture_hold_v1">;
+        pointer: WaylandObjectId2<"wl_pointer">;
+    };
+    "zwp_pointer_gesture_swipe_v1.destroy": {};
+    "zwp_pointer_gesture_pinch_v1.destroy": {};
+    "zwp_pointer_gesture_hold_v1.destroy": {};
 };
 
 export type WaylandEnumObj = {

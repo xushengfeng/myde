@@ -255,6 +255,24 @@ export interface ScrollCommand {
     relativeDirection?: "identical" | "inverted";
 }
 
+/**
+ * 触摸板语义手势（pointer-gestures-unstable-v1）。
+ *
+ * 序列由桌面保证：`begin` → 若干 `update` → `end`；`hold` 只有 `begin` / `end`。
+ * `deltaX` / `deltaY` 是手势逻辑中心的**相对位移**（surface-local，按手指方向，
+ * 不做自然滚动翻转）；`scale` 是相对 begin 的绝对比例；`rotation` 是相对上一次
+ * 事件的顺时针角度（度）。
+ */
+export type GestureCommand =
+    | { type: "swipe"; phase: "begin"; fingers: number }
+    | { type: "swipe"; phase: "update"; deltaX: number; deltaY: number }
+    | { type: "swipe"; phase: "end"; cancelled?: boolean }
+    | { type: "pinch"; phase: "begin"; fingers: number }
+    | { type: "pinch"; phase: "update"; deltaX: number; deltaY: number; scale: number; rotation: number }
+    | { type: "pinch"; phase: "end"; cancelled?: boolean }
+    | { type: "hold"; phase: "begin"; fingers: number }
+    | { type: "hold"; phase: "end"; cancelled?: boolean };
+
 // ───────────────────────── server 级事件 ─────────────────────────
 
 /**
@@ -319,6 +337,8 @@ export type ServerNotifyMap = {
      */
     "input.pointer": [handle: WinHandle, ev: PointerCommand, seat?: string];
     "input.scroll": [handle: WinHandle, ev: ScrollCommand, seat?: string];
+    /** 触摸板手势；发给 handle 对应窗口，`begin`/`end` 的 serial、surface 由 server 补 */
+    "input.gesture": [handle: WinHandle, ev: GestureCommand, seat?: string];
     "input.key": [handle: WinHandle, key: number, state: "pressed" | "released", seat?: string];
     "input.text": [handle: WinHandle, text: string, preedit: boolean, seat?: string];
     /**

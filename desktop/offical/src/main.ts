@@ -16,7 +16,7 @@ import type { wifiDevice } from "../../../src/sys_api/network";
 import type { NotificationData } from "../../../src/sys_api/notification";
 import type { powerDevice } from "../../../src/sys_api/power";
 import { TouchpadInput } from "../../../src/utils/touchpad";
-import type { DragStartInfo, WindowInfo } from "../../../src/wayland";
+import type { DragStartInfo, GestureCommand, WindowInfo } from "../../../src/wayland";
 import { type ClipboardItem, type ClipboardStation, initClipboard } from "./clipboard";
 import { createClipboardStationTool } from "./clipboard_tool";
 import { Cursor } from "./cursor";
@@ -58,6 +58,9 @@ import {
 
 /** Chromium / Electron 的 Scheduler API；当前 TS lib 没有声明 */
 declare const scheduler: { yield(): Promise<void> };
+
+const debugGesture =
+    (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.MYDE_DEBUG_GESTURE === "1";
 
 // ========== Registry 和 ControlNode ==========
 
@@ -2738,6 +2741,27 @@ function pointerHits(p: { x: number; y: number; target?: EventTarget | null }): 
         hits.push({ handle: info.handle, clientId: info.clientId });
     }
     return hits;
+}
+
+/** Firefox 与 pointer 一样需要 seat1 回退：seat0 的 pointer 可能被地址栏/select 弹层 grab 住。 */
+function notifyGesture(handle: WinHandle, ev: GestureCommand): void {
+    server.server.notify("input.gesture", handle, ev);
+    const info = server.server.windows.get(handle);
+    if (info && /firefox/i.test(info.appid) && connect.getActiveConnections().length === 0) {
+        server.server.notify("input.gesture", handle, ev, "seat1");
+    }
+}
+
+/**
+ * 触摸板手势落到当前指针下的客户端窗口。
+ * begin 时返回目标 handle，后续 update/end 必须复用同一个目标，避免手势中途换窗口。
+ */
+function sendGestureEvent(ev: GestureCommand, x: number, y: number): WinHandle | undefined {
+    const hit = pointerHits({ x, y })[0];
+    if (debugGesture) console.log("[gesture] send", ev, hit?.handle, { x, y });
+    if (!hit) return undefined;
+    notifyGesture(hit.handle, ev);
+    return hit.handle;
 }
 
 /** 桌面坐标 → `dnd.move/drop` 需要的目标窗口 + surface 局部坐标 */
@@ -5780,6 +5804,48 @@ const inputApi = MSysApi.input;
 
 const exitModifiers = { meta: false, shift: false, ctrl: false, alt: false };
 
+// ── window 模式：宿主把触摸板 pinch 合成成 Ctrl+wheel，桌面再转发给 Wayland 客户端 ──
+// desktop 模式由 evdev 的 TouchpadInput 直接产生 pinch；window 模式拿不到 evdev，
+// 只能从 Chromium 的 Ctrl+wheel 里还原 scale。物理 Ctrl+滚轮不在这里处理。
+type PointerInput = Extract<UniInputEvent, { kind: "pointer" }>;
+const hostGestureMode = MSysApi.display.getType() !== "desktop";
+let hostPinch: { target: WinHandle; scale: number; timer?: ReturnType<typeof setTimeout> } | undefined;
+
+function isHostPinch(e: PointerInput): boolean {
+    return hostGestureMode && e.ctrlKey === true && !exitModifiers.ctrl;
+}
+
+function endHostPinch(): void {
+    if (!hostPinch) return;
+    if (hostPinch.timer !== undefined) clearTimeout(hostPinch.timer);
+    notifyGesture(hostPinch.target, { type: "pinch", phase: "end", cancelled: false });
+    hostPinch = undefined;
+}
+
+function handleHostPinch(e: PointerInput): void {
+    // Chromium 把 Wayland pinch 的 scale 增量合成为 Ctrl+wheel：deltaY 约等于 -scale增量×100
+    const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? window.innerHeight : 1;
+    const step = Math.exp((-(e.deltaY ?? 0) * unit) / 100);
+    if (!hostPinch) {
+        const target = sendGestureEvent({ type: "pinch", phase: "begin", fingers: 2 }, e.x, e.y);
+        if (target === undefined) return;
+        hostPinch = { target, scale: 1 };
+    }
+    hostPinch.scale = Math.min(10, Math.max(0.1, hostPinch.scale * step));
+    notifyGesture(hostPinch.target, {
+        type: "pinch",
+        phase: "update",
+        deltaX: 0,
+        deltaY: 0,
+        scale: hostPinch.scale,
+        rotation: 0,
+    });
+    if (hostPinch.timer !== undefined) clearTimeout(hostPinch.timer);
+    const timer = setTimeout(endHostPinch, 120);
+    (timer as { unref?: () => void }).unref?.();
+    hostPinch.timer = timer;
+}
+
 /** 在进入 inputSim 和桌面 UI 之前处理退出键；返回 true 表示已触发退出 */
 function checkExitKey(e: UniInputEvent): boolean {
     if (e.kind !== "key") return false;
@@ -5813,6 +5879,10 @@ function dispatchInput(e: UniInputEvent) {
     // 滚轮/触摸板：先按窗口几何命中转发给 Wayland 客户端，再模拟 DOM 事件给桌面 UI。
     // 源信息（触摸板连续滚动、高精度刻度）随统一事件带下来，不能等模拟成 DOM WheelEvent 再取。
     if (e.kind === "pointer" && e.type === "wheel") {
+        if (isHostPinch(e)) {
+            handleHostPinch(e);
+            return;
+        }
         sendScrollEvent(e);
         if (e.scrollEnd) return;
     }
@@ -5867,6 +5937,7 @@ function domInputEvent(e: Event) {
             deltaX: e.deltaX,
             deltaY: e.deltaY,
             deltaMode: e.deltaMode,
+            ctrlKey: e.ctrlKey,
             source: "dom",
             target: e.target,
         });
@@ -6357,6 +6428,16 @@ function useEvdevDevice(
     const rel = hasRelativeXY(info);
     const abs = MInputMap.absPosMapping(info);
     const keyboard = canKey(info);
+    if (debugGesture && touchpad) {
+        console.log("[touchpad] device", {
+            name: info.name,
+            type: info.type,
+            phys: info.phys,
+            capabilities: info.capabilities,
+            absInfo: info.absInfo,
+            touchInfo: info.touchInfo,
+        });
+    }
     if (!rel && !abs && !keyboard) return () => {};
     // 高精度滚轮与普通滚轮会同时上报，优先高精度避免重复滚动
     const hiResWheel = info.capabilities.relAxes.includes(InputEventCodes.REL_WHEEL_HI_RES);
@@ -6428,6 +6509,7 @@ function useEvdevDevice(
                       return ratio === undefined ? undefined : ratioToView(ratio, window.innerHeight);
                   },
                   ignoreAbs: companionActive,
+                  debugGesture: debugGesture ? (g) => console.log("[touchpad] two-finger", g) : undefined,
               })
             : undefined;
     touchpadInput?.on("move", (moveX, moveY) => {
@@ -6484,15 +6566,75 @@ function useEvdevDevice(
             source: "evdev",
         });
     });
-    // 三指横滑切换虚拟屏：跟手移动，松手吸附；总览里不响应
+    // 手势目标在 begin 时锁定：update/end 必须发给同一个窗口，不能中途改到别的客户端
+    let gestureTarget: WinHandle | undefined;
+    const forwardGesture = (ev: GestureCommand) => {
+        if (debugGesture) console.log("[gesture] forward", ev);
+        if (ev.phase === "begin") {
+            gestureTarget = sendGestureEvent(ev, pointerPos.x, pointerPos.y);
+            return;
+        }
+        if (gestureTarget === undefined) return;
+        notifyGesture(gestureTarget, ev);
+        if (ev.phase === "end") gestureTarget = undefined;
+    };
+    touchpadInput?.on("pinchStart", (fingers) => {
+        forwardGesture({ type: "pinch", phase: "begin", fingers });
+    });
+    touchpadInput?.on("pinchUpdate", (deltaX, deltaY, scale, rotation) => {
+        forwardGesture({ type: "pinch", phase: "update", deltaX, deltaY, scale, rotation });
+    });
+    touchpadInput?.on("pinchEnd", (cancelled) => {
+        forwardGesture({ type: "pinch", phase: "end", cancelled });
+    });
+    // 三指横滑切换虚拟屏、上下滑总览/启动器：桌面捕获，不发给应用。
+    // 四指及以上没有系统手势，第一次移动时作为 swipe 发给应用。
+    let appSwipe = false;
+    let appSwipeStarted = false;
+    let appSwipeFingers = 0;
+    let appHold = false;
+    touchpadInput?.on("holdStart", (fingers) => {
+        // 三指及以上是桌面手势，像全局快捷键一样消费掉，不发给应用
+        if (fingers >= 3 || appSwipe) return;
+        appHold = true;
+        forwardGesture({ type: "hold", phase: "begin", fingers });
+    });
+    touchpadInput?.on("holdEnd", (cancelled) => {
+        if (!appHold) return;
+        appHold = false;
+        forwardGesture({ type: "hold", phase: "end", cancelled });
+    });
     touchpadInput?.on("multiStart", (fingers) => {
-        if (fingers >= 3) viewData.startGesture();
+        if (fingers === 3) {
+            viewData.startGesture();
+            return;
+        }
+        if (fingers > 3) {
+            appSwipe = true;
+            appSwipeStarted = false;
+            appSwipeFingers = fingers;
+        }
     });
     touchpadInput?.on("multiMove", (fingers, moveX, moveY) => {
-        if (fingers >= 3) viewData.moveGesture(moveX, moveY);
+        if (appSwipe) {
+            if (!appSwipeStarted) {
+                appSwipeStarted = true;
+                forwardGesture({ type: "swipe", phase: "begin", fingers: appSwipeFingers });
+            }
+            forwardGesture({ type: "swipe", phase: "update", deltaX: moveX, deltaY: moveY });
+        } else if (fingers >= 3) {
+            viewData.moveGesture(moveX, moveY);
+        }
     });
-    touchpadInput?.on("multiEnd", (fingers) => {
-        if (fingers >= 3) viewData.endGesture();
+    touchpadInput?.on("multiEnd", () => {
+        if (appSwipe) {
+            if (appSwipeStarted) forwardGesture({ type: "swipe", phase: "end" });
+            appSwipe = false;
+            appSwipeStarted = false;
+            appSwipeFingers = 0;
+        } else {
+            viewData.endGesture();
+        }
     });
 
     function flushFrame() {

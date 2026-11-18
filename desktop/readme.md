@@ -378,7 +378,7 @@ inputSim.emit({ kind: "key", type: "up", code: 30, source: "evdev" });
 
 统一输入事件：
 
-- `UniPointerEvent`：`kind: "pointer"`，`type: "move" | "down" | "up" | "wheel"`，`x`/`y`（视口坐标），`button?`（down/up，0左 1中 2右），`pointerType?`（"mouse"/"touch"/"pen"），`pointerId?`，`isPrimary?`（同一指针类型中的主指针，缺省 true；多指触摸只有第一根为 true），`deltaX?`/`deltaY?`/`deltaMode?`（wheel），`wheelSource?`（"wheel"/"finger"/"continuous"）、`value120X?`/`value120Y?`（高精度滚轮刻度，1/120 格）、`scrollEnd?`（连续滚动抬手），`target?`（指定派发目标，缺省按坐标命中测试）
+- `UniPointerEvent`：`kind: "pointer"`，`type: "move" | "down" | "up" | "wheel"`，`x`/`y`（视口坐标），`button?`（down/up，0左 1中 2右），`pointerType?`（"mouse"/"touch"/"pen"），`pointerId?`，`isPrimary?`（同一指针类型中的主指针，缺省 true；多指触摸只有第一根为 true），`deltaX?`/`deltaY?`/`deltaMode?`（wheel），`wheelSource?`（"wheel"/"finger"/"continuous"）、`value120X?`/`value120Y?`（高精度滚轮刻度，1/120 格）、`ctrlKey?`（DOM wheel 的 Ctrl 状态；window 模式宿主用 Ctrl+wheel 合成 pinch）、`scrollEnd?`（连续滚动抬手），`target?`（指定派发目标，缺省按坐标命中测试）
 - `UniKeyEvent`：`kind: "key"`，`type: "down" | "up"`，`code`（evdev 键码），`webCode?`（DOM `KeyboardEvent.code`，缺省由 evdev 码反查），`key?`（DOM `KeyboardEvent.key`，缺省按美式布局 + 修饰键推导），`repeat?`，`target?`（缺省为当前聚焦元素）
 - `source`："dom"（DOM 原生事件）或 "evdev"（input api），聚合层用它区分/去重来源
 
@@ -393,7 +393,7 @@ inputSim.emit({ kind: "key", type: "up", code: 30, source: "evdev" });
 
 聚合层参考实现见 `desktop/offical`：`main.ts` 的"输入聚合层"完成聚合/融合/分发——window capture 捕获真实 DOM 事件（只收 `isTrusted`，合成事件不回流防环）归一化，`useEvdevDevice` 解码 input api 事件（EV_SYN 帧合并、相对位移积分、绝对轴小数映射、滚轮换算、按键分流，判定/换算工具在 `input_evdev.ts`），统一传入本 api；来源只以 `source` 标记保留类型数据，不做去重。input api 热插拔按 `deviceAdded`/`deviceRemoved` 接入：新设备按 path 注册，移除时解除监听并清掉该设备的共享状态（同 `phys` 的伴随节点还在就保留），同时把该设备还按着的键盘键、鼠标键、触屏接触点和触摸板手势补成抬起/结束，避免模拟层和 Wayland 客户端卡在按下状态。
 
-触摸板（`type === "touchpad"`）的绝对坐标**不直接映射到屏幕**，只用来计算相邻帧位移；`BTN_TOUCH` 只表示手指接触、不是点击（点击走 `BTN_LEFT`）。仓库的 `src/utils/touchpad.ts` 把设备事件封装成 `move`/`scroll`/`scrollEnd`/`button` 语义事件：单指轻触左键、双指轻触右键、三指轻触中键、双指自然滚动、轻触后第二下按住拖拽。轻触/拖拽行为对齐 libinput（COSMIC、KWin 都直接使用它）：接触不超过 180ms、位移不超过 1.3mm（按设备分辨率折算，缺失时按默认 DPI）才算轻触；接触中移动超过 1.3mm 或按住超过 180ms 都不点击。轻触在抬手时按下左键，并等 180ms 拖拽窗口：窗口内第二下按住（移动超阈值或保持到超时）沿用按住的左键进入拖拽，抬手结束；第二下快速抬起则按双击处理；没有第二下时窗口结束自动抬起完成点击。双指滚动是连续滚动，转发给 Wayland 时要带 `source: "finger"`（不发离散步进），手指数量变化时发 `scrollEnd` 让客户端补 `axis_stop`。三指及以上移动不发滚动，而是单独发 `multiStart`/`multiMove`/`multiEnd`，官方桌面不订阅。MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪接触点，没有 tracking id 的旧设备用 `BTN_TOOL_*` 手指数兜底。触摸板常带一个同 `phys` 的伴随鼠标节点，如果那个相对通道真的在出事件，则忽略触摸板的绝对位移，避免双倍移动。
+触摸板（`type === "touchpad"`）的绝对坐标**不直接映射到屏幕**，只用来计算相邻帧位移；`BTN_TOUCH` 只表示手指接触、不是点击（点击走 `BTN_LEFT`）。仓库的 `src/utils/touchpad.ts` 把设备事件封装成 `move`/`scroll`/`scrollEnd`/`pinchStart`/`pinchUpdate`/`pinchEnd`/`holdStart`/`holdEnd`/`multiStart`/`multiMove`/`multiEnd`/`button` 语义事件：单指轻触左键、双指轻触右键、三指轻触中键、双指自然滚动、双指捏合缩放/旋转、按住、轻触后第二下按住拖拽。轻触/拖拽行为对齐 libinput（COSMIC、KWin 都直接使用它）：接触不超过 180ms、位移不超过 1.3mm（按设备分辨率折算，缺失时按默认 DPI）才算轻触；接触中移动超过 1.3mm 或按住超过 180ms 都不点击。轻触在抬手时按下左键，并等 180ms 拖拽窗口：窗口内第二下按住（移动超阈值或保持到超时）沿用按住的左键进入拖拽，抬手结束；第二下快速抬起则按双击处理；没有第二下时窗口结束自动抬起完成点击。双指滚动是连续滚动，转发给 Wayland 时要带 `source: "finger"`（不发离散步进），手指数量变化时发 `scrollEnd` 让客户端补 `axis_stop`。两指先分类再发滚动：质心移动超过 1.5mm 且大于两指距离变化才判为滚动；双指距离相对 begin 变化超过 8% 且不少于 2mm，或夹角变化超过 10° 判为捏合，分类前暂存滚动量；已判为滚动后本轮不再改判捏合，捏合期间滚动继续；`scale` 是相对 begin 的绝对比例，`rotation` 是相对上一次事件的顺时针角度，捏合期间不再发滚动。手指保持不动 300ms、质心位移不超过 2mm 发 hold，移动或换指则取消；官方桌面只把 1-2 指的 hold 转发给应用。三指及以上移动不发滚动，单独发 `multiStart`/`multiMove`/`multiEnd`（即 swipe 语义）。官方桌面把三指手势当作全局快捷键消费（切虚拟屏、总览/启动器），不转发给应用；四指及以上作为 swipe 发给应用。双指捏合和 hold 发给应用。MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪接触点，没有 tracking id 的旧设备用 `BTN_TOOL_*` 手指数兜底。触摸板常带一个同 `phys` 的伴随鼠标节点，如果那个相对通道真的在出事件，则忽略触摸板的绝对位移，避免双倍移动。window 模式没有 evdev，宿主会把触摸板 pinch 合成成 `Ctrl+wheel`；官方桌面在物理 Ctrl 没按下时把它还原成 pinch 并转发，scale 按 `exp(-deltaY/100)` 累积，物理 Ctrl+wheel 仍按普通滚轮处理。
 
 触屏（`type === "touchscreen"`）的绝对坐标直接映射到视口，MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪每个接触点：一根手指对应一个 `pointerId`，各自产生独立的 down/move/up，第一根按下的手指 `isPrimary` 为 true。没有 tracking id 的旧设备退回单指 `BTN_TOUCH` 路径。统一输入事件的 `pointerType` 为 `"touch"`，`inputSim` 合成 `PointerEvent` 时保留 `pointerType`/`pointerId`/`isPrimary`，UI 只监听 pointer 事件即可同时响应鼠标、触摸板和触屏，多指手势由交互层处理。
 
@@ -706,7 +706,7 @@ enter/leave、剪贴板 selection 归属都跟它走。指针 hover **不**自�
 
 ### 输入事件
 
-四个 `input.*` 末尾都可以带可选的 `seat`（缺省 `"seat0"`）：多光标 / 多 seat 时按**人**选择，
+`input.*` 末尾都可以带可选的 `seat`（缺省 `"seat0"`）：多光标 / 多 seat 时按**人**选择，
 是选择器**不是广播**——同一事件发给多个 seat 会被客户端当成几把同步光标（点击双发、文本双打）。
 第二个光标（如远程协作者）就 `server.notify("input.pointer", handle, ev, "seat1")`。
 
@@ -725,6 +725,13 @@ server.notify("input.scroll", handle, { deltaX, deltaY, deltaZ, value120X, value
 // 自然滚动带 relativeDirection，抬手时发 stop 结束滚动序列（客户端据此收尾/惯性）
 server.notify("input.scroll", handle, { deltaX, deltaY, deltaZ: 0, source: "finger", relativeDirection: "inverted" });
 server.notify("input.scroll", handle, { deltaX: 0, deltaY: 0, deltaZ: 0, source: "finger", relativeDirection: "inverted", stop: true });
+// 触摸板语义手势（pointer-gestures-unstable-v1）：begin → update* → end，hold 只有 begin/end。
+// delta 按手指方向（不做自然滚动翻转）；scale 相对 begin；rotation 是相对上一次的顺时针角度。
+server.notify("input.gesture", handle, { type: "pinch", phase: "begin", fingers: 2 });
+server.notify("input.gesture", handle, { type: "pinch", phase: "update", deltaX, deltaY, scale, rotation });
+server.notify("input.gesture", handle, { type: "pinch", phase: "end", cancelled: false });
+server.notify("input.gesture", handle, { type: "hold", phase: "begin", fingers: 1 });
+server.notify("input.gesture", handle, { type: "swipe", phase: "begin", fingers: 4 });
 // mapKeyCode 转换过来的
 server.notify("input.key", handle, keyCode, "pressed" | "released");
 // 输入法文本（preedit为true表示合成中的预编辑），统一走该入口，
@@ -740,7 +747,8 @@ const ti = await server.request("textInput.get", handle);
 ```
 
 发送门槛（没到门槛就静默丢弃，不报错）：`input.key` 只在**该 seat 有键盘焦点**时下发、
-`input.scroll` 只在该 seat 有指针焦点时下发——所以**先 `window.focus` 再注入按键**。
+`input.scroll` 只在该 seat 有指针焦点时下发；`input.gesture` 按目标窗口下发，桌面要先按指针落点
+选出窗口并锁住目标——所以**先 `window.focus` 再注入按键**。
 
 触摸板连续滚动按规范只发 `axis`（连续、无离散步进）；`axis_value120` 是滚轮通道，只随 `wheel` 发送。滚轮的高精度事件可以同帧发 `axis` + `axis_value120`（v8+）或 `axis` + `axis_discrete`（v5-7）。自然滚动通过 `axis_relative_direction`（v9）告诉客户端物理方向。客户端之间轴值换算差异（Chromium 的 ×12、GTK3/Firefox 的 ÷10×40 等）属于客户端行为，官方桌面只提供全局/触摸板速度倍率，不按 appid 改轴值。
 
