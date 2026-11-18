@@ -231,12 +231,33 @@ dev = true;
 
 const isTestMode = process.env.testMode === "on";
 
-// 默认启动私有 dbus + xdg-desktop-portal，避免依赖宿主 portal；--no-internal-portal
-// 或 MYDE_INTERNAL_PORTAL=0 可关闭。测试实例默认关闭，显式开启时仍会启动。
+// 总线模式控制应用和桌面系统服务的总线归属：
+// internal 全部走私有总线；mixed 除输入法外走私有总线；external 全部走宿主会话总线。
+// --bus-mode=<mode> 或 MYDE_BUS_MODE 指定，默认 mixed。
+const requestedBusMode = (() => {
+    const arg = process.argv.find((item) => item.startsWith("--bus-mode="))?.slice("--bus-mode=".length);
+    const value = arg ?? process.env.MYDE_BUS_MODE;
+    return value === "internal" || value === "external" ? value : "mixed";
+})();
+
+// 私有 dbus + xdg-desktop-portal 供应用和桌面服务使用；external 模式不启动。
+// --no-internal-portal / MYDE_INTERNAL_PORTAL=0 可关闭，--internal-portal / MYDE_INTERNAL_PORTAL=1 可强制开启。
+// 测试实例默认关闭，显式开启时仍会启动。
 const internalPortalForced = process.env.MYDE_INTERNAL_PORTAL === "1" || process.argv.includes("--internal-portal");
 const internalPortalDisabled =
     process.env.MYDE_INTERNAL_PORTAL === "0" || process.argv.includes("--no-internal-portal");
-const useInternalPortal = internalPortalDisabled ? false : isTestMode ? internalPortalForced : true;
+const useInternalPortal = internalPortalDisabled
+    ? false
+    : internalPortalForced
+      ? true
+      : isTestMode
+        ? false
+        : requestedBusMode !== "external";
+
+// 没有私有总线时只能按 external 工作；强制开启私有总线时 external 退化为 mixed。
+const busMode = !useInternalPortal ? "external" : requestedBusMode === "external" ? "mixed" : requestedBusMode;
+process.env.MYDE_BUS_MODE = busMode;
+mainLog("info", `bus mode: ${busMode}`);
 mainLog("info", `internal portal: ${useInternalPortal ? "on" : "off"}`);
 
 if (isTestMode) {

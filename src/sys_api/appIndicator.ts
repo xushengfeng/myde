@@ -1,9 +1,40 @@
 // Status Notifier Item also Tray
 
-import { type DBusTypes, dbusClient, type dbusInterface, type dbusIO } from "myde-dbus";
+import { type DBusTypes, dbusClient, type dbusInterface, type dbusIO, dbusServer, MessageType } from "myde-dbus";
 import { EventEmitter } from "../event-emitter/event-emitter";
 import { getDesktopIcon } from "./application";
 import { dbusMenu } from "./menu";
+
+const WATCHER_NAME = "org.kde.StatusNotifierWatcher";
+const WATCHER_PATH = "/StatusNotifierWatcher";
+const WATCHER_IFACE = "org.kde.StatusNotifierWatcher";
+const ITEM_PATH = "/StatusNotifierItem";
+
+const WATCHER_XML = `<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.StatusNotifierWatcher">
+    <method name="RegisterStatusNotifierItem"><arg name="service" type="s" direction="in"/></method>
+    <method name="RegisterStatusNotifierHost"><arg name="service" type="s" direction="in"/></method>
+    <signal name="StatusNotifierItemRegistered"><arg name="service" type="s"/></signal>
+    <signal name="StatusNotifierItemUnregistered"><arg name="service" type="s"/></signal>
+    <signal name="StatusNotifierHostRegistered"/>
+    <signal name="StatusNotifierHostUnregistered"/>
+    <property name="RegisteredStatusNotifierItems" type="as" access="read"/>
+    <property name="IsStatusNotifierHostRegistered" type="b" access="read"/>
+    <property name="ProtocolVersion" type="i" access="read"/>
+  </interface>
+  <interface name="org.freedesktop.DBus.Properties">
+    <method name="Get"><arg name="interface" type="s" direction="in"/><arg name="property" type="s" direction="in"/><arg name="value" type="v" direction="out"/></method>
+    <method name="GetAll"><arg name="interface" type="s" direction="in"/><arg name="props" type="a{sv}" direction="out"/></method>
+    <signal name="PropertiesChanged"><arg name="interface" type="s"/><arg name="changed" type="a{sv}"/><arg name="invalidated" type="as"/></signal>
+  </interface>
+  <interface name="org.freedesktop.DBus.Introspectable">
+    <method name="Introspect"><arg name="xml" type="s" direction="out"/></method>
+  </interface>
+</node>`;
+
+/** D-Bus variant：value 是签名解析出的值数组 */
+type Variant = { signature: string; value: unknown[] };
 
 export type TrayEvents = {
     new: [name: string];
@@ -18,23 +49,33 @@ export type TrayItemEvents = {
 };
 
 export class tray {
-    // private sniHost: dbusServer; // todo 实现watcher
     private dbus: dbusIO;
     private sniWatcher: dbusClient;
+    private sniWatcherServer: dbusServer;
+    /** dbusServer 的 handler 只有 body；记录当前 MethodCall 的 sender，供只传对象路径的注册使用 */
+    private currentSender: string | undefined;
+    /** item id（service + path）→ 注册它的 bus name */
+    private items = new Map<string, string>();
+    private hosts = new Set<string>();
+    private hostRegistered = false;
     ev = new EventEmitter<TrayEvents>();
     tarysService = new Map<string, trayItem>();
 
     constructor(dbus: dbusIO) {
         this.dbus = dbus;
         this.sniWatcher = new dbusClient({ io: dbus });
+        this.sniWatcherServer = new dbusServer(dbus, WATCHER_NAME);
+        this.dbus.addMessageHandler((message) => {
+            if (message.getType() === MessageType.MethodCall) this.currentSender = message.getSender();
+        });
     }
 
     async init() {
         await this.dbus.connect();
-        const watcher = await this.sniWatcher.getService("org.kde.StatusNotifierWatcher");
-        const infc = await (await watcher.getObject("/StatusNotifierWatcher")).getInterface(
-            "org.kde.StatusNotifierWatcher",
-        );
+        await this.#initWatcher();
+
+        const watcher = await this.sniWatcher.getService(WATCHER_NAME);
+        const infc = await (await watcher.getObject(WATCHER_PATH)).getInterface(WATCHER_IFACE);
         const [servicesNames] = await infc.get<"as">("RegisteredStatusNotifierItems");
         for (const name of servicesNames) {
             const item = new trayItem(name, this.dbus);
@@ -57,6 +98,83 @@ export class tray {
             this.tarysService.delete(name);
             this.ev.emit("remove", name);
         });
+    }
+
+    /** 成为 watcher；外部总线上已有 watcher 时会排队，仍然使用已有的那个 */
+    async #initWatcher() {
+        await this.sniWatcherServer.init();
+        this.sniWatcherServer.addObject(WATCHER_PATH, WATCHER_IFACE, {
+            RegisterStatusNotifierItem: (service: string) => this.#registerItem(service),
+            RegisterStatusNotifierHost: (service: string) => this.#registerHost(service),
+        });
+        this.sniWatcherServer.addObject(WATCHER_PATH, "org.freedesktop.DBus.Properties", {
+            Get: (iface: string, prop: string) => this.#getProperty(iface, prop),
+            GetAll: (iface: string) => this.#getAllProperties(iface),
+        });
+        this.sniWatcherServer.addObject(WATCHER_PATH, "org.freedesktop.DBus.Introspectable", {
+            Introspect: () => ({ signature: "s", value: [WATCHER_XML] }),
+        });
+        this.hostRegistered = true;
+        await this.sniWatcherServer.emitSignal(WATCHER_PATH, WATCHER_IFACE, "StatusNotifierHostRegistered");
+
+        const meta = await new dbusClient({ io: this.dbus }).getMetaInterface();
+        await meta.onNameOwnerChanged((name, _oldOwner, newOwner) => {
+            if (newOwner) return;
+            this.hosts.delete(name);
+            void this.#removeItemsByService(name);
+        });
+    }
+
+    async #registerItem(serviceArg: string): Promise<undefined> {
+        if (!serviceArg) return undefined;
+        // 规范允许只传对象路径，此时用调用方唯一名补全
+        const service = serviceArg.startsWith("/") ? this.currentSender : serviceArg;
+        const path = serviceArg.startsWith("/") ? serviceArg : ITEM_PATH;
+        if (!service || !path) return undefined;
+        const item = `${service}${path}`;
+        if (this.items.has(item)) return undefined;
+        this.items.set(item, service);
+        await this.sniWatcherServer.emitSignal(WATCHER_PATH, WATCHER_IFACE, "StatusNotifierItemRegistered", "s", [
+            item,
+        ]);
+        return undefined;
+    }
+
+    async #registerHost(service: string): Promise<undefined> {
+        if (!service || this.hosts.has(service)) return undefined;
+        this.hosts.add(service);
+        await this.sniWatcherServer.emitSignal(WATCHER_PATH, WATCHER_IFACE, "StatusNotifierHostRegistered");
+        return undefined;
+    }
+
+    async #removeItemsByService(service: string) {
+        for (const [item, itemService] of [...this.items]) {
+            if (itemService !== service) continue;
+            this.items.delete(item);
+            await this.sniWatcherServer.emitSignal(WATCHER_PATH, WATCHER_IFACE, "StatusNotifierItemUnregistered", "s", [
+                item,
+            ]);
+        }
+    }
+
+    #properties(): [string, Variant][] {
+        return [
+            ["RegisteredStatusNotifierItems", { signature: "as", value: [Array.from(this.items.keys())] }],
+            ["IsStatusNotifierHostRegistered", { signature: "b", value: [this.hostRegistered || this.hosts.size > 0] }],
+            ["ProtocolVersion", { signature: "i", value: [0] }],
+        ];
+    }
+
+    #getProperty(iface: string, prop: string) {
+        if (iface !== WATCHER_IFACE) throw new Error(`未知接口 ${iface}`);
+        const entry = this.#properties().find(([name]) => name === prop);
+        if (!entry) throw new Error(`未知属性 ${prop}`);
+        return { signature: "v", value: [entry[1]] };
+    }
+
+    #getAllProperties(iface: string) {
+        if (iface !== WATCHER_IFACE) return { signature: "a{sv}", value: [[]] };
+        return { signature: "a{sv}", value: [this.#properties()] };
     }
 
     private bindItem(name: string, item: trayItem) {
