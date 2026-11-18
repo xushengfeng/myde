@@ -494,6 +494,13 @@ export interface WaylandClientEventMap {
     /** 服务端装饰（xdg-decoration server_side）开关变化 */
     windowDecorated: (xdgToplevelId: WaylandWinId, decorated: boolean) => void;
     title: (xdgToplevelId: WaylandWinId, title: string) => void;
+    /** `xdg_toplevel.set_parent` 变化；`parent` 为 undefined 表示取消父窗口 */
+    windowParent: (xdgToplevelId: WaylandWinId, parent: WaylandWinId | undefined) => void;
+    /** xdg-dialog-v1 的模态提示变化 */
+    windowModal: (xdgToplevelId: WaylandWinId, modal: boolean) => void;
+    /** 客户端用 xdg-foreign 导出（或撤销导出）窗口句柄；portal 的 parent_window 用它解析 */
+    toplevelExported: (handle: string, xdgToplevelId: WaylandWinId) => void;
+    toplevelUnexported: (handle: string) => void;
 }
 
 // ───────────── 语义 Store 与客户端自身（结构化实现，由 host 注入） ─────────────
@@ -506,6 +513,17 @@ export interface WindowRecord {
     /** 是否由桌面绘制服务端装饰（xdg-decoration 协商为 server_side） */
     decorated: boolean;
     title: string;
+    /**
+     * `xdg_toplevel.set_parent` 的父窗口（同一连接内的 xdg_toplevel）。
+     * 只描述「子窗口挂在谁上面」，位置/层级/输入阻塞由桌面决定。
+     */
+    parent?: WaylandWinId;
+    /** 是否模态（xdg-dialog-v1 set_modal）；桌面据此阻塞父窗口输入 */
+    modal: boolean;
+    /** 客户端 `set_min_size` 的逻辑尺寸；0 表示不限制 */
+    minSize: { width: number; height: number };
+    /** 客户端 `set_max_size` 的逻辑尺寸；0 表示不限制 */
+    maxSize: { width: number; height: number };
     /** 由桌面命令或客户端 set/unset_maximized 维护，进 WindowInfo.states */
     maximized: boolean;
     minimized: boolean;
@@ -529,6 +547,20 @@ export interface WindowsApi {
     setAppid(id: WaylandWinId, appid: string): void;
     setDecorated(id: WaylandWinId, decorated: boolean): void;
     setTitle(id: WaylandWinId, title: string): void;
+    /** `xdg_toplevel.set_parent`；`undefined` 表示取消父窗口 */
+    setParent(id: WaylandWinId, parent: WaylandWinId | undefined): void;
+    /**
+     * 父窗口被销毁：把它的子窗口按协议接到祖父窗口（没有祖父就取消父关系）。
+     * 必须在 `remove(parent)` 之前调用，否则读不到父窗口自己的父链。
+     */
+    detachChildren(id: WaylandWinId): void;
+    setModal(id: WaylandWinId, modal: boolean): void;
+    /** `xdg_toplevel.set_min_size` / `set_max_size`；0 表示该轴不限制 */
+    setSizeLimits(
+        id: WaylandWinId,
+        min?: { width: number; height: number },
+        max?: { width: number; height: number },
+    ): void;
     resized(id: WaylandWinId, width: number, height: number): void;
     startMove(id: WaylandWinId): void;
     setMaximized(id: WaylandWinId, maximized: boolean): void;

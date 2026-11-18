@@ -27,9 +27,21 @@
     - xdg_wm_base
     - xdg_surface
     - xdg_toplevel 部分（maximize / fullscreen / minimize；fullscreen 忽略 output 参数，单屏，
-      退出全屏恢复进入前的最大化状态）
-    - xdg_popup 部分
+      退出全屏恢复进入前的最大化状态；`set_parent` 记父子关系，父窗口销毁时子窗口接到祖父窗口；
+      `set_min_size` / `set_max_size` 进 `WindowInfo.minSize/maxSize`，负值和 min>max 报 `invalid_size`。
+      未实现 `show_window_menu` / `resize` / `set_minimized`）
+    - xdg_popup 部分（`reposition` 未实现）
     - xdg_positioner 部分
+
+- xdg-dialog-v1
+    - xdg_wm_dialog_v1
+    - xdg_dialog_v1
+    - 只把 `set_modal` / `unset_modal` 映射到 `WindowInfo.modal`；父窗口输入是否阻塞由桌面决定
+
+- xdg-foreign-unstable-v1 / v2
+    - 只实现导出侧（`zxdg_exporter_*` / `zxdg_exported_*`），不广播 importer 的 global
+    - 导出句柄经 `toplevelExported` / `toplevelUnexported` 交给 server，
+      桌面用 `server.windows.lookupExport(handle)` 把 portal 的 `parent_window` 解析回窗口
 
 - xdg-decoration-unstable-v1
     - zxdg_decoration_manager_v1
@@ -109,8 +121,10 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
 
 - **事件**：`server.on("window.created" | "window.changed" | "window.closed" | "window.startMove" |
   "cursor.changed" | "clipboard.changed" | "dnd.started" | "dnd.finished" | "client.opened" | "client.closed", …)`
-- **查询**：`server.windows.list() / get() / preview() / hitTest()`、`server.cursor.get(clientId)`、`await server.request(…)`
-  （`hitTest(handle, p)` 走 xdg 域的完整几何，含 popup/subsurface/input region，供桌面决定指针事件发给哪个窗口）
+  ——`window.changed` 覆盖 rect / states / title / appid / decorated / `parent` / `modal`
+- **查询**：`server.windows.list() / get() / preview() / hitTest() / lookupExport()`、`server.cursor.get(clientId)`、`await server.request(…)`
+  （`hitTest(handle, p)` 走 xdg 域的完整几何，含 popup/subsurface/input region，供桌面决定指针事件发给哪个窗口；
+  `lookupExport(handle)` 把 xdg-foreign 导出的句柄解析成窗口身份，portal 的 `parent_window` 用它）
 - **命令**：`server.notify("window.focus" | … | "input.pointer" | …, handle, …)`
   → `host/server.ts` 按 handle 反查 `(client, winId)` → 协议模块的 `actions` 表，组包在协议文件里。
   `input.pointer|scroll|gesture|key|text` 末尾可带 `seat`（缺省 `"seat0"`，选择器语义、不广播）：
@@ -138,6 +152,7 @@ v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧
 | `clipboard.test.ts` | 双向剪贴板：`clipboard.set`/`offer` → `requestData` 回填；客户端 `set_selection` → `clipboard.changed` → `clipboard.read` |
 | `dnd_cross.test.ts` | 跨客户端 DnD：A 的选区拖拽 → 桌面 `dnd.move/drop` 到 B → B 的 drop 拿到文字 |
 | `popup.test.ts` | 真实 Qt/KDE 客户端（konsole）右键菜单：`xdg_popup` 初始 configure/ack 后提交首帧、`constraint_adjustment` 把菜单约束在窗口内、点击外部收回 grab 并销毁弹层（无 konsole 时跳过） |
+| `parent_child.test.ts` | 临时子窗口：Chromium 的 `xdg_toplevel.set_parent` → `WindowInfo.parent`，父窗口关闭后子窗口不再指向已死的 handle |
 | `window_close.test.ts` | 客户端断线 / `xdg_toplevel.destroy` 后撤掉 canvas DOM（konsole `--separate`，无 konsole 时跳过） |
 | `render_tools.test.ts` | `renderCanvas` 每帧先清空再绘制：半透明/透明帧是替换而不是 source-over 叠加 |
 | `viewporter.test.ts` | `wp_viewport` 的 source/destination 跨 commit 持续生效（Chrome popup 用 set_source 裁剪旧内容） |

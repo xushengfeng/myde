@@ -194,7 +194,7 @@ portal.on("fileChooser.request", async (req) => {
 
 - 目录枚举用 `MSysApi.nativefs.list`；portal 自带的 `browse` 也保留 `list` / `stat` / `places` / `home` / `matchFilter`，不提供 `readFile`
 - `accept` 的路径由后端校验：打开要求存在，保存要求父目录存在、文件本身可以不存在
-- `parent_window` 目前只保留原始字符串；没有 `xdg-foreign` 时不解析，模态由桌面自己用遮罩实现
+- `parent_window` 用 xdg-foreign 导出的句柄解析（`server.windows.lookupExport`）；应用没导出或句柄失效时，文件选择器挂到当前聚焦窗口；模态按请求的 `modal` 处理，由桌面用自己的窗口遮挡
 - 需要系统安装 xdg-desktop-portal，并安装 `assets/portal` 里的 `myde.portal` 和 `myde-portals.conf`；会话设置 `XDG_CURRENT_DESKTOP=MyDE`。开发测试用 `XDG_DESKTOP_PORTAL_DIR` 指向 `assets/portal/portals`，不要改系统配置
 - 默认启动私有 dbus 和 xdg-desktop-portal，MyDE 启动的应用会连到私有总线，不影响宿主 portal；用 `--no-internal-portal` 或 `MYDE_INTERNAL_PORTAL=0` 关闭，测试实例默认关闭
 - 总线归属用 `--bus-mode=internal|mixed|external` / `MYDE_BUS_MODE` 选择，默认 `mixed`：`internal` 连输入法也走私有总线，`mixed` 只有输入法走宿主，`external` 不启动私有总线、全部走宿主
@@ -609,9 +609,20 @@ interface WindowInfo {
     rect: { x: number; y: number; w: number; h: number };
     scale: number; // 输出缩放：显示尺寸 = rect × scale，输入坐标 = 桌面坐标 ÷ scale
     states: { activated: boolean; maximized: boolean; minimized: boolean; fullscreen: boolean };
+    parent: string | null; // 父窗口（xdg_toplevel.set_parent）；顶层窗口为 null
+    modal: boolean; // 模态提示（xdg-dialog-v1）；只在有 parent 时有意义
+    minSize: { width: number; height: number }; // set_min_size；0 = 该轴不限制
+    maxSize: { width: number; height: number }; // set_max_size；0 = 该轴不限制
     renderId: string; // render.getXdgSurfaceEle(info.renderId)
 }
 ```
+
+`minSize` / `maxSize` 是 surface 逻辑尺寸，桌面缩放窗口时按 `× scale` 换算；`min>max`
+或负数由 server 按协议报 `invalid_size`。桌面自己的兜底最小尺寸（200×150）取两者较大值。
+
+`parent` / `modal` 是**客户端声明的**父子与模态信息：位置、层级、是否阻塞输入全归桌面。
+父窗口销毁时 server 按协议把子窗口接到祖父窗口（没有祖父就置 null）并补发 `window.changed`，
+所以桌面不要缓存过期的父 handle。
 
 `decorated` 为 true 时，客户端已把装饰交给桌面：桌面画标题栏/边框，客户端不再画 CSD；
 标题栏高度属于桌面布局，`rect`/configure 仍只表示客户端内容尺寸。为 false 时不要再加一层装饰。
@@ -666,10 +677,15 @@ server.windows.list(); // WindowInfo[]
 server.windows.get(handle); // WindowInfo | undefined
 server.windows.preview(handle); // OffscreenCanvas | undefined（缩略图）
 server.windows.hitTest(handle, { x, y }); // boolean：含 popup/subsurface/input region 的完整几何命中
+server.windows.lookupExport(handle); // xdg-foreign 导出句柄 → WinHandle | undefined
 server.cursor.get(clientId); // CursorState
 await server.request("window.get", handle); // WindowInfo，未知 handle 会 reject
 await server.request("window.getBounds", handle); // Rect
 ```
+
+`lookupExport` 用于把 xdg-desktop-portal 请求里的 `parent_window` 解析回窗口：应用用
+`xdg-foreign` 导出窗口得到不透明句柄，portal 原样转给后端；没有 valid 句柄时返回 `undefined`，
+桌面可退回“当前聚焦窗口”。句柄随导出对象销毁或窗口关闭失效。
 
 ### 窗口命令
 
@@ -703,6 +719,29 @@ server.notify("window.minimize", handle);
 enter/leave、剪贴板 selection 归属都跟它走。指针 hover **不**自动切键盘焦点，要不要 focus-follows-mouse
 完全由桌面自己决定（想跟随就在 hover 时调 `window.focus`）。重复 focus/blur 会被内部去重，
 与「目标 focus + 其余 blur」的全量循环配合时与遍历顺序无关。
+
+### 父子窗口
+
+`WindowInfo.parent` 是客户端 `xdg_toplevel.set_parent` 声明的父窗口，`modal` 来自 `xdg-dialog-v1`
+（没有 `parent` 时无意义）。服务器只负责**记录与转发**：子窗口怎么摆、是否挡住父窗口输入，
+都是桌面的政策。
+
+官方桌面（`desktop/official`）的做法：
+
+- 子窗口**不占虚拟屏**：它叠在父窗口所在屏的上面，初始居中覆盖父窗口并夹在舞台内；
+  客户端没有声明几何时桌面用 `configure(0×0)` 让客户端自己选尺寸（对话框通常有固有尺寸）。
+- 顶层窗口仍按 800×600 起步；子窗口出现时视图切到父窗口所在的屏。
+- 指针/滚动按「子窗口先」命中；`modal` 子窗口存在时，父窗口的指针、滚动、键盘都被挡住，
+  点父窗口只会把焦点收回对话框并闪一下边框。焦点入口（`focusWin`）也会自动落到最内层模态子窗口。
+- 子窗口跟随父窗口拖动；用户手动拖过子窗口后不再自动居中。父窗口关闭时，挂在它上面的
+  桌面内部窗口（文件选择器）一起关闭，客户端子窗口由 server 的父关系更新兜底。
+- 缩放窗口时尊重客户端的 `minSize` / `maxSize`（对话框常见的固有尺寸下限）。
+- 总览里子窗口跟着父窗口那张卡片缩放，不单独成卡，也没有自己的关闭按钮。
+
+桌面自己的内部窗口（文件选择器、设置等）走同一套映射：`openInternalWindow({ parent, modal })`
+有 `parent` 时同样覆盖在父窗口上。官方桌面的文件选择器把 portal 请求的 `parent_window`
+经 `server.windows.lookupExport` 解析成父窗口（解析不到时退回当前聚焦窗口），并按请求的
+`modal` 决定是否挡住应用。
 
 ### 输入事件
 

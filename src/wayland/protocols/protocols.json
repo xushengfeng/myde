@@ -4299,5 +4299,182 @@
       ],
       "enum": []
     }
+  ],
+  "xdg-dialog-v1": [
+    {
+      "name": "xdg_wm_dialog_v1",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "get_xdg_dialog",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "xdg_dialog_v1"
+            },
+            {
+              "name": "toplevel",
+              "type": "object",
+              "interface": "xdg_toplevel"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "already_used": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "xdg_dialog_v1",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "set_modal",
+          "args": []
+        },
+        {
+          "name": "unset_modal",
+          "args": []
+        }
+      ],
+      "event": [],
+      "enum": []
+    }
+  ],
+  "xdg-foreign-unstable-v1": [
+    {
+      "name": "zxdg_exporter_v1",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "export",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "zxdg_exported_v1",
+              "summary": "the new xdg_exported object"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface",
+              "summary": "the surface to export"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": []
+    },
+    {
+      "name": "zxdg_exported_v1",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        }
+      ],
+      "event": [
+        {
+          "name": "handle",
+          "args": [
+            {
+              "name": "handle",
+              "type": "string",
+              "summary": "the exported surface handle"
+            }
+          ]
+        }
+      ],
+      "enum": []
+    }
+  ],
+  "xdg-foreign-unstable-v2": [
+    {
+      "name": "zxdg_exporter_v2",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "export_toplevel",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "zxdg_exported_v2",
+              "summary": "the new xdg_exported object"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface",
+              "summary": "the surface to export"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "invalid_surface": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "zxdg_exported_v2",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        }
+      ],
+      "event": [
+        {
+          "name": "handle",
+          "args": [
+            {
+              "name": "handle",
+              "type": "string",
+              "summary": "the exported surface handle"
+            }
+          ]
+        }
+      ],
+      "enum": []
+    }
   ]
 }

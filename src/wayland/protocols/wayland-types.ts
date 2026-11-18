@@ -2,7 +2,7 @@
 import type { WaylandObjectId } from "../utils/wayland-binary";
 type WaylandObjectId2<T extends string> = WaylandObjectId & { __interface: T };
 
-export type WaylandInterfaces = "wl_display" | "wl_registry" | "wl_callback" | "wl_compositor" | "wl_shm_pool" | "wl_shm" | "wl_buffer" | "wl_surface" | "wl_seat" | "wl_pointer" | "wl_keyboard" | "wl_output" | "wl_region" | "wl_data_device" | "wl_data_device_manager" | "wl_data_offer" | "wl_data_source" | "wl_subcompositor" | "wl_subsurface" | "xdg_wm_base" | "xdg_surface" | "xdg_toplevel" | "xdg_popup" | "xdg_positioner" | "wp_viewporter" | "wp_viewport" | "wp_fractional_scale_manager_v1" | "wp_fractional_scale_v1" | "wp_presentation" | "wp_presentation_feedback" | "zwp_linux_dmabuf_v1" | "zwp_linux_buffer_params_v1" | "zwp_linux_dmabuf_feedback_v1" | "zwp_text_input_v3" | "zwp_text_input_manager_v3" | "zwp_text_input_v1" | "zwp_text_input_manager_v1" | "wp_cursor_shape_manager_v1" | "wp_cursor_shape_device_v1" | "zxdg_decoration_manager_v1" | "zxdg_toplevel_decoration_v1" | "zwp_pointer_gestures_v1" | "zwp_pointer_gesture_swipe_v1" | "zwp_pointer_gesture_pinch_v1" | "zwp_pointer_gesture_hold_v1";
+export type WaylandInterfaces = "wl_display" | "wl_registry" | "wl_callback" | "wl_compositor" | "wl_shm_pool" | "wl_shm" | "wl_buffer" | "wl_surface" | "wl_seat" | "wl_pointer" | "wl_keyboard" | "wl_output" | "wl_region" | "wl_data_device" | "wl_data_device_manager" | "wl_data_offer" | "wl_data_source" | "wl_subcompositor" | "wl_subsurface" | "xdg_wm_base" | "xdg_surface" | "xdg_toplevel" | "xdg_popup" | "xdg_positioner" | "wp_viewporter" | "wp_viewport" | "wp_fractional_scale_manager_v1" | "wp_fractional_scale_v1" | "wp_presentation" | "wp_presentation_feedback" | "zwp_linux_dmabuf_v1" | "zwp_linux_buffer_params_v1" | "zwp_linux_dmabuf_feedback_v1" | "zwp_text_input_v3" | "zwp_text_input_manager_v3" | "zwp_text_input_v1" | "zwp_text_input_manager_v1" | "wp_cursor_shape_manager_v1" | "wp_cursor_shape_device_v1" | "zxdg_decoration_manager_v1" | "zxdg_toplevel_decoration_v1" | "zwp_pointer_gestures_v1" | "zwp_pointer_gesture_swipe_v1" | "zwp_pointer_gesture_pinch_v1" | "zwp_pointer_gesture_hold_v1" | "xdg_wm_dialog_v1" | "xdg_dialog_v1" | "zxdg_exporter_v1" | "zxdg_exported_v1" | "zxdg_exporter_v2" | "zxdg_exported_v2";
 
 export enum WaylandEventOpcode {
     wl_display__error = 0,
@@ -109,6 +109,8 @@ export enum WaylandEventOpcode {
     zwp_pointer_gesture_pinch_v1__end = 2,
     zwp_pointer_gesture_hold_v1__begin = 0,
     zwp_pointer_gesture_hold_v1__end = 1,
+    zxdg_exported_v1__handle = 0,
+    zxdg_exported_v2__handle = 0,
 }
 
 export type WaylandEventObj = {
@@ -643,6 +645,14 @@ export type WaylandEventObj = {
         time: number;
         /** 1 if the gesture was cancelled, 0 otherwise*/
         cancelled: number;
+    };
+    "zxdg_exported_v1.handle": {
+        /** the exported surface handle*/
+        handle: string;
+    };
+    "zxdg_exported_v2.handle": {
+        /** the exported surface handle*/
+        handle: string;
     };
 };
 
@@ -1218,6 +1228,30 @@ export type WaylandRequestObj = {
     "zwp_pointer_gesture_swipe_v1.destroy": {};
     "zwp_pointer_gesture_pinch_v1.destroy": {};
     "zwp_pointer_gesture_hold_v1.destroy": {};
+    "xdg_wm_dialog_v1.destroy": {};
+    "xdg_wm_dialog_v1.get_xdg_dialog": {
+        id: WaylandObjectId2<"xdg_dialog_v1">;
+        toplevel: WaylandObjectId2<"xdg_toplevel">;
+    };
+    "xdg_dialog_v1.destroy": {};
+    "xdg_dialog_v1.set_modal": {};
+    "xdg_dialog_v1.unset_modal": {};
+    "zxdg_exporter_v1.destroy": {};
+    "zxdg_exporter_v1.export": {
+        /** the new xdg_exported object*/
+        id: WaylandObjectId2<"zxdg_exported_v1">;
+        /** the surface to export*/
+        surface: WaylandObjectId2<"wl_surface">;
+    };
+    "zxdg_exported_v1.destroy": {};
+    "zxdg_exporter_v2.destroy": {};
+    "zxdg_exporter_v2.export_toplevel": {
+        /** the new xdg_exported object*/
+        id: WaylandObjectId2<"zxdg_exported_v2">;
+        /** the surface to export*/
+        surface: WaylandObjectId2<"wl_surface">;
+    };
+    "zxdg_exported_v2.destroy": {};
 };
 
 export type WaylandEnumObj = {
@@ -1273,4 +1307,6 @@ export type WaylandEnumObj = {
     "wp_cursor_shape_device_v1.error": "invalid_shape";
     "zxdg_toplevel_decoration_v1.error": "unconfigured_buffer" | "already_constructed" | "orphaned" | "invalid_mode";
     "zxdg_toplevel_decoration_v1.mode": "client_side" | "server_side";
+    "xdg_wm_dialog_v1.error": "already_used";
+    "zxdg_exporter_v2.error": "invalid_surface";
 };

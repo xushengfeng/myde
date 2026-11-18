@@ -140,6 +140,11 @@ class WaylandServer {
     private windowTable = new Map<WinHandle, WindowEntry>();
     private handlesByClient = new Map<string, Set<WinHandle>>();
     private nextHandle = 1;
+    /**
+     * xdg-foreign 导出的句柄 → 窗口。客户端把它交给 xdg-desktop-portal，
+     * 桌面再从 portal 请求的 `parent_window` 反查回窗口（`windows.lookupExport`）。
+     */
+    private exportedHandles = new Map<string, { clientId: string; winId: WaylandWinId }>();
     /** 当前输出配置（单屏；多屏时扩展为列表） */
     private output: OutputInfo = DEFAULT_OUTPUT;
     /** seat → 当前 selection（只有元数据，字节在客户端或桌面） */
@@ -195,6 +200,15 @@ class WaylandServer {
             const entry = this.windowTable.get(handle);
             if (entry === undefined) return false;
             return entry.client.windowHitTest(entry.winId, p);
+        },
+        /**
+         * xdg-foreign 导出句柄 → 窗口身份。portal 后端（文件选择器之类）用它把
+         * 请求里的 `parent_window` 变成某个窗口的父级；句柄无效/已撤销时返回 undefined。
+         */
+        lookupExport: (exported: string): WinHandle | undefined => {
+            const entry = this.exportedHandles.get(exported);
+            if (entry === undefined) return undefined;
+            return this.handleOf(entry.clientId, entry.winId);
         },
     };
 
@@ -379,6 +393,7 @@ class WaylandServer {
         const entry = this.windowTable.get(handle);
         if (entry === undefined) return undefined;
         const record = entry.client.getWindows().get(entry.winId);
+        const parent = record?.parent === undefined ? null : (this.handleOf(entry.client.id, record.parent) ?? null);
         return {
             handle,
             clientId: entry.client.id,
@@ -393,6 +408,10 @@ class WaylandServer {
                 minimized: record?.minimized ?? false,
                 fullscreen: record?.fullscreen ?? false,
             },
+            parent,
+            modal: record?.modal ?? false,
+            minSize: record?.minSize ?? { width: 0, height: 0 },
+            maxSize: record?.maxSize ?? { width: 0, height: 0 },
             renderId: entry.renderId,
         };
     }
@@ -417,7 +436,15 @@ class WaylandServer {
 
     private closeHandle(handle: WinHandle): void {
         const entry = this.windowTable.get(handle);
-        if (entry !== undefined) this.handlesByClient.get(entry.client.id)?.delete(handle);
+        if (entry !== undefined) {
+            this.handlesByClient.get(entry.client.id)?.delete(handle);
+            // 窗口没了，它导出的句柄也失效（portal 的 parent_window 不能指向已关闭的窗口）
+            for (const [exported, target] of this.exportedHandles) {
+                if (target.clientId === entry.client.id && target.winId === entry.winId) {
+                    this.exportedHandles.delete(exported);
+                }
+            }
+        }
         this.windowTable.delete(handle);
         this.emitEvent("window.closed", handle);
     }
@@ -520,6 +547,15 @@ class WaylandServer {
         client.on("windowAppid", (winId) => this.emitChanged(clientId, winId));
         // 服务端装饰协商结果变化：桌面据此挂上/摘掉标题栏
         client.on("windowDecorated", (winId) => this.emitChanged(clientId, winId));
+        // 父子关系与模态提示：payload 自包含，桌面靠 info.parent / info.modal 差分
+        client.on("windowParent", (winId) => this.emitChanged(clientId, winId));
+        client.on("windowModal", (winId) => this.emitChanged(clientId, winId));
+        client.on("toplevelExported", (handle, winId) => {
+            this.exportedHandles.set(handle, { clientId, winId });
+        });
+        client.on("toplevelUnexported", (handle) => {
+            this.exportedHandles.delete(handle);
+        });
     }
 
     /** 断开：先补发该客户端全部窗口的关闭，再报 client.closed —— 残留窗口由 server 兜底 */
@@ -528,6 +564,9 @@ class WaylandServer {
         if (handles !== undefined) {
             for (const handle of [...handles]) this.closeHandle(handle);
             this.handlesByClient.delete(clientId);
+        }
+        for (const [exported, target] of this.exportedHandles) {
+            if (target.clientId === clientId) this.exportedHandles.delete(exported);
         }
         this.rawClients.delete(clientId);
         // 该客户端持有的 selection 没有源了；桌面若要保留内容，收到 sourceGone 后自己 clipboard.set 回去

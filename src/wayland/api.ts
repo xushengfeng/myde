@@ -102,6 +102,23 @@ export interface WindowInfo {
      */
     scale: number;
     states: WindowStates;
+    /**
+     * 父窗口（`xdg_toplevel.set_parent`）。顶层窗口为 `null`。
+     *
+     * 父窗口只在同一连接里（Wayland 对象 id 不能跨连接）；桌面据此把子窗口
+     * 叠在父窗口之上、跟随父窗口的位置，并在 `modal` 时阻塞父窗口的输入。
+     * 父窗口关闭时 server 按协议把子窗口接到祖父窗口，并补发 `window.changed`。
+     */
+    parent: WinHandle | null;
+    /**
+     * 是否模态（xdg-dialog-v1 `set_modal`）。只是客户端的提示：
+     * 桌面可选择阻塞父窗口的输入；没有 `parent` 时没有意义。
+     */
+    modal: boolean;
+    /** 客户端 `set_min_size` 的逻辑尺寸；0 表示该轴不限制 */
+    minSize: { width: number; height: number };
+    /** 客户端 `set_max_size` 的逻辑尺寸；0 表示该轴不限制 */
+    maxSize: { width: number; height: number };
     /** 渲染侧不透明 id：`render.getXdgSurfaceEle(info.renderId)` */
     renderId: string;
 }
@@ -284,7 +301,7 @@ export type GestureCommand =
 export type ServerEvents = {
     /** 新窗口，`renderId` 内嵌在 `info` 里 */
     "window.created": [info: WindowInfo];
-    /** rect / states / title / appid / decorated 任一变化；payload 自包含，无需反查 */
+    /** rect / states / title / appid / decorated / parent / modal 任一变化；payload 自包含，无需反查 */
     "window.changed": [info: WindowInfo];
     /** 窗口关闭，**含客户端断开时由 server 统一补发的关闭** */
     "window.closed": [handle: WinHandle];

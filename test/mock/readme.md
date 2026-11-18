@@ -220,12 +220,13 @@ interface MockConfig {
 
 | API | 状态 | 说明 |
 |-----|------|------|
-| `windows.list/get/preview/hitTest` | ✅ | 全局 handle 表的快照查询；`hitTest` 按窗口几何判断（不模拟 popup） |
+| `windows.list/get/preview/hitTest/lookupExport` | ✅ | 全局 handle 表的快照查询；`hitTest` 按窗口几何判断（不模拟 popup）；`lookupExport` 是占位，永远返回 `undefined` |
 | `cursor.get` | ✅ | 光标状态 |
 | `on/off/emit` | ✅ | `window.*` / `cursor.*` / `clipboard.*` / `client.*` 域事件 |
 | `notify` | ✅ | 窗口命令与输入注入（mock 不模拟客户端） |
 | `respond/request` | ✅ | `surfaceBounds.request`、`window.get`、`window.getBounds` |
-| `openWindow/closeWindow/touchAppid` | ✅ | mock 侧造窗口、关窗口、改 appid；`openWindow({ decorated })` 可模拟服务端装饰 |
+| `openWindow/closeWindow/touchAppid` | ✅ | mock 侧造窗口、关窗口、改 appid；`openWindow({ decorated })` 可模拟服务端装饰，`openWindow({ parent, modal })` 可造父子/模态窗口，`minSize/maxSize` 可模拟尺寸限制 |
+| `setWindowParent` | ✅ | 改父子关系并补发 `window.changed` |
 | `startXwayland` | ✅ | 返回 `undefined`，不启动真实 Xwayland |
 | `clients` | ✅ | Map |
 | `destroy` | ✅ | 清理 |

@@ -112,6 +112,28 @@ const supportedProtocols: Array<{
             { name: "zwp_pointer_gesture_hold_v1", version: 3 },
         ],
     },
+    {
+        name: "xdg-dialog-v1",
+        interfaces: [
+            { name: "xdg_wm_dialog_v1", version: 1 },
+            { name: "xdg_dialog_v1", version: 1 },
+        ],
+    },
+    {
+        // 只实现导出侧：portal 的 parent_window 就是 zxdg_exported_*.handle
+        name: "xdg-foreign-unstable-v1",
+        interfaces: [
+            { name: "zxdg_exporter_v1", version: 1 },
+            { name: "zxdg_exported_v1", version: 1 },
+        ],
+    },
+    {
+        name: "xdg-foreign-unstable-v2",
+        interfaces: [
+            { name: "zxdg_exporter_v2", version: 1 },
+            { name: "zxdg_exported_v2", version: 1 },
+        ],
+    },
 ];
 
 // 支持遍历 supportedProtocols，按 name 读取对应 xml 文件并处理

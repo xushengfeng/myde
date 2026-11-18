@@ -74,6 +74,13 @@ export interface MockWindowInfo {
     /** 输出缩放：桌面显示尺寸 = rect × scale */
     scale: number;
     states: { activated: boolean; maximized: boolean; minimized: boolean; fullscreen: boolean };
+    /** 父窗口 handle；顶层窗口为 null */
+    parent: string | null;
+    /** 模态提示（xdg-dialog-v1） */
+    modal: boolean;
+    /** 客户端 set_min_size / set_max_size（逻辑尺寸，0 = 不限制） */
+    minSize: { width: number; height: number };
+    maxSize: { width: number; height: number };
     renderId: string;
 }
 
@@ -103,6 +110,8 @@ export interface MockWaylandServer {
         get(handle: string): MockWindowInfo | undefined;
         preview(handle: string): OffscreenCanvas | undefined;
         hitTest(handle: string, p: { x: number; y: number }): boolean;
+        /** xdg-foreign 导出句柄 → 窗口；mock 永远解析不到 */
+        lookupExport(exported: string): string | undefined;
     };
     cursor: { get(clientId: string): unknown };
     /** 输出配置（单屏 mock） */
@@ -125,7 +134,16 @@ export interface MockWaylandServer {
         height?: number;
         /** 是否绘制服务端装饰，默认 false */
         decorated?: boolean;
+        /** 父窗口 handle：子窗口叠在父窗口所在屏上 */
+        parent?: string;
+        /** 模态（配合 parent） */
+        modal?: boolean;
+        /** 客户端尺寸限制（逻辑尺寸，0 = 不限制） */
+        minSize?: { width: number; height: number };
+        maxSize?: { width: number; height: number };
     }): string;
+    /** 改父子关系并发出 `window.changed`；`null` 取消父窗口 */
+    setWindowParent(handle: string, parent: string | null): void;
     closeWindow(handle: string): void;
     closeWindowOf(clientId: string, winId: string): void;
     handleOf(clientId: string, winId: string): string | undefined;
@@ -320,6 +338,7 @@ export function createMockServer(): MockWaylandServer {
                 if (!info) return false;
                 return p.x >= 0 && p.x < info.rect.w && p.y >= 0 && p.y < info.rect.h;
             },
+            lookupExport: () => undefined,
         },
         cursor: { get: (clientId) => (clients.has(clientId) ? "default" : undefined) },
         outputs: {
@@ -343,6 +362,10 @@ export function createMockServer(): MockWaylandServer {
                 rect: { x: 0, y: 0, w: op.width ?? 0, h: op.height ?? 0 },
                 scale: output.scale,
                 states: { activated: false, maximized: false, minimized: false, fullscreen: false },
+                parent: op.parent ?? null,
+                modal: op.modal ?? false,
+                minSize: op.minSize ?? { width: 0, height: 0 },
+                maxSize: op.maxSize ?? { width: 0, height: 0 },
                 renderId: op.renderId,
             };
             infos.set(handle, info);
@@ -352,6 +375,12 @@ export function createMockServer(): MockWaylandServer {
             }
             dispatch("window.created", info);
             return handle;
+        },
+        setWindowParent(handle, parent) {
+            const info = infos.get(handle);
+            if (!info || info.parent === parent) return;
+            info.parent = parent;
+            changed(info);
         },
         closeWindow(handle) {
             if (!infos.delete(handle)) return;

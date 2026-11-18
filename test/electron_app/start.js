@@ -122,6 +122,9 @@ if (!process.versions.electron) {
             width: opts.width || 1200,
             height: opts.height || 800,
             ...(opts.frame === false ? { frame: false } : {}),
+            // 临时子窗口：Chromium 会走 xdg_toplevel.set_parent（modal 还会用 xdg-dialog-v1）
+            ...(opts.parent ? { parent: opts.parent } : {}),
+            ...(opts.modal ? { modal: true } : {}),
             webPreferences: {
                 nodeIntegration: true,
                 contextIsolation: false,

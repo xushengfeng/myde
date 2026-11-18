@@ -638,9 +638,21 @@ class ViewData {
         return screen;
     }
 
-    /** 新窗口占用右侧的空桌面；空桌面自动补到最右 */
-    addWindowScreen(winid: MWinId) {
+    /**
+     * 新窗口占用右侧的空桌面；空桌面自动补到最右。
+     * 有父窗口时子窗口不占屏，直接挂到父窗口所在的屏上。
+     */
+    addWindowScreen(winid: MWinId, parent?: MWinId) {
         this.cancelGesture();
+        const parentScreen = parent === undefined ? undefined : this.win2Screen.get(parent);
+        if (parentScreen) {
+            this.win2Screen.set(winid, parentScreen);
+            // 子窗口出现时把视图切到父窗口所在屏（它可能在其他虚拟屏上）
+            this.currentId = parentScreen.id;
+            this.setOverviewInternal(false);
+            this.render(true);
+            return parentScreen;
+        }
         let empty = this.screens.find((s) => s.empty);
         if (!empty) empty = this.createEmptyScreen();
         empty.empty = false;
@@ -653,6 +665,43 @@ class ViewData {
         this.scheduleReorder();
         this.render(true);
         return empty;
+    }
+
+    /**
+     * 父子关系变化（`window.changed` 的 parent 差分）：
+     * 子窗口搬到父窗口的屏，或取消父关系后重新占一个空桌面。
+     * 只调整视图数据；元素搬动由调用方按返回的屏去做。
+     */
+    reparentWindow(winid: MWinId, parent: MWinId | undefined): ViewScreen | undefined {
+        const screen = this.win2Screen.get(winid);
+        const parentScreen = parent === undefined ? undefined : this.win2Screen.get(parent);
+        if (parentScreen !== undefined) {
+            if (screen !== undefined && screen.winId === winid) this.removeOwnScreen(screen, parentScreen);
+            this.win2Screen.set(winid, parentScreen);
+            return parentScreen;
+        }
+        if (screen !== undefined && screen.winId === winid) return screen;
+        return this.addWindowScreen(winid);
+    }
+
+    /** 撤掉窗口独占的虚拟屏（窗口改挂到父窗口上时）；当前屏落到 fallback */
+    private removeOwnScreen(screen: ViewScreen, fallback?: ViewScreen) {
+        this.cancelGesture();
+        const index = this.screens.indexOf(screen);
+        if (index < 0) return;
+        const wasCurrent = screen.id === this.currentId;
+        screen.gear.moveTo(screen.visual, 0);
+        screen.el.remove();
+        this.screens.splice(index, 1);
+        if (wasCurrent) {
+            const next = fallback ?? this.screens[Math.min(index, this.screens.length - 1)] ?? this.screens[0];
+            if (next) {
+                this.currentId = next.id;
+                if (next.winId) this.focusWin(next.winId);
+                else this.blurAll();
+            }
+        }
+        this.render(false);
     }
 
     /**
@@ -764,6 +813,16 @@ class ViewData {
     closeWin(winid: MWinId) {
         const screen = this.win2Screen.get(winid);
         if (!screen) return undefined;
+        // 子窗口只从父窗口的屏里摘掉自己：父窗口和虚拟屏都还在，焦点回到父窗口
+        if (screen.winId !== winid) {
+            this.win2Screen.delete(winid);
+            if (this.focusHandle === winid) {
+                const parent = windowParents.get(winid);
+                if (parent !== undefined) this.focusWin(parent);
+                else this.blurAll();
+            }
+            return undefined;
+        }
         this.cancelGesture();
         this.win2Screen.delete(winid);
         const index = this.screens.indexOf(screen);
@@ -771,6 +830,10 @@ class ViewData {
         screen.gear.moveTo(screen.visual, 0);
         screen.el.remove();
         this.screens.splice(index, 1);
+        // 随屏一起消失的还有仍挂在这个屏上的子窗口映射（父窗口先关、客户端整体退出）
+        for (const [other, mapped] of this.win2Screen) {
+            if (mapped === screen) this.win2Screen.delete(other);
+        }
 
         let next: ViewScreen | undefined;
         if (wasCurrent) {
@@ -1227,6 +1290,8 @@ class ViewData {
 
     focusWin(winid: MWinId) {
         this.launcher?.blur();
+        // 模态对话框存在时不能把焦点交给它下面的窗口：聚焦最内层的模态子窗口
+        winid = this.modalTarget(winid);
         const internal = internalWindows.has(winid);
         if (!internal && !server.server.windows.get(winid)) {
             console.warn("cant find window", winid);
@@ -1248,6 +1313,22 @@ class ViewData {
         }
         if (internal) void ime?.blur();
         else void ime?.focus(winid);
+    }
+
+    /** 沿模态子窗口链往下找：焦点落在最内层的模态对话框上 */
+    private modalTarget(winid: MWinId): MWinId {
+        let cur = winid;
+        for (;;) {
+            let next: MWinId | undefined;
+            for (const [child, parent] of windowParents) {
+                if (parent === cur && modalWindows.has(child)) {
+                    next = child;
+                    break;
+                }
+            }
+            if (next === undefined) return cur;
+            cur = next;
+        }
     }
 
     /** 只有 Wayland 窗口才有输入法上下文，内部窗口的文本输入由 DOM 自己处理 */
@@ -1922,6 +2003,8 @@ function beginWindowResize(
 
     // 手动调整过尺寸后不再自动居中，和拖动窗口一致
     windowCenterManager.pauseCentering(windowId);
+    // 子窗口被手动摆过位置后，不再自动回到父窗口正中
+    if (windowParents.has(windowId)) childWindowPinned.add(windowId);
     const settleTimer = resizeSettleTimers.get(windowId);
     if (settleTimer !== undefined) {
         clearTimeout(settleTimer);
@@ -1945,9 +2028,14 @@ function beginWindowResize(
     };
     const startX = e.clientX;
     const startY = e.clientY;
-    // 逻辑尺寸按整数下发；DOM 尺寸是逻辑尺寸 × scale，避免缩放后窗口尺寸抖动
-    const minWidth = Math.ceil(RESIZE_MIN_WIDTH / scale) * scale;
-    const minHeight = Math.ceil(RESIZE_MIN_HEIGHT / scale) * scale;
+    // 逻辑尺寸按整数下发；DOM 尺寸是逻辑尺寸 × scale，避免缩放后窗口尺寸抖动。
+    // 客户端 set_min_size / set_max_size 优先于桌面兜底的最小尺寸。
+    const minLogicalWidth = Math.max(Math.ceil(RESIZE_MIN_WIDTH / scale), info?.minSize?.width ?? 0);
+    const minLogicalHeight = Math.max(Math.ceil(RESIZE_MIN_HEIGHT / scale), info?.minSize?.height ?? 0);
+    const minWidth = minLogicalWidth * scale;
+    const minHeight = minLogicalHeight * scale;
+    const maxWidth = info?.maxSize?.width ? info.maxSize.width * scale : Infinity;
+    const maxHeight = info?.maxSize?.height ? info.maxSize.height * scale : Infinity;
 
     resizingWindowId = windowId;
 
@@ -1984,6 +2072,14 @@ function beginWindowResize(
             top += dy;
         }
 
+        if (width > maxWidth) {
+            if (edge.includes("w")) left = start.left + start.width - maxWidth;
+            width = maxWidth;
+        }
+        if (height > maxHeight) {
+            if (edge.includes("n")) top = start.top + start.height - maxHeight;
+            height = maxHeight;
+        }
         if (width < minWidth) {
             if (edge.includes("w")) left = start.left + start.width - minWidth;
             width = minWidth;
@@ -2079,7 +2175,12 @@ function beginWindowResize(
     window.addEventListener("pointercancel", finish);
 }
 
-function addWindow(screen: ViewScreen, el: HTMLElement, windowId?: string) {
+/**
+ * 把窗口元素放进某个虚拟屏。
+ * `center=false` 用于子窗口：它由父子关系定位（`placeChildWindow`），
+ * 不参与视口居中，也不跟随视口变化重排。
+ */
+function addWindow(screen: ViewScreen, el: HTMLElement, windowId?: string, center = true) {
     screen.el.add(el);
 
     pack(el).style({
@@ -2087,7 +2188,8 @@ function addWindow(screen: ViewScreen, el: HTMLElement, windowId?: string) {
     });
 
     if (windowId) {
-        windowCenterManager.addWindow(windowId, el);
+        if (center) windowCenterManager.addWindow(windowId, el);
+        else el.setAttribute("data-window-id", windowId);
     }
 }
 
@@ -2098,6 +2200,8 @@ function addWindow(screen: ViewScreen, el: HTMLElement, windowId?: string) {
 const CLIENT_TITLEBAR_HEIGHT = 38;
 
 type ClientWindowFrame = {
+    /** 全局窗口身份；父子关系/命中测试按它查 */
+    handle: WinHandle;
     el: ElType<HTMLElement>;
     header: ElType<HTMLElement>;
     icon: ElType<HTMLElement>;
@@ -2121,6 +2225,173 @@ type ClientWindowFrame = {
 
 const clientWindowFrames = new Map<WinHandle, ClientWindowFrame>();
 const clientFrameByRenderId = new Map<string, ClientWindowFrame>();
+
+// ── 父子窗口 ──────────────────────────────────────────────────────────────────────────
+// 官方桌面「一屏一窗口」：顶层窗口各占一个虚拟屏，子窗口（对话框）不再占屏，
+// 而是叠在父窗口所在屏的上面。父子关系来自 xdg_toplevel.set_parent，
+// 模态提示来自 xdg-dialog-v1；桌面自己的内部窗口（文件选择器）也走同一套映射。
+
+/** 子窗口 → 父窗口；键和值都可能是客户端 handle 或 `internal:*` */
+const windowParents = new Map<MWinId, MWinId>();
+/** 模态子窗口；存在时父窗口的指针/滚动/键盘都被挡住 */
+const modalWindows = new Set<MWinId>();
+/** 用户拖动/缩放过位置的子窗口：不再自动居中覆盖父窗口 */
+const childWindowPinned = new Set<MWinId>();
+
+/** 沿 parent 链找到顶层窗口（对话框的父窗口是应用主窗口，不是别的对话框） */
+function rootWindow(winid: MWinId): MWinId {
+    let cur = winid;
+    for (;;) {
+        const parent = windowParents.get(cur);
+        if (parent === undefined) return cur;
+        cur = parent;
+    }
+}
+
+/** 子窗口在父链里的深度：命中测试与层叠顺序都按「深的先」 */
+function windowDepth(winid: MWinId): number {
+    let depth = 0;
+    let cur = windowParents.get(winid);
+    while (cur !== undefined) {
+        depth++;
+        cur = windowParents.get(cur);
+    }
+    return depth;
+}
+
+/**
+ * 窗口按层叠顺序排列：子窗口在父窗口之上。
+ * 指针/滚动命中必须按这个顺序第一个命中者先得，否则同客户端的父窗口会吃掉对话框的事件。
+ */
+function windowsTopFirst() {
+    return server.server.windows.list().toSorted((a, b) => windowDepth(b.handle) - windowDepth(a.handle));
+}
+
+/** 客户端窗口与内部窗口共用的 DOM 取得方式 */
+function windowElement(winid: MWinId): HTMLElement | undefined {
+    return clientWindowFrames.get(winid)?.el.el ?? internalWindows.get(winid)?.el.el;
+}
+
+function setWindowPosition(winid: MWinId, left: number, top: number): void {
+    const frame = clientWindowFrames.get(winid);
+    if (frame) {
+        setClientFramePosition(frame, left, top);
+        return;
+    }
+    internalWindows.get(winid)?.el.style({ left: `${Math.round(left)}px`, top: `${Math.round(top)}px` });
+}
+
+/**
+ * 把子窗口摆在父窗口正中并夹在舞台内。父/子尺寸会多次变化（客户端提交前是 1×1），
+ * 所以调用方在 created、尺寸变化和父子变化后都会再调一次；用户拖过之后不再自动摆。
+ */
+function placeChildWindow(winid: MWinId, force = false): void {
+    const parent = windowParents.get(winid);
+    if (parent === undefined) return;
+    if (!force && childWindowPinned.has(winid)) return;
+    const self = windowElement(winid);
+    const parentEl = windowElement(parent);
+    if (!self || !parentEl) return;
+    const width = self.offsetWidth;
+    const height = self.offsetHeight;
+    if (width <= 0 || height <= 0) return;
+    const stageWidth = windowEl.el.offsetWidth;
+    const stageHeight = windowEl.el.offsetHeight;
+    if (stageWidth <= 0 || stageHeight <= 0) return;
+    const left = parentEl.offsetLeft + (parentEl.offsetWidth - width) / 2;
+    const top = parentEl.offsetTop + (parentEl.offsetHeight - height) / 2;
+    setWindowPosition(
+        winid,
+        Math.min(Math.max(0, left), Math.max(0, stageWidth - width)),
+        Math.min(Math.max(0, top), Math.max(0, stageHeight - height)),
+    );
+}
+
+/** 父窗口拖动时子窗口跟着走（对话框一般贴着父窗口动） */
+function moveChildWindows(parent: MWinId, dx: number, dy: number): void {
+    if (dx === 0 && dy === 0) return;
+    for (const [child, p] of windowParents) {
+        if (p !== parent) continue;
+        const el = windowElement(child);
+        if (!el) continue;
+        setWindowPosition(child, el.offsetLeft + dx, el.offsetTop + dy);
+        moveChildWindows(child, dx, dy);
+    }
+}
+
+/** 该窗口下面是否压着模态子窗口（递归：模态对话框里再开对话框） */
+function hasModalChild(winid: MWinId): boolean {
+    for (const [child, parent] of windowParents) {
+        if (parent !== winid) continue;
+        if (modalWindows.has(child)) return true;
+        if (hasModalChild(child)) return true;
+    }
+    return false;
+}
+
+/** 当前虚拟屏里最内层的模态子窗口；它挡住同屏的下层窗口与桌面点击 */
+function modalWindowInCurrentScreen(): MWinId | undefined {
+    let top: MWinId | undefined;
+    for (const child of modalWindows) {
+        if (!viewData.isCurrentWin(child)) continue;
+        if (top === undefined || windowDepth(child) > windowDepth(top)) top = child;
+    }
+    return top;
+}
+
+/** 点击被模态挡住的父窗口：聚到对话框并闪一下边框，说明点击被它接管 */
+function flashWindow(winid: MWinId): void {
+    const el = windowElement(winid);
+    if (!el) return;
+    el.style.outline = "2px solid #00aaff88";
+    el.style.outlineOffset = "-2px";
+    window.setTimeout(() => {
+        el.style.outline = "";
+        el.style.outlineOffset = "";
+    }, 160);
+}
+
+/**
+ * 父子关系变化（`window.created` 与 `window.changed` 的 parent 差分）：
+ * 子窗口搬进父窗口的屏、停止视口居中、改成客户端自选尺寸；取消父关系则重新占一屏。
+ */
+function applyWindowParent(winid: MWinId, parent: MWinId | undefined): void {
+    if (windowParents.get(winid) === parent) return;
+    if (parent === undefined) {
+        windowParents.delete(winid);
+        const screen = viewData.reparentWindow(winid, undefined);
+        const frame = clientWindowFrames.get(winid);
+        if (frame && screen) {
+            addWindow(screen, frame.el.el, winid, true);
+            setClientFramePosition(frame, wino.l, wino.t);
+        }
+        return;
+    }
+    windowParents.set(winid, parent);
+    const screen = viewData.reparentWindow(winid, parent);
+    const frame = clientWindowFrames.get(winid);
+    if (!frame || !screen) return;
+    // 子窗口不参与视口居中，元素搬到父窗口所在的屏（同屏时是空操作）
+    windowCenterManager.removeWindow(winid);
+    screen.el.add(frame.el.el);
+    frame.el.style({ position: "absolute" });
+    // 已经按 800×600 映射过的窗口重发一次 configure 0×0，让客户端回到自己的固有尺寸
+    const applied = appliedState.get(winid);
+    server.server.notify(
+        applied !== undefined && applied.w > 0 && applied.h > 0 ? "window.setSize" : "window.setBox",
+        winid,
+        { width: 0, height: 0 },
+    );
+    placeChildWindow(winid, true);
+    viewData.focusWin(winid);
+}
+
+/** 模态提示变化；变成模态时把焦点从父窗口收到对话框上 */
+function applyWindowModal(winid: MWinId, modal: boolean): void {
+    if (modal) modalWindows.add(winid);
+    else modalWindows.delete(winid);
+    if (modal && viewData.focusHandle === windowParents.get(winid)) viewData.focusWin(winid);
+}
 
 /** 标题栏占用的视觉高度；全屏和未协商服务端装饰时为 0 */
 function titlebarPx(frame: ClientWindowFrame) {
@@ -2229,18 +2500,24 @@ function updateClientFrameInfo(frame: ClientWindowFrame, info: WindowInfo) {
 function beginClientFrameMove(frame: ClientWindowFrame, handle: WinHandle, e: PointerEvent) {
     viewData.focusWin(handle);
     windowCenterManager.pauseCentering(handle);
+    // 子窗口被拖走后不再自动回到父窗口正中
+    if (windowParents.has(handle)) childWindowPinned.add(handle);
     const startX = e.clientX;
     const startY = e.clientY;
     const rect = frame.el.el.getBoundingClientRect();
     const parentRect = frame.el.el.parentElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
     const origLeft = rect.left - parentRect.left;
     const origTop = rect.top - parentRect.top;
+    let lastLeft = Math.round(origLeft);
+    let lastTop = Math.round(origTop);
 
     function onPointerMove(ev: PointerEvent) {
-        frame.el.style({
-            left: `${Math.round(ev.clientX - startX + origLeft)}px`,
-            top: `${Math.round(ev.clientY - startY + origTop)}px`,
-        });
+        const left = Math.round(ev.clientX - startX + origLeft);
+        const top = Math.round(ev.clientY - startY + origTop);
+        frame.el.style({ left: `${left}px`, top: `${top}px` });
+        moveChildWindows(handle, left - lastLeft, top - lastTop);
+        lastLeft = left;
+        lastTop = top;
     }
     function cleanup() {
         window.removeEventListener("pointermove", onPointerMove);
@@ -2408,6 +2685,7 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
     el.add([header, content]);
 
     const frame: ClientWindowFrame = {
+        handle: info.handle,
         el,
         header,
         icon,
@@ -2437,8 +2715,9 @@ function jump2Win(winid: MWinId) {
 }
 
 // ── 桌面自己的 DOM 窗口 ────────────────────────────────────────────────────────────────────────
-// 设置窗口、文件选择器不是 Wayland 客户端，但仍然占用一个虚拟桌面、参与总览、聚焦和关闭，
-// 与客户端窗口走同一套 ViewData / WindowCenterManager 逻辑。
+// 设置窗口、文件选择器不是 Wayland 客户端，但参与虚拟桌面、总览、聚焦和关闭，
+// 与客户端窗口走同一套 ViewData / WindowCenterManager 逻辑；带 parent 的内部窗口
+// 和客户端子窗口一样，不占屏、叠在父窗口上（文件选择器就挂在发起请求的应用上）。
 const SETTINGS_WINDOW_ID = "internal:settings";
 
 type InternalWindowContent = {
@@ -2452,6 +2731,13 @@ type InternalWindowOptions = {
     icon?: HTMLElement | { el: HTMLElement };
     width: number;
     height: number;
+    /**
+     * 父窗口（客户端 handle 或别的内部窗口）：有父窗口时不占虚拟屏，
+     * 覆盖在父窗口所在屏的上面，并随父窗口移动。文件选择器用它挂到发起请求的应用上。
+     */
+    parent?: MWinId;
+    /** 模态：挡住父窗口的指针/滚动/键盘，直到本窗口关闭 */
+    modal?: boolean;
     build(host: { inner: ElType<HTMLDivElement>; close: () => void }): InternalWindowContent;
     /** 关闭前调用，例如取消尚未结束的文件选择请求 */
     onClose?(): void;
@@ -2466,7 +2752,15 @@ function openInternalWindow(op: InternalWindowOptions) {
         return;
     }
 
-    const screen = viewData.addWindowScreen(op.id);
+    // 父窗口已经不存在时退化成独立窗口，避免对话框挂在一个已关闭的应用上
+    let parent = op.parent === undefined ? undefined : rootWindow(op.parent);
+    if (parent !== undefined && !internalWindows.has(parent) && !server.server.windows.get(parent)) parent = undefined;
+
+    const screen = viewData.addWindowScreen(op.id, parent);
+    if (parent !== undefined) {
+        windowParents.set(op.id, parent);
+        if (op.modal) modalWindows.add(op.id);
+    }
     const root = view("y")
         .data({ "internal-window": op.id })
         .style({
@@ -2529,7 +2823,11 @@ function openInternalWindow(op: InternalWindowOptions) {
         if (!entry) return;
         internalWindows.delete(op.id);
         op.onClose?.();
+        // closeWin 里要按父窗口恢复焦点，映射在它之后清
         viewData.closeWin(op.id);
+        windowParents.delete(op.id);
+        modalWindows.delete(op.id);
+        childWindowPinned.delete(op.id);
         windowCenterManager.removeWindow(op.id);
         removeResizeHandles(op.id);
         entry.dispose?.();
@@ -2561,18 +2859,23 @@ function openInternalWindow(op: InternalWindowOptions) {
     header.on("pointerdown", (e) => {
         if ((e.target as HTMLElement).closest("button, input, select, textarea")) return;
         windowCenterManager.pauseCentering(op.id);
+        if (windowParents.has(op.id)) childWindowPinned.add(op.id);
         const startX = e.clientX;
         const startY = e.clientY;
         const rect = root.el.getBoundingClientRect();
         const parentRect = root.el.parentElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
         const origLeft = rect.left - parentRect.left;
         const origTop = rect.top - parentRect.top;
+        let lastLeft = Math.round(origLeft);
+        let lastTop = Math.round(origTop);
 
         function onPointerMove(ev: PointerEvent) {
-            root.style({
-                left: `${Math.round(ev.clientX - startX + origLeft)}px`,
-                top: `${Math.round(ev.clientY - startY + origTop)}px`,
-            });
+            const left = Math.round(ev.clientX - startX + origLeft);
+            const top = Math.round(ev.clientY - startY + origTop);
+            root.style({ left: `${left}px`, top: `${top}px` });
+            moveChildWindows(op.id, left - lastLeft, top - lastTop);
+            lastLeft = left;
+            lastTop = top;
         }
         function cleanup() {
             window.removeEventListener("pointermove", onPointerMove);
@@ -2591,9 +2894,11 @@ function openInternalWindow(op: InternalWindowOptions) {
         close: closeWindow,
         dispose: content.dispose,
     });
-    addWindow(screen, root.el, op.id);
+    addWindow(screen, root.el, op.id, parent === undefined);
     addResizeHandles(root.el, op.id, false);
-    createOverviewWindowCloseButton(closeWindow).addInto(root.el);
+    // 子窗口不在总览里单独成卡，关闭按钮由父窗口那张卡负责
+    if (parent === undefined) createOverviewWindowCloseButton(closeWindow).addInto(root.el);
+    else placeChildWindow(op.id, true);
     viewData.focusWin(op.id);
 }
 
@@ -2673,6 +2978,18 @@ function openSettingsWindow() {
 const FILE_CHOOSER_WINDOW_ID = "internal:file-chooser";
 const fileChooserQueue: FileChooserRequest[] = [];
 
+/**
+ * portal 请求里的 `parent_window` 是应用用 xdg-foreign 导出的句柄；
+ * 解析不到时退回当前聚焦的窗口，让选择器至少贴着用户眼前的应用。
+ */
+function fileChooserParent(request: FileChooserRequest): MWinId | undefined {
+    const exported = request.parentWindow ? server.server.windows.lookupExport(request.parentWindow) : undefined;
+    if (exported !== undefined) return rootWindow(exported);
+    const focused = viewData.focusHandle;
+    if (focused === undefined) return undefined;
+    return rootWindow(focused);
+}
+
 function openFileChooserWindow(request: FileChooserRequest) {
     if (internalWindows.has(FILE_CHOOSER_WINDOW_ID)) {
         fileChooserQueue.push(request);
@@ -2684,6 +3001,9 @@ function openFileChooserWindow(request: FileChooserRequest) {
         icon: fileChooserHeaderIcon(request),
         width: 860,
         height: 580,
+        parent: fileChooserParent(request),
+        // portal 声明 non-modal 时不要挡住应用
+        modal: request.modal,
         onClose: () => {
             void request.cancel();
         },
@@ -2825,10 +3145,12 @@ function pointerHits(p: { x: number; y: number; target?: EventTarget | null }): 
 
     const hits: PointerHit[] = [];
     const handled = new Set<string>();
-    for (const info of server.server.windows.list()) {
+    for (const info of windowsTopFirst()) {
         // 只有当前虚拟屏接收指针；相邻屏在滑动动画中也可能进入视口
         if (!viewData.isCurrentWin(info.handle)) continue;
-        // 每个客户端只处理第一个命中的窗口
+        // 模态对话框挡住的父窗口（及祖先）不接收指针
+        if (hasModalChild(info.handle)) continue;
+        // 每个客户端只处理第一个命中的窗口；子窗口按 depth 排在父窗口前面
         if (handled.has(info.clientId)) continue;
         const rect = render.getXdgSurfaceEle(info.renderId)?.getBoundingClientRect();
         if (!rect) continue;
@@ -3039,6 +3361,15 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): Pointe
             route = { hit, buttons: new Set() };
             pointerRoutes.set(key, route);
             for (const h of hits) sendPointerTo(h, "down", p);
+            // 模态对话框开着时点到了被挡住的父窗口：把注意力收回对话框
+            // （点在桌面 UI 上不算，工具栏菜单之类照常响应）
+            if (!hit && !desktopUiUnderPoint(p.x, p.y, p.target)) {
+                const modal = modalWindowInCurrentScreen();
+                if (modal !== undefined) {
+                    viewData.focusWin(modal);
+                    flashWindow(modal);
+                }
+            }
         } else if (hit) {
             // 已经归属某个客户端时，后续按键沿用同一个窗口（隐式 grab）
             sendPointerTo(hit, "down", p);
@@ -3101,9 +3432,16 @@ function sendScrollEvent(p: ScrollInput) {
               ? p.target.parentElement
               : document.elementFromPoint(p.x, p.y);
     if (isDesktopUiTarget(target)) return;
+    // 模态对话框开着时，滚动只发给对话框本身
+    const modal = modalWindowInCurrentScreen();
+    if (modal !== undefined) {
+        const modalEl = windowElement(modal);
+        if (!modalEl || !(target instanceof Node) || !modalEl.contains(target)) return;
+    }
     const handled = new Set<string>();
-    for (const info of server.server.windows.list()) {
+    for (const info of windowsTopFirst()) {
         if (!viewData.isCurrentWin(info.handle)) continue;
+        if (hasModalChild(info.handle)) continue;
         if (handled.has(info.clientId)) continue;
         const rootEl = render.getXdgSurfaceEle(info.renderId);
         if (!rootEl) continue;
@@ -3225,6 +3563,8 @@ render.on({
         frame.surfaceWidth = Math.max(1, width);
         frame.surfaceHeight = Math.max(1, height);
         if (frame.decorated && !frame.fullscreen) applyFrameSurfaceSize(frame);
+        // 子窗口（对话框）的尺寸由客户端决定，首次拿到真实尺寸后重新在父窗口正中摆一次
+        placeChildWindow(frame.handle);
     },
 });
 const server = MSysApi.server({ render });
@@ -3325,7 +3665,15 @@ server.server.on("client.closed", (clientId) => {
  */
 const appliedState = new Map<
     WinHandle,
-    { w: number; h: number; maximized: boolean; fullscreen: boolean; scale: number }
+    {
+        w: number;
+        h: number;
+        maximized: boolean;
+        fullscreen: boolean;
+        scale: number;
+        parent: WinHandle | null;
+        modal: boolean;
+    }
 >();
 /** 全屏时临时暂停居中的窗口；退出时只恢复这些，不打断用户手动拖动后的状态 */
 const fullscreenCenteringPaused = new Set<WinHandle>();
@@ -3346,31 +3694,58 @@ function resumeCenteringForFullscreen(handle: WinHandle) {
 server.server.on("window.created", (info) => {
     console.log(`Client ${info.clientId} created window ${info.handle}`, info.renderId);
     const wid = info.handle;
+    const parent = info.parent ?? undefined;
     appliedState.set(wid, {
         w: info.rect.w,
         h: info.rect.h,
         maximized: false,
         fullscreen: false,
         scale: info.scale,
+        parent: info.parent,
+        modal: info.modal,
     });
+    if (parent !== undefined) {
+        windowParents.set(wid, parent);
+        if (info.modal) modalWindows.add(wid);
+    }
 
-    const screen = viewData.addWindowScreen(wid);
+    const screen = viewData.addWindowScreen(wid, parent);
     // biome-ignore lint/style/noNonNullAssertion: 刚刚创建的，一定有
     const winEl = render.getXdgSurfaceEle(info.renderId)!;
     const frame = createClientWindowFrame(info, winEl);
     clientWindowFrames.set(wid, frame);
     applyFrameSurfaceSize(frame);
     setClientFramePosition(frame, wino.l, wino.t);
-    addWindow(screen, frame.el.el, wid);
+    addWindow(screen, frame.el.el, wid, parent === undefined);
     addResizeHandles(frame.el.el, wid, true, winEl);
-    createOverviewWindowCloseButton(() => server.server.notify("window.close", wid)).addInto(frame.el);
+    // 子窗口不在总览里单独成卡，关闭按钮由父窗口那张卡负责
+    if (parent === undefined) {
+        createOverviewWindowCloseButton(() => server.server.notify("window.close", wid)).addInto(frame.el);
+    }
+    // 子窗口让客户端自己决定尺寸（configure 0×0）：对话框有固有尺寸，
+    // 给它塞 800×600 会把文件选择器这类对话框撑大。
+    server.server.notify(
+        "window.setBox",
+        wid,
+        parent === undefined ? { width: 800, height: 600 } : { width: 0, height: 0 },
+    );
     viewData.focusWin(wid);
-    server.server.notify("window.setBox", wid, { width: 800, height: 600 });
+    if (parent !== undefined) {
+        placeChildWindow(wid, true);
+        // 客户端提交首帧后尺寸才确定，下一帧再摆一次（用户拖过之后 placeChildWindow 自己会跳过）
+        requestAnimationFrame(() => placeChildWindow(wid, true));
+    }
 });
 
 server.server.on("window.closed", (wid) => {
     console.log(`window ${wid} closed`);
     appliedState.delete(wid);
+    // 挂在它上面的桌面内部窗口（文件选择器）一起收掉：否则 internalWindows 留下孤儿，
+    // portal 请求也会一直挂着等不到结果
+    for (const [child, parent] of [...windowParents]) {
+        if (parent !== wid) continue;
+        internalWindows.get(child)?.close();
+    }
     lastFullscreenBox.delete(wid);
     fullscreenCenteringPaused.delete(wid);
     removeResizeHandles(wid);
@@ -3382,6 +3757,9 @@ server.server.on("window.closed", (wid) => {
         frame.el.el.remove();
     }
     viewData.closeWin(wid);
+    windowParents.delete(wid);
+    modalWindows.delete(wid);
+    childWindowPinned.delete(wid);
     // 指针还停在刚关闭的窗口上时，立刻回到默认光标；
     // 否则客户端退出流程补发的 hidden 会把光标留成空白
     if (pointerTarget?.handle === wid) {
@@ -3401,6 +3779,7 @@ server.server.on("window.startMove", (wid) => {
     const rect = movingFrame.el.el.getBoundingClientRect();
 
     windowCenterManager.pauseCentering(wid);
+    if (windowParents.has(wid)) childWindowPinned.add(wid);
 
     const startX = mousePos.x;
     const startY = mousePos.y;
@@ -3408,11 +3787,16 @@ server.server.on("window.startMove", (wid) => {
     const parentRect = movingFrame.el.el.parentElement?.getBoundingClientRect() ?? { left: 0, top: 0 };
     const origLeft = rect.left - parentRect.left;
     const origTop = rect.top - parentRect.top;
+    let lastLeft = Math.round(origLeft);
+    let lastTop = Math.round(origTop);
 
     function onPointerMove() {
         const newLeft = Math.round(mousePos.x - startX + origLeft);
         const newTop = Math.round(mousePos.y - startY + origTop);
         setClientFramePosition(movingFrame, newLeft, newTop);
+        moveChildWindows(wid, newLeft - lastLeft, newTop - lastTop);
+        lastLeft = newLeft;
+        lastTop = newTop;
     }
 
     function cleanup() {
@@ -3433,6 +3817,15 @@ server.server.on("window.startMove", (wid) => {
 server.server.on("window.changed", (info) => {
     const applied = appliedState.get(info.handle);
     if (!applied) return;
+    // 父子关系/模态提示：payload 自包含，靠本地快照差分
+    if (applied.parent !== info.parent) {
+        applied.parent = info.parent;
+        applyWindowParent(info.handle, info.parent ?? undefined);
+    }
+    if (applied.modal !== info.modal) {
+        applied.modal = info.modal;
+        applyWindowModal(info.handle, info.modal);
+    }
     const frame = clientWindowFrames.get(info.handle);
     if (frame) {
         updateClientFrameInfo(frame, info);
@@ -3500,6 +3893,8 @@ server.server.on("window.changed", (info) => {
                 setClientFrameLayout(frame, info.rect.w * info.scale, info.rect.h * info.scale);
             }
         }
+        // 子窗口尺寸由客户端决定：几何一变就重新在父窗口正中摆一次（用户拖过则不动）
+        if (windowParents.has(info.handle)) placeChildWindow(info.handle);
     }
 
     // 最大化状态变化（由客户端发起）

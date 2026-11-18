@@ -244,6 +244,8 @@ export interface WindowsSink {
     closed(id: WaylandWinId): void;
     appidChanged(id: WaylandWinId, appid: string): void;
     decoratedChanged(id: WaylandWinId, decorated: boolean): void;
+    parentChanged(id: WaylandWinId, parent: WaylandWinId | undefined): void;
+    modalChanged(id: WaylandWinId, modal: boolean): void;
     resized(id: WaylandWinId, width: number, height: number): void;
     startMove(id: WaylandWinId): void;
     maximized(id: WaylandWinId): void;
@@ -286,6 +288,9 @@ export class WindowsStore {
             appid: "",
             decorated: false,
             title: "",
+            modal: false,
+            minSize: { width: 0, height: 0 },
+            maxSize: { width: 0, height: 0 },
             maximized: false,
             minimized: false,
             fullscreen: false,
@@ -330,6 +335,50 @@ export class WindowsStore {
         if (w === undefined || w.decorated === decorated) return;
         w.decorated = decorated;
         this.#sink.decoratedChanged(id, decorated);
+    }
+
+    /** xdg_toplevel.set_parent —— 只改记录，层级/摆放由桌面决定 */
+    setParent(id: WaylandWinId, parent: WaylandWinId | undefined): void {
+        const w = this.#wins.get(id);
+        if (w === undefined || w.parent === parent) return;
+        w.parent = parent;
+        this.#sink.parentChanged(id, parent);
+    }
+
+    /**
+     * 父窗口销毁：子窗口按 xdg-shell 接到祖父窗口（没有祖父就取消父关系）。
+     * 必须由调用方在父窗口记录删除之前调。
+     */
+    detachChildren(id: WaylandWinId): void {
+        const grandparent = this.#wins.get(id)?.parent;
+        for (const [childId, w] of this.#wins) {
+            if (w.parent !== id) continue;
+            w.parent = grandparent;
+            this.#sink.parentChanged(childId, grandparent);
+        }
+    }
+
+    /** xdg-dialog-v1 的模态提示；父窗口输入阻塞由桌面决定 */
+    setModal(id: WaylandWinId, modal: boolean): void {
+        const w = this.#wins.get(id);
+        if (w === undefined || w.modal === modal) return;
+        w.modal = modal;
+        this.#sink.modalChanged(id, modal);
+    }
+
+    /**
+     * set_min_size / set_max_size：0 表示该轴不限制。
+     * 只改窗口记录（桌面在开始缩放时读 `WindowInfo.minSize/maxSize`），不发事件。
+     */
+    setSizeLimits(
+        id: WaylandWinId,
+        min?: { width: number; height: number },
+        max?: { width: number; height: number },
+    ): void {
+        const w = this.#wins.get(id);
+        if (w === undefined) return;
+        if (min !== undefined) w.minSize = min;
+        if (max !== undefined) w.maxSize = max;
     }
 
     /** xdg_surface.set_window_geometry —— 只通知，不改 box（box 由桌面命令维护） */
@@ -817,6 +866,8 @@ export const xdgShellModule = defineModule({
                 closed: (wid) => ctx.client.emit("windowClosed", wid),
                 appidChanged: (wid, appid) => ctx.client.emit("windowAppid", wid, appid),
                 decoratedChanged: (wid, decorated) => ctx.client.emit("windowDecorated", wid, decorated),
+                parentChanged: (wid, parent) => ctx.client.emit("windowParent", wid, parent),
+                modalChanged: (wid, modal) => ctx.client.emit("windowModal", wid, modal),
                 resized: (wid, width, height) => ctx.client.emit("windowResized", wid, width, height),
                 startMove: (wid) => ctx.client.emit("windowStartMove", wid),
                 maximized: (wid) => ctx.client.emit("windowMaximized", wid),
@@ -1017,6 +1068,21 @@ export const xdgShellModule = defineModule({
             if (xdgSurfaceId === undefined) return;
             ctx.domain.xdgSurface.popupDestroyed(xid, ctx);
         },
+        "xdg_toplevel.set_parent": (x, ctx) => {
+            const parent = x.args.parent as WaylandWinId | undefined;
+            if (parent !== undefined) {
+                // 规范：父窗口不能是自己或自己的后代，否则 invalid_parent
+                let cur: WaylandWinId | undefined = parent;
+                while (cur !== undefined) {
+                    if (cur === x.id) {
+                        ctx.postError("xdg_toplevel", x.id, "invalid_parent");
+                        return;
+                    }
+                    cur = ctx.domain.windows.get(cur)?.parent;
+                }
+            }
+            ctx.domain.windows.setParent(x.id, parent);
+        },
         "xdg_toplevel.set_app_id": (x, ctx) => {
             // 窗口身份按 toplevel 存：xwayland-satellite 用一个连接承载所有 X11 窗口，
             // 每个窗口的 WM_CLASS 不同，按连接只留一个会让任务栏把所有 X11 应用并成一个图标
@@ -1026,6 +1092,37 @@ export const xdgShellModule = defineModule({
         },
         "xdg_toplevel.set_title": (x, ctx) => {
             ctx.domain.windows.setTitle(x.id, x.args.title);
+        },
+        "xdg_toplevel.set_min_size": (x, ctx) => {
+            if (x.args.width < 0 || x.args.height < 0) {
+                ctx.postError("xdg_toplevel", x.id, "invalid_size");
+                return;
+            }
+            const max = ctx.domain.windows.get(x.id)?.maxSize;
+            if (max !== undefined && (max.width !== 0 || max.height !== 0)) {
+                if ((max.width !== 0 && x.args.width > max.width) || (max.height !== 0 && x.args.height > max.height)) {
+                    ctx.postError("xdg_toplevel", x.id, "invalid_size");
+                    return;
+                }
+            }
+            ctx.domain.windows.setSizeLimits(x.id, { width: x.args.width, height: x.args.height });
+        },
+        "xdg_toplevel.set_max_size": (x, ctx) => {
+            if (x.args.width < 0 || x.args.height < 0) {
+                ctx.postError("xdg_toplevel", x.id, "invalid_size");
+                return;
+            }
+            const min = ctx.domain.windows.get(x.id)?.minSize;
+            if (min !== undefined) {
+                if (
+                    (x.args.width !== 0 && min.width > x.args.width) ||
+                    (x.args.height !== 0 && min.height > x.args.height)
+                ) {
+                    ctx.postError("xdg_toplevel", x.id, "invalid_size");
+                    return;
+                }
+            }
+            ctx.domain.windows.setSizeLimits(x.id, undefined, { width: x.args.width, height: x.args.height });
         },
         "xdg_toplevel.move": (x, ctx) => {
             ctx.domain.windows.startMove(x.id);
@@ -1046,10 +1143,17 @@ export const xdgShellModule = defineModule({
         "xdg_toplevel.destroy": (x, ctx) => {
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(x.id);
             if (xdgSurfaceId === undefined) return;
-            // 客户端应先销毁 decoration；这里兜底，避免域里的映射留下已死的 toplevel
+            // 客户端应先销毁 decoration / dialog / exported；这里兜底，避免域里的映射留下已死的 toplevel
             ctx.domain.decoration.forgetToplevel(x.id);
+            ctx.domain.dialog.forgetToplevel(x.id);
+            // 导出句柄随 toplevel 一起作废：通知 server 摘掉 lookupExport 映射
+            for (const handle of ctx.domain.export.forgetToplevel(x.id)) {
+                ctx.client.emit("toplevelUnexported", handle);
+            }
             // 关窗时仍在的 grabbing popup 一并 dismiss（否则关闭流程里可能漏掉）
             ctx.domain.xdgSurface.dismissGrabsForWindow(x.id, ctx);
+            // 记录删除前先把子窗口接到祖父：之后读不到父窗口自己的父链
+            ctx.domain.windows.detachChildren(x.id);
             // 顺序对桌面可见：记录删除 → onToplevelRemove → windowClosed
             ctx.domain.windows.remove(x.id);
             ctx.domain.xdgSurface.toplevelDestroyed(x.id);
