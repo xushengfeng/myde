@@ -28,6 +28,8 @@ pnpm build:packages         # 编译 Rust 读取器 + TypeScript
 > **前置条件**：需要 Linux 系统。设备打开方式可选：
 >
 > - `auto`（默认）：先直接打开 `/dev/input/event*`（`input` 组 / udev uaccess / root 可用时最省事），失败时回退 systemd-logind。
+>
+> 构建需要 libudev 开发文件（`libudev-dev` / `systemd-devel`）；运行时 `libudev.so.1` 由 systemd 提供，缺失时仍能读设备，只是没有热插拔推送。
 > - `logind`：通过 systemd-logind `TakeDevice` 取 fd，不需要设备文件权限。logind 要求调用者是会话控制器，所以会调用 `TakeControl`：这会把当前 VT 切到图形模式并**关闭该 VT 的键盘**。因此从 TTY 启动、又用 Ctrl+C 停程序的用法，请用 `direct`/`auto`；`logind` 模式退出需要从其它 VT 结束进程（或由桌面自行退出）。
 > - `direct`：只直接打开，需要 `input` 组、udev uaccess 规则或 root。
 >
@@ -116,6 +118,8 @@ manager.on("deviceAdded", (info) => { ... })
 manager.on("deviceRemoved", (path) => { ... })
 manager.on("error", (error) => { ... })
 ```
+
+热插拔由 Rust 侧的 udev monitor 推送：新设备发 `device_added`（暂时没权限时会在 2 秒内重试），拔出由 udev 或读取时的 `ENODEV` 发现并发 `device_removed`；`device_list` 是完整快照，缺省的设备会被当作已移除。
 
 ### `InputDevice`
 

@@ -1,14 +1,28 @@
 mod access;
 mod device_info;
+mod hotplug;
 mod protocol;
 mod reader;
 mod scanner;
 
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
+use std::time::{Duration, Instant};
 
 use access::{AccessEvent, AccessMode, DeviceAccess};
+use hotplug::{HotplugAction, HotplugMonitor};
 use protocol::*;
 use reader::EventReader;
+
+/// 热插拔新增设备打开失败后的重试间隔与总时限
+const HOTPLUG_RETRY_INTERVAL: Duration = Duration::from_millis(200);
+const HOTPLUG_RETRY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// 等待权限/设备节点就绪的新设备
+struct PendingAdd {
+    deadline: Instant,
+    next_try: Instant,
+}
 
 fn main() {
     let stdin = io::stdin();
@@ -43,9 +57,17 @@ fn main() {
         }
     };
 
+    // 先创建 udev 监听，再扫描，避免两者之间插入的设备丢失（重复的设备会去重）
+    let hotplug = HotplugMonitor::new();
+
     // 初始扫描设备
     let devices = scanner::scan_devices(&mut access);
     let device_infos: Vec<DeviceFullInfo> = devices.into_iter().map(|(info, _)| info).collect();
+    let mut known: HashSet<String> = device_infos
+        .iter()
+        .filter(|info| !info.path.is_empty())
+        .map(|info| info.path.clone())
+        .collect();
     let msg = RustMessage::DeviceList {
         devices: device_infos,
         access_mode: access.access_mode().to_string(),
@@ -57,6 +79,8 @@ fn main() {
     let mut stdin_buf = vec![0u8; 64 * 1024];
     let mut stdin_pos = 0;
     let mut should_exit = false;
+    // 已经发现但暂时打不开的设备（权限/设备节点尚未就绪）
+    let mut pending: HashMap<String, PendingAdd> = HashMap::new();
 
     while !should_exit {
         // 处理 logind 的 Pause/Resume/Gone（VT 切换、设备拔出）
@@ -69,16 +93,46 @@ fn main() {
                     event_reader.resume_device(&mut access, &path.to_string_lossy(), fd);
                 }
                 AccessEvent::Gone(path) => {
-                    event_reader.remove_device(&mut access, &path.to_string_lossy());
-                    send_message(
-                        &mut stdout,
-                        &RustMessage::DeviceRemoved {
-                            path: path.to_string_lossy().into_owned(),
-                        },
-                    );
+                    let path = path.to_string_lossy().into_owned();
+                    event_reader.remove_device(&mut access, &path);
+                    pending.remove(&path);
+                    if known.remove(&path) {
+                        send_message(&mut stdout, &RustMessage::DeviceRemoved { path });
+                    }
                 }
             }
         }
+
+        // 处理 udev 热插拔（新增设备打开失败会进入 pending 重试）
+        for event in hotplug.drain() {
+            match event.action {
+                HotplugAction::Added => {
+                    if !known.contains(&event.path) && !pending.contains_key(&event.path) {
+                        try_add_device(
+                            &event.path,
+                            &mut stdout,
+                            &mut access,
+                            &mut known,
+                            &mut pending,
+                        );
+                    }
+                }
+                HotplugAction::Removed => {
+                    pending.remove(&event.path);
+                    // 已通过读取出错或 logind Gone 处理过的不再重复通知
+                    if known.remove(&event.path) {
+                        event_reader.remove_device(&mut access, &event.path);
+                        send_message(
+                            &mut stdout,
+                            &RustMessage::DeviceRemoved { path: event.path },
+                        );
+                    }
+                }
+            }
+        }
+
+        // 重试暂时打不开的新设备
+        retry_pending(&mut stdout, &mut access, &mut known, &mut pending);
 
         // 处理所有已到达的命令
         while let Some(cmd) = read_command(&stdin, &mut stdin_buf, &mut stdin_pos) {
@@ -87,6 +141,13 @@ fn main() {
                     let devices = scanner::scan_devices(&mut access);
                     let device_infos: Vec<DeviceFullInfo> =
                         devices.into_iter().map(|(info, _)| info).collect();
+                    // /proc 解析失败会返回一个 path 为空的错误项，此时不要动 known
+                    if device_infos.iter().all(|info| !info.path.is_empty()) {
+                        let paths: HashSet<String> =
+                            device_infos.iter().map(|info| info.path.clone()).collect();
+                        known.retain(|path| paths.contains(path));
+                        known.extend(paths);
+                    }
                     let msg = RustMessage::DeviceList {
                         devices: device_infos,
                         access_mode: access.access_mode().to_string(),
@@ -133,8 +194,30 @@ fn main() {
 
         // 批量读取输入事件（非阻塞，超时 10ms）
         match event_reader.wait_events(10) {
-            Ok(events) => {
-                for event in events {
+            Ok(outcome) => {
+                for removed in outcome.removed {
+                    access.release(removed.major, removed.minor);
+                    pending.remove(&removed.path);
+                    if known.remove(&removed.path) {
+                        send_message(
+                            &mut stdout,
+                            &RustMessage::DeviceRemoved {
+                                path: removed.path,
+                            },
+                        );
+                    }
+                }
+                for message in outcome.errors {
+                    send_message(
+                        &mut stdout,
+                        &RustMessage::Error {
+                            code: "EVENT_READ_ERROR".to_string(),
+                            message,
+                            detail: None,
+                        },
+                    );
+                }
+                for event in outcome.events {
                     let msg = RustMessage::InputEvent {
                         path: event.path,
                         event_type: event.event_type,
@@ -160,6 +243,76 @@ fn main() {
     }
 
     event_reader.close(&mut access);
+}
+
+/// 扫描并上报一个新设备；暂时打不开时放进 pending 等权限/设备节点就绪
+fn try_add_device(
+    path: &str,
+    stdout: &mut io::StdoutLock<'_>,
+    access: &mut DeviceAccess,
+    known: &mut HashSet<String>,
+    pending: &mut HashMap<String, PendingAdd>,
+) {
+    if known.contains(path) {
+        pending.remove(path);
+        return;
+    }
+
+    let (info, _) = scanner::scan_device(path, access);
+    if info.errors.iter().any(|error| error.field == "open") {
+        let now = Instant::now();
+        let entry = pending.entry(path.to_string()).or_insert(PendingAdd {
+            deadline: now + HOTPLUG_RETRY_TIMEOUT,
+            next_try: now + HOTPLUG_RETRY_INTERVAL,
+        });
+        entry.next_try = now + HOTPLUG_RETRY_INTERVAL;
+        return;
+    }
+
+    pending.remove(path);
+    if known.insert(path.to_string()) {
+        send_message(stdout, &RustMessage::DeviceAdded { device: info });
+    }
+}
+
+/// 重试 pending 中到期的设备
+fn retry_pending(
+    stdout: &mut io::StdoutLock<'_>,
+    access: &mut DeviceAccess,
+    known: &mut HashSet<String>,
+    pending: &mut HashMap<String, PendingAdd>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+
+    let now = Instant::now();
+    let due: Vec<String> = pending
+        .iter()
+        .filter(|(_, entry)| now >= entry.next_try)
+        .map(|(path, _)| path.clone())
+        .collect();
+
+    for path in due {
+        if !std::path::Path::new(&path).exists() {
+            pending.remove(&path);
+            continue;
+        }
+        let expired = pending
+            .get(&path)
+            .is_some_and(|entry| now >= entry.deadline);
+        if expired {
+            pending.remove(&path);
+            // 一直打不开（通常是权限）：仍然上报，和初始 device_list 的行为一致
+            let (info, _) = scanner::scan_device(&path, access);
+            if known.insert(path.clone()) {
+                send_message(stdout, &RustMessage::DeviceAdded { device: info });
+            }
+            eprintln!("设备 {path} 打开失败，已按不可用设备上报");
+            continue;
+        }
+        try_add_device(&path, stdout, access, known, pending);
+    }
 }
 
 /// 解析 `--access=auto|logind|direct`

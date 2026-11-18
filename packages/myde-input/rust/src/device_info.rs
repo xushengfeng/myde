@@ -4,6 +4,8 @@ use crate::protocol::*;
 
 // Linux ioctl 常量
 const EVIOCGNAME: u64 = 0x82004506; // _IOC(_IOC_READ, 'E', 0x06, 256)
+const EVIOCGPHYS: u64 = 0x81004507; // _IOC(_IOC_READ, 'E', 0x07, 256)
+const EVIOCGID: u64 = 0x80084502; // _IOC(_IOC_READ, 'E', 0x02, sizeof(input_id))
 const EVIOCGBIT_EV_MAX: usize = 32;
 const EVIOCGABS: u64 = 0x80184540; // _IOC(_IOC_READ, 'E', 0x40, sizeof(input_absinfo))
 
@@ -32,6 +34,15 @@ const ABS_MT_PRESSURE: u16 = 0x3a; // 58
 // input_absinfo 结构体大小 (6 * i32 = 24 bytes)
 const ABSINFO_SIZE: usize = 24;
 
+/// input_id 结构体（Linux 内核定义）
+#[repr(C)]
+struct InputId {
+    bustype: u16,
+    vendor: u16,
+    product: u16,
+    version: u16,
+}
+
 /// input_absinfo 结构体（Linux 内核定义）
 #[repr(C)]
 struct InputAbsInfo {
@@ -53,6 +64,32 @@ pub fn read_name(fd: RawFd) -> Result<String, String> {
     // 找到字符串结尾
     let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
     String::from_utf8(buf[..len].to_vec()).map_err(|e| format!("名称编码错误: {}", e))
+}
+
+/// 读取物理路径（如 usb-0000:00:14.0-1/input0）
+pub fn read_phys(fd: RawFd) -> Result<String, String> {
+    let mut buf = [0u8; 256];
+    let ret = unsafe { libc::ioctl(fd, EVIOCGPHYS, buf.as_mut_ptr()) };
+    if ret < 0 {
+        return Err(format!("ioctl EVIOCGPHYS 失败: {}", ret));
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    String::from_utf8(buf[..len].to_vec()).map_err(|e| format!("物理路径编码错误: {}", e))
+}
+
+/// 读取设备 ID（vendor, product, version）
+pub fn read_id(fd: RawFd) -> Result<(u16, u16, u16), String> {
+    let mut id = InputId {
+        bustype: 0,
+        vendor: 0,
+        product: 0,
+        version: 0,
+    };
+    let ret = unsafe { libc::ioctl(fd, EVIOCGID, &mut id as *mut _ as *mut u8) };
+    if ret < 0 {
+        return Err(format!("ioctl EVIOCGID 失败: {}", ret));
+    }
+    Ok((id.vendor, id.product, id.version))
 }
 
 /// 读取设备能力

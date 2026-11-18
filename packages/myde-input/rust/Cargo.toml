@@ -15,6 +15,7 @@ rmp-serde = "1.1"
 nix = { version = "0.27", features = ["fs", "ioctl", "event"] }
 libc = "0.2"
 zbus = { version = "5", features = ["blocking-api"] }
+udev = "0.9"
 
 [profile.release]
 opt-level = 3

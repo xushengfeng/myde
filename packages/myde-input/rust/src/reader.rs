@@ -26,6 +26,20 @@ struct OpenDevice {
     paused: bool,
 }
 
+/// 读取时发现已被拔出的设备（major/minor 供 logind 归还设备）
+pub struct RemovedDevice {
+    pub path: String,
+    pub major: u32,
+    pub minor: u32,
+}
+
+/// 一次等待/读取的结果
+pub struct ReadOutcome {
+    pub events: Vec<RawInputEvent>,
+    pub removed: Vec<RemovedDevice>,
+    pub errors: Vec<String>,
+}
+
 /// 多设备事件读取器
 pub struct EventReader {
     epoll: Epoll,
@@ -130,7 +144,10 @@ impl EventReader {
     }
 
     /// 等待事件并批量读取（阻塞，带超时）
-    pub fn wait_events(&self, timeout_ms: i32) -> Result<Vec<RawInputEvent>, String> {
+    ///
+    /// 读取时遇到 ENODEV 说明设备已被拔出：从 epoll 和映射表里摘掉并放进
+    /// `removed`，由调用方归还 logind 设备并通知上层。
+    pub fn wait_events(&mut self, timeout_ms: i32) -> Result<ReadOutcome, String> {
         let mut events = [EpollEvent::empty(); 16];
 
         // timeout: -1 = 无限等待, 0 = 立即返回, >0 = 等待毫秒数
@@ -141,11 +158,16 @@ impl EventReader {
             .wait(&mut events, timeout)
             .map_err(|e| format!("epoll_wait 失败: {}", e))?;
 
+        let mut outcome = ReadOutcome {
+            events: Vec::new(),
+            removed: Vec::new(),
+            errors: Vec::new(),
+        };
         if nfds == 0 {
-            return Ok(Vec::new());
+            return Ok(outcome);
         }
 
-        let mut collected = Vec::new();
+        let mut gone = Vec::new();
         for ev in &events[..nfds] {
             let fd = ev.data() as RawFd;
             let Some(device) = self.devices.get(&fd) else {
@@ -157,10 +179,20 @@ impl EventReader {
                 let ret = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
                 if ret < 0 {
                     let errno = nix::errno::Errno::last();
-                    if errno == nix::errno::Errno::EAGAIN || errno == nix::errno::Errno::EWOULDBLOCK {
-                        break;
+                    match errno {
+                        nix::errno::Errno::EAGAIN => break,
+                        // 设备已拔出（或 fd 已失效）
+                        nix::errno::Errno::ENODEV
+                        | nix::errno::Errno::ENXIO
+                        | nix::errno::Errno::EBADF => {
+                            gone.push(fd);
+                            break;
+                        }
+                        _ => {
+                            outcome.errors.push(format!("读取 {} 事件失败: {}", device.path, errno));
+                            break;
+                        }
                     }
-                    return Err(format!("读取事件失败: {}", errno));
                 }
                 if ret == 0 {
                     break;
@@ -174,7 +206,7 @@ impl EventReader {
                     let event_type = u16::from_ne_bytes(chunk[16..18].try_into().unwrap());
                     let code = u16::from_ne_bytes(chunk[18..20].try_into().unwrap());
                     let value = i32::from_ne_bytes(chunk[20..24].try_into().unwrap());
-                    collected.push(RawInputEvent {
+                    outcome.events.push(RawInputEvent {
                         path: device.path.clone(),
                         event_type,
                         code,
@@ -190,7 +222,19 @@ impl EventReader {
             }
         }
 
-        Ok(collected)
+        for fd in gone {
+            if let Some(device) = self.devices.remove(&fd) {
+                let _ = self.epoll.delete(&device.fd);
+                self.by_path.remove(&device.path);
+                outcome.removed.push(RemovedDevice {
+                    path: device.path,
+                    major: device.major,
+                    minor: device.minor,
+                });
+            }
+        }
+
+        Ok(outcome)
     }
 
     /// 获取当前监听的设备列表
