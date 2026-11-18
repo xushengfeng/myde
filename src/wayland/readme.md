@@ -80,6 +80,13 @@
     - 与 `wl_surface.set_buffer_scale` / `wl_output.scale` 配合：surface 仍是逻辑坐标，
       buffer 按 `preferred_scale / 120` 放大，窗口 DOM 尺寸按输出 scale 放大。
 
+- xdg-output-unstable-v1
+    - zxdg_output_manager_v1
+    - zxdg_output_v1
+    - 单屏，`logical_position` 固定 (0, 0)；`logical_size` 为物理模式按 transform 转置后除以
+      输出 scale。Chromium / Electron 用物理尺寸与逻辑尺寸的比值反推显示缩放，
+      `wl_output.scale` 只有整数，分数缩放必须靠这个协议。
+
 - text-input-unstable-v1
     - zwp_text_input_v1 部分
     - zwp_text_input_manager_v1

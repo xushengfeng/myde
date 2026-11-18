@@ -11,6 +11,7 @@ import { viewporterModule } from "./ext/viewporter";
 import { xdgDecorationModule } from "./ext/xdg_decoration";
 import { xdgDialogModule } from "./ext/xdg_dialog";
 import { xdgForeignModule } from "./ext/xdg_foreign";
+import { xdgOutputModule } from "./ext/xdg_output";
 import { xdgShellModule } from "./ext/xdg_shell";
 
 /**
@@ -20,6 +21,9 @@ import { xdgShellModule } from "./ext/xdg_shell";
  * 装配时会校验同一 `接口.请求` 被两个模块声明——现在 `Map.set` 会静默覆盖。
  */
 export const protocolModules: readonly ProtocolModule[] = [
+    // 输出变化钩子按本数组顺序执行：xdg-output 要在 core 的 onOutput（发 wl_output.done）之前
+    // 发逻辑尺寸，客户端才会把两者当成同一次原子更新。
+    xdgOutputModule,
     waylandCoreModule,
     viewporterModule,
     fractionalScaleModule,

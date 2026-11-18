@@ -61,6 +61,13 @@ const supportedProtocols: Array<{
         ],
     },
     {
+        name: "xdg-output-unstable-v1",
+        interfaces: [
+            { name: "zxdg_output_manager_v1", version: 3 },
+            { name: "zxdg_output_v1", version: 3 },
+        ],
+    },
+    {
         name: "presentation-time",
         interfaces: [
             { name: "wp_presentation", version: 2 },

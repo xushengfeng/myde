@@ -2,7 +2,7 @@
 import type { WaylandObjectId } from "../utils/wayland-binary";
 type WaylandObjectId2<T extends string> = WaylandObjectId & { __interface: T };
 
-export type WaylandInterfaces = "wl_display" | "wl_registry" | "wl_callback" | "wl_compositor" | "wl_shm_pool" | "wl_shm" | "wl_buffer" | "wl_surface" | "wl_seat" | "wl_pointer" | "wl_keyboard" | "wl_output" | "wl_region" | "wl_data_device" | "wl_data_device_manager" | "wl_data_offer" | "wl_data_source" | "wl_subcompositor" | "wl_subsurface" | "xdg_wm_base" | "xdg_surface" | "xdg_toplevel" | "xdg_popup" | "xdg_positioner" | "wp_viewporter" | "wp_viewport" | "wp_fractional_scale_manager_v1" | "wp_fractional_scale_v1" | "wp_presentation" | "wp_presentation_feedback" | "zwp_linux_dmabuf_v1" | "zwp_linux_buffer_params_v1" | "zwp_linux_dmabuf_feedback_v1" | "zwp_text_input_v3" | "zwp_text_input_manager_v3" | "zwp_text_input_v1" | "zwp_text_input_manager_v1" | "wp_cursor_shape_manager_v1" | "wp_cursor_shape_device_v1" | "zxdg_decoration_manager_v1" | "zxdg_toplevel_decoration_v1" | "zwp_pointer_gestures_v1" | "zwp_pointer_gesture_swipe_v1" | "zwp_pointer_gesture_pinch_v1" | "zwp_pointer_gesture_hold_v1" | "xdg_wm_dialog_v1" | "xdg_dialog_v1" | "zxdg_exporter_v1" | "zxdg_exported_v1" | "zxdg_exporter_v2" | "zxdg_exported_v2";
+export type WaylandInterfaces = "wl_display" | "wl_registry" | "wl_callback" | "wl_compositor" | "wl_shm_pool" | "wl_shm" | "wl_buffer" | "wl_surface" | "wl_seat" | "wl_pointer" | "wl_keyboard" | "wl_output" | "wl_region" | "wl_data_device" | "wl_data_device_manager" | "wl_data_offer" | "wl_data_source" | "wl_subcompositor" | "wl_subsurface" | "xdg_wm_base" | "xdg_surface" | "xdg_toplevel" | "xdg_popup" | "xdg_positioner" | "wp_viewporter" | "wp_viewport" | "wp_fractional_scale_manager_v1" | "wp_fractional_scale_v1" | "zxdg_output_manager_v1" | "zxdg_output_v1" | "wp_presentation" | "wp_presentation_feedback" | "zwp_linux_dmabuf_v1" | "zwp_linux_buffer_params_v1" | "zwp_linux_dmabuf_feedback_v1" | "zwp_text_input_v3" | "zwp_text_input_manager_v3" | "zwp_text_input_v1" | "zwp_text_input_manager_v1" | "wp_cursor_shape_manager_v1" | "wp_cursor_shape_device_v1" | "zxdg_decoration_manager_v1" | "zxdg_toplevel_decoration_v1" | "zwp_pointer_gestures_v1" | "zwp_pointer_gesture_swipe_v1" | "zwp_pointer_gesture_pinch_v1" | "zwp_pointer_gesture_hold_v1" | "xdg_wm_dialog_v1" | "xdg_dialog_v1" | "zxdg_exporter_v1" | "zxdg_exported_v1" | "zxdg_exporter_v2" | "zxdg_exported_v2";
 
 export enum WaylandEventOpcode {
     wl_display__error = 0,
@@ -66,6 +66,11 @@ export enum WaylandEventOpcode {
     xdg_popup__popup_done = 1,
     xdg_popup__repositioned = 2,
     wp_fractional_scale_v1__preferred_scale = 0,
+    zxdg_output_v1__logical_position = 0,
+    zxdg_output_v1__logical_size = 1,
+    zxdg_output_v1__done = 2,
+    zxdg_output_v1__name = 3,
+    zxdg_output_v1__description = 4,
     wp_presentation__clock_id = 0,
     wp_presentation_feedback__sync_output = 0,
     wp_presentation_feedback__presented = 1,
@@ -432,6 +437,27 @@ export type WaylandEventObj = {
     "wp_fractional_scale_v1.preferred_scale": {
         /** the new preferred scale*/
         scale: number;
+    };
+    "zxdg_output_v1.logical_position": {
+        /** x position within the global compositor space*/
+        x: number;
+        /** y position within the global compositor space*/
+        y: number;
+    };
+    "zxdg_output_v1.logical_size": {
+        /** width in global compositor space*/
+        width: number;
+        /** height in global compositor space*/
+        height: number;
+    };
+    "zxdg_output_v1.done": {};
+    "zxdg_output_v1.name": {
+        /** output name*/
+        name: string;
+    };
+    "zxdg_output_v1.description": {
+        /** output description*/
+        description: string;
     };
     "wp_presentation.clock_id": {
         /** platform clock identifier*/
@@ -1063,6 +1089,12 @@ export type WaylandRequestObj = {
         surface: WaylandObjectId2<"wl_surface">;
     };
     "wp_fractional_scale_v1.destroy": {};
+    "zxdg_output_manager_v1.destroy": {};
+    "zxdg_output_manager_v1.get_xdg_output": {
+        id: WaylandObjectId2<"zxdg_output_v1">;
+        output: WaylandObjectId2<"wl_output">;
+    };
+    "zxdg_output_v1.destroy": {};
     "wp_presentation.destroy": {};
     "wp_presentation.feedback": {
         /** target surface*/

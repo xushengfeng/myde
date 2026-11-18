@@ -2758,6 +2758,106 @@
       "enum": []
     }
   ],
+  "xdg-output-unstable-v1": [
+    {
+      "name": "zxdg_output_manager_v1",
+      "version": 3,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "get_xdg_output",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "zxdg_output_v1"
+            },
+            {
+              "name": "output",
+              "type": "object",
+              "interface": "wl_output"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": []
+    },
+    {
+      "name": "zxdg_output_v1",
+      "version": 3,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        }
+      ],
+      "event": [
+        {
+          "name": "logical_position",
+          "args": [
+            {
+              "name": "x",
+              "type": "int",
+              "summary": "x position within the global compositor space"
+            },
+            {
+              "name": "y",
+              "type": "int",
+              "summary": "y position within the global compositor space"
+            }
+          ]
+        },
+        {
+          "name": "logical_size",
+          "args": [
+            {
+              "name": "width",
+              "type": "int",
+              "summary": "width in global compositor space"
+            },
+            {
+              "name": "height",
+              "type": "int",
+              "summary": "height in global compositor space"
+            }
+          ]
+        },
+        {
+          "name": "done",
+          "args": []
+        },
+        {
+          "name": "name",
+          "args": [
+            {
+              "name": "name",
+              "type": "string",
+              "summary": "output name"
+            }
+          ],
+          "since": 2
+        },
+        {
+          "name": "description",
+          "args": [
+            {
+              "name": "description",
+              "type": "string",
+              "summary": "output description"
+            }
+          ],
+          "since": 2
+        }
+      ],
+      "enum": []
+    }
+  ],
   "presentation-time": [
     {
       "name": "wp_presentation",
