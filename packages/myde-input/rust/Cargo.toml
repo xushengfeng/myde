@@ -1,0 +1,22 @@
+[package]
+name = "myde-input-reader"
+version = "1.0.0"
+edition = "2021"
+description = "High-performance input device reader for myde-input"
+
+[[bin]]
+name = "myde-input-reader"
+path = "src/main.rs"
+
+[dependencies]
+evdev-rs = "0.6"
+serde = { version = "1", features = ["derive"] }
+rmp-serde = "1.1"
+nix = { version = "0.27", features = ["fs", "ioctl", "event"] }
+libc = "0.2"
+zbus = { version = "5", features = ["blocking-api"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
