@@ -187,7 +187,7 @@ async function createWin() {
             query: { userData: app.getPath("userData"), env: JSON.stringify(process.env) },
         });
     } else {
-        let desktop_path = process.env.desktop ?? "desktop/offical";
+        let desktop_path = process.env.desktop ?? "desktop/official";
         if (!path.isAbsolute(desktop_path)) {
             desktop_path = path.join(run_path, desktop_path);
         }

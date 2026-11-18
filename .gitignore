@@ -3,7 +3,7 @@ out
 script/wayland/xml
 script/linux_input_codes/input-event-codes.h
 script/xcb/x.xkb
-test/offical/wayland
+test/official/wayland
 dist
 build
 /resources

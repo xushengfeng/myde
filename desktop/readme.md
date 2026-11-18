@@ -391,13 +391,13 @@ inputSim.emit({ kind: "key", type: "up", code: 30, source: "evdev" });
 - 合成事件没有浏览器默认行为：按键派发后未被 `preventDefault` 时补齐文本输入（`input`/`textarea`/contenteditable 的插入、Backspace、Delete）；滚轮派发后未被 `preventDefault` 时滚动最近的可滚动祖先，原生 `overflow: auto/scroll` 容器也能滚动
 - DOM 操作通过宿主接口 `InputSimHost`（`targetAt`/`activeTarget`/`focus`/`dispatch`）访问，默认实现 `domInputSimHost()` 操作真实 DOM，纯 node 环境可 `new inputSim(host)` 注入自定义宿主
 
-聚合层参考实现见 `desktop/offical`：`main.ts` 的"输入聚合层"完成聚合/融合/分发——window capture 捕获真实 DOM 事件（只收 `isTrusted`，合成事件不回流防环）归一化，`useEvdevDevice` 解码 input api 事件（EV_SYN 帧合并、相对位移积分、绝对轴小数映射、滚轮换算、按键分流，判定/换算工具在 `input_evdev.ts`），统一传入本 api；来源只以 `source` 标记保留类型数据，不做去重。input api 热插拔按 `deviceAdded`/`deviceRemoved` 接入：新设备按 path 注册，移除时解除监听并清掉该设备的共享状态（同 `phys` 的伴随节点还在就保留），同时把该设备还按着的键盘键、鼠标键、触屏接触点和触摸板手势补成抬起/结束，避免模拟层和 Wayland 客户端卡在按下状态。
+聚合层参考实现见 `desktop/official`：`main.ts` 的"输入聚合层"完成聚合/融合/分发——window capture 捕获真实 DOM 事件（只收 `isTrusted`，合成事件不回流防环）归一化，`useEvdevDevice` 解码 input api 事件（EV_SYN 帧合并、相对位移积分、绝对轴小数映射、滚轮换算、按键分流，判定/换算工具在 `input_evdev.ts`），统一传入本 api；来源只以 `source` 标记保留类型数据，不做去重。input api 热插拔按 `deviceAdded`/`deviceRemoved` 接入：新设备按 path 注册，移除时解除监听并清掉该设备的共享状态（同 `phys` 的伴随节点还在就保留），同时把该设备还按着的键盘键、鼠标键、触屏接触点和触摸板手势补成抬起/结束，避免模拟层和 Wayland 客户端卡在按下状态。
 
 触摸板（`type === "touchpad"`）的绝对坐标**不直接映射到屏幕**，只用来计算相邻帧位移；`BTN_TOUCH` 只表示手指接触、不是点击（点击走 `BTN_LEFT`）。仓库的 `src/utils/touchpad.ts` 把设备事件封装成 `move`/`scroll`/`scrollEnd`/`pinchStart`/`pinchUpdate`/`pinchEnd`/`holdStart`/`holdEnd`/`multiStart`/`multiMove`/`multiEnd`/`button` 语义事件：单指轻触左键、双指轻触右键、三指轻触中键、双指自然滚动、双指捏合缩放/旋转、按住、轻触后第二下按住拖拽。轻触/拖拽行为对齐 libinput（COSMIC、KWin 都直接使用它）：接触不超过 180ms、位移不超过 1.3mm（按设备分辨率折算，缺失时按默认 DPI）才算轻触；接触中移动超过 1.3mm 或按住超过 180ms 都不点击。轻触在抬手时按下左键，并等 180ms 拖拽窗口：窗口内第二下按住（移动超阈值或保持到超时）沿用按住的左键进入拖拽，抬手结束；第二下快速抬起则按双击处理；没有第二下时窗口结束自动抬起完成点击。双指滚动是连续滚动，转发给 Wayland 时要带 `source: "finger"`（不发离散步进），手指数量变化时发 `scrollEnd` 让客户端补 `axis_stop`。两指先分类再发滚动：质心移动超过 1.5mm 且大于两指距离变化才判为滚动；双指距离相对 begin 变化超过 8% 且不少于 2mm，或夹角变化超过 10° 判为捏合，分类前暂存滚动量；已判为滚动后本轮不再改判捏合，捏合期间滚动继续；`scale` 是相对 begin 的绝对比例，`rotation` 是相对上一次事件的顺时针角度，捏合期间不再发滚动。手指保持不动 300ms、质心位移不超过 2mm 发 hold，移动或换指则取消；官方桌面只把 1-2 指的 hold 转发给应用。三指及以上移动不发滚动，单独发 `multiStart`/`multiMove`/`multiEnd`（即 swipe 语义）；本轮出现过多指后，残留的两指/单指也不再产生滚动、捏合或光标移动，避免抬手不齐时误触双指滚动。手指数变多是允许的（单指→双指滚动→多指手势）；变少时本轮结束，例外是 2→1，剩下的单指继续移动光标。官方桌面把三指手势当作全局快捷键消费（切虚拟屏、总览/启动器），不转发给应用；四指及以上作为 swipe 发给应用。双指捏合和 hold 发给应用。MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪接触点，没有 tracking id 的旧设备用 `BTN_TOOL_*` 手指数兜底。触摸板常带一个同 `phys` 的伴随鼠标节点，如果那个相对通道真的在出事件，则忽略触摸板的绝对位移，避免双倍移动。window 模式没有 evdev，宿主会把触摸板 pinch 合成成 `Ctrl+wheel`；官方桌面在物理 Ctrl 没按下时把它还原成 pinch 并转发，scale 按 `exp(-deltaY/100)` 累积，物理 Ctrl+wheel 仍按普通滚轮处理。
 
 触屏（`type === "touchscreen"`）的绝对坐标直接映射到视口，MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪每个接触点：一根手指对应一个 `pointerId`，各自产生独立的 down/move/up，第一根按下的手指 `isPrimary` 为 true。没有 tracking id 的旧设备退回单指 `BTN_TOUCH` 路径。统一输入事件的 `pointerType` 为 `"touch"`，`inputSim` 合成 `PointerEvent` 时保留 `pointerType`/`pointerId`/`isPrimary`，UI 只监听 pointer 事件即可同时响应鼠标、触摸板和触屏，多指手势由交互层处理。
 
-注意被吞掉的原生事件只对**聚合层之后**注册的监听不可见：排在它之前的 window capture 监听仍会先收到原生事件，而原生 `click` 不受 `preventDefault` 影响（它不是兼容鼠标事件），且派发在 inputSim 合成的 `click` 之后——一次物理点击就被处理两遍，出现「合成 click 打开弹窗 → 原生 click 立刻关闭」的点击无反应（evdev 来源没有原生事件，只用 evdev 时看不出）。因此：① 吞事件的注册要早于所有 UI 监听（`desktop/offical` 把整个「输入聚合层」放在工具栏 plant 循环之前）；② 若确要在它之前注册监听，该监听必须忽略 `isTrusted` 事件（`desktop/offical` 的 Tools 关闭弹窗监听保留了这条守卫）。
+注意被吞掉的原生事件只对**聚合层之后**注册的监听不可见：排在它之前的 window capture 监听仍会先收到原生事件，而原生 `click` 不受 `preventDefault` 影响（它不是兼容鼠标事件），且派发在 inputSim 合成的 `click` 之后——一次物理点击就被处理两遍，出现「合成 click 打开弹窗 → 原生 click 立刻关闭」的点击无反应（evdev 来源没有原生事件，只用 evdev 时看不出）。因此：① 吞事件的注册要早于所有 UI 监听（`desktop/official` 把整个「输入聚合层」放在工具栏 plant 循环之前）；② 若确要在它之前注册监听，该监听必须忽略 `isTrusted` 事件（`desktop/official` 的 Tools 关闭弹窗监听保留了这条守卫）。
 
 ### inputMethod
 
@@ -693,7 +693,7 @@ server.notify("window.minimize", handle);
 再由桌面用 `window.fullscreen` / `window.unfullscreen` 下发最终盒子。`wm_capabilities` 已声明
 `minimize` / `maximize` / `fullscreen`。
 
-官方桌面（`desktop/offical`）对全屏的处理：舞台（`windowElWarp`/`windowEl`）始终铺满视口，
+官方桌面（`desktop/official`）对全屏的处理：舞台（`windowElWarp`/`windowEl`）始终铺满视口，
 工具栏占位只体现为窗口可用区（最大化尺寸、普通窗口居中、`surfaceBounds`）的内缩，不再限制
 舞台 DOM。全屏时只是让工具栏**模糊淡出**，全屏窗口按整块输出 configure；进入全局预览、
 或切到没有全屏窗口的虚拟屏时工具栏原样恢复。`Super+F` 切换当前聚焦窗口的全屏。总览 grid
@@ -863,7 +863,7 @@ server.on("client.opened", (clientId) => {
 
 ## 输入处理
 
-推荐用聚合层统一输入：捕获 DOM 原生事件（只收 `isTrusted`，合成事件不回流）与 input api（evdev）事件，区分来源、融合（evdev EV_SYN 帧合并、相对位移积分、绝对轴映射、滚轮换算）后传给 `MSysApi.inputSim` 模拟 DOM 事件。滚轮/触摸板建议在聚合层**直接用统一输入事件的字段转发**给窗口，因为模拟成 DOM `WheelEvent` 会丢掉 `wheelSource`（滚轮还是触摸板）和高精度刻度；其它事件继续消费 DOM 事件即可（两种输入来源走同一条路径）。`desktop/offical/src/main.ts` 的"输入聚合层"是完整参考实现。
+推荐用聚合层统一输入：捕获 DOM 原生事件（只收 `isTrusted`，合成事件不回流）与 input api（evdev）事件，区分来源、融合（evdev EV_SYN 帧合并、相对位移积分、绝对轴映射、滚轮换算）后传给 `MSysApi.inputSim` 模拟 DOM 事件。滚轮/触摸板建议在聚合层**直接用统一输入事件的字段转发**给窗口，因为模拟成 DOM `WheelEvent` 会丢掉 `wheelSource`（滚轮还是触摸板）和高精度刻度；其它事件继续消费 DOM 事件即可（两种输入来源走同一条路径）。`desktop/official/src/main.ts` 的"输入聚合层"是完整参考实现。
 
 ```typescript
 function windowAtPoint(p) {

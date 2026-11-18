@@ -157,7 +157,7 @@ resize ↔ `move` / `all_scroll` / `all_resize` 过渡时优先用十字的一�
 - UI 调试（浏览器 + mock 文件树）：`pnpm test:file-chooser`
 - 真实 portal 弹窗：`cd test/electron_app && npm run file`，用窗口里的文件输入框或保存下载按钮触发；在 MyDE internal portal 环境里启动该应用即可看到官方桌面的选择器
 
-UI 调试页在 `desktop/offical/test/file_chooser`，直接复用真实的 `file_chooser.ts`，只替换 `nativefs.list` 和 `portal.browse.places` 的 mock 数据。
+UI 调试页在 `desktop/official/test/file_chooser`，直接复用真实的 `file_chooser.ts`，只替换 `nativefs.list` 和 `portal.browse.places` 的 mock 数据。
 
 ## 输入法
 

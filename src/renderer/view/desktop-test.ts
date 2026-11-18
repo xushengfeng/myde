@@ -316,7 +316,7 @@ view()
             button(app)
                 .style({ padding: "4px 8px", background: "#fff" })
                 .on("click", () => {
-                    const execPath = path.join(__dirname, "../..", "test/offical", `wayland/build/tests/${app}`);
+                    const execPath = path.join(__dirname, "../..", "test/official", `wayland/build/tests/${app}`);
                     runApp(execPath);
                 }),
         ),

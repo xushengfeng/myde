@@ -18,11 +18,11 @@
         "biome:format": "biome format --write .",
         "wayland:gen-protocols": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON script/wayland/gen_protocols.ts",
         "desktop:simpletest": "export desktop=':test' && electron-vite --ignoreConfigWarning preview",
-        "desktop:offical": "cd desktop/offical && npm run build && cd ../.. && export desktop='desktop/offical' && electron-vite --ignoreConfigWarning preview",
+        "desktop:official": "cd desktop/official && npm run build && cd ../.. && export desktop='desktop/official' && electron-vite --ignoreConfigWarning preview",
         "desktop:remote": "cd desktop/remote && npm run build && cd ../.. && export desktop='desktop/remote' && electron-vite --ignoreConfigWarning preview",
         "desktop:example": "cd desktop/example && npm run build && cd ../.. && export desktop='desktop/example' && electron-vite --ignoreConfigWarning preview",
-        "test:frametime": "vite desktop/offical/test/frametime",
-        "test:file-chooser": "vite desktop/offical/test/file_chooser"
+        "test:frametime": "vite desktop/official/test/frametime",
+        "test:file-chooser": "vite desktop/official/test/file_chooser"
     },
     "author": {
         "name": "xsf",

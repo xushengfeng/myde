@@ -53,7 +53,7 @@ jobs:
                   USE_HARD_LINKS: false
               run: |
                   npm install
-                  cd desktop/offical
+                  cd desktop/official
                   npm install
                   npm run build
                   cd ..

@@ -275,7 +275,7 @@ setupMydeMock({ vfsStore: store });
 ## 外部数据配置示例
 
 ```typescript
-// desktop/offical/test/mock/mock_demo.ts 提供了完整示例
+// desktop/official/test/mock/mock_demo.ts 提供了完整示例
 import { setMockDesktopEntries, addMockValidPassword, getMockVfsStore } from "./mock_demo";
 
 // 设置桌面应用列表

@@ -12,7 +12,7 @@
 
 [桌面实现文档](desktop/readme.md)
 
-`desktop/offical`官方桌面
+`desktop/official`官方桌面
 
 `desktop/remote`远程特性演示桌面
 
