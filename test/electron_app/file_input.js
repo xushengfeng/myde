@@ -2,6 +2,10 @@
 //   cd test/electron_app && npm run file
 // npm script 会带上 GTK_USE_PORTAL=1，让 GTK 文件对话框走 xdg-desktop-portal；
 // 在 MyDE 的 internal portal 环境里就能看到官方桌面的弹窗。
+//
+// 过滤器的两种来源都会触发：
+//   - <input type="file" accept="...">：Chromium 自己生成 portal filters
+//   - Electron dialog.showOpenDialog/showSaveDialog 的 filters：GTK 生成命名过滤器
 
 const html = `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -100,6 +104,39 @@ const html = `<!DOCTYPE html>
         </div>
     </div>
 
+    <div class="panel">
+        <p>过滤器测试</p>
+        <div class="row">
+            <span class="label">accept 扩展名</span>
+            <input id="open-accept-ext" type="file" accept=".txt,.md,.json" />
+            <span class="hint">accept=".txt,.md,.json"</span>
+        </div>
+        <div class="row">
+            <span class="label">accept MIME</span>
+            <input id="open-accept-mime" type="file" accept="image/*,text/plain" />
+            <span class="hint">accept="image/*,text/plain"</span>
+        </div>
+        <div class="row">
+            <span class="label">accept 混合多选</span>
+            <input id="open-accept-mixed" type="file" multiple accept="image/png,image/jpeg,.txt,.md" />
+            <span class="hint">multiple + MIME/glob 混合</span>
+        </div>
+        <div class="row">
+            <span class="label">dialog 打开（命名筛选）</span>
+            <button id="dialog-open" type="button">showOpenDialog</button>
+            <span class="hint">filters: 图片 / 文本 / PDF，Electron 会自动补「All Files」</span>
+        </div>
+        <div class="row">
+            <span class="label">dialog 保存（命名筛选）</span>
+            <button id="dialog-save" type="button">showSaveDialog</button>
+            <span class="hint">filters: 文本 / JSON</span>
+        </div>
+        <div class="row">
+            <span class="label">过滤器结果</span>
+            <pre id="filter-result">还没有触发过滤器对话框。</pre>
+        </div>
+    </div>
+
     <script>
         const result = document.getElementById("result");
         const saveButton = document.getElementById("save");
@@ -122,6 +159,14 @@ const html = `<!DOCTYPE html>
                 : title + "（" + list.length + "）：\\n" + list.map((file) => "  " + filePath(file)).join("\\n");
         }
 
+        const filterResult = document.getElementById("filter-result");
+
+        function showFiltered(title, list) {
+            filterResult.textContent = list.length === 0
+                ? title + "：没有选择文件"
+                : title + "（" + list.length + "）：\\n" + list.map((path) => "  " + path).join("\\n");
+        }
+
         for (const [id, title] of [
             ["open-one", "打开单个文件"],
             ["open-many", "打开多个文件"],
@@ -130,6 +175,38 @@ const html = `<!DOCTYPE html>
             const input = document.getElementById(id);
             input.addEventListener("change", () => show(title, input.files));
         }
+
+        for (const [id, title] of [
+            ["open-accept-ext", "accept 扩展名"],
+            ["open-accept-mime", "accept MIME"],
+            ["open-accept-mixed", "accept 混合多选"],
+        ]) {
+            const input = document.getElementById(id);
+            input.addEventListener("change", () => {
+                const files = [...input.files];
+                showFiltered(title, files.map(filePath));
+            });
+        }
+
+        const { ipcRenderer } = require("electron");
+
+        document.getElementById("dialog-open").addEventListener("click", async () => {
+            try {
+                const outcome = await ipcRenderer.invoke("dialog:open-filtered");
+                showFiltered("dialog 打开", outcome.canceled ? [] : outcome.filePaths);
+            } catch (error) {
+                filterResult.textContent = "dialog 打开失败：" + error;
+            }
+        });
+
+        document.getElementById("dialog-save").addEventListener("click", async () => {
+            try {
+                const outcome = await ipcRenderer.invoke("dialog:save-filtered");
+                showFiltered("dialog 保存", outcome.canceled || !outcome.filePath ? [] : [outcome.filePath]);
+            } catch (error) {
+                filterResult.textContent = "dialog 保存失败：" + error;
+            }
+        });
 
         saveButton.addEventListener("click", () => {
             const blob = new Blob(["MyDE file chooser test\\n"], { type: "text/plain" });
@@ -148,10 +225,36 @@ const html = `<!DOCTYPE html>
 </html>`;
 
 module.exports = ({ createWindow }) => {
-    createWindow({
+    const win = createWindow({
         html,
         width: 760,
-        height: 620,
+        height: 720,
         devtools: false,
     });
+
+    const { dialog, ipcMain } = require("electron");
+
+    // Electron 的 filters 会经 GTK/portal 变成命名过滤器，用来验证桌面端筛选
+    ipcMain.handle("dialog:open-filtered", () =>
+        dialog.showOpenDialog(win, {
+            title: "过滤器测试：打开文件",
+            properties: ["openFile", "multiSelections"],
+            filters: [
+                { name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif", "svg"] },
+                { name: "文本", extensions: ["txt", "md", "json"] },
+                { name: "PDF", extensions: ["pdf"] },
+            ],
+        }),
+    );
+
+    ipcMain.handle("dialog:save-filtered", () =>
+        dialog.showSaveDialog(win, {
+            title: "过滤器测试：保存文件",
+            defaultPath: "myde-filter-test.txt",
+            filters: [
+                { name: "文本", extensions: ["txt", "md"] },
+                { name: "JSON", extensions: ["json"] },
+            ],
+        }),
+    );
 };
