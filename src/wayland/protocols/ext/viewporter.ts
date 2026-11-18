@@ -54,7 +54,10 @@ export const viewporterModule = defineModule({
             }
             const sctx = ncanvas.getContext("2d");
             if (sctx) {
-                // drawImage 的 destination 覆盖整块画布，不需要先 clear
+                // 复用画布必须先清空：窗口是透明的时候，新的裁剪帧里的透明像素
+                // 按 source-over 盖不掉上一帧的裁剪内容，resize 过渡（Chrome 用
+                // set_source 缩放旧帧）会留下逐帧叠加的残影。
+                sctx.clearRect(0, 0, width, height);
                 sctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, width, height);
             }
             return ncanvas;

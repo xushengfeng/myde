@@ -1,0 +1,6 @@
+{
+    "name": "myde-transparent-overlap-repro",
+    "version": "1.0.0",
+    "private": true,
+    "main": "entry.js"
+}

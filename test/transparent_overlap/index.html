@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<style>
+    html,
+    body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        font: 12px/1.5 system-ui, sans-serif;
+        user-select: none;
+    }
+    /* 透明窗口的拖动区域 */
+    #hint {
+        position: absolute;
+        left: 12px;
+        top: 12px;
+        z-index: 10;
+        padding: 8px 12px;
+        border-radius: 12px;
+        color: #fff;
+        background: rgba(20, 20, 24, 0.62);
+        backdrop-filter: blur(6px);
+        -webkit-app-region: drag;
+        pointer-events: auto;
+        max-width: 420px;
+    }
+    #hint b {
+        font-weight: 600;
+    }
+    #hint .k {
+        display: inline-block;
+        padding: 0 5px;
+        margin: 0 1px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.18);
+        font-family: ui-monospace, monospace;
+    }
+    #status {
+        opacity: 0.75;
+        font-family: ui-monospace, monospace;
+    }
+    .layer {
+        position: absolute;
+        will-change: transform;
+        transform: translate3d(0, 0, 0);
+    }
+    #red {
+        width: 84px;
+        height: 84px;
+        border-radius: 18px;
+        background: #ff2d55;
+        box-shadow: 0 10px 28px rgba(255, 45, 85, 0.45);
+        animation: slideA 2.4s ease-in-out infinite alternate;
+    }
+    #blue {
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        background: #0a84ff;
+        box-shadow: 0 8px 24px rgba(10, 132, 255, 0.4);
+        animation: slideB 1.9s ease-in-out infinite alternate;
+    }
+    #green {
+        width: 52px;
+        height: 52px;
+        border-radius: 12px;
+        background: #30d158;
+        animation: spin 3.2s linear infinite, slideC 2.8s ease-in-out infinite alternate;
+    }
+    #card {
+        width: 220px;
+        height: 116px;
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.86);
+        color: #1d1d1f;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+        padding: 14px 16px;
+        box-sizing: border-box;
+        animation: cardMove 4.5s ease-in-out infinite alternate;
+    }
+    #card .t {
+        font-size: 14px;
+        font-weight: 600;
+    }
+    #card .s {
+        margin-top: 6px;
+        opacity: 0.6;
+    }
+    #pulse {
+        width: 160px;
+        height: 160px;
+        border-radius: 50%;
+        background: radial-gradient(circle at 40% 35%, rgba(255, 214, 10, 0.95), rgba(255, 159, 10, 0.45) 55%, rgba(255, 159, 10, 0));
+        filter: blur(1px);
+        animation: pulse 1.5s ease-in-out infinite alternate, drift 3.6s ease-in-out infinite alternate;
+    }
+    #spinner {
+        width: 96px;
+        height: 96px;
+        animation: spinnerMove 2.1s ease-in-out infinite alternate;
+    }
+    #spinner canvas {
+        width: 96px;
+        height: 96px;
+        display: block;
+    }
+    @keyframes slideA {
+        from { transform: translate3d(40px, 340px, 0); }
+        to { transform: translate3d(540px, 150px, 0); }
+    }
+    @keyframes slideB {
+        from { transform: translate3d(560px, 360px, 0); }
+        to { transform: translate3d(250px, 40px, 0); }
+    }
+    @keyframes slideC {
+        from { transform: translate3d(80px, 120px, 0); }
+        to { transform: translate3d(470px, 380px, 0); }
+    }
+    @keyframes spin {
+        from { rotate: 0deg; }
+        to { rotate: 360deg; }
+    }
+    @keyframes cardMove {
+        from { transform: translate3d(20px, 180px, 0); }
+        to { transform: translate3d(420px, 300px, 0); }
+    }
+    @keyframes pulse {
+        from { opacity: 0.35; }
+        to { opacity: 1; }
+    }
+    @keyframes drift {
+        from { transform: translate3d(320px, 220px, 0) scale(0.8); }
+        to { transform: translate3d(360px, 260px, 0) scale(1.15); }
+    }
+    @keyframes spinnerMove {
+        from { transform: translate3d(520px, 30px, 0); }
+        to { transform: translate3d(560px, 300px, 0); }
+    }
+    body.opaque {
+        background: #202124;
+    }
+    body.paused .layer,
+    body.paused #card,
+    body.paused #pulse,
+    body.paused #spinner {
+        animation-play-state: paused;
+    }
+    body.hide-hint #hint {
+        display: none;
+    }
+</style>
+</head>
+<body>
+    <div id="hint">
+        <b>myde 透明窗口 damage 复现</b><br />
+        看到 <b>拖尾 / 残影 / 旧内容叠在新内容上</b> 就是问题复现了，请截图。<br />
+        <span class="k">空格</span> 暂停　<span class="k">R</span> 改尺寸　<span class="k">B</span> 不透明背景　<span class="k">H</span> 隐藏提示　<span class="k">Esc</span> 退出<br />
+        <span id="status">frame 0</span>
+    </div>
+
+    <div id="red" class="layer"></div>
+    <div id="blue" class="layer"></div>
+    <div id="green" class="layer"></div>
+    <div id="pulse" class="layer"></div>
+    <div id="card" class="layer">
+        <div class="t">半透明面板</div>
+        <div class="s">移动时不应留下旧内容</div>
+    </div>
+    <div id="spinner" class="layer"><canvas id="spinnerCanvas" width="192" height="192"></canvas></div>
+
+    <script>
+        const status = document.getElementById("status");
+        const spinner = document.getElementById("spinnerCanvas");
+        const sctx = spinner.getContext("2d");
+        const isElectron = typeof require === "function";
+        let paused = false;
+        let frame = 0;
+        let last = performance.now();
+
+        function drawSpinner(now) {
+            const t = now / 1000;
+            const w = spinner.width;
+            const h = spinner.height;
+            sctx.clearRect(0, 0, w, h);
+            sctx.save();
+            sctx.translate(w / 2, h / 2);
+            sctx.rotate(t * 3);
+            sctx.lineWidth = 14;
+            sctx.lineCap = "round";
+            sctx.strokeStyle = "#ff9f0a";
+            sctx.beginPath();
+            sctx.arc(0, 0, w / 2 - 18, 0, Math.PI * 1.15);
+            sctx.stroke();
+            sctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+            sctx.beginPath();
+            sctx.arc(0, 0, w / 2 - 18, Math.PI * 1.15, Math.PI * 1.6);
+            sctx.stroke();
+            sctx.restore();
+        }
+
+        function tick(now) {
+            const dt = now - last;
+            last = now;
+            if (!paused) drawSpinner(now);
+            frame++;
+            status.textContent = `frame ${frame}  ${dt.toFixed(1)}ms`;
+            requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+
+        addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                if (isElectron) require("electron").ipcRenderer.send("repro:quit");
+            } else if (e.key === " ") {
+                paused = !paused;
+                document.body.classList.toggle("paused", paused);
+                e.preventDefault();
+            } else if (e.key === "r" || e.key === "R") {
+                if (isElectron) require("electron").ipcRenderer.sendSync("repro:resize");
+            } else if (e.key === "b" || e.key === "B") {
+                document.body.classList.toggle("opaque");
+            } else if (e.key === "h" || e.key === "H") {
+                document.body.classList.toggle("hide-hint");
+            }
+        });
+    </script>
+</body>
+</html>
