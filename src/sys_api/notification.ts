@@ -36,7 +36,7 @@ export class notification extends EventEmitter<NotificationEvents> {
         await this.dbusServer.init();
         this.dbusServer.addObject(NOTIFICATION_PATH, NOTIFICATION_IFACE, {
             GetCapabilities: async () => {
-                return { signature: "as", value: ["body", "actions", "persistence"] };
+                return { signature: "as", value: [["body", "actions", "persistence"]] };
             },
             Notify: async (
                 app_name: string,
@@ -63,7 +63,7 @@ export class notification extends EventEmitter<NotificationEvents> {
                 };
                 this.notifications.set(thisId, data);
                 this.emit("new", data);
-                return { signature: "u", value: thisId };
+                return { signature: "u", value: [thisId] };
             },
             CloseNotification: async (id: number) => {
                 await this.close(id, 3);
