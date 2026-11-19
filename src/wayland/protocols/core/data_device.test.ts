@@ -30,6 +30,13 @@ function makeCtx() {
         pointerPos: { x: 5, y: 5 },
         keyboardFocus: null,
         mods: new Set<number>(),
+        // start_drag 要求有仍按住按钮的隐式 grab；测试直接以 serial 1 发起
+        pointerGrab: { serial: 1, surface: 10, winId: 20, buttons: new Set([0]) } as {
+            serial: number;
+            surface: number;
+            winId: number;
+            buttons: Set<number>;
+        },
     };
 
     const objects = {
@@ -67,8 +74,16 @@ function makeCtx() {
             byName: (name?: string) => ((name ?? "seat0") === "seat0" ? seat : undefined),
             get: (id: number) => (id === 1 ? seat : undefined),
             all: () => [seat][Symbol.iterator](),
-            noteUserActionSerial: () => {},
             isUserActionSerial: () => true,
+            isActivePointerGrab: () => true,
+            beginPointerGrab: (_seat: unknown, _winId: number, _surface: number, button: number, serial: number) => {
+                seat.pointerGrab = { serial, surface: 10, winId: 20, buttons: new Set([button]) };
+            },
+            endPointerButton: (_seat: unknown, button: number) => {
+                seat.pointerGrab.buttons.delete(button);
+                return seat.pointerGrab.buttons.size === 0;
+            },
+            noteKeyboardSerial: () => {},
             addModifier: () => {},
             removeModifier: () => {},
             modifierMask: () => 0,

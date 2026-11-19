@@ -762,10 +762,44 @@ export class xdgSurfaceData {
      * 只做几何；焦点转移与 enter/leave 的协议动作在 `protocols/core/wayland.ts` 的 `input.pointer`。
      * 没命中任何 surface 时返回 undefined —— 此时**不发 leave**（见 core 的 todo）。
      */
-    hitTest(winId: WaylandWinId, p: { x: number; y: number }): HitTestResult | undefined {
+    hitTest(winId: WaylandWinId, p: { x: number; y: number }, hold?: SurfaceId): HitTestResult | undefined {
         const xdgSurfaceId = this.getXdgSurfaceByToplevel(winId);
         if (xdgSurfaceId === undefined) return undefined;
         const { x, y } = p;
+
+        // 隐式 grab：焦点固定在 hold 上，不按几何/input region 判定，只把坐标换算到它的局部坐标系
+        if (hold !== undefined) {
+            const candidates: {
+                id: WaylandObjectId2<"xdg_surface">;
+                offset: { x: number; y: number };
+                role: "main" | "popup";
+            }[] = [{ id: xdgSurfaceId, offset: { x: 0, y: 0 }, role: "main" }];
+            for (const popup of this.getChildenDeepOnlyPopup(xdgSurfaceId)) {
+                candidates.push({ id: popup.id, offset: popup.offset, role: "popup" });
+            }
+            for (const candidate of candidates) {
+                const info = this.getXdgSurface(candidate.id);
+                if (info === undefined) continue;
+                const mainSurfaceId = info.surface;
+                const selfOffset = info.winGeo ?? { x: 0, y: 0 };
+                const surfaces = [
+                    { id: mainSurfaceId, offsetRect: { x: 0, y: 0 } },
+                    ...this.subsurface.getChildrenDeep(mainSurfaceId),
+                ];
+                for (const s of surfaces) {
+                    if (s.id !== hold) continue;
+                    return {
+                        surface: hold,
+                        xdgSurface: candidate.id,
+                        x: x - (s.offsetRect.x - selfOffset.x + candidate.offset.x),
+                        y: y - (s.offsetRect.y - selfOffset.y + candidate.offset.y),
+                        role: candidate.role,
+                    };
+                }
+            }
+            return undefined;
+        }
+
         // 获取在哪个xdgsurface上，并区分surface还是popup
         let inXdgSurface: WaylandObjectId2<"xdg_surface"> | undefined;
         /** 相对于主xdgsurface坐标，适用于popup */

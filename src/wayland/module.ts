@@ -348,8 +348,11 @@ export interface XdgSurfaceApi {
      * 指针命中检测（纯几何）：xdg 几何 + popup 树 + subsurface + input region。
      * `p` 相对窗口元素左上角（几何原点）；没命中任何 surface 时 undefined —— 此时**不发 leave**。
      * core 的 `input.pointer` 在调；焦点转移与 enter/leave 的协议动作留在 core。
+     *
+     * `hold` 是隐式 grab 固定住的 surface：给了它就不再按几何/input region 判定，直接返回该
+     * surface 上的局部坐标（可能落在 surface 外），用于 grab 期间的 motion/up。
      */
-    hitTest(winId: WaylandWinId, p: { x: number; y: number }): HitTestResult | undefined;
+    hitTest(winId: WaylandWinId, p: { x: number; y: number }, hold?: SurfaceId): HitTestResult | undefined;
 }
 
 export interface RegistryApi {
@@ -581,6 +584,24 @@ export interface CursorApi {
     isCursorSurface(id: SurfaceId): boolean;
 }
 
+/**
+ * 指针隐式 grab：第一次按下按钮时建立，全部按钮松开后结束。
+ *
+ * Wayland 的隐式 grab 把指针焦点固定在这块 surface 上，之后即使指针移出它的范围，
+ * motion/up 仍然发给它；grab 的 serial 就是首次按下事件的 serial。按钮全部松开后
+ * 仍保留最后一次的 serial/surface，因为 `move` / `popup.grab` 可能在 release 之后才到达。
+ */
+export interface PointerGrab {
+    /** 首次按下按钮的事件 serial；同一次 grab 内再按其它键不换 serial */
+    serial: number;
+    /** grab 期间固定的焦点 surface */
+    surface: SurfaceId;
+    /** 建立 grab 时的窗口对象（取局部坐标要按它的几何算） */
+    winId: WaylandWinId;
+    /** 当前按下的按钮；空集表示 grab 已结束 */
+    buttons: Set<number>;
+}
+
 export interface SeatRecord {
     /** seat 名（registry 广播的第几个 `wl_seat` global：`seat0`/`seat1`…）；`input.*` 的 `seat` 参数按它选择 */
     name: string;
@@ -603,8 +624,10 @@ export interface SeatRecord {
     keyboardFocus: SurfaceId | null;
     /** 该 seat 的修饰键位（`mods_depressed` 的掩码原料），两把键盘各记各的 */
     mods: Set<number>;
-    /** 最近下发的用户操作 serial（指针/键盘按键），xdg move/grab、DnD 的请求按它校验 */
-    recentUserActionSerials: number[];
+    /** 最近一次指针隐式 grab（button 全松开后仍保留 serial/surface，供延迟到达的请求校验） */
+    pointerGrab?: PointerGrab;
+    /** 最近一次键盘事件 serial；键盘触发的 move/grab 用它校验 */
+    keyboardGrabSerial?: number;
 }
 
 export interface SeatApi {
@@ -613,9 +636,16 @@ export interface SeatApi {
     /** 按 seat 名取：`input.*` 的 `seat` 参数就按它解析（缺省 `"seat0"`） */
     byName(name: string): SeatRecord | undefined;
     all(): IterableIterator<SeatRecord>;
-    /** 记下指针/键盘按键的 serial：xdg move/grab、DnD 用它判断用户操作是否仍然有效 */
-    noteUserActionSerial(seat: SeatRecord, serial: number): void;
+    /** 按下按钮：第一次按下时建立 grab，之后只追加按钮（保留首次的 serial） */
+    beginPointerGrab(seat: SeatRecord, winId: WaylandWinId, surface: SurfaceId, button: number, serial: number): void;
+    /** 松开按钮；返回 true 表示 grab 已结束（全部按钮都已松开） */
+    endPointerButton(seat: SeatRecord, button: number): boolean;
+    /** serial 是否属于当前仍按住按钮的指针 grab（DnD 的隐式 grab 校验） */
+    isActivePointerGrab(seat: SeatRecord, serial: number): boolean;
+    /** serial 是否来自当前/最近一次指针 grab，或最近一次键盘事件（move/grab 校验） */
     isUserActionSerial(seat: SeatRecord, serial: number): boolean;
+    /** 记录键盘事件 serial（键盘触发的 move/grab 用） */
+    noteKeyboardSerial(seat: SeatRecord, serial: number): void;
     addModifier(seat: SeatRecord, bit: number): void;
     removeModifier(seat: SeatRecord, bit: number): void;
     modifierMask(seat: SeatRecord): number;
