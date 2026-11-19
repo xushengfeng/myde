@@ -1539,10 +1539,12 @@ type PointerHit = { handle: WinHandle; clientId: string };
 let pointerTarget: PointerHit | undefined;
 
 /**
- * 每个按下的指针归属：命中客户端时后续 move/up 都路由给它（Wayland 隐式 grab）；
- * 按在桌面 UI 上时 `hit` 为空，这次指针序列不再漏给下面的客户端。
+ * 一次按压序列的归属：
+ * - `client`：已经交给 server，后续 move/up 都用 `hit` 的 handle 和局部坐标；
+ * - `desktop`：落在桌面 UI 或桌面自己接管，后续 move 不再转发给客户端。
+ *   客户端 grab 的按钮集合由 server 管理，这里只在桌面自己的按压上记按钮。
  */
-type PointerRoute = { hit: PointerHit | undefined; buttons: Set<number> };
+type PointerRoute = { kind: "client"; hit: PointerHit } | { kind: "desktop"; buttons: Set<number> };
 const pointerRoutes = new Map<string, PointerRoute>();
 
 function pointerKey(p: PointerEvent) {
@@ -3327,9 +3329,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): Pointe
         if (stationArmed) {
             if (type === "up") {
                 void dropDragToStation();
-                const route = pointerRoutes.get(key);
-                route?.buttons.delete(p.button ?? 0);
-                if (route && route.buttons.size === 0) pointerRoutes.delete(key);
+                pointerRoutes.delete(key);
                 pointerTarget = undefined;
             }
             return undefined;
@@ -3343,9 +3343,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): Pointe
             server.server.notify("dnd.drop", activeDrag.token, target ?? null);
             activeDrag = undefined;
             clipboardStationTool?.setDragActive(false);
-            const route = pointerRoutes.get(key);
-            route?.buttons.delete(p.button ?? 0);
-            if (route && route.buttons.size === 0) pointerRoutes.delete(key);
+            pointerRoutes.delete(key);
             pointerTarget = undefined;
         }
         return undefined;
@@ -3353,31 +3351,39 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): Pointe
 
     if (type === "down") {
         let route = pointerRoutes.get(key);
-        let hit = route?.hit;
         if (!route) {
-            // 第一次按下决定这次指针序列归谁：桌面 UI（hit 为空）或某个客户端窗口。
+            // 第一次按下决定这次指针序列归谁：桌面 UI（desktop）或某个客户端窗口。
             // 一个 seat 同一时刻只能有一个 pointer focus，所以只给最上层命中的 client 发。
-            const top = pointerHits(p)[0];
-            hit = top;
-            route = { hit, buttons: new Set() };
-            pointerRoutes.set(key, route);
-            if (hit) sendPointerTo(hit, "down", p);
-            // 模态对话框开着时点到了被挡住的父窗口：把注意力收回对话框
-            // （点在桌面 UI 上不算，工具栏菜单之类照常响应）
-            if (!hit && !desktopUiUnderPoint(p.x, p.y, p.target)) {
-                const modal = modalWindowInCurrentScreen();
-                if (modal !== undefined) {
-                    viewData.focusWin(modal);
-                    flashWindow(modal);
+            const hit = pointerHits(p)[0];
+            if (hit) {
+                route = { kind: "client", hit };
+                pointerRoutes.set(key, route);
+                sendPointerTo(hit, "down", p);
+            } else {
+                route = { kind: "desktop", buttons: new Set() };
+                pointerRoutes.set(key, route);
+                // 模态对话框开着时点到了被挡住的父窗口：把注意力收回对话框
+                // （点在桌面 UI 上不算，工具栏菜单之类照常响应）
+                if (!desktopUiUnderPoint(p.x, p.y, p.target)) {
+                    const modal = modalWindowInCurrentScreen();
+                    if (modal !== undefined) {
+                        viewData.focusWin(modal);
+                        flashWindow(modal);
+                    }
                 }
             }
-        } else if (hit) {
+        } else if (route.kind === "client") {
             // 已经归属某个客户端时，后续按键沿用同一个窗口（隐式 grab）
-            sendPointerTo(hit, "down", p);
+            sendPointerTo(route.hit, "down", p);
+        }
+
+        if (route.kind === "client") {
+            pointerTarget = route.hit;
+            return route.hit;
         }
         route.buttons.add(p.button ?? 0);
-        pointerTarget = hit;
-        return hit;
+        pointerTarget = undefined;
+        return undefined;
     }
 
     if (type === "move") {
@@ -3385,7 +3391,11 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): Pointe
         if (route) {
             // 按住期间保持按下时的归属：从客户端开始的拖拽不会因为经过弹窗而断掉，
             // 从桌面 UI 开始的按压也不会把 move 漏给下面的客户端
-            if (route.hit) sendPointerTo(route.hit, "move", p);
+            if (route.kind === "desktop") {
+                pointerTarget = undefined;
+                return undefined;
+            }
+            sendPointerTo(route.hit, "move", p);
             pointerTarget = route.hit;
             return route.hit;
         }
@@ -3400,12 +3410,17 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): Pointe
         // 没有对应的按下（例如点击落在桌面 UI 上）：不能把抬起漏给客户端
         return undefined;
     }
-    const hit = route.hit;
-    if (hit) sendPointerTo(hit, "up", p);
-    pointerTarget = hit;
+    if (route.kind === "client") {
+        sendPointerTo(route.hit, "up", p);
+        pointerTarget = route.hit;
+        // 客户端 grab 是否结束由 server 判断；不需要桌面维护按钮集合
+        if (server.server.pointerGrab("seat0") === null) pointerRoutes.delete(key);
+        return route.hit;
+    }
     route.buttons.delete(p.button ?? 0);
     if (route.buttons.size === 0) pointerRoutes.delete(key);
-    return hit;
+    pointerTarget = undefined;
+    return undefined;
 }
 
 /** `input.scroll` 需要的字段；real DOM WheelEvent 与统一输入事件都能直接用 */
@@ -3768,8 +3783,10 @@ server.server.on("window.closed", (wid) => {
         cursor.setSurfaceFocus(undefined);
     }
     // 按下时归属该窗口的指针序列不再有接收方，后续 move/up 留在桌面
-    for (const route of pointerRoutes.values()) {
-        if (route.hit?.handle === wid) route.hit = undefined;
+    for (const [key, route] of pointerRoutes) {
+        if (route.kind === "client" && route.hit.handle === wid) {
+            pointerRoutes.set(key, { kind: "desktop", buttons: new Set() });
+        }
     }
 });
 

@@ -36,6 +36,34 @@ const move: PointerCommand = { type: "move", x: 1, y: 1, button: 0 };
 const up = (button: number): PointerCommand => ({ type: "up", x: 0, y: 0, button });
 
 describe("SeatRouter", () => {
+    it("grab 查询：down 后返回窗口，最后一个 up 后变 null", () => {
+        const { router, owner } = setup();
+        const a = owner("a", winA);
+        expect(router.grab()).toBeNull();
+
+        router.pointer(a, down(0));
+        expect(router.grab()).toBe("1");
+
+        router.pointer(a, down(2));
+        router.pointer(a, up(0));
+        expect(router.grab()).toBe("1");
+
+        router.pointer(a, up(2));
+        expect(router.grab()).toBeNull();
+    });
+
+    it("grab 查询在 cancel / 窗口关闭后清空", () => {
+        const { router, owner } = setup();
+        const a = owner("a", winA);
+        router.pointer(a, down(0));
+        router.pointer(a, down(2));
+        router.pointer(a, up(0));
+        expect(router.grab()).toBe("1");
+
+        router.windowClosed("1");
+        expect(router.grab()).toBeNull();
+    });
+
     it("跨 client 切换 pointer：旧 client 先 leave", () => {
         const { router, calls, owner } = setup();
         router.pointer(owner("a", winA), move);

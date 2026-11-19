@@ -141,6 +141,13 @@ export class SeatRouter {
         this.getClient(owner.clientId)?.gesture(owner.winId, ev, seat);
     }
 
+    /** 当前 client pointer grab 的窗口；null 表示没有 grab */
+    grab(seat = "seat0"): WinHandle | null {
+        const route = this.#seats.get(seat);
+        if (route?.grab === undefined || route.buttons.size === 0) return null;
+        return route.grab.handle;
+    }
+
     /** 键盘焦点命令（window.focus）：跨 client 时先 blur 旧 owner */
     keyboardFocus(owner: RouteOwner, seat = "seat0"): void {
         const route = this.#seat(seat);

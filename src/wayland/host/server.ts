@@ -339,6 +339,14 @@ class WaylandServer {
 
     // ───────────────────────── 命令（桌面 → server → client） ─────────────────────────
 
+    /**
+     * 当前 client 指针 grab 的窗口；`null` 表示没有 grab。
+     * 桌面用它决定 up 后是否结束自己的坐标路由，不需要维护客户端按钮集合。
+     */
+    pointerGrab(seat = "seat0"): WinHandle | null {
+        return this.seatRouter.grab(seat);
+    }
+
     /** 内部按 handle 反查 `(client, winId)`，桌面不接触 Wayland 对象 id */
     notify<K extends keyof ServerNotifyMap>(key: K, ...args: ServerNotifyMap[K]): void {
         this.dispatchNotify(key, args);
