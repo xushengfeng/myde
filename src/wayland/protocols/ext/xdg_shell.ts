@@ -129,6 +129,12 @@ function mainSurface(ctx: ModuleCtx, winId: WaylandWinId): SurfaceId | null {
 }
 
 /**
+ * 未 ack 的 configure serial 上限：正常客户端只会留最后一个；客户端长期不 ack 时丢掉最旧的，
+ * 避免无界增长（被丢掉的旧 serial 再 ack 会按 invalid_serial 处理）。
+ */
+const MAX_PENDING_CONFIGURE_SERIALS = 16;
+
+/**
  * 下发一次完整的 configure：先 role 事件（xdg_toplevel/xdg_popup.configure），
  * 再以唯一 serial 收尾 xdg_surface.configure。
  *
@@ -177,6 +183,7 @@ function sendConfigure(ctx: ModuleCtx, xdgSurfaceId: WaylandObjectId2<"xdg_surfa
     }
     const serial = xdg.nextConfigureSerial();
     s.pendingConfigureSerials.push(serial);
+    if (s.pendingConfigureSerials.length > MAX_PENDING_CONFIGURE_SERIALS) s.pendingConfigureSerials.shift();
     send(xdgSurfaceId, "xdg_surface.configure", { serial });
     s.configurePending = false;
 }
@@ -882,9 +889,9 @@ export class xdgSurfaceData {
                 role: reasonSurfaceType ?? "main",
             };
         }
-        // todo 指针不在任何surface上时应发送wl_pointer.leave并清除指针焦点
-        //  现在焦点悬挂：客户端收不到leave（hover状态卡住），重新进来也不发enter、客户端不重发光标
-        //  还需给桌面新增sendPointerLeave()入口（移出窗口时调用，幂等），覆盖移出所有窗口、跨客户端窗口
+        // 普通 hover 移出所有窗口仍需桌面主动通知（sendPointerLeave）：桌面只按命中发 input.pointer，
+        // 指针落到桌面 UI/窗口外时 server 收不到事件，焦点会悬挂。隐式 grab 结束后的 leave 已由
+        // core 的 clearPointerFocus 处理；这里保持纯几何语义（没命中就 undefined）。
         return undefined;
     }
 }
@@ -1195,6 +1202,27 @@ export const xdgShellModule = defineModule({
         "xdg_toplevel.destroy": (x, ctx) => {
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(x.id);
             if (xdgSurfaceId === undefined) return;
+            // 隐式 grab 固定在本窗口：销毁时补发释放并清槽，否则后续 motion 会一直查不到窗口而被丢弃
+            for (const seat of ctx.domain.seat.all()) {
+                const grab = seat.pointerGrab;
+                if (grab?.winId !== x.id) continue;
+                if (grab.buttons.size > 0) {
+                    const state = getEnumValue("wl_pointer.button_state", "released");
+                    for (const pointer of seat.pointers) {
+                        if (!ctx.objects.has(pointer)) continue;
+                        for (const button of grab.buttons) {
+                            ctx.sendNow(pointer, "wl_pointer.button", {
+                                serial: ctx.domain.serial.next(),
+                                time: Date.now(),
+                                button,
+                                state,
+                            });
+                        }
+                        ctx.sendNow(pointer, "wl_pointer.frame", {});
+                    }
+                }
+                seat.pointerGrab = undefined;
+            }
             // 客户端应先销毁 decoration / dialog / exported；这里兜底，避免域里的映射留下已死的 toplevel
             ctx.domain.decoration.forgetToplevel(x.id);
             ctx.domain.dialog.forgetToplevel(x.id);

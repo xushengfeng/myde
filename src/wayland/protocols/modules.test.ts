@@ -131,7 +131,7 @@ describe("桌面命令（actions）", () => {
                 serial: { next: () => 5 },
                 seat: {
                     byName: (name: string) => (name === "seat0" ? seat : undefined),
-                    noteKeyboardSerial: () => {},
+                    noteKeyboardPress: () => {},
                     addModifier: (s: SeatRecord, b: number) => s.mods.add(b),
                     removeModifier: (s: SeatRecord, b: number) => s.mods.delete(b),
                     modifierMask: (s: SeatRecord) => {

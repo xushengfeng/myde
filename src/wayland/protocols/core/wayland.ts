@@ -328,6 +328,9 @@ export class SerialStore implements SerialApi {
     }
 }
 
+/** 最近键盘按下 serial 的保留数量：move/grab 可能晚于 release 到达，保留一小段足够 */
+const KEY_PRESS_SERIAL_KEEP = 16;
+
 /**
  * 输入设备侧状态（原散在 host 的 `ClientState`（`obj2`）里：seats/focusSurface/focusSurfaceType/modifiers）。
  *
@@ -363,6 +366,7 @@ export class SeatStore {
             pointerPos: { x: 0, y: 0 },
             keyboardFocus: null,
             mods: new Set(),
+            keyboardPressSerials: [],
         };
         this.#seats.set(id, record);
         this.#byName.set(name, record);
@@ -406,13 +410,14 @@ export class SeatStore {
         return grab !== undefined && grab.buttons.size > 0 && grab.serial === serial;
     }
 
-    /** 指针 grab 的 serial（含已结束的最近一次）或最近一次键盘事件 serial */
+    /** 指针 grab 的 serial（含已结束的最近一次）或最近几次键盘按下的 serial */
     isUserActionSerial(seat: SeatRecord, serial: number): boolean {
-        return seat.pointerGrab?.serial === serial || seat.keyboardGrabSerial === serial;
+        return seat.pointerGrab?.serial === serial || seat.keyboardPressSerials.includes(serial);
     }
 
-    noteKeyboardSerial(seat: SeatRecord, serial: number): void {
-        seat.keyboardGrabSerial = serial;
+    noteKeyboardPress(seat: SeatRecord, serial: number): void {
+        seat.keyboardPressSerials.push(serial);
+        if (seat.keyboardPressSerials.length > KEY_PRESS_SERIAL_KEEP) seat.keyboardPressSerials.shift();
     }
 
     /** 修饰键位按 seat 记（两把键盘的 Ctrl 状态互不相干） */
@@ -744,7 +749,19 @@ function updatePointerFocus(ctx: ModuleCtx, seat: SeatRecord, hit: HitTestResult
     seat.pointerFocus = hit.surface;
 }
 
-/** 指针离开所有 surface：发 leave 并清槽（隐式 grab 结束时重新命中不到任何 surface 用） */
+/** 桌面 `PointerCommand.button`（0/1/2）→ Linux 键码；grab 与 `wl_pointer.button` 共用这个码空间 */
+function pointerButtonCode(button: number): number {
+    return button === 1
+        ? InputEventCodes.BTN_MIDDLE
+        : button === 2
+          ? InputEventCodes.BTN_RIGHT
+          : InputEventCodes.BTN_LEFT;
+}
+
+/**
+ * 指针离开所有 surface：发 leave 并清槽（隐式 grab 结束时重新命中不到任何 surface 用）。
+ * 只处理指针焦点；data_device 的拖拽 hover 由 dnd 域在会话结束时自己收敛。
+ */
 function clearPointerFocus(ctx: ModuleCtx, seat: SeatRecord): void {
     const prev = seat.pointerFocus;
     if (prev === null) return;
@@ -777,14 +794,7 @@ function sendPointer(ctx: ModuleCtx, seat: SeatRecord, ev: PointerCommand, hit: 
         }
         return undefined;
     }
-    const button =
-        ev.button === 0
-            ? InputEventCodes.BTN_LEFT
-            : ev.button === 1
-              ? InputEventCodes.BTN_MIDDLE
-              : ev.button === 2
-                ? InputEventCodes.BTN_RIGHT
-                : InputEventCodes.BTN_LEFT;
+    const button = pointerButtonCode(ev.button);
     const serial = ctx.domain.serial.next();
     for (const pointer of pointers) {
         ctx.sendNow(pointer, "wl_pointer.button", {
@@ -821,7 +831,7 @@ function sendKey(ctx: ModuleCtx, seat: SeatRecord, key: number, state: "pressed"
     const keyboards = [...seat.keyboards].filter((id) => ctx.objects.has(id));
     if (seat.keyboardFocus === null || keyboards.length === 0) return;
     const s = ctx.domain.serial.next();
-    ctx.domain.seat.noteKeyboardSerial(seat, s);
+    if (state === "pressed") ctx.domain.seat.noteKeyboardPress(seat, s);
     for (const k of keyboards) {
         ctx.sendNow(k, "wl_keyboard.key", {
             serial: s,
@@ -2118,16 +2128,27 @@ export const waylandCoreModule = defineModule({
             if (!hit) {
                 // grab 的 surface 已不在（销毁/窗口换了）：松开时结束 grab，不引用死对象
                 if (ev.type === "up" && activeGrab) {
-                    if (ctx.domain.seat.endPointerButton(seat, ev.button)) clearPointerFocus(ctx, seat);
+                    if (ctx.domain.seat.endPointerButton(seat, pointerButtonCode(ev.button)))
+                        clearPointerFocus(ctx, seat);
                 }
                 return;
             }
 
             if (activeGrab) {
-                sendPointer(ctx, seat, ev, hit);
-                if (ev.type === "up" && ctx.domain.seat.endPointerButton(seat, ev.button)) {
+                const serial = sendPointer(ctx, seat, ev, hit);
+                if (ev.type === "down" && serial !== undefined) {
+                    // 按住期间再按其它键：追加到同一 grab，不换 serial
+                    ctx.domain.seat.beginPointerGrab(
+                        seat,
+                        activeGrab.winId,
+                        activeGrab.surface,
+                        pointerButtonCode(ev.button),
+                        activeGrab.serial,
+                    );
+                }
+                if (ev.type === "up" && ctx.domain.seat.endPointerButton(seat, pointerButtonCode(ev.button))) {
                     // grab 结束：按抬起位置重新判定焦点，可能换 surface 或离开窗口
-                    const after = ctx.domain.xdgSurface.hitTest(activeGrab.winId, { x: ev.x, y: ev.y });
+                    const after = ctx.domain.xdgSurface.hitTest(msg.winId, { x: ev.x, y: ev.y });
                     if (after) updatePointerFocus(ctx, seat, after);
                     else clearPointerFocus(ctx, seat);
                 }
@@ -2137,7 +2158,7 @@ export const waylandCoreModule = defineModule({
             updatePointerFocus(ctx, seat, hit);
             const serial = sendPointer(ctx, seat, ev, hit);
             if (ev.type === "down" && serial !== undefined) {
-                ctx.domain.seat.beginPointerGrab(seat, msg.winId, hit.surface, ev.button, serial);
+                ctx.domain.seat.beginPointerGrab(seat, msg.winId, hit.surface, pointerButtonCode(ev.button), serial);
             }
         },
         "input.scroll": (msg, ctx) => {
@@ -2177,18 +2198,24 @@ export const waylandCoreModule = defineModule({
             if (drag.remoteDriven) {
                 const seat = ctx.domain.seat.byName(drag.seatName);
                 if (seat) {
+                    // 桌面没有走真实的 up：源客户端还按着哪些键就补发哪些释放，再同步结束隐式 grab
+                    const buttons = seat.pointerGrab?.buttons.size
+                        ? [...seat.pointerGrab.buttons]
+                        : [InputEventCodes.BTN_LEFT];
+                    const state = getEnumValue("wl_pointer.button_state", "released");
                     for (const pointer of seat.pointers) {
                         if (!ctx.objects.has(pointer)) continue;
-                        ctx.sendNow(pointer, "wl_pointer.button", {
-                            serial: ctx.domain.serial.next(),
-                            time: Date.now(),
-                            button: InputEventCodes.BTN_LEFT,
-                            state: getEnumValue("wl_pointer.button_state", "released"),
-                        });
+                        for (const button of buttons) {
+                            ctx.sendNow(pointer, "wl_pointer.button", {
+                                serial: ctx.domain.serial.next(),
+                                time: Date.now(),
+                                button,
+                                state,
+                            });
+                        }
                         ctx.sendNow(pointer, "wl_pointer.frame", {});
                     }
-                    // 桌面没有走真实的 up：同步结束隐式 grab，否则后续 move/grab 仍被旧 surface 固定
-                    ctx.domain.seat.endPointerButton(seat, InputEventCodes.BTN_LEFT);
+                    for (const button of buttons) ctx.domain.seat.endPointerButton(seat, button);
                 }
             }
             if (drag.offerId !== undefined) ctx.sendNow(drag.dataDeviceId, "wl_data_device.leave", {});

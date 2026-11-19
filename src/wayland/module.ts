@@ -598,7 +598,7 @@ export interface PointerGrab {
     surface: SurfaceId;
     /** 建立 grab 时的窗口对象（取局部坐标要按它的几何算） */
     winId: WaylandWinId;
-    /** 当前按下的按钮；空集表示 grab 已结束 */
+    /** 当前按下的按钮（Linux 键码 BTN_*）；空集表示 grab 已结束 */
     buttons: Set<number>;
 }
 
@@ -626,8 +626,8 @@ export interface SeatRecord {
     mods: Set<number>;
     /** 最近一次指针隐式 grab（button 全松开后仍保留 serial/surface，供延迟到达的请求校验） */
     pointerGrab?: PointerGrab;
-    /** 最近一次键盘事件 serial；键盘触发的 move/grab 用它校验 */
-    keyboardGrabSerial?: number;
+    /** 最近几次键盘按下的 serial（release 不覆盖 press，move/grab 可能晚于松键到达） */
+    keyboardPressSerials: number[];
 }
 
 export interface SeatApi {
@@ -642,10 +642,10 @@ export interface SeatApi {
     endPointerButton(seat: SeatRecord, button: number): boolean;
     /** serial 是否属于当前仍按住按钮的指针 grab（DnD 的隐式 grab 校验） */
     isActivePointerGrab(seat: SeatRecord, serial: number): boolean;
-    /** serial 是否来自当前/最近一次指针 grab，或最近一次键盘事件（move/grab 校验） */
+    /** serial 是否来自当前/最近一次指针 grab，或最近几次键盘按下（move/grab 校验） */
     isUserActionSerial(seat: SeatRecord, serial: number): boolean;
-    /** 记录键盘事件 serial（键盘触发的 move/grab 用） */
-    noteKeyboardSerial(seat: SeatRecord, serial: number): void;
+    /** 记录键盘按下的 serial（release 不记；键盘触发的 move/grab 用） */
+    noteKeyboardPress(seat: SeatRecord, serial: number): void;
     addModifier(seat: SeatRecord, bit: number): void;
     removeModifier(seat: SeatRecord, bit: number): void;
     modifierMask(seat: SeatRecord): number;

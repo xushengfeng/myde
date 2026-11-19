@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { InputEventCodes } from "../../../input_codes/types";
 import type { ModuleCtx } from "../../module";
 import { newFd } from "../../utils/fd";
 import { waylandCoreModule } from "./wayland";
@@ -31,7 +32,7 @@ function makeCtx() {
         keyboardFocus: null,
         mods: new Set<number>(),
         // start_drag 要求有仍按住按钮的隐式 grab；测试直接以 serial 1 发起
-        pointerGrab: { serial: 1, surface: 10, winId: 20, buttons: new Set([0]) } as {
+        pointerGrab: { serial: 1, surface: 10, winId: 20, buttons: new Set([InputEventCodes.BTN_LEFT]) } as {
             serial: number;
             surface: number;
             winId: number;
@@ -83,7 +84,7 @@ function makeCtx() {
                 seat.pointerGrab.buttons.delete(button);
                 return seat.pointerGrab.buttons.size === 0;
             },
-            noteKeyboardSerial: () => {},
+            noteKeyboardPress: () => {},
             addModifier: () => {},
             removeModifier: () => {},
             modifierMask: () => 0,
