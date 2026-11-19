@@ -56,15 +56,19 @@ function makeCtx() {
 
     const domain = {
         dataDevice: { devices: new Map<string, Set<number>>([["seat0", new Set([11])]]) },
-        seat: {
-            byName: (name?: string) => ((name ?? "seat0") === "seat0" ? seat : undefined),
-            get: (id: number) => (id === 1 ? seat : undefined),
-            all: () => [seat][Symbol.iterator](),
-            nextSerial: () => {
+        serial: {
+            next: () => {
                 const s = serial;
                 serial += 2;
                 return s;
             },
+        },
+        seat: {
+            byName: (name?: string) => ((name ?? "seat0") === "seat0" ? seat : undefined),
+            get: (id: number) => (id === 1 ? seat : undefined),
+            all: () => [seat][Symbol.iterator](),
+            noteUserActionSerial: () => {},
+            isUserActionSerial: () => true,
             addModifier: () => {},
             removeModifier: () => {},
             modifierMask: () => 0,

@@ -295,7 +295,8 @@ export interface XdgSurfaceInfo {
     children: XdgSurfaceId[];
     initialCommitDone: boolean;
     configurePending: boolean;
-    lastConfigureSerial?: number;
+    /** 已下发、尚未 ack 的 configure serial（按发送顺序；ack 会一并消费更早的） */
+    pendingConfigureSerials: number[];
     /** 最近一次广播给桌面的窗口尺寸（显式 winGeo 或退化的 surface 尺寸） */
     reportedSize?: { w: number; h: number };
     popupConfigure?: { x: number; y: number; width: number; height: number };
@@ -305,7 +306,7 @@ export interface XdgSurfaceApi {
     addXdgSurface(id: XdgSurfaceId, wlSurface: SurfaceId): void;
     getXdgSurface(id: XdgSurfaceId): XdgSurfaceInfo;
     getXdgSurfaceByWlSurface(id: SurfaceId): XdgSurfaceId | undefined;
-    /** 客户端级单调 serial（0 在 Qt 里等于「没有 configure」） */
+    /** 客户端级单调 serial（所有需要 serial 的事件共用；0 在 Qt 里等于「没有 configure」） */
     nextConfigureSerial(): number;
     ackConfigure(id: XdgSurfaceId, serial: number): void;
     /** `xdg_popup.grab`：seat 名 → grab 栈（嵌套 popup 压栈） */
@@ -602,6 +603,8 @@ export interface SeatRecord {
     keyboardFocus: SurfaceId | null;
     /** 该 seat 的修饰键位（`mods_depressed` 的掩码原料），两把键盘各记各的 */
     mods: Set<number>;
+    /** 最近下发的用户操作 serial（指针/键盘按键），xdg move/grab、DnD 的请求按它校验 */
+    recentUserActionSerials: number[];
 }
 
 export interface SeatApi {
@@ -610,10 +613,25 @@ export interface SeatApi {
     /** 按 seat 名取：`input.*` 的 `seat` 参数就按它解析（缺省 `"seat0"`） */
     byName(name: string): SeatRecord | undefined;
     all(): IterableIterator<SeatRecord>;
-    nextSerial(): number;
+    /** 记下指针/键盘按键的 serial：xdg move/grab、DnD 用它判断用户操作是否仍然有效 */
+    noteUserActionSerial(seat: SeatRecord, serial: number): void;
+    isUserActionSerial(seat: SeatRecord, serial: number): boolean;
     addModifier(seat: SeatRecord, bit: number): void;
     removeModifier(seat: SeatRecord, bit: number): void;
     modifierMask(seat: SeatRecord): number;
+}
+
+/**
+ * 客户端级 serial 分配器。
+ *
+ * Wayland 只要求 serial 能标识「本连接内某一次事件」，没有类型编码，也不要求各接口分开编号；
+ * 用一个单调 uint32 序列（跳过 0）最省事，也避免不同接口的事件撞到同一个值。各请求的校验
+ * 范围由持有事件状态的资源自己维护：pointer 的 enter serial、xdg_surface 的待 ack 队列、
+ * xdg_wm_base 的 ping 表。
+ */
+export interface SerialApi {
+    /** 分配一个客户端级 serial：从 1 开始、单调递增、uint32、跳过 0 */
+    next(): number;
 }
 
 /**

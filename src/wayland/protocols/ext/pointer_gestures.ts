@@ -128,12 +128,12 @@ export const pointerGesturesModule = defineModule({
 
             if (ev.type === "swipe") {
                 if (ev.phase === "begin") {
-                    const serial = ctx.domain.seat.nextSerial();
+                    const serial = ctx.domain.serial.next();
                     forGestureObjects(domain.swipe, seat, (id) => {
                         // 目标窗口在手势中途关闭时可能收不到 end；下一次 begin 先把旧序列取消
                         if (domain.activeSwipe.delete(id)) {
                             ctx.sendNow(id, "zwp_pointer_gesture_swipe_v1.end", {
-                                serial: ctx.domain.seat.nextSerial(),
+                                serial: ctx.domain.serial.next(),
                                 time,
                                 cancelled: 1,
                             });
@@ -160,7 +160,7 @@ export const pointerGesturesModule = defineModule({
                     return;
                 }
                 {
-                    const serial = ctx.domain.seat.nextSerial();
+                    const serial = ctx.domain.serial.next();
                     forEachActive(domain.swipe, domain.activeSwipe, seat, (id) => {
                         ctx.sendNow(id, "zwp_pointer_gesture_swipe_v1.end", {
                             serial,
@@ -174,11 +174,11 @@ export const pointerGesturesModule = defineModule({
 
             if (ev.type === "pinch") {
                 if (ev.phase === "begin") {
-                    const serial = ctx.domain.seat.nextSerial();
+                    const serial = ctx.domain.serial.next();
                     forGestureObjects(domain.pinch, seat, (id) => {
                         if (domain.activePinch.delete(id)) {
                             ctx.sendNow(id, "zwp_pointer_gesture_pinch_v1.end", {
-                                serial: ctx.domain.seat.nextSerial(),
+                                serial: ctx.domain.serial.next(),
                                 time,
                                 cancelled: 1,
                             });
@@ -207,7 +207,7 @@ export const pointerGesturesModule = defineModule({
                     return;
                 }
                 {
-                    const serial = ctx.domain.seat.nextSerial();
+                    const serial = ctx.domain.serial.next();
                     forEachActive(domain.pinch, domain.activePinch, seat, (id) => {
                         ctx.sendNow(id, "zwp_pointer_gesture_pinch_v1.end", {
                             serial,
@@ -220,11 +220,11 @@ export const pointerGesturesModule = defineModule({
             }
 
             if (ev.phase === "begin") {
-                const serial = ctx.domain.seat.nextSerial();
+                const serial = ctx.domain.serial.next();
                 forGestureObjects(domain.hold, seat, (id) => {
                     if (domain.activeHold.delete(id)) {
                         ctx.sendNow(id, "zwp_pointer_gesture_hold_v1.end", {
-                            serial: ctx.domain.seat.nextSerial(),
+                            serial: ctx.domain.serial.next(),
                             time,
                             cancelled: 1,
                         });
@@ -240,7 +240,7 @@ export const pointerGesturesModule = defineModule({
                 return;
             }
             {
-                const serial = ctx.domain.seat.nextSerial();
+                const serial = ctx.domain.serial.next();
                 forEachActive(domain.hold, domain.activeHold, seat, (id) => {
                     ctx.sendNow(id, "zwp_pointer_gesture_hold_v1.end", {
                         serial,

@@ -6,6 +6,7 @@ import {
     type HitTestResult,
     type ModuleCtx,
     type SeatRecord,
+    type SerialApi,
     type SurfaceId,
     type WaylandObjectId2,
 } from "../../module";
@@ -111,6 +112,15 @@ declare module "../../module" {
     }
 }
 
+declare module "../../module" {
+    interface WaylandDataRegistry {
+        wl_pointer: {
+            /** 最近一次 `wl_pointer.enter` 的 serial；set_cursor / cursor-shape 的校验基线 */
+            enterSerial?: number;
+        };
+    }
+}
+
 /** seat 名 → 该 seat 的 data_device 集合（selection 按 seat 路由，跟随键盘焦点） */
 type DataDevices = Map<string, Set<WaylandObjectId2<"wl_data_device">>>;
 
@@ -142,6 +152,8 @@ declare module "../../module" {
          * 读写方是各 text_input 模块，触发通道是 core 的 `input.text` action（见 `TextInputHooks.onTextInput`）。
          */
         textInput: { owner: TextInputOwner | null };
+        /** 客户端级 serial 分配器（所有需要 serial 的事件共用） */
+        serial: SerialApi;
         /** 输入设备状态（`SeatStore` 在本文件旁边的 `seat_store.ts`）：只有 core 读写，host 不碰 */
         seat: SeatApi;
         /**
@@ -295,7 +307,28 @@ function scheduleFrameDone(ctx: ModuleCtx, surfaceId: SurfaceId, callback: Wayla
 }
 
 /**
- * 输入设备侧状态（原散在 host 的 `ClientState`（`obj2`）里：seats/serial/focusSurface/focusSurfaceType/modifiers）。
+ * 客户端级 serial 分配器（`ctx.domain.serial`）。
+ *
+ * Wayland 的 serial 只是「本连接内某次事件」的 uint32 令牌，没有类型编码；协议只规定某些请求
+ * 必须回传对应事件的 serial（pointer enter、configure、ping、隐式 grab…），并不要求不同接口
+ * 各自编号。这里用单条单调序列，既避免不同接口的事件撞值，也让所有事件共享同一个回绕规则。
+ *
+ * 校验状态不放这里：它是「谁的请求」就记在谁身上——pointer 的 enter serial 在对象数据里，
+ * xdg_surface 的待 ack 队列在 xdg 域里，ping 表挂在 xdg_wm_base 对象上。
+ */
+export class SerialStore implements SerialApi {
+    /** 首值 1（0 在部分客户端里等于「没有 serial」） */
+    #serial = 0;
+
+    next(): number {
+        // uint32 回绕：0 跳过，回到 1
+        this.#serial = this.#serial >= 0xffffffff ? 1 : this.#serial + 1;
+        return this.#serial;
+    }
+}
+
+/**
+ * 输入设备侧状态（原散在 host 的 `ClientState`（`obj2`）里：seats/focusSurface/focusSurfaceType/modifiers）。
  *
  * **per-seat**：焦点与修饰键都是「一把 seat 一份」——`pointerFocus`/`keyboardFocus`/`mods`
  * 是 `SeatRecord` 上的数据字段（读写像 `win.actived` 一样直接），因为多光标 = 多 seat，
@@ -312,8 +345,6 @@ function scheduleFrameDone(ctx: ModuleCtx, surfaceId: SurfaceId, callback: Wayla
 export class SeatStore {
     #seats = new Map<WaylandObjectId2<"wl_seat">, SeatRecord>();
     #byName = new Map<string, SeatRecord>();
-    /** 键盘事件 serial：首值 1、步长 2（客户端级单调，两把键盘共用一个序列） */
-    #serial = 1;
 
     addSeat(id: WaylandObjectId2<"wl_seat">, name: string): void {
         // 同一把 seat 可能被客户端在不同 registry 上重复 bind（Firefox 会这么做）。
@@ -331,6 +362,7 @@ export class SeatStore {
             pointerPos: { x: 0, y: 0 },
             keyboardFocus: null,
             mods: new Set(),
+            recentUserActionSerials: [],
         };
         this.#seats.set(id, record);
         this.#byName.set(name, record);
@@ -350,11 +382,17 @@ export class SeatStore {
         return new Set(this.#seats.values()).values();
     }
 
-    /** 分配一个键盘事件 serial */
-    nextSerial(): number {
-        const s = this.#serial;
-        this.#serial = s + 2;
-        return s;
+    /** 最近用户操作 serial 的保留数量：够客户端在事件处理后发 move/grab，不会无限增长 */
+    static readonly USER_ACTION_SERIAL_KEEP = 64;
+
+    noteUserActionSerial(seat: SeatRecord, serial: number): void {
+        seat.recentUserActionSerials.push(serial);
+        if (seat.recentUserActionSerials.length > SeatStore.USER_ACTION_SERIAL_KEEP)
+            seat.recentUserActionSerials.shift();
+    }
+
+    isUserActionSerial(seat: SeatRecord, serial: number): boolean {
+        return seat.recentUserActionSerials.includes(serial);
     }
 
     /** 修饰键位按 seat 记（两把键盘的 Ctrl 状态互不相干） */
@@ -604,6 +642,17 @@ function seatNameOf(ctx: ModuleCtx, msg: BindMsg): string {
 }
 
 /**
+ * 记录 `wl_pointer.enter` 的 serial：`wl_pointer.set_cursor` 与
+ * `wp_cursor_shape_device_v1.set_shape` 都要求请求携带的 serial 与最近一次 enter 相同，
+ * 不一致时按协议忽略请求。
+ */
+function trackPointerEnter(ctx: ModuleCtx, pointer: WaylandObjectId2<"wl_pointer">, serial: number): void {
+    const info = ctx.objects.getOption(pointer);
+    if (info === undefined) return;
+    ctx.objects.setData(pointer, { ...info.data, enterSerial: serial });
+}
+
+/**
  * 键盘焦点单写入点（`CoreApi.focusKeyboard` 的实现）：**同值直接去重**；变化才发
  * `leave`(旧) → `enter`(新) + `modifiers`、写 `seat.keyboardFocus`，最后 `ctx.notify.focus`
  * 扇出给派生物（text-input 的 enter/leave、selection 归属都挂在这条通知上）。
@@ -622,13 +671,16 @@ function focusKeyboard(ctx: ModuleCtx, surface: SurfaceId | null, seatName?: str
     if (prev === surface) return;
     const keyboards = [...seat.keyboards].filter((id) => ctx.objects.has(id));
     if (prev !== null && ctx.objects.has(prev)) {
-        for (const k of keyboards) ctx.sendNow(k, "wl_keyboard.leave", { serial: 0, surface: prev });
+        const serial = ctx.domain.serial.next();
+        for (const k of keyboards) ctx.sendNow(k, "wl_keyboard.leave", { serial, surface: prev });
     }
     if (surface !== null) {
+        const enterSerial = ctx.domain.serial.next();
+        const modifiersSerial = ctx.domain.serial.next();
         for (const k of keyboards) {
-            ctx.sendNow(k, "wl_keyboard.enter", { serial: 0, surface: surface, keys: new Uint32Array([]) });
+            ctx.sendNow(k, "wl_keyboard.enter", { serial: enterSerial, surface: surface, keys: new Uint32Array([]) });
             ctx.sendNow(k, "wl_keyboard.modifiers", {
-                serial: 0,
+                serial: modifiersSerial,
                 mods_depressed: ctx.domain.seat.modifierMask(seat),
                 mods_latched: 0,
                 mods_locked: 0,
@@ -655,10 +707,12 @@ function updatePointerFocus(ctx: ModuleCtx, seat: SeatRecord, hit: HitTestResult
     seat.pointerPos = { x: hit.x, y: hit.y };
     if (prevFocus === hit.surface) return;
     if (prevFocus && ctx.objects.has(prevFocus)) {
-        for (const p of pointers) ctx.sendNow(p, "wl_pointer.leave", { serial: 0, surface: prevFocus });
+        const serial = ctx.domain.serial.next();
+        for (const p of pointers) ctx.sendNow(p, "wl_pointer.leave", { serial, surface: prevFocus });
     }
-    const serial = ctx.domain.seat.nextSerial();
+    const serial = ctx.domain.serial.next();
     for (const p of pointers) {
+        trackPointerEnter(ctx, p, serial);
         ctx.sendNow(p, "wl_pointer.enter", {
             serial,
             surface: hit.surface,
@@ -696,7 +750,8 @@ function sendPointer(ctx: ModuleCtx, seat: SeatRecord, ev: PointerCommand, hit: 
               : ev.button === 2
                 ? InputEventCodes.BTN_RIGHT
                 : InputEventCodes.BTN_LEFT;
-    const serial = ctx.domain.seat.nextSerial();
+    const serial = ctx.domain.serial.next();
+    ctx.domain.seat.noteUserActionSerial(seat, serial);
     for (const pointer of pointers) {
         ctx.sendNow(pointer, "wl_pointer.button", {
             serial,
@@ -730,7 +785,8 @@ function unmapSurface(ctx: ModuleCtx, surfaceId: SurfaceId): void {
 function sendKey(ctx: ModuleCtx, seat: SeatRecord, key: number, state: "pressed" | "released"): void {
     const keyboards = [...seat.keyboards].filter((id) => ctx.objects.has(id));
     if (seat.keyboardFocus === null || keyboards.length === 0) return;
-    const s = ctx.domain.seat.nextSerial();
+    const s = ctx.domain.serial.next();
+    ctx.domain.seat.noteUserActionSerial(seat, s);
     for (const k of keyboards) {
         ctx.sendNow(k, "wl_keyboard.key", {
             serial: s,
@@ -906,7 +962,7 @@ function sendDragEnter(ctx: ModuleCtx, drag: DataDrag, surface: SurfaceId, x: nu
     ctx.sendNow(drag.dataDeviceId, "wl_data_device.data_offer", { id: offerId });
     for (const mime of src.data.offers) ctx.sendNow(offerId, "wl_data_offer.offer", { mime_type: mime });
     ctx.sendNow(offerId, "wl_data_offer.source_actions", { source_actions: src.data.actions ?? DND_ACTION_COPY });
-    const serial = ctx.domain.seat.nextSerial();
+    const serial = ctx.domain.serial.next();
     ctx.sendNow(drag.dataDeviceId, "wl_data_device.enter", { serial, surface, x, y, id: offerId });
     drag.offerId = offerId;
     drag.surface = surface;
@@ -1017,6 +1073,8 @@ export const waylandCoreModule = defineModule({
     domain: {
         dataDevice: () => ({ devices: undefined }),
         textInput: () => ({ owner: null }),
+        /** 客户端级 serial（指针/键盘、configure、ping、手势共用同一条序列） */
+        serial: () => new SerialStore(),
         /** 输入设备记录（原 `state/seat_store.ts`，host 已不持有）：只有 core 读写 */
         seat: () => new SeatStore(),
         output: () => ({ outputs: new Set(), surfaces: new Set() }),
@@ -1145,6 +1203,11 @@ export const waylandCoreModule = defineModule({
             const seatName = ctx.objects.getOption(x.id)?.data?.seatName ?? "seat0";
             const seat = ctx.domain.seat.byName(seatName);
             if (!seat) {
+                ctx.sendNow(sourceId, "wl_data_source.cancelled", {});
+                return;
+            }
+            // 规范要求 serial 匹配发起拖拽的隐式 grab；不是用户按键产生的 serial 就取消
+            if (!ctx.domain.seat.isUserActionSerial(seat, x.args.serial)) {
                 ctx.sendNow(sourceId, "wl_data_source.cancelled", {});
                 return;
             }
@@ -1879,10 +1942,13 @@ export const waylandCoreModule = defineModule({
                 return;
             }
             seat.pointers.add(pointerId);
+            ctx.objects.setData(pointerId, {});
             // 同一 seat 后来新建的 pointer 也要接上当前焦点（Firefox 会在多份 registry 上重复 get_pointer）
             if (seat.pointerFocus !== null && ctx.objects.has(seat.pointerFocus)) {
+                const serial = ctx.domain.serial.next();
+                trackPointerEnter(ctx, pointerId, serial);
                 ctx.send(pointerId, "wl_pointer.enter", {
-                    serial: ctx.domain.seat.nextSerial(),
+                    serial,
                     surface: seat.pointerFocus,
                     surface_x: seat.pointerPos.x,
                     surface_y: seat.pointerPos.y,
@@ -1912,13 +1978,15 @@ export const waylandCoreModule = defineModule({
                 size: size,
             });
             if (seat.keyboardFocus !== null && ctx.objects.has(seat.keyboardFocus)) {
+                const enterSerial = ctx.domain.serial.next();
+                const modifiersSerial = ctx.domain.serial.next();
                 ctx.send(keyboardId, "wl_keyboard.enter", {
-                    serial: 0,
+                    serial: enterSerial,
                     surface: seat.keyboardFocus,
                     keys: new Uint32Array([]),
                 });
                 ctx.send(keyboardId, "wl_keyboard.modifiers", {
-                    serial: 0,
+                    serial: modifiersSerial,
                     mods_depressed: ctx.domain.seat.modifierMask(seat),
                     mods_latched: 0,
                     mods_locked: 0,
@@ -1934,7 +2002,9 @@ export const waylandCoreModule = defineModule({
             for (const seat of ctx.domain.seat.all()) seat.keyboards.delete(x.id);
         },
         "wl_pointer.set_cursor": (x, ctx) => {
-            // todo serial
+            // serial 必须是该 pointer 最近一次 enter 的 serial；不匹配时按协议忽略整个请求
+            const pointerData = ctx.objects.getOption(x.id)?.data;
+            if (pointerData?.enterSerial !== x.args.serial) return;
             // todo wlsurface.offset
             const surfaceId = x.args.surface;
             if (!surfaceId) {
@@ -2038,7 +2108,7 @@ export const waylandCoreModule = defineModule({
                     for (const pointer of seat.pointers) {
                         if (!ctx.objects.has(pointer)) continue;
                         ctx.sendNow(pointer, "wl_pointer.button", {
-                            serial: ctx.domain.seat.nextSerial(),
+                            serial: ctx.domain.serial.next(),
                             time: Date.now(),
                             button: InputEventCodes.BTN_LEFT,
                             state: getEnumValue("wl_pointer.button_state", "released"),

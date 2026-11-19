@@ -23,12 +23,15 @@ export const cursorShapeModule = defineModule({
             ctx.objects.get(x.args.cursor_shape_device).data = { pointer: x.args.pointer };
         },
         "wp_cursor_shape_device_v1.set_shape": (x, ctx) => {
-            // todo serial 校验wl_pointer.enter的serial，不匹配时忽略
             const shape = getEnumName("wp_cursor_shape_device_v1.shape", x.args.shape);
             if (!shape) {
                 ctx.postError("wp_cursor_shape_device_v1", x.id, "invalid_shape", `Invalid shape ${x.args.shape}`);
                 return;
             }
+            // serial 必须匹配该设备绑定的 pointer 最近一次 enter；不匹配时按协议忽略
+            const device = ctx.objects.getOption(x.id)?.data;
+            const pointer = ctx.objects.getOption(device?.pointer)?.data;
+            if (device === undefined || pointer?.enterSerial !== x.args.serial) return;
             // 语义光标替换之前的surface光标（与wl_pointer.set_cursor混用，后到者生效）
             ctx.cursor.setShape(shape);
         },

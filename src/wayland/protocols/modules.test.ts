@@ -128,9 +128,10 @@ describe("桌面命令（actions）", () => {
         } as unknown as SeatRecord;
         const ctx = {
             domain: {
+                serial: { next: () => 5 },
                 seat: {
                     byName: (name: string) => (name === "seat0" ? seat : undefined),
-                    nextSerial: () => 5,
+                    noteUserActionSerial: () => {},
                     addModifier: (s: SeatRecord, b: number) => s.mods.add(b),
                     removeModifier: (s: SeatRecord, b: number) => s.mods.delete(b),
                     modifierMask: (s: SeatRecord) => {
@@ -182,30 +183,48 @@ describe("桌面命令（actions）", () => {
 });
 
 describe("cursor-shape 模块", () => {
-    it("set_shape 把枚举名交给 CursorStore（语义光标，后到者生效）", () => {
-        const shapeCalls: string[] = [];
-        const errors: unknown[] = [];
-        const ctx = {
+    const pointer = 21;
+    const device = 11;
+    function cursorCtx(shapeCalls: string[], errors: unknown[], enterSerial = 7) {
+        return {
+            objects: {
+                getOption: (id: number | undefined) =>
+                    id === device ? { data: { pointer } } : id === pointer ? { data: { enterSerial } } : undefined,
+            },
             cursor: { setShape: (s: string) => shapeCalls.push(s) },
             postError: (...a: unknown[]) => errors.push(a),
         } as unknown as ModuleCtx;
+    }
 
-        handler("wp_cursor_shape_device_v1.set_shape")(msg(11, { shape: 1 }), ctx);
+    it("set_shape 把枚举名交给 CursorStore（语义光标，后到者生效）", () => {
+        const shapeCalls: string[] = [];
+        const errors: unknown[] = [];
+        const ctx = cursorCtx(shapeCalls, errors);
+
+        handler("wp_cursor_shape_device_v1.set_shape")(msg(device, { serial: 7, shape: 1 }), ctx);
 
         expect(errors).toHaveLength(0);
         expect(shapeCalls).toHaveLength(1);
         expect(typeof shapeCalls[0]).toBe("string");
     });
 
+    it("serial 不是该 pointer 最近一次 enter 时忽略请求", () => {
+        const shapeCalls: string[] = [];
+        const errors: unknown[] = [];
+        const ctx = cursorCtx(shapeCalls, errors);
+
+        handler("wp_cursor_shape_device_v1.set_shape")(msg(device, { serial: 9, shape: 1 }), ctx);
+
+        expect(errors).toHaveLength(0);
+        expect(shapeCalls).toHaveLength(0);
+    });
+
     it("非法 shape 发协议错误，不改光标", () => {
         const shapeCalls: string[] = [];
         const errors: unknown[] = [];
-        const ctx = {
-            cursor: { setShape: (s: string) => shapeCalls.push(s) },
-            postError: (...a: unknown[]) => errors.push(a[2]),
-        } as unknown as ModuleCtx;
+        const ctx = cursorCtx(shapeCalls, errors);
 
-        handler("wp_cursor_shape_device_v1.set_shape")(msg(11, { shape: 0x7ffffff0 }), ctx);
+        handler("wp_cursor_shape_device_v1.set_shape")(msg(device, { serial: 7, shape: 0x7ffffff0 }), ctx);
 
         expect(shapeCalls).toHaveLength(0);
         expect(errors).toHaveLength(1);

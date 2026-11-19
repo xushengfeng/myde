@@ -347,7 +347,7 @@ export class WaylandClient implements Client {
             objects: ctx.objects,
             sendNow: (id, event, args) => this.sendMessageImm(id as never, event as never, args as never),
             dataDevices: (seat) => [...(ctx.domain.dataDevice.devices?.get(seat) ?? [])],
-            nextSerial: () => ctx.domain.seat.nextSerial(),
+            nextSerial: () => ctx.domain.serial.next(),
             hitTest: (winId, p) => ctx.domain.xdgSurface.hitTest(winId, p),
             sendDataSource: (sourceId, mime, fd) => this.sendDataSource(sourceId, mime, fd),
             readDataSource: (sourceId, mime) => this.readDataSource(sourceId, mime),
@@ -726,8 +726,8 @@ export class WaylandClient implements Client {
         for (const id of this.ctx.domain.xdg.wmBase) {
             const p = Promise.withResolvers<void>();
             ps.push(p.promise);
-            const serial = Math.floor(Math.random() * 1000000);
-            this.sendMessageImm(id, "xdg_wm_base.ping", { serial: serial });
+            const serial = this.ctx.domain.serial.next();
+            this.sendMessageImm(id, "xdg_wm_base.ping", { serial });
             this.getObject(id).data.pingSerials.set(serial, p.resolve);
         }
         await Promise.all(ps);

@@ -32,9 +32,9 @@ function setup() {
         },
         sendNow: (id: number, event: string, args: Record<string, unknown>) => sent.push({ id, event, args }),
         domain: {
+            serial: { next: () => serial++ },
             seat: {
                 byName: (name: string) => (name === "seat0" ? seat : undefined),
-                nextSerial: () => serial++,
             },
             xdgSurface: {
                 getXdgSurfaceByToplevel: (id: number) => (id === winId ? xdgSurfaceId : undefined),

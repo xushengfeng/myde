@@ -32,6 +32,8 @@ declare module "../../module" {
             offset: { x: number; y: number };
             reactive: boolean;
             parent_size: { parent_width: number; parent_height: number };
+            /** `set_parent_configure` 记录的父 configure serial（当前只保存，不参与定位） */
+            parent_configure?: number;
         };
     }
     /** `ctx.domain.xdgSurface` 这个 key 归本模块所有（提供者见下方 `domain`） */
@@ -174,7 +176,7 @@ function sendConfigure(ctx: ModuleCtx, xdgSurfaceId: WaylandObjectId2<"xdg_surfa
         });
     }
     const serial = xdg.nextConfigureSerial();
-    s.lastConfigureSerial = serial;
+    s.pendingConfigureSerials.push(serial);
     send(xdgSurfaceId, "xdg_surface.configure", { serial });
     s.configurePending = false;
 }
@@ -448,8 +450,8 @@ export class xdgSurfaceData {
             initialCommitDone: boolean;
             /** 初始 commit 前桌面就可能改了状态（focus/setBox），先记下，等 commit 再发 */
             configurePending: boolean;
-            /** 最近一次下发的 xdg_surface.configure serial，ack 时对账 */
-            lastConfigureSerial?: number;
+            /** 已下发、尚未 ack 的 configure serial（按发送顺序；ack 会一并消费更早的） */
+            pendingConfigureSerials: number[];
             /**
              * 最近一次广播给桌面的窗口尺寸。
              * 客户端可以不调用 `set_window_geometry`（xdg-shell 允许），此时尺寸取 surface 尺寸；
@@ -472,8 +474,6 @@ export class xdgSurfaceData {
     >();
     /** 反向索引：commit 走 wl_surface id，靠它找回 xdg_surface */
     private byWlSurface = new Map<WaylandObjectId2<"wl_surface">, WaylandObjectId2<"xdg_surface">>();
-    /** xdg configure serial：客户端级单调递增，起点 1（0 会被 Qt 当作无效 configure） */
-    #configureSerial = 1;
     private render: renderTools;
     private idScope: (id: unknown) => string;
     /** core 的 subsurface 树与对象表：`hitTest` 的正向依赖（ext → core 允许） */
@@ -497,6 +497,7 @@ export class xdgSurfaceData {
             offset: { x: 0, y: 0 },
             initialCommitDone: false,
             configurePending: false,
+            pendingConfigureSerials: [],
         };
         this.byWlSurface.set(wlSurface, id);
 
@@ -510,14 +511,19 @@ export class xdgSurfaceData {
         sendConfigure(this.ctx, id, true);
     }
     nextConfigureSerial() {
-        const serial = this.#configureSerial;
-        this.#configureSerial += 2;
-        return serial;
+        // 与输入事件、ping 共用客户端级序列：客户端可能拿任意事件的 serial 做用户操作判定
+        return this.ctx.domain.serial.next();
     }
-    /** 记录 ack；只用于把「已送达」的 serial 收掉 */
+    /** ack 只接受已下发的 serial；成功时一并消费更早的 configure（协议语义） */
     ackConfigure(id: WaylandObjectId2<"xdg_surface">, serial: number) {
         const s = this.getXdgSurface(id);
-        if (s && s.lastConfigureSerial === serial) s.lastConfigureSerial = undefined;
+        if (s === undefined) return;
+        const index = s.pendingConfigureSerials.indexOf(serial);
+        if (index === -1) {
+            this.ctx.postError("xdg_surface", id, "invalid_serial", `Unknown configure serial ${serial}`);
+            return;
+        }
+        s.pendingConfigureSerials.splice(0, index + 1);
     }
 
     /** `xdg_popup.grab`：把 popup 压到该 seat 的 grab 栈顶 */
@@ -952,6 +958,10 @@ export const xdgShellModule = defineModule({
             const pData = ctx.objects.get(x.id).data;
             pData.parent_size = x.args;
         },
+        "xdg_positioner.set_parent_configure": (x, ctx) => {
+            // 定位算法当前不依赖父 configure 的历史状态，但 serial 仍要收下（协议调用是合法的）
+            ctx.objects.get(x.id).data.parent_configure = x.args.serial;
+        },
         "xdg_positioner.set_reactive": (x, ctx) => {
             const pData = ctx.objects.get(x.id).data;
             pData.reactive = true;
@@ -1058,9 +1068,14 @@ export const xdgShellModule = defineModule({
         "xdg_popup.grab": (x, ctx) => {
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByPopup(x.id);
             if (xdgSurfaceId === undefined) return;
-            const seatName = ctx.domain.seat.get(x.args.seat)?.name;
-            if (seatName === undefined) return;
-            ctx.domain.xdgSurface.grabPopup(seatName, x.id, xdgSurfaceId);
+            const seat = ctx.domain.seat.get(x.args.seat);
+            if (seat === undefined) return;
+            // grab 必须由用户按键（serial）触发；拒绝时按协议立即 popup_done
+            if (!ctx.domain.seat.isUserActionSerial(seat, x.args.serial)) {
+                ctx.sendNow(x.id, "xdg_popup.popup_done", {});
+                return;
+            }
+            ctx.domain.xdgSurface.grabPopup(seat.name, x.id, xdgSurfaceId);
         },
         "xdg_popup.destroy": (x, ctx) => {
             const xid = x.id;
@@ -1125,6 +1140,9 @@ export const xdgShellModule = defineModule({
             ctx.domain.windows.setSizeLimits(x.id, undefined, { width: x.args.width, height: x.args.height });
         },
         "xdg_toplevel.move": (x, ctx) => {
+            const seat = ctx.domain.seat.get(x.args.seat);
+            // 移动必须由用户按键触发；serial 不是最近下发的按键 serial 时忽略（协议允许）
+            if (seat === undefined || !ctx.domain.seat.isUserActionSerial(seat, x.args.serial)) return;
             ctx.domain.windows.startMove(x.id);
         },
         "xdg_toplevel.set_maximized": (x, ctx) => {
