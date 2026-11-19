@@ -14,6 +14,25 @@ import {
 import type { renderTools } from "../../render_tools";
 import type { WaylandName, WaylandProtocol } from "../../utils/wayland-binary";
 import { getEnumName, getEnumValue, tryX, waylandObjectId } from "../../utils/wayland-proto";
+import {
+    keyboardEnter,
+    keyboardKey,
+    keyboardKeymap,
+    keyboardLeave,
+    keyboardModifiers,
+    keyboardRepeatInfo,
+    pointerAxis,
+    pointerAxisDiscrete,
+    pointerAxisRelativeDirection,
+    pointerAxisSource,
+    pointerAxisStop,
+    pointerAxisValue120,
+    pointerButton,
+    pointerEnter,
+    pointerFrame,
+    pointerLeave,
+    pointerMotion,
+} from "./seat_native";
 
 const fs = require("node:fs") as typeof import("node:fs");
 
@@ -37,8 +56,6 @@ const {
     getElectronPixelFormat,
 } = require("myde-drm") as typeof import("myde-drm");
 
-import { buildXkb } from "myde-xcb";
-import { newFd } from "../../utils/fd";
 import { importSharedTexture } from "../../utils/shared_texture";
 
 declare module "../../module" {
@@ -366,6 +383,7 @@ export class SeatStore {
             pointerPos: { x: 0, y: 0 },
             keyboardFocus: null,
             mods: new Set(),
+            pressedKeys: new Set(),
             keyboardPressSerials: [],
         };
         this.#seats.set(id, record);
@@ -429,9 +447,13 @@ export class SeatStore {
         seat.mods.delete(bit);
     }
 
-    /** `wl_keyboard.modifiers.mods_depressed` 的位掩码 */
+    /** `wl_keyboard.modifiers.mods_depressed` 的位掩码：按仍按下的物理键算，左右同名键不会互相覆盖 */
     modifierMask(seat: SeatRecord): number {
         let mask = 0;
+        for (const key of seat.pressedKeys) {
+            const bit = MOD_KEY_TO_BIT[key];
+            if (bit !== undefined) mask |= 1 << bit;
+        }
         for (const bit of seat.mods) mask |= 1 << bit;
         return mask;
     }
@@ -666,111 +688,129 @@ function seatNameOf(ctx: ModuleCtx, msg: BindMsg): string {
     return `seat${index < 0 ? 0 : index}`;
 }
 
-/**
- * 记录 `wl_pointer.enter` 的 serial：`wl_pointer.set_cursor` 与
- * `wp_cursor_shape_device_v1.set_shape` 都要求请求携带的 serial 与最近一次 enter 相同，
- * 不一致时按协议忽略请求。
- */
-function trackPointerEnter(ctx: ModuleCtx, pointer: WaylandObjectId2<"wl_pointer">, serial: number): void {
-    const info = ctx.objects.getOption(pointer);
-    if (info === undefined) return;
-    ctx.objects.setData(pointer, { ...info.data, enterSerial: serial });
+function activePointers(ctx: ModuleCtx, seat: SeatRecord): WaylandObjectId2<"wl_pointer">[] {
+    return [...seat.pointers].filter((id) => ctx.objects.has(id));
+}
+
+function activeKeyboards(ctx: ModuleCtx, seat: SeatRecord): WaylandObjectId2<"wl_keyboard">[] {
+    return [...seat.keyboards].filter((id) => ctx.objects.has(id));
 }
 
 /**
- * 键盘焦点单写入点（`CoreApi.focusKeyboard` 的实现）：**同值直接去重**；变化才发
- * `leave`(旧) → `enter`(新) + `modifiers`、写 `seat.keyboardFocus`，最后 `ctx.notify.focus`
- * 扇出给派生物（text-input 的 enter/leave、selection 归属都挂在这条通知上）。
+ * 键盘焦点单写入点：同值去重；变化才发 `leave`(旧) → `enter`(新) + `modifiers`。
  *
- * 同一 seat 可能有多个 `wl_keyboard` 资源（客户端重复 bind），事件发给每一个。
- *
- * 与 xdg 的 `actived` 是两条独立的轴：规范对 `configure(activated)` 与 `wl_keyboard.enter`
- * 的顺序没有要求，所以这里不碰 actived，谁先变都以最终态为准。
- *
- * 旧 surface 若已被客户端销毁就不发 leave（协议上不能引用死对象）——那条路径在 `wl_surface.destroy`。
+ * `enter.keys` 必须带当前逻辑按下的键，否则失焦期间按住的键在重新聚焦后不会被客户端知道。
+ * 失焦**不补发 key release**：`wl_keyboard.leave` 本身就会让客户端重置逻辑状态。
  */
 function focusKeyboard(ctx: ModuleCtx, surface: SurfaceId | null, seatName?: string): void {
     const seat = ctx.domain.seat.byName(seatName ?? "seat0");
     if (seat === undefined) return;
     const prev = seat.keyboardFocus;
     if (prev === surface) return;
-    const keyboards = [...seat.keyboards].filter((id) => ctx.objects.has(id));
+    const keyboards = activeKeyboards(ctx, seat);
     if (prev !== null && ctx.objects.has(prev)) {
         const serial = ctx.domain.serial.next();
-        for (const k of keyboards) ctx.sendNow(k, "wl_keyboard.leave", { serial, surface: prev });
+        for (const keyboard of keyboards) keyboardLeave(ctx, keyboard, serial, prev);
     }
     if (surface !== null) {
         const enterSerial = ctx.domain.serial.next();
         const modifiersSerial = ctx.domain.serial.next();
-        for (const k of keyboards) {
-            ctx.sendNow(k, "wl_keyboard.enter", { serial: enterSerial, surface: surface, keys: new Uint32Array([]) });
-            ctx.sendNow(k, "wl_keyboard.modifiers", {
-                serial: modifiersSerial,
-                mods_depressed: ctx.domain.seat.modifierMask(seat),
-                mods_latched: 0,
-                mods_locked: 0,
-                group: 0,
-            });
+        const keys = Uint32Array.from(seat.pressedKeys);
+        for (const keyboard of keyboards) {
+            keyboardEnter(ctx, keyboard, enterSerial, surface, keys);
+            keyboardModifiers(ctx, keyboard, modifiersSerial, ctx.domain.seat.modifierMask(seat));
         }
     }
     seat.keyboardFocus = surface;
     ctx.notify.focus(seat.name, surface ?? undefined);
-    // selection 跟随键盘焦点：失焦即撤掉本 seat 上发给该客户端的宣告（重新聚焦由桌面 `clipboard.offer` 推）
     if (surface === null) clearSelection(ctx, seat.name);
 }
 
 /**
- * 指针焦点转移——**只管指针**：hover 是否要改键盘焦点是桌面政策（想 focus-follows-mouse 的桌面
- * 自己在 hover 时调 `window.focus`），wayland 内部不再自作主张。
- * 命中 surface 变了才发 leave/enter，且只发给**这一把 seat**的全部 pointer 资源。
- * 与几何命中检测分开——`ctx.domain.xdgSurface.hitTest` 是纯几何（xdg 域），这里只剩协议动作。
+ * 指针焦点转移：**只管指针**，hover 是否改键盘焦点是桌面政策。
+ * 不同 surface 先 leave 旧、再 enter 新；同 surface 只更新坐标。
+ * 已销毁的旧 surface 不再引用（不能给死对象发 leave），直接清槽。
  */
 function updatePointerFocus(ctx: ModuleCtx, seat: SeatRecord, hit: HitTestResult): void {
     const prevFocus = seat.pointerFocus;
-    const pointers = [...seat.pointers].filter((id) => ctx.objects.has(id));
+    const pointers = activePointers(ctx, seat);
     // 坐标每次都更新：后创建的 pointer 需要能补发 enter
     seat.pointerPos = { x: hit.x, y: hit.y };
     if (prevFocus === hit.surface) return;
-    if (prevFocus && ctx.objects.has(prevFocus)) {
+    if (prevFocus !== null && ctx.objects.has(prevFocus)) {
         const serial = ctx.domain.serial.next();
-        for (const p of pointers) ctx.sendNow(p, "wl_pointer.leave", { serial, surface: prevFocus });
+        for (const p of pointers) pointerLeave(ctx, p, serial, prevFocus);
     }
     const serial = ctx.domain.serial.next();
     for (const p of pointers) {
-        trackPointerEnter(ctx, p, serial);
-        ctx.sendNow(p, "wl_pointer.enter", {
-            serial,
-            surface: hit.surface,
-            surface_x: hit.x,
-            surface_y: hit.y,
-        });
-        ctx.sendNow(p, "wl_pointer.frame", {});
+        pointerEnter(ctx, p, serial, hit.surface, hit.x, hit.y);
+        pointerFrame(ctx, p);
     }
     seat.pointerFocus = hit.surface;
 }
 
-/** 桌面 `PointerCommand.button`（0/1/2）→ Linux 键码；grab 与 `wl_pointer.button` 共用这个码空间 */
+/** 桌面 `PointerCommand.button`（DOM 编号）→ Linux 键码；grab 与 `wl_pointer.button` 共用这个码空间 */
 function pointerButtonCode(button: number): number {
-    return button === 1
-        ? InputEventCodes.BTN_MIDDLE
-        : button === 2
-          ? InputEventCodes.BTN_RIGHT
-          : InputEventCodes.BTN_LEFT;
+    switch (button) {
+        case 1:
+            return InputEventCodes.BTN_MIDDLE;
+        case 2:
+            return InputEventCodes.BTN_RIGHT;
+        case 3:
+            return InputEventCodes.BTN_SIDE;
+        case 4:
+            return InputEventCodes.BTN_EXTRA;
+        default:
+            return InputEventCodes.BTN_LEFT;
+    }
 }
 
 /**
- * 指针离开所有 surface：发 leave 并清槽（隐式 grab 结束时重新命中不到任何 surface 用）。
- * 只处理指针焦点；data_device 的拖拽 hover 由 dnd 域在会话结束时自己收敛。
+ * 指针离开所有 surface：发 leave 并清槽。没有活跃 grab 时才允许调用——
+ * grab 期间 pointer focus 必须固定在按下 surface 上。
  */
 function clearPointerFocus(ctx: ModuleCtx, seat: SeatRecord): void {
     const prev = seat.pointerFocus;
     if (prev === null) return;
-    const pointers = [...seat.pointers].filter((id) => ctx.objects.has(id));
+    const pointers = activePointers(ctx, seat);
     if (ctx.objects.has(prev)) {
         const serial = ctx.domain.serial.next();
-        for (const p of pointers) ctx.sendNow(p, "wl_pointer.leave", { serial, surface: prev });
+        for (const p of pointers) pointerLeave(ctx, p, serial, prev);
     }
     seat.pointerFocus = null;
+}
+
+/**
+ * 强制结束隐式 grab：仍按住的按钮先补 `button(released)`，再清空按钮集合。
+ * grab 对象保留（buttons 为空），让 `isUserActionSerial` 仍能校验延迟到达的 move/grab。
+ *
+ * - `cancel` / `destroy`：补 release，并 leave 当前 pointer focus；
+ * - `compositor`：设备被合成器接管，只 leave，不补 release（客户端靠 leave 重置）。
+ */
+export function forcePointerGrab(ctx: ModuleCtx, seat: SeatRecord, reason: "cancel" | "destroy" | "compositor"): void {
+    const grab = seat.pointerGrab;
+    if (grab === undefined || grab.buttons.size === 0) return;
+    const buttons = [...grab.buttons];
+    const focusAlive = seat.pointerFocus !== null && ctx.objects.has(seat.pointerFocus);
+    if (reason !== "compositor" && focusAlive && seat.pointerFocus === grab.surface) {
+        const pointers = activePointers(ctx, seat);
+        const time = Date.now();
+        for (const pointer of pointers) {
+            for (const button of buttons) {
+                pointerButton(ctx, pointer, ctx.domain.serial.next(), time, button, "released");
+            }
+            pointerFrame(ctx, pointer);
+        }
+    }
+    for (const button of buttons) grab.buttons.delete(button);
+    if (seat.pointerFocus !== null) clearPointerFocus(ctx, seat);
+    // 拖拽是被这次 grab 驱动的：grab 没了，拖拽也必须结束。
+    // 桌面驱动的会话已经由 dnd hub 收尾，只清本地状态，避免重复 dnd_finished/cancelled。
+    const drag = ctx.domain.dataDevice.drag;
+    if (drag !== undefined && drag.seatName === seat.name) {
+        if (drag.remoteDriven) ctx.domain.dataDevice.drag = undefined;
+        else cancelDrag(ctx);
+    }
 }
 
 /**
@@ -780,30 +820,26 @@ function clearPointerFocus(ctx: ModuleCtx, seat: SeatRecord): void {
 function sendPointer(ctx: ModuleCtx, seat: SeatRecord, ev: PointerCommand, hit: HitTestResult): number | undefined {
     // 移动先同步 DnD；抬起时先发 wl_pointer.button（和 KWin 一样），再结束拖拽发 drop
     if (ev.type === "move" && ctx.domain.dataDevice.drag) updateDrag(ctx, "move", hit);
-    const pointers = [...seat.pointers].filter((id) => ctx.objects.has(id));
+    const pointers = activePointers(ctx, seat);
     if (pointers.length === 0) {
         if (ev.type === "up" && ctx.domain.dataDevice.drag) updateDrag(ctx, "up", hit);
         return undefined;
     }
     const { x: nx, y: ny } = hit;
     seat.pointerPos = { x: nx, y: ny };
+    const time = Date.now();
     if (ev.type === "move") {
         for (const pointer of pointers) {
-            ctx.sendNow(pointer, "wl_pointer.motion", { time: Date.now(), surface_x: nx, surface_y: ny });
-            ctx.sendNow(pointer, "wl_pointer.frame", {});
+            pointerMotion(ctx, pointer, time, nx, ny);
+            pointerFrame(ctx, pointer);
         }
         return undefined;
     }
     const button = pointerButtonCode(ev.button);
     const serial = ctx.domain.serial.next();
     for (const pointer of pointers) {
-        ctx.sendNow(pointer, "wl_pointer.button", {
-            serial,
-            time: Date.now(),
-            button,
-            state: getEnumValue("wl_pointer.button_state", ev.type === "down" ? "pressed" : "released"),
-        });
-        ctx.sendNow(pointer, "wl_pointer.frame", {});
+        pointerButton(ctx, pointer, serial, time, button, ev.type === "down" ? "pressed" : "released");
+        pointerFrame(ctx, pointer);
     }
     if (ev.type === "up" && ctx.domain.dataDevice.drag) updateDrag(ctx, "up", hit);
     return serial;
@@ -824,38 +860,73 @@ function unmapSurface(ctx: ModuleCtx, surfaceId: SurfaceId): void {
 }
 
 /**
- * 按键注入：**该 seat 没有键盘焦点就不发**（否则客户端会收到不属于任何聚焦窗口的按键）。
+ * 按键注入：按键集合是物理状态，**没有键盘焦点也要更新**（下次 enter 要用它做 keys 快照）；
+ * 但只有存在焦点时才真正发 `wl_keyboard.key`。
+ *
+ * press/release 去重：重复 press、没有 press 的 release 都直接丢弃。
  * 修饰键按该 seat 的掩码补发 `wl_keyboard.modifiers`（两把键盘各记各的；todo repeat）。
  */
 function sendKey(ctx: ModuleCtx, seat: SeatRecord, key: number, state: "pressed" | "released"): void {
-    const keyboards = [...seat.keyboards].filter((id) => ctx.objects.has(id));
-    if (seat.keyboardFocus === null || keyboards.length === 0) return;
-    const s = ctx.domain.serial.next();
-    if (state === "pressed") ctx.domain.seat.noteKeyboardPress(seat, s);
-    for (const k of keyboards) {
-        ctx.sendNow(k, "wl_keyboard.key", {
-            serial: s,
-            time: Date.now(),
-            key: key,
-            state: getEnumValue("wl_keyboard.key_state", state),
-        });
-    }
+    const held = seat.pressedKeys.has(key);
+    if (state === "pressed" && held) return;
+    if (state === "released" && !held) return;
 
-    const bit = MOD_KEY_TO_BIT[key];
-    if (bit === undefined) return;
+    if (state === "pressed") seat.pressedKeys.add(key);
+    else seat.pressedKeys.delete(key);
+
     const store = ctx.domain.seat;
-    if (state === "pressed") store.addModifier(seat, bit);
-    else store.removeModifier(seat, bit);
-
-    for (const k of keyboards) {
-        ctx.sendNow(k, "wl_keyboard.modifiers", {
-            serial: s,
-            mods_depressed: store.modifierMask(seat),
-            mods_latched: 0, // todo not tracking latched in this implementation
-            mods_locked: 0, // todo not tracking locked separately here
-            group: 0,
-        });
+    const bit = MOD_KEY_TO_BIT[key];
+    if (bit !== undefined) {
+        if (state === "pressed") store.addModifier(seat, bit);
+        else store.removeModifier(seat, bit);
     }
+
+    const keyboards = activeKeyboards(ctx, seat);
+    if (seat.keyboardFocus === null || keyboards.length === 0) return;
+
+    const serial = ctx.domain.serial.next();
+    if (state === "pressed") ctx.domain.seat.noteKeyboardPress(seat, serial);
+    const time = Date.now();
+    for (const keyboard of keyboards) keyboardKey(ctx, keyboard, serial, time, key, state);
+    if (bit === undefined) return;
+    const mask = store.modifierMask(seat);
+    for (const keyboard of keyboards) keyboardModifiers(ctx, keyboard, serial, mask);
+}
+
+/**
+ * 取窗口主 surface：`input.key` 的 handle 是桌面侧窗口身份，键盘状态机需要落到 surface。
+ * 窗口不在（已销毁/不是 xdg）时返回 null。
+ */
+function mainSurfaceOfToplevel(ctx: ModuleCtx, winId: WaylandWinId): SurfaceId | null {
+    const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId);
+    if (xdgSurfaceId === undefined) return null;
+    const info = ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId);
+    return info?.surface ?? null;
+}
+
+function surfaceInToplevel(ctx: ModuleCtx, surface: SurfaceId, winId: WaylandWinId): boolean {
+    const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByWlSurface(surface);
+    if (xdgSurfaceId === undefined) return false;
+    return ctx.domain.xdgSurface.rootXdgSurface(xdgSurfaceId) === ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId);
+}
+
+/**
+ * 滚动/手势这类没有坐标的事件：如果当前 pointer focus 不在目标窗口上，就以窗口主 surface
+ * 补一次 enter（坐标沿用最近一次 pointerPos）。桌面已经做过命中，这里只补协议前置状态。
+ */
+function ensurePointerFocusForWindow(ctx: ModuleCtx, seat: SeatRecord, winId: WaylandWinId): boolean {
+    const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId);
+    if (xdgSurfaceId === undefined) return false;
+    if (seat.pointerFocus !== null && surfaceInToplevel(ctx, seat.pointerFocus, winId)) return true;
+    const mainSurface = ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
+    updatePointerFocus(ctx, seat, {
+        surface: mainSurface,
+        xdgSurface: xdgSurfaceId,
+        x: seat.pointerPos.x,
+        y: seat.pointerPos.y,
+        role: "main",
+    });
+    return true;
 }
 
 /**
@@ -887,9 +958,7 @@ function sendScroll(ctx: ModuleCtx, seat: SeatRecord, ev: ScrollCommand): void {
         // 同一把 seat 上可能有多把不同版本的指针，按各自的版本挑事件
         const pointerVersion = ctx.objects.getOption(pointer)?.version ?? 0;
         if (pointerVersion >= 5) {
-            ctx.sendNow(pointer, "wl_pointer.axis_source", {
-                axis_source: getEnumValue("wl_pointer.axis_source", source),
-            });
+            pointerAxisSource(ctx, pointer, getEnumValue("wl_pointer.axis_source", source));
         }
         const sendAxis = (
             axis: "horizontal_scroll" | "vertical_scroll",
@@ -901,60 +970,38 @@ function sendScroll(ctx: ModuleCtx, seat: SeatRecord, ev: ScrollCommand): void {
             const axisValue = getEnumValue("wl_pointer.axis", axis);
             // axis_relative_direction 与 axis 同帧、紧跟其前
             if (pointerVersion >= 9 && ev.relativeDirection !== undefined) {
-                ctx.sendNow(pointer, "wl_pointer.axis_relative_direction", {
-                    axis: axisValue,
-                    direction: getEnumValue("wl_pointer.axis_relative_direction", ev.relativeDirection),
-                });
+                pointerAxisRelativeDirection(
+                    ctx,
+                    pointer,
+                    axisValue,
+                    getEnumValue("wl_pointer.axis_relative_direction", ev.relativeDirection),
+                );
             }
             if (source === "wheel") {
                 const steps120 = value120 ?? delta * value120PerPx;
                 if (pointerVersion >= 5 && pointerVersion < 8) {
                     // axis_discrete 必须紧跟在同一 frame 的 axis 之前
                     const discrete = Math.round(steps120 / 120);
-                    if (discrete !== 0) {
-                        ctx.sendNow(pointer, "wl_pointer.axis_discrete", {
-                            axis: axisValue,
-                            discrete,
-                        });
-                    }
+                    if (discrete !== 0) pointerAxisDiscrete(ctx, pointer, axisValue, discrete);
                 } else if (pointerVersion >= 8) {
                     // 高精度滚轮：value120 与 axis 同帧，value120 在前（与 KWin 一致）
                     const steps = Math.round(steps120);
-                    if (steps !== 0) {
-                        ctx.sendNow(pointer, "wl_pointer.axis_value120", {
-                            axis: axisValue,
-                            value120: steps,
-                        });
-                    }
+                    if (steps !== 0) pointerAxisValue120(ctx, pointer, axisValue, steps);
                 }
-                ctx.sendNow(pointer, "wl_pointer.axis", {
-                    time: Date.now(),
-                    axis: axisValue,
-                    value: delta * axisPerPx,
-                });
+                pointerAxis(ctx, pointer, Date.now(), axisValue, delta * axisPerPx);
             } else {
                 // 连续滚动：axis 直接是 surface-local 像素，不带离散步进
-                ctx.sendNow(pointer, "wl_pointer.axis", {
-                    time: Date.now(),
-                    axis: axisValue,
-                    value: delta,
-                });
+                pointerAxis(ctx, pointer, Date.now(), axisValue, delta);
             }
         };
         sendAxis("horizontal_scroll", deltaX, ev.value120X);
         sendAxis("vertical_scroll", deltaY, ev.value120Y);
         // 连续滚动结束（触摸板抬手）。客户端按自己滚动的轴处理，两个轴都发一遍。
         if (stop && source !== "wheel" && pointerVersion >= 5) {
-            ctx.sendNow(pointer, "wl_pointer.axis_stop", {
-                time: Date.now(),
-                axis: getEnumValue("wl_pointer.axis", "horizontal_scroll"),
-            });
-            ctx.sendNow(pointer, "wl_pointer.axis_stop", {
-                time: Date.now(),
-                axis: getEnumValue("wl_pointer.axis", "vertical_scroll"),
-            });
+            pointerAxisStop(ctx, pointer, Date.now(), getEnumValue("wl_pointer.axis", "horizontal_scroll"));
+            pointerAxisStop(ctx, pointer, Date.now(), getEnumValue("wl_pointer.axis", "vertical_scroll"));
         }
-        ctx.sendNow(pointer, "wl_pointer.frame", {});
+        pointerFrame(ctx, pointer);
     }
 }
 
@@ -1113,6 +1160,27 @@ export const waylandCoreModule = defineModule({
             subsurface: new wlSubSurfaceData(surface),
             /** 键盘焦点单写入点（去重 + 发包 + 扇出），见 `CoreApi.focusKeyboard` */
             focusKeyboard: (surfaceId, seatName) => focusKeyboard(ctx, surfaceId, seatName),
+            /** 强制结束隐式 grab（补 release + leave），给 xdg / dnd / host 收尾用 */
+            forcePointerGrab: (seatName, reason) => {
+                const seat = ctx.domain.seat.byName(seatName ?? "seat0");
+                if (seat !== undefined) forcePointerGrab(ctx, seat, reason ?? "cancel");
+            },
+            /** 清 pointer focus；有活跃 grab 时忽略，避免 grab 期间焦点被外部清掉 */
+            leavePointer: (seatName) => {
+                const seat = ctx.domain.seat.byName(seatName ?? "seat0");
+                if (seat === undefined) return;
+                if (seat.pointerGrab !== undefined && seat.pointerGrab.buttons.size > 0) return;
+                clearPointerFocus(ctx, seat);
+            },
+            /** 无坐标输入（scroll/gesture）的目标窗口 → 必要时补 pointer enter */
+            ensurePointerFocus: (winId, seatName) => {
+                const seat = ctx.domain.seat.byName(seatName ?? "seat0");
+                if (seat === undefined) return false;
+                if (seat.pointerGrab !== undefined && seat.pointerGrab.buttons.size > 0) {
+                    return seat.pointerFocus !== null && surfaceInToplevel(ctx, seat.pointerFocus, winId);
+                }
+                return ensurePointerFocusForWindow(ctx, seat, winId);
+            },
         };
     },
     domain: {
@@ -1965,8 +2033,8 @@ export const waylandCoreModule = defineModule({
             // text-input 之类经 `notify.destroy` 收敛自己的状态，不走 focus 通知。
             for (const seat of ctx.domain.seat.all()) {
                 if (seat.pointerFocus === surfaceId) seat.pointerFocus = null;
-                // grab 固定的 surface 已销毁：不能再把 motion/up 路由给它
-                if (seat.pointerGrab?.surface === surfaceId) seat.pointerGrab = undefined;
+                // grab 固定的 surface 已销毁：不能再把 motion/up 路由给它；也不能给死对象补 release
+                if (seat.pointerGrab?.surface === surfaceId) seat.pointerGrab.buttons.clear();
                 if (seat.keyboardFocus === surfaceId) {
                     seat.keyboardFocus = null;
                     clearSelection(ctx, seat.name);
@@ -1998,14 +2066,8 @@ export const waylandCoreModule = defineModule({
             // 同一 seat 后来新建的 pointer 也要接上当前焦点（Firefox 会在多份 registry 上重复 get_pointer）
             if (seat.pointerFocus !== null && ctx.objects.has(seat.pointerFocus)) {
                 const serial = ctx.domain.serial.next();
-                trackPointerEnter(ctx, pointerId, serial);
-                ctx.send(pointerId, "wl_pointer.enter", {
-                    serial,
-                    surface: seat.pointerFocus,
-                    surface_x: seat.pointerPos.x,
-                    surface_y: seat.pointerPos.y,
-                });
-                ctx.send(pointerId, "wl_pointer.frame", {});
+                pointerEnter(ctx, pointerId, serial, seat.pointerFocus, seat.pointerPos.x, seat.pointerPos.y, ctx.send);
+                pointerFrame(ctx, pointerId, ctx.send);
             }
         },
         "wl_seat.get_keyboard": (x, ctx) => {
@@ -2016,34 +2078,20 @@ export const waylandCoreModule = defineModule({
                 return;
             }
             seat.keyboards.add(keyboardId);
-            ctx.send(keyboardId, "wl_keyboard.repeat_info", {
-                rate: 25,
-                delay: 600,
-            });
-
-            const keymapStr = buildXkb();
-            const { fd, size } = newFd(keymapStr);
-
-            ctx.send(keyboardId, "wl_keyboard.keymap", {
-                format: getEnumValue("wl_keyboard.keymap_format", "xkb_v1"),
-                fd: fd,
-                size: size,
-            });
+            keyboardRepeatInfo(ctx, keyboardId, ctx.send);
+            keyboardKeymap(ctx, keyboardId, ctx.send);
             if (seat.keyboardFocus !== null && ctx.objects.has(seat.keyboardFocus)) {
                 const enterSerial = ctx.domain.serial.next();
                 const modifiersSerial = ctx.domain.serial.next();
-                ctx.send(keyboardId, "wl_keyboard.enter", {
-                    serial: enterSerial,
-                    surface: seat.keyboardFocus,
-                    keys: new Uint32Array([]),
-                });
-                ctx.send(keyboardId, "wl_keyboard.modifiers", {
-                    serial: modifiersSerial,
-                    mods_depressed: ctx.domain.seat.modifierMask(seat),
-                    mods_latched: 0,
-                    mods_locked: 0,
-                    group: 0,
-                });
+                keyboardEnter(
+                    ctx,
+                    keyboardId,
+                    enterSerial,
+                    seat.keyboardFocus,
+                    Uint32Array.from(seat.pressedKeys),
+                    ctx.send,
+                );
+                keyboardModifiers(ctx, keyboardId, modifiersSerial, ctx.domain.seat.modifierMask(seat), ctx.send);
             }
         },
         /** `wl_pointer.release` 是 destructor：对象已由分发器删除，这里只清 seat 的资源表 */
@@ -2109,65 +2157,111 @@ export const waylandCoreModule = defineModule({
     },
     actions: {
         /**
-         * 指针路由：有隐式 grab 时固定在 grab surface（即使指针移出它的几何范围），
-         * 否则按几何命中 → 焦点转移 → 事件下发。没命中时不发（见 hitTest 的 leave todo）。
+         * 指针入口规范化：有隐式 grab 时固定在 grab surface（即使指针移出它的几何范围）；
+         * 没有 grab 时先补齐 enter/leave，再发 motion/button。
+         *
+         * 桌面不需要严格保证 leave/enter 顺序：不同窗口的事件到达时，旧会话在这里被强制收尾，
+         * 目标 surface 的 enter 在 button/motion 之前补发。没有对应 down 的 up 直接丢弃。
          */
         "input.pointer": (msg, ctx) => {
             const ev = msg.args[0];
             const seat = resolveSeat(ctx, msg.args[1]);
             if (seat === undefined) return;
+            const p = { x: ev.x, y: ev.y };
 
-            const grab = seat.pointerGrab;
-            const activeGrab = grab !== undefined && grab.buttons.size > 0 ? grab : undefined;
-            const hit = activeGrab
-                ? ctx.domain.xdgSurface.hitTest(activeGrab.winId, { x: ev.x, y: ev.y }, activeGrab.surface)
-                : ctx.domain.xdgSurface.hitTest(msg.winId, { x: ev.x, y: ev.y });
+            let grab = seat.pointerGrab;
+            // grab 期间桌面把事件发到了别的窗口：旧会话的坐标空间已经不可信，先完整收尾
+            if (grab !== undefined && grab.buttons.size > 0 && grab.winId !== msg.winId) {
+                forcePointerGrab(ctx, seat, "cancel");
+                grab = undefined;
+            }
+
+            if (grab !== undefined && grab.buttons.size > 0) {
+                const hit = ctx.domain.xdgSurface.hitTest(grab.winId, p, grab.surface);
+                if (hit === undefined) {
+                    // grab 固定的 surface 已不可用（窗口销毁/角色变化），不能继续引用
+                    forcePointerGrab(ctx, seat, "destroy");
+                    return;
+                }
+                if (ev.type === "down") {
+                    const code = pointerButtonCode(ev.button);
+                    if (grab.buttons.has(code)) return;
+                    const serial = sendPointer(ctx, seat, ev, hit);
+                    if (serial !== undefined) {
+                        ctx.domain.seat.beginPointerGrab(seat, grab.winId, grab.surface, code, grab.serial);
+                    }
+                } else if (ev.type === "move") {
+                    sendPointer(ctx, seat, ev, hit);
+                } else {
+                    const code = pointerButtonCode(ev.button);
+                    if (!grab.buttons.has(code)) return;
+                    sendPointer(ctx, seat, ev, hit);
+                    ctx.domain.seat.endPointerButton(seat, code);
+                }
+                return;
+            }
+
+            // 没有对应 down 的 up 丢弃，不制造幽灵点击
+            if (ev.type === "up") return;
+
+            const hit = ctx.domain.xdgSurface.hitTest(msg.winId, p);
             // 按下先收回不再包含指针的 popup grab（点击外部关闭），点击本身照常路由
             if (ev.type === "down") ctx.domain.xdgSurface.dismissGrabsForPointer(hit, seat.name, ctx);
-
-            if (!hit) {
-                // grab 的 surface 已不在（销毁/窗口换了）：松开时结束 grab，不引用死对象
-                if (ev.type === "up" && activeGrab) {
-                    if (ctx.domain.seat.endPointerButton(seat, pointerButtonCode(ev.button)))
-                        clearPointerFocus(ctx, seat);
-                }
+            if (hit === undefined) {
+                if (ev.type === "move") clearPointerFocus(ctx, seat);
                 return;
             }
 
-            if (activeGrab) {
-                const serial = sendPointer(ctx, seat, ev, hit);
-                if (ev.type === "down" && serial !== undefined) {
-                    // 按住期间再按其它键：追加到同一 grab，不换 serial
-                    ctx.domain.seat.beginPointerGrab(
-                        seat,
-                        activeGrab.winId,
-                        activeGrab.surface,
-                        pointerButtonCode(ev.button),
-                        activeGrab.serial,
-                    );
-                }
-                if (ev.type === "up" && ctx.domain.seat.endPointerButton(seat, pointerButtonCode(ev.button))) {
-                    // grab 结束：按抬起位置重新判定焦点，可能换 surface 或离开窗口
-                    const after = ctx.domain.xdgSurface.hitTest(msg.winId, { x: ev.x, y: ev.y });
-                    if (after) updatePointerFocus(ctx, seat, after);
-                    else clearPointerFocus(ctx, seat);
-                }
-                return;
-            }
-
+            // 任何 motion/button 之前先保证 enter 已发（不同 surface 先 leave 旧）
             updatePointerFocus(ctx, seat, hit);
             const serial = sendPointer(ctx, seat, ev, hit);
             if (ev.type === "down" && serial !== undefined) {
                 ctx.domain.seat.beginPointerGrab(seat, msg.winId, hit.surface, pointerButtonCode(ev.button), serial);
             }
         },
+        /** host 在跨 client 切换 pointer 归属时调用；有活跃 grab 时先补 release 再离开 */
+        "input.pointerLeave": (msg, ctx) => {
+            const seat = resolveSeat(ctx, msg.args[0]);
+            if (seat === undefined) return;
+            if (seat.pointerGrab !== undefined && seat.pointerGrab.buttons.size > 0) {
+                forcePointerGrab(ctx, seat, "cancel");
+                return;
+            }
+            clearPointerFocus(ctx, seat);
+        },
+        /** host / xdg / dnd 强制结束旧 grab：有活跃 grab 补 release，否则也清掉残留焦点 */
+        "input.pointerCancel": (msg, ctx) => {
+            const seat = resolveSeat(ctx, msg.args[0]);
+            if (seat === undefined) return;
+            if (seat.pointerGrab !== undefined && seat.pointerGrab.buttons.size > 0) {
+                forcePointerGrab(ctx, seat, "cancel");
+            } else {
+                clearPointerFocus(ctx, seat);
+            }
+        },
         "input.scroll": (msg, ctx) => {
             const seat = resolveSeat(ctx, msg.args[1]);
-            if (seat !== undefined) sendScroll(ctx, seat, msg.args[0]);
+            if (seat === undefined) return;
+            // grab 期间 pointer focus 固定在按下 surface，滚动跟随它，不切目标
+            if (seat.pointerGrab !== undefined && seat.pointerGrab.buttons.size > 0) {
+                sendScroll(ctx, seat, msg.args[0]);
+                return;
+            }
+            // 桌面按落点选中了窗口；焦点缺失/停在别的窗口时先补 enter，再发 axis
+            if (ensurePointerFocusForWindow(ctx, seat, msg.winId)) sendScroll(ctx, seat, msg.args[0]);
         },
         "input.key": (msg, ctx) => {
             const seat = resolveSeat(ctx, msg.args[2]);
-            if (seat !== undefined) sendKey(ctx, seat, msg.args[0], msg.args[1]);
+            if (seat === undefined) return;
+            const [key, state] = msg.args;
+            // 先按键状态去重：没有 press 的 release 不值得为它补键盘焦点
+            const held = seat.pressedKeys.has(key);
+            if ((state === "pressed" && held) || (state === "released" && !held)) return;
+            // 事件自带窗口：桌面没发 window.focus 时，以它为准补 keyboard enter
+            const surface = mainSurfaceOfToplevel(ctx, msg.winId);
+            if (surface === null) return;
+            focusKeyboard(ctx, surface, seat.name);
+            sendKey(ctx, seat, key, state);
         },
         /** 仲裁交给各 text_input 模块（core 不认识 zwp_* 事件） */
         "input.text": (msg, ctx) => {
@@ -2194,28 +2288,25 @@ export const waylandCoreModule = defineModule({
             const drag = ctx.domain.dataDevice.drag;
             if (!drag) return;
             // 桌面驱动时源窗口没收到 wl_pointer.button；GTK/Firefox 会因此卡在 drag 状态。
-            // 在 dnd_finished/cancelled 之后补一个左键释放（本地回退路径的 up 已经发过了）。
+            // 有活跃 grab 就统一走 forcePointerGrab；没有 grab 的兼容路径仍补一个左键释放。
             if (drag.remoteDriven) {
                 const seat = ctx.domain.seat.byName(drag.seatName);
-                if (seat) {
-                    // 桌面没有走真实的 up：源客户端还按着哪些键就补发哪些释放，再同步结束隐式 grab
-                    const buttons = seat.pointerGrab?.buttons.size
-                        ? [...seat.pointerGrab.buttons]
-                        : [InputEventCodes.BTN_LEFT];
-                    const state = getEnumValue("wl_pointer.button_state", "released");
-                    for (const pointer of seat.pointers) {
-                        if (!ctx.objects.has(pointer)) continue;
-                        for (const button of buttons) {
-                            ctx.sendNow(pointer, "wl_pointer.button", {
-                                serial: ctx.domain.serial.next(),
-                                time: Date.now(),
-                                button,
-                                state,
-                            });
-                        }
-                        ctx.sendNow(pointer, "wl_pointer.frame", {});
+                if (seat?.pointerGrab !== undefined && seat.pointerGrab.buttons.size > 0) {
+                    forcePointerGrab(ctx, seat, "cancel");
+                } else if (seat !== undefined) {
+                    const pointers = activePointers(ctx, seat);
+                    const time = Date.now();
+                    for (const pointer of pointers) {
+                        pointerButton(
+                            ctx,
+                            pointer,
+                            ctx.domain.serial.next(),
+                            time,
+                            InputEventCodes.BTN_LEFT,
+                            "released",
+                        );
+                        pointerFrame(ctx, pointer);
                     }
-                    for (const button of buttons) ctx.domain.seat.endPointerButton(seat, button);
                 }
             }
             if (drag.offerId !== undefined) ctx.sendNow(drag.dataDeviceId, "wl_data_device.leave", {});

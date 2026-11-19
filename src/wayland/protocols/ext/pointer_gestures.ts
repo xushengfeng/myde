@@ -109,6 +109,8 @@ export const pointerGesturesModule = defineModule({
             const [ev, seatName] = msg.args;
             const seat = resolveSeat(ctx, seatName);
             if (seat === undefined) return;
+            // 手势 begin 也要求 pointer focus 已经在该窗口上：没有/停在别处时先补 enter
+            if (ev.phase === "begin" && !ctx.core.ensurePointerFocus(msg.winId, seat.name)) return;
             // 桌面已经按指针落点选中了窗口；优先用该窗口内的指针焦点（popup / 子 surface），
             // 焦点缺失或停在别的窗口时退回窗口主 surface。
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(msg.winId);

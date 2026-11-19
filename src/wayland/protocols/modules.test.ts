@@ -124,6 +124,7 @@ describe("桌面命令（actions）", () => {
             name: "seat0",
             keyboards: new Set([7 as WaylandObjectId2<"wl_keyboard">]),
             keyboardFocus: 100 as unknown as SurfaceId,
+            pressedKeys: new Set<number>(),
             mods,
         } as unknown as SeatRecord;
         const ctx = {
@@ -140,9 +141,14 @@ describe("桌面命令（actions）", () => {
                         return mask;
                     },
                 },
+                xdgSurface: {
+                    getXdgSurfaceByToplevel: () => 200,
+                    getXdgSurface: () => ({ surface: 100 }),
+                },
             },
             objects: { has: () => true },
             sendNow: (id: number, event: string, args: Record<string, unknown>) => sent.push({ id, event, args }),
+            notify: { focus: () => {} },
         } as unknown as ModuleCtx;
 
         // 普通按键：只有 wl_keyboard.key
@@ -157,11 +163,16 @@ describe("桌面命令（actions）", () => {
         expect(sent.map((s) => s.event)).toEqual(["wl_keyboard.key", "wl_keyboard.modifiers"]);
         expect(sent[1].args).toMatchObject({ serial: 5, mods_depressed: 1 << 0 });
 
-        // 该 seat 没有键盘焦点：一条都不发（客户端不该收到不属于聚焦窗口的按键）
+        // 没有键盘焦点时，事件自带窗口：先补 enter（带当前按键快照），再发 key
+        action?.({ winId: 1 as WaylandWinId, args: [30, "released"] }, ctx);
         sent.length = 0;
         seat.keyboardFocus = null;
         action?.({ winId: 1 as WaylandWinId, args: [30, "pressed"] }, ctx);
-        expect(sent).toEqual([]);
+        expect(sent.map((s) => s.event)).toEqual(["wl_keyboard.enter", "wl_keyboard.modifiers", "wl_keyboard.key"]);
+        expect(sent[0].args).toMatchObject({
+            surface: 100,
+            keys: new Uint32Array([InputEventCodes.KEY_LEFTSHIFT]),
+        });
     });
 
     it("input.text 只是转发（带 seat），仲裁由各 text_input 模块的 onTextInput 自判", () => {

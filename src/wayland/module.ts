@@ -381,6 +381,18 @@ export interface CoreApi {
      * 规范对 `configure(activated)` 与 `wl_keyboard.enter` 的顺序没有要求。
      */
     focusKeyboard(surface: SurfaceId | null, seat?: string): void;
+    /**
+     * 强制结束该 seat 的指针隐式 grab：仍按住的按钮先补 `button(released)`，
+     * 再按 reason 决定是否离开当前 pointer focus。
+     */
+    forcePointerGrab(seat?: string, reason?: "cancel" | "destroy" | "compositor"): void;
+    /** 清掉该 seat 的 pointer focus（有活跃 grab 时忽略）；没有焦点时幂等 */
+    leavePointer(seat?: string): void;
+    /**
+     * 确保该窗口拥有 pointer focus：缺失/停在别的窗口时补 leave/enter，
+     * 返回窗口是否有可用的主 surface。grab 期间不切焦点，只返回当前焦点是否就在该窗口。
+     */
+    ensurePointerFocus(winId: WaylandWinId, seat?: string): boolean;
 }
 
 /**
@@ -626,6 +638,8 @@ export interface SeatRecord {
     mods: Set<number>;
     /** 最近一次指针隐式 grab（button 全松开后仍保留 serial/surface，供延迟到达的请求校验） */
     pointerGrab?: PointerGrab;
+    /** 当前物理按下的键（内核 key code）；`wl_keyboard.enter.keys` 的快照来源 */
+    pressedKeys: Set<number>;
     /** 最近几次键盘按下的 serial（release 不覆盖 press，move/grab 可能晚于松键到达） */
     keyboardPressSerials: number[];
 }

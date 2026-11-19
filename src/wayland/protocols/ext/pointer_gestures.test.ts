@@ -31,6 +31,7 @@ function setup() {
             has: (id: number) => id === surface,
         },
         sendNow: (id: number, event: string, args: Record<string, unknown>) => sent.push({ id, event, args }),
+        core: { ensurePointerFocus: () => true },
         domain: {
             serial: { next: () => serial++ },
             seat: {

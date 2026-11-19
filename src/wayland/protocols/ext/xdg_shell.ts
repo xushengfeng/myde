@@ -128,6 +128,14 @@ function mainSurface(ctx: ModuleCtx, winId: WaylandWinId): SurfaceId | null {
     return ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
 }
 
+/** 该 wl_surface 是否属于这个 toplevel（主 surface、subsurface 或它的 popup）。 */
+function surfaceInToplevel(ctx: ModuleCtx, surface: SurfaceId, winId: WaylandWinId): boolean {
+    const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByWlSurface(surface);
+    if (xdgSurfaceId === undefined) return false;
+    const root = ctx.domain.xdgSurface.rootXdgSurface(xdgSurfaceId);
+    return ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId) === root;
+}
+
 /**
  * 未 ack 的 configure serial 上限：正常客户端只会留最后一个；客户端长期不 ack 时丢掉最旧的，
  * 避免无界增长（被丢掉的旧 serial 再 ack 会按 invalid_serial 处理）。
@@ -1122,6 +1130,12 @@ export const xdgShellModule = defineModule({
             const xid = x.id;
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByPopup(xid);
             if (xdgSurfaceId === undefined) return;
+            const surface = ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
+            for (const seat of ctx.domain.seat.all()) {
+                if (seat.pointerGrab?.surface === surface) ctx.core.forcePointerGrab(seat.name, "destroy");
+                if (seat.pointerFocus === surface) ctx.core.leavePointer(seat.name);
+                if (seat.keyboardFocus === surface) ctx.core.focusKeyboard(null, seat.name);
+            }
             ctx.domain.xdgSurface.popupDestroyed(xid, ctx);
         },
         "xdg_toplevel.set_parent": (x, ctx) => {
@@ -1202,26 +1216,14 @@ export const xdgShellModule = defineModule({
         "xdg_toplevel.destroy": (x, ctx) => {
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(x.id);
             if (xdgSurfaceId === undefined) return;
-            // 隐式 grab 固定在本窗口：销毁时补发释放并清槽，否则后续 motion 会一直查不到窗口而被丢弃
+            // 窗口销毁是 server 已知的收尾点：grab 补 release，pointer/keyboard 焦点立即离开。
+            // 此时 wl_surface 可能还活着，所以 leave 仍然能发给它。
             for (const seat of ctx.domain.seat.all()) {
-                const grab = seat.pointerGrab;
-                if (grab?.winId !== x.id) continue;
-                if (grab.buttons.size > 0) {
-                    const state = getEnumValue("wl_pointer.button_state", "released");
-                    for (const pointer of seat.pointers) {
-                        if (!ctx.objects.has(pointer)) continue;
-                        for (const button of grab.buttons) {
-                            ctx.sendNow(pointer, "wl_pointer.button", {
-                                serial: ctx.domain.serial.next(),
-                                time: Date.now(),
-                                button,
-                                state,
-                            });
-                        }
-                        ctx.sendNow(pointer, "wl_pointer.frame", {});
-                    }
-                }
-                seat.pointerGrab = undefined;
+                if (seat.pointerGrab?.winId === x.id) ctx.core.forcePointerGrab(seat.name, "destroy");
+                const pointerFocused = seat.pointerFocus !== null && surfaceInToplevel(ctx, seat.pointerFocus, x.id);
+                if (pointerFocused) ctx.core.leavePointer(seat.name);
+                const keyboardFocused = seat.keyboardFocus !== null && surfaceInToplevel(ctx, seat.keyboardFocus, x.id);
+                if (keyboardFocused) ctx.core.focusKeyboard(null, seat.name);
             }
             // 客户端应先销毁 decoration / dialog / exported；这里兜底，避免域里的映射留下已死的 toplevel
             ctx.domain.decoration.forgetToplevel(x.id);

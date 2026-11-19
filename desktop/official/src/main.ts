@@ -3355,12 +3355,13 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): Pointe
         let route = pointerRoutes.get(key);
         let hit = route?.hit;
         if (!route) {
-            // 第一次按下决定这次指针序列归谁：桌面 UI（hit 为空）或某个客户端窗口
-            const hits = pointerHits(p);
-            hit = hits[0];
+            // 第一次按下决定这次指针序列归谁：桌面 UI（hit 为空）或某个客户端窗口。
+            // 一个 seat 同一时刻只能有一个 pointer focus，所以只给最上层命中的 client 发。
+            const top = pointerHits(p)[0];
+            hit = top;
             route = { hit, buttons: new Set() };
             pointerRoutes.set(key, route);
-            for (const h of hits) sendPointerTo(h, "down", p);
+            if (hit) sendPointerTo(hit, "down", p);
             // 模态对话框开着时点到了被挡住的父窗口：把注意力收回对话框
             // （点在桌面 UI 上不算，工具栏菜单之类照常响应）
             if (!hit && !desktopUiUnderPoint(p.x, p.y, p.target)) {
@@ -3388,10 +3389,10 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): Pointe
             pointerTarget = route.hit;
             return route.hit;
         }
-        const hits = pointerHits(p);
-        for (const h of hits) sendPointerTo(h, "move", p);
-        pointerTarget = hits[0];
-        return hits[0];
+        const hit = pointerHits(p)[0];
+        if (hit) sendPointerTo(hit, "move", p);
+        pointerTarget = hit;
+        return hit;
     }
 
     const route = pointerRoutes.get(key);

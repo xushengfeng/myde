@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { InputEventCodes } from "../../../input_codes/types";
 import type { ModuleCtx, SeatRecord, SurfaceId, WaylandObjectId2, WaylandWinId } from "../../module";
 import { xdgShellModule } from "../ext/xdg_shell";
-import { SeatStore, waylandCoreModule } from "./wayland";
+import { forcePointerGrab, SeatStore, waylandCoreModule } from "./wayland";
 
 /**
  * 隐式 grab 的 core 单元测试：不启动 Wayland 连接，只验证路由、按钮码空间和清理。
@@ -13,7 +13,9 @@ const seatId = 1 as WaylandObjectId2<"wl_seat">;
 const pointerId = 2 as WaylandObjectId2<"wl_pointer">;
 const keyboardId = 3 as WaylandObjectId2<"wl_keyboard">;
 const surfaceId = 100 as SurfaceId;
+const otherSurfaceId = 101 as SurfaceId;
 const winId = 10 as WaylandWinId;
+const otherWinId = 20 as WaylandWinId;
 
 function makeCtx() {
     const sent: { id: number; event: string; args: Record<string, unknown> }[] = [];
@@ -21,6 +23,7 @@ function makeCtx() {
         [pointerId, {}],
         [keyboardId, {}],
         [surfaceId, {}],
+        [otherSurfaceId, {}],
     ]);
     const store = new SeatStore();
     store.addSeat(seatId, "seat0");
@@ -29,6 +32,10 @@ function makeCtx() {
     seat.keyboards.add(keyboardId);
     seat.pointerFocus = surfaceId;
     seat.keyboardFocus = surfaceId;
+    const surfaceByWin = new Map<number, SurfaceId>([
+        [winId, surfaceId],
+        [otherWinId, otherSurfaceId],
+    ]);
 
     let serial = 1;
     const holdCalls: { win: number; p: { x: number; y: number }; hold?: number }[] = [];
@@ -53,7 +60,7 @@ function makeCtx() {
                 hitTest: (win: number, p: { x: number; y: number }, hold?: number) => {
                     holdCalls.push({ win, p, hold });
                     return {
-                        surface: (hold ?? surfaceId) as SurfaceId,
+                        surface: (hold ?? surfaceByWin.get(win) ?? surfaceId) as SurfaceId,
                         xdgSurface: 200 as WaylandObjectId2<"xdg_surface">,
                         x: p.x,
                         y: p.y,
@@ -61,18 +68,24 @@ function makeCtx() {
                     };
                 },
                 dismissGrabsForPointer: () => {},
+                getXdgSurfaceByToplevel: (win: number) =>
+                    (win === otherWinId ? 201 : 200) as WaylandObjectId2<"xdg_surface">,
+                getXdgSurface: (id: number) => ({ surface: id === 201 ? otherSurfaceId : surfaceId }),
+                getXdgSurfaceByWlSurface: () => 200 as WaylandObjectId2<"xdg_surface">,
+                rootXdgSurface: () => 200 as WaylandObjectId2<"xdg_surface">,
             },
         },
         notify: { focus: () => {} },
+        transfer: { dragFinished: () => {} },
     } as unknown as ModuleCtx;
 
     return { ctx, store, seat, sent, holdCalls };
 }
 
-function action(ctx: ModuleCtx, key: string, args: unknown[]) {
+function action(ctx: ModuleCtx, key: string, args: unknown[], win: WaylandWinId = winId) {
     const handler = waylandCoreModule.actions.get(key as never);
     if (!handler) throw new Error(`未声明动作 ${key}`);
-    handler({ winId, args } as never, ctx);
+    handler({ winId: win, args } as never, ctx);
 }
 
 describe("指针隐式 grab", () => {
@@ -103,6 +116,81 @@ describe("指针隐式 grab", () => {
         action(ctx, "input.pointer", [{ type: "up", x: 0, y: 0, button: 2 }]);
         expect(seat.pointerGrab?.buttons.size).toBe(0);
         expect(seat.pointerGrab?.serial).toBe(1);
+    });
+
+    it("grab 期间收到别的窗口：先补 release + leave，再按新窗口 enter", () => {
+        const { ctx, store, seat, sent, holdCalls } = makeCtx();
+        store.beginPointerGrab(seat, winId, surfaceId, InputEventCodes.BTN_LEFT, 1);
+
+        action(ctx, "input.pointer", [{ type: "move", x: 3, y: 4, button: 0 }], otherWinId);
+
+        const events = sent.map((e) => e.event);
+        expect(events[0]).toBe("wl_pointer.button");
+        expect(sent[0].args).toMatchObject({ button: InputEventCodes.BTN_LEFT, state: expect.any(Number) });
+        expect(events).toContain("wl_pointer.leave");
+        expect(events).toContain("wl_pointer.enter");
+        expect(sent.find((e) => e.event === "wl_pointer.enter")?.args).toMatchObject({
+            surface: otherSurfaceId,
+        });
+        expect(holdCalls.at(-1)).toMatchObject({ win: otherWinId });
+        expect(seat.pointerFocus).toBe(otherSurfaceId);
+        expect(seat.pointerGrab?.buttons.size).toBe(0);
+    });
+
+    it("没有对应 down 的 up 丢弃，不改焦点", () => {
+        const { ctx, seat, sent } = makeCtx();
+        const before = seat.pointerFocus;
+
+        action(ctx, "input.pointer", [{ type: "up", x: 0, y: 0, button: 0 }]);
+
+        expect(sent).toEqual([]);
+        expect(seat.pointerFocus).toBe(before);
+    });
+
+    it("重复 down 只发一次 pressed", () => {
+        const { ctx, seat, sent } = makeCtx();
+
+        action(ctx, "input.pointer", [{ type: "down", x: 0, y: 0, button: 0 }]);
+        action(ctx, "input.pointer", [{ type: "down", x: 0, y: 0, button: 0 }]);
+
+        expect(sent.filter((e) => e.event === "wl_pointer.button")).toHaveLength(1);
+        expect(seat.pointerGrab?.buttons.size).toBe(1);
+    });
+
+    it("键盘补 enter 时带当前 pressedKeys 快照", () => {
+        const { ctx, seat, sent } = makeCtx();
+        seat.keyboardFocus = null;
+        seat.pressedKeys.add(30);
+
+        action(ctx, "input.key", [31, "pressed"]);
+
+        const enter = sent.find((e) => e.event === "wl_keyboard.enter");
+        expect(enter?.args).toMatchObject({ surface: surfaceId });
+        expect([...(enter?.args.keys as Uint32Array)]).toEqual([30]);
+    });
+
+    it("键盘切到别的窗口：先 leave 旧 surface，再 enter 新 surface", () => {
+        const { ctx, sent } = makeCtx();
+
+        action(ctx, "input.key", [31, "pressed"], otherWinId);
+
+        const events = sent.map((e) => e.event);
+        expect(events.slice(0, 2)).toEqual(["wl_keyboard.leave", "wl_keyboard.enter"]);
+        expect(sent[0].args.surface).toBe(surfaceId);
+        expect(sent[1].args.surface).toBe(otherSurfaceId);
+    });
+
+    it("scroll 没有 pointer focus 时先补 enter，再发 axis", () => {
+        const { ctx, seat, sent } = makeCtx();
+        seat.pointerFocus = null;
+
+        action(ctx, "input.scroll", [{ deltaX: 0, deltaY: 100, deltaZ: 0, source: "wheel" }]);
+
+        const events = sent.map((e) => e.event);
+        expect(events[0]).toBe("wl_pointer.enter");
+        expect(events).toContain("wl_pointer.axis");
+        expect(sent[0].args).toMatchObject({ surface: surfaceId });
+        expect(seat.pointerFocus).toBe(surfaceId);
     });
 
     it("dnd.endLocal 用同一按钮码空间清空 grab", () => {
@@ -142,20 +230,25 @@ describe("xdg_toplevel 销毁时的 grab 收尾", () => {
         store.addSeat(seatId, "seat0");
         const seat = store.byName("seat0") as SeatRecord;
         seat.pointers.add(pointerId);
+        seat.pointerFocus = surfaceId;
         seat.pointerGrab = {
             serial: 1,
             surface: surfaceId,
             winId,
             buttons: new Set([InputEventCodes.BTN_LEFT, InputEventCodes.BTN_RIGHT]),
         };
-        const ctx = {
-            objects: { has: (id: number) => id === pointerId },
+        let ctx: ModuleCtx;
+        ctx = {
+            objects: { has: (id: number) => id === pointerId || id === surfaceId },
             sendNow: (id: number, event: string, args: Record<string, unknown>) => sent.push({ id, event, args }),
             domain: {
                 seat: store,
                 serial: { next: () => 100 },
+                dataDevice: { drag: undefined },
                 xdgSurface: {
                     getXdgSurfaceByToplevel: () => 5,
+                    getXdgSurfaceByWlSurface: () => 5,
+                    rootXdgSurface: () => 5,
                     dismissGrabsForWindow: () => {},
                     toplevelDestroyed: () => {},
                 },
@@ -164,6 +257,14 @@ describe("xdg_toplevel 销毁时的 grab 收尾", () => {
                 export: { forgetToplevel: () => [] },
                 windows: { detachChildren: () => {}, remove: () => {}, notifyClosed: () => {} },
             },
+            core: {
+                forcePointerGrab: (seatName, reason) => {
+                    const s = store.byName(seatName ?? "seat0");
+                    if (s !== undefined) forcePointerGrab(ctx, s, reason ?? "cancel");
+                },
+                leavePointer: () => {},
+                focusKeyboard: () => {},
+            },
             client: { emit: () => {} },
         } as unknown as ModuleCtx;
 
@@ -171,7 +272,7 @@ describe("xdg_toplevel 销毁时的 grab 收尾", () => {
         if (!handler) throw new Error("未声明 xdg_toplevel.destroy");
         handler({ id: winId, args: {} } as never, ctx);
 
-        expect(seat.pointerGrab).toBeUndefined();
+        expect(seat.pointerGrab?.buttons.size).toBe(0);
         expect(sent.filter((e) => e.event === "wl_pointer.button").map((e) => e.args.button)).toEqual([
             InputEventCodes.BTN_LEFT,
             InputEventCodes.BTN_RIGHT,

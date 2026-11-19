@@ -353,6 +353,10 @@ export type ServerNotifyMap = {
      * 一个 seat = 一个人的一套设备，同一事件发给多个 seat 会被客户端当成 N 把同步光标。
      */
     "input.pointer": [handle: WinHandle, ev: PointerCommand, seat?: string];
+    /** 内部：host 在跨 client 切换 pointer 归属时让旧连接离开；桌面不需要调用。handle 参数未使用 */
+    "input.pointerLeave": [handle: WinHandle, seat?: string];
+    /** 内部：host 强制结束旧连接的指针 grab（补发 release）；桌面不需要调用。handle 参数未使用 */
+    "input.pointerCancel": [handle: WinHandle, seat?: string];
     "input.scroll": [handle: WinHandle, ev: ScrollCommand, seat?: string];
     /** 触摸板手势；发给 handle 对应窗口，`begin`/`end` 的 serial、surface 由 server 补 */
     "input.gesture": [handle: WinHandle, ev: GestureCommand, seat?: string];

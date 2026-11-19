@@ -284,8 +284,14 @@ export class WaylandClient implements Client {
                 surface: undefined!,
                 // biome-ignore lint/style/noNonNullAssertion: 同上
                 subsurface: undefined!,
-                // biome-ignore lint/style/noNonNullAssertion: 同上（键盘焦点单写入点在 core 模块）
+                // biome-ignore lint/style/noNonNullAssertion: 占位，buildCtx 结尾的装配循环按 mod.core 回填
                 focusKeyboard: undefined!,
+                // biome-ignore lint/style/noNonNullAssertion: 同上（grab 收尾在 core 模块）
+                forcePointerGrab: undefined!,
+                // biome-ignore lint/style/noNonNullAssertion: 同上（pointer leave 在 core 模块）
+                leavePointer: undefined!,
+                // biome-ignore lint/style/noNonNullAssertion: 同上（scroll/gesture 补 pointer enter）
+                ensurePointerFocus: undefined!,
                 registry: {
                     globals: () =>
                         (function* () {

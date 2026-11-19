@@ -23,7 +23,10 @@ import type {
     ClipboardOffer,
     CursorState,
     DesktopClipboard,
+    GestureCommand,
     OutputInfo,
+    PointerCommand,
+    ScrollCommand,
     ServerEvents,
     ServerNotifyMap,
     ServerRequests,
@@ -37,6 +40,7 @@ import type { WaylandName } from "../utils/wayland-binary";
 import { WaylandProtocols, waylandProtocolsNameMap } from "../utils/wayland-proto";
 import { type ClientHost, WaylandClient } from "./client";
 import { DndHub } from "./dnd_hub";
+import { type SeatClientActions, SeatRouter } from "./seat_router";
 
 export { WaylandServer };
 
@@ -153,6 +157,8 @@ class WaylandServer {
     private clipboardTokens = new Map<string, ClipboardState>();
     /** 跨客户端拖拽会话 */
     private dnd: DndHub;
+    /** 跨 client 的 pointer/keyboard 归属；协议细节仍由各连接的 core 状态机处理 */
+    private seatRouter = new SeatRouter((clientId) => this.seatClientActions(clientId));
 
     /**
      * 输出配置。桌面启动、分辨率或缩放变化时调用 `set`；
@@ -338,6 +344,22 @@ class WaylandServer {
         this.dispatchNotify(key, args);
     }
 
+    /** 把 SeatRouter 的抽象动作落到具体连接的协议 action 上 */
+    private seatClientActions(clientId: string): SeatClientActions | undefined {
+        const client = this.rawClients.get(clientId);
+        if (client === undefined) return undefined;
+        return {
+            pointer: (winId, ev, seat) => client.runAction("input.pointer", winId, [ev, seat]),
+            pointerLeave: (seat) => client.runAction("input.pointerLeave", 0 as WaylandWinId, [seat]),
+            pointerCancel: (seat) => client.runAction("input.pointerCancel", 0 as WaylandWinId, [seat]),
+            scroll: (winId, ev, seat) => client.runAction("input.scroll", winId, [ev, seat]),
+            gesture: (winId, ev, seat) => client.runAction("input.gesture", winId, [ev, seat]),
+            key: (winId, key, state, seat) => client.runAction("input.key", winId, [key, state, seat]),
+            focus: (winId) => client.runAction("window.focus", winId, []),
+            blur: (winId) => client.runAction("window.blur", winId, []),
+        };
+    }
+
     private dispatchNotify<K extends keyof ServerNotifyMap>(key: K, args: ServerNotifyMap[K]): void {
         if (key === "clipboard.set") {
             // 剪贴板是 client 级 / server 级，没有 window handle
@@ -368,6 +390,46 @@ class WaylandServer {
             const resolved = target ? this.resolveDndTarget(target.handle, target.x, target.y) : null;
             if (key === "dnd.move") this.dnd.move(token, resolved);
             else this.dnd.drop(token, resolved);
+            return;
+        }
+        // 输入事件先经过跨 client 的归属路由：旧 client 在这里补 leave/cancel，
+        // 再把事件交给目标 client 的 core 状态机。
+        if (
+            key === "input.pointer" ||
+            key === "input.scroll" ||
+            key === "input.gesture" ||
+            key === "input.key" ||
+            key === "window.focus" ||
+            key === "window.blur"
+        ) {
+            const handle = args[0] as WinHandle;
+            const entry = this.windowTable.get(handle);
+            if (entry === undefined) {
+                console.warn(`notify ${String(key)}: unknown window handle`, handle);
+                return;
+            }
+            const owner = { clientId: entry.client.id, handle, winId: entry.winId };
+            if (key === "input.pointer") {
+                const ev = args[1] as PointerCommand;
+                const seat = (args[2] as string | undefined) ?? "seat0";
+                this.seatRouter.pointer(owner, ev, seat);
+            } else if (key === "input.scroll") {
+                const ev = args[1] as ScrollCommand;
+                const seat = (args[2] as string | undefined) ?? "seat0";
+                this.seatRouter.scroll(owner, ev, seat);
+            } else if (key === "input.gesture") {
+                const ev = args[1] as GestureCommand;
+                const seat = (args[2] as string | undefined) ?? "seat0";
+                this.seatRouter.gesture(owner, ev, seat);
+            } else if (key === "input.key") {
+                const state = args[2] as "pressed" | "released";
+                const seat = (args[3] as string | undefined) ?? "seat0";
+                this.seatRouter.key(owner, args[1] as number, state, seat);
+            } else if (key === "window.focus") {
+                this.seatRouter.keyboardFocus(owner, "seat0");
+            } else {
+                this.seatRouter.keyboardBlur(owner, "seat0");
+            }
             return;
         }
         const handle = args[0] as WinHandle;
@@ -435,6 +497,7 @@ class WaylandServer {
     }
 
     private closeHandle(handle: WinHandle): void {
+        this.seatRouter.windowClosed(handle);
         const entry = this.windowTable.get(handle);
         if (entry !== undefined) {
             this.handlesByClient.get(entry.client.id)?.delete(handle);
@@ -560,6 +623,7 @@ class WaylandServer {
 
     /** 断开：先补发该客户端全部窗口的关闭，再报 client.closed —— 残留窗口由 server 兜底 */
     private dropClient(clientId: string) {
+        this.seatRouter.clientClosed(clientId);
         const handles = this.handlesByClient.get(clientId);
         if (handles !== undefined) {
             for (const handle of [...handles]) this.closeHandle(handle);
