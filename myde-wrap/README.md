@@ -71,6 +71,8 @@ ARGS:
 
 应用通过环境变量`MYDE_WRAP_SOCKET`获取 Socket 路径，格式为`[4字节大端长度][JSON消息体]`。具体见 agents.md 的api定义
 
+调试参数用 `MYDE_REMOTE_DEBUGGING_PORT`、`MYDE_INSPECT_PORT`、`MYDE_REMOTE_ALLOW_ORIGINS` 指定：wrap 会把它们追加成子进程的 `--remote-debugging-port`、`--inspect`、`--remote-allow-origins` 参数，之后可以用 CDP 客户端连接，或在浏览器里打开 devtools 前端（`MYDE_REMOTE_ALLOW_ORIGINS=*` 允许任意来源）。
+
 ## 依赖
 
 - `smithay`: Wayland 合成器框架

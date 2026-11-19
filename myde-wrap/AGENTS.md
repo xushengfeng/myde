@@ -78,6 +78,8 @@ cargo clippy
 
 屏幕模式切换能力通过`MYDE_WRAP_SCREEN_MODE=1`广告；只有 DRM 后端会设置，winit 的窗口尺寸由宿主决定，不支持切换。
 
+调试参数由环境变量交给子进程（Electron 只认命令行开关，环境变量本身不生效）：`MYDE_REMOTE_DEBUGGING_PORT` → `--remote-debugging-port=<port>`、`MYDE_INSPECT_PORT` → `--inspect=<port>`、`MYDE_REMOTE_ALLOW_ORIGINS` → `--remote-allow-origins=<value>`（逗号分隔的 origin 列表或 `*`，在浏览器里打开 devtools 前端时用）。端口为空或非数字、origin 含空白字符时忽略；命令行里已经显式给过同名开关时不重复添加。例如 `MYDE_REMOTE_DEBUGGING_PORT=9222 MYDE_INSPECT_PORT=9229 MYDE_REMOTE_ALLOW_ORIGINS=* ./myde-wrap`，之后用 CDP 客户端连 `http://127.0.0.1:9222`，主进程用 `9229`。
+
 DRM 启动模式取 EDID 首选分辨率下刷新率最高的模式，而不是`modes()[0]`，避免 120Hz 屏幕默认跑 60Hz。
 
 控制连接建立后，wrap 每 3 秒向客户端发 `Ping`。客户端只有在桌面入口脚本执行到末尾（加载器自动调用 `display.markReady()`）后才回 `Pong`，因此 `Pong` 同时证明页面逻辑已经跑完，而不只是 socket 层还活着。连接建立后 30 秒内没有收到首次 `Pong`（桌面初始化抛错或卡住）时，wrap 判定启动失败；就绪后 10 秒内没有收到任何控制消息（`Pong` 或普通请求）时，判定页面卡死。两种情况都会退出并释放屏幕，避免把最后一帧一直留在显示器上。

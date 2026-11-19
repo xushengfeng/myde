@@ -111,6 +111,60 @@ fn detect_program() -> Option<PathBuf> {
     })
 }
 
+/// 调试参数环境变量 → 子进程命令行开关。
+///
+/// Electron/Chromium 的远程调试与 Node inspector 只认命令行开关，环境变量本身不生效，
+/// 所以由 wrap 把环境变量翻译成参数传给子进程。端口留空或非法时忽略；
+/// 命令行里已经显式给过同名开关时不重复添加。
+const DEBUG_PORT_ENVS: [(&str, &str); 2] = [
+    ("MYDE_REMOTE_DEBUGGING_PORT", "--remote-debugging-port"),
+    ("MYDE_INSPECT_PORT", "--inspect"),
+];
+
+/// 原样透传的调试参数：值是逗号分隔的 origin 列表或 `*`，只拦空白字符。
+const DEBUG_VALUE_ENVS: [(&str, &str); 1] = [("MYDE_REMOTE_ALLOW_ORIGINS", "--remote-allow-origins")];
+
+fn debug_args(program_args: &[String]) -> Vec<String> {
+    let mut extra = Vec::new();
+    let already_set = |flag: &str| {
+        let prefix = format!("{flag}=");
+        program_args.iter().any(|arg| arg.starts_with(&prefix))
+    };
+    for (env, flag) in DEBUG_PORT_ENVS {
+        let Some(port) = std::env::var(env).ok().map(|v| v.trim().to_string()) else {
+            continue;
+        };
+        if port.is_empty() {
+            continue;
+        }
+        if !port.parse::<u16>().is_ok_and(|port| port != 0) {
+            warn!("忽略 {env}={port}：不是有效端口");
+            continue;
+        }
+        if already_set(flag) {
+            continue;
+        }
+        extra.push(format!("{flag}={port}"));
+    }
+    for (env, flag) in DEBUG_VALUE_ENVS {
+        let Some(value) = std::env::var(env).ok().map(|v| v.trim().to_string()) else {
+            continue;
+        };
+        if value.is_empty() {
+            continue;
+        }
+        if value.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            warn!("忽略 {env}={value}：不能包含空白字符");
+            continue;
+        }
+        if already_set(flag) {
+            continue;
+        }
+        extra.push(format!("{flag}={value}"));
+    }
+    extra
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -222,11 +276,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     };
 
-    let program_args = if args.command.len() > 1 {
-        &args.command[1..]
+    let mut program_args: Vec<String> = if args.command.len() > 1 {
+        args.command[1..].to_vec()
     } else {
-        &[]
+        Vec::new()
     };
+    program_args.extend(debug_args(&program_args));
 
     info!("run program: {} {:?}", program.display(), program_args);
 
