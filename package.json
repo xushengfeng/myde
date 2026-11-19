@@ -41,7 +41,7 @@
         "myde-pam-client": "^0.1.3",
         "myde-remote-connect": "^0.0.5",
         "myde-ui": "0.0.7",
-        "myde-unix-socket": "^0.2.6",
+        "myde-unix-socket": "^0.2.7",
         "myde-xcb": "^0.1.1",
         "peerjs": "^1.5.5",
         "xml2js": "^0.6.2"

@@ -36,8 +36,8 @@ importers:
         specifier: 0.0.7
         version: 0.0.7
       myde-unix-socket:
-        specifier: ^0.2.6
-        version: 0.2.6
+        specifier: ^0.2.7
+        version: 0.2.7
       myde-xcb:
         specifier: ^0.1.1
         version: 0.1.1
@@ -2139,8 +2139,8 @@ packages:
   myde-ui@0.0.7:
     resolution: {integrity: sha512-JkeRPtLJ5d0qU1A97BuaGqnK7DuyULqg4s3YB4vY6T/GS5S5D0k9zl8MBa5+BmCQEDO5xkXuIi4sKL3lnwdPDA==}
 
-  myde-unix-socket@0.2.6:
-    resolution: {integrity: sha512-5sxsrLGJXAd1PAjpJbeHgnHcQo9FdGLBM6tUaAenlWaCy3IXbu/25wNDByEkSOvVIBkyl1GXXRYv1b9VqM7HNw==}
+  myde-unix-socket@0.2.7:
+    resolution: {integrity: sha512-nPuiDy7uRYf/N8YJBjLV3qTI9bO0UMUCqwPrPUmKBQbADedStEB5Fxhr/PqM0NoP0cco1VBzkr+7wB18l6+Ykw==}
 
   myde-xcb@0.1.1:
     resolution: {integrity: sha512-dtv4wYLZTtJHOAKsJuqvPoTS2hCqVW3Kahu5EKNNeP4TMACvutQBAgCNNdosa4iRlXl6DUDlSmROMalysC6oxQ==}
@@ -4850,7 +4850,7 @@ snapshots:
 
   myde-ui@0.0.7: {}
 
-  myde-unix-socket@0.2.6: {}
+  myde-unix-socket@0.2.7: {}
 
   myde-xcb@0.1.1: {}
 
