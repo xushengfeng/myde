@@ -1290,11 +1290,14 @@ export const waylandCoreModule = defineModule({
         },
         "wl_shm.create_pool": (x, ctx) => {
             const fd = x.args.fd;
+            // pool 与它创建的 buffer 共用这一个 fd，按引用计数关（见 FdRegistry）
+            ctx.fds.retain(fd);
             ctx.objects.get(x.args.id).data = { fd };
         },
         "wl_shm_pool.create_buffer": (x, ctx) => {
             const thisObj = ctx.objects.get(x.id);
             const buffer = ctx.objects.get(x.args.id);
+            ctx.fds.retain(thisObj.data.fd);
             buffer.data = {
                 type: "shm",
                 fd: thisObj.data.fd,
@@ -1304,6 +1307,23 @@ export const waylandCoreModule = defineModule({
                 height: x.args.height,
                 format: x.args.format,
             };
+        },
+        "wl_shm_pool.destroy": (x, ctx) => {
+            const pool = ctx.objects.getOption(x.id)?.data;
+            if (pool) ctx.fds.release(pool.fd);
+        },
+        // 客户端销毁 buffer 就归还它那一份 fd 引用（dma-buf 尤其重要：不关就把显存
+        // 钉住，客户端销毁后内核也回收不了这块 buffer）
+        "wl_buffer.destroy": (x, ctx) => {
+            const data = ctx.objects.getOption(x.id)?.data;
+            if (!data) return;
+            if (data.type === "shm") {
+                ctx.fds.release(data.fd);
+                return;
+            }
+            for (const plane of data.planes) {
+                if (plane) ctx.fds.release(plane.fd);
+            }
         },
         "wl_data_device_manager.create_data_source": (x, ctx) => {
             const src = ctx.objects.get(x.args.id);

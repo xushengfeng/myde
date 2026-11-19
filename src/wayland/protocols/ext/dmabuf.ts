@@ -61,10 +61,16 @@ const FEEDBACK_FORMATS = [
 function sendFeedback(ctx: ModuleCtx, feedbackId: WaylandObjectId2<"zwp_linux_dmabuf_feedback_v1">) {
     const formatTable = createFormatTableBuffer(FEEDBACK_FORMATS.map((format) => ({ format, modifier: 0n })));
     const { fd } = newFd(new Uint8Array(formatTable.buffer));
-    ctx.send(feedbackId, "zwp_linux_dmabuf_feedback_v1.format_table", {
-        fd: fd,
-        size: formatTable.byteLength,
-    });
+    // 立即写 socket 后关掉自己这份：SCM_RIGHTS 已经把 fd 复制进内核，客户端拿到的是另一份。
+    // 不关的话每次 feedback（Chromium 每个 surface 都会要一次）都会在 /dev/shm 留一个 fd。
+    try {
+        ctx.sendNow(feedbackId, "zwp_linux_dmabuf_feedback_v1.format_table", {
+            fd: fd,
+            size: formatTable.byteLength,
+        });
+    } finally {
+        fs.closeSync(fd);
+    }
 
     const r = fs.statSync("/dev/dri/renderD128"); // todo
     const buffer = Buffer.alloc(8);
@@ -101,6 +107,10 @@ export const dmabufModule = defineModule({
         },
         "zwp_linux_buffer_params_v1.add": (x, ctx) => {
             const params = ctx.objects.get(x.id);
+            // 同一个索引重复 add 是协议违规，但真发生时先把旧的引用还掉，避免少关一个 fd
+            const prev = params.data.planes[x.args.plane_idx];
+            if (prev) ctx.fds.release(prev.fd);
+            ctx.fds.retain(x.args.fd);
             params.data.planes[x.args.plane_idx] = {
                 fd: x.args.fd,
                 plane_idx: x.args.plane_idx,
@@ -120,6 +130,17 @@ export const dmabufModule = defineModule({
             const bufferId = x.args.buffer_id;
             const buffer = ctx.objects.get(bufferId);
             buffer.data = { type: "dmabuf", planes, width: x.args.width, height: x.args.height, format: x.args.format };
+            // plane fd 的所有权移交给 wl_buffer：params 之后被 destroy 不能再还一次
+            params.data.planes = [];
+        },
+        // 没走 create_immed 就销毁的参数对象：把 add 进来的 fd 还掉
+        "zwp_linux_buffer_params_v1.destroy": (x, ctx) => {
+            const params = ctx.objects.getOption(x.id)?.data;
+            if (!params) return;
+            for (const plane of params.planes) {
+                if (plane) ctx.fds.release(plane.fd);
+            }
+            params.planes = [];
         },
     },
 });

@@ -20,7 +20,7 @@ import type {
 import { protocolModules } from "../protocols/index";
 import { type WaylandEventObj, WaylandEventOpcode, type WaylandInterfaces } from "../protocols/wayland-types";
 import type { renderTools } from "../render_tools";
-import { newFd } from "../utils/fd";
+import { FdRegistry, newFd } from "../utils/fd";
 import type { WaylandObjectId, WaylandOp, WaylandProtocol } from "../utils/wayland-binary";
 import { WaylandArgType } from "../utils/wayland-binary";
 import { WaylandDecoder } from "../utils/wayland-decoder";
@@ -140,6 +140,8 @@ export class WaylandClient implements Client {
     public readonly ctx: ModuleCtx;
     /** 每个 data source 的读取串行队列（见 `readDataSource`） */
     private dataSourceReads = new Map<number, Promise<Uint8Array | null>>();
+    /** 本连接持有的客户端 fd（dma-buf plane、wl_shm pool），按引用计数关 */
+    private readonly fds = new FdRegistry();
     // 事件存储
     private events: { [K in keyof WaylandClientEventMap]?: WaylandClientEventMap[K][] } = {};
 
@@ -277,6 +279,10 @@ export class WaylandClient implements Client {
             /** 立即写 socket */
             sendNow: (target, event, args) => this.sendMessageImm(target, event, args),
             postError: (iface, id, code, message) => this.postError(iface, id, code, message),
+            fds: {
+                retain: (fd) => this.fds.retain(fd),
+                release: (fd) => this.fds.release(fd),
+            },
             // host 只能先给 `registry`（跨模块 `globals` 聚合）；surface/subsurface 是占位，
             // 由下面的装配循环按 `mod.core` 回填（`undefined!` = 装配前不存在，装配后即为完整对象）
             core: {
@@ -835,11 +841,17 @@ export class WaylandClient implements Client {
     }
     close() {
         this.cleanupRender();
-        for (const obj of this.objects.values()) {
-            if (obj.protocol.name === "wl_shm_pool") {
-                fs.closeSync(obj.data.fd);
+        // 客户端不会再 destroy 剩下的对象了：把还登记着的 fd（dma-buf plane、shm pool）
+        // 一次关掉，否则它们会一直钉住显存；半条消息里缓存的 fd 同样要清。
+        this.fds.closeAll();
+        for (const fd of this.decodeRestCache.fds) {
+            try {
+                fs.closeSync(fd);
+            } catch {
+                // ignore
             }
         }
+        this.decodeRestCache.fds = [];
         this.socket.end();
         this.socket.destroy();
     }

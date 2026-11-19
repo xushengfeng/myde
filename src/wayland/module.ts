@@ -789,6 +789,14 @@ export interface DndHubApi {
  */
 export interface ModuleCtx {
     objects: ObjectApi;
+    /**
+     * 连接持有的 fd 引用计数。客户端传来的 fd（dma-buf plane、wl_shm pool）收到时必须
+     * `retain`，对象销毁时 `release`；共用同一个 fd 的对象各持一份引用。
+     */
+    fds: {
+        retain(fd: number): void;
+        release(fd: number): void;
+    };
     send: EventApi["send"];
     sendNow: EventApi["sendNow"];
     postError: EventApi["postError"];
