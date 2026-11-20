@@ -4879,6 +4879,8 @@ MSysApi.notification
 
 const mediaControl = new Set<string>();
 const mediaTimers = new Map<string, ReturnType<typeof setInterval>>();
+/** serverName → 是否正在播放；媒体键优先控制正在播放的播放器 */
+const mediaPlaying = new Map<string, boolean>();
 MSysApi.media
     .init()
     .then(() => {
@@ -4913,9 +4915,13 @@ MSysApi.media
                 setData();
             });
 
-            registry.setData(registry.buildVarId("media.list[].play", [serverName]), await p.paused());
+            const paused = await p.paused();
+            mediaPlaying.set(serverName, !paused);
+            registry.setData(registry.buildVarId("media.list[].play", [serverName]), paused);
             p.onStatusChange(async () => {
-                registry.setData(registry.buildVarId("media.list[].play", [serverName]), await p.paused());
+                const paused = await p.paused();
+                mediaPlaying.set(serverName, !paused);
+                registry.setData(registry.buildVarId("media.list[].play", [serverName]), paused);
             });
             registry.setSetCallback(registry.buildVarId("media.list[].play", [serverName]), (v) => {
                 if (v) p.play();
@@ -4940,6 +4946,7 @@ MSysApi.media
             if (timer) clearInterval(timer);
             mediaTimers.delete(name);
             mediaControl.delete(name);
+            mediaPlaying.delete(name);
             registry.setData("media.list", Array.from(mediaControl.keys()) as id<"media.list[]">[]);
         });
     })
@@ -7046,6 +7053,37 @@ function checkContextMenuKey(e: UniInputEvent): boolean {
     return true;
 }
 
+/** 媒体键目标：优先正在播放的播放器，没有时用最近加入的 */
+function currentMediaPlayer() {
+    const players = MSysApi.media.getPlayers();
+    return players.find((player) => mediaPlaying.get(player.getServerName())) ?? players.at(-1);
+}
+
+/** 媒体键在输入聚合层处理，锁屏时也可用；不再转发给客户端 */
+function checkMediaKey(e: UniInputEvent): boolean {
+    if (e.kind !== "key") return false;
+    const playPause = e.code === InputEventCodes.KEY_PLAYPAUSE || e.webCode === "MediaPlayPause";
+    const play =
+        e.code === InputEventCodes.KEY_PLAY || e.code === InputEventCodes.KEY_PLAYCD || e.webCode === "MediaPlay";
+    const pause = e.code === InputEventCodes.KEY_PAUSECD || e.webCode === "MediaPause";
+    const next = e.code === InputEventCodes.KEY_NEXTSONG || e.webCode === "MediaTrackNext";
+    const previous = e.code === InputEventCodes.KEY_PREVIOUSSONG || e.webCode === "MediaTrackPrevious";
+    const stop = e.code === InputEventCodes.KEY_STOPCD || e.webCode === "MediaStop";
+    if (!playPause && !play && !pause && !next && !previous && !stop) return false;
+    if (e.type === "down" && !e.repeat) {
+        const player = currentMediaPlayer();
+        if (player) {
+            if (playPause) player.playPause();
+            else if (play) player.play();
+            else if (pause) player.pause();
+            else if (next) player.next();
+            else if (previous) player.previous();
+            else player.stop();
+        }
+    }
+    return true;
+}
+
 /** 分发：统一传入新 api（当前行为为模拟 DOM 事件） */
 function dispatchInput(e: UniInputEvent) {
     if (checkExitKey(e)) {
@@ -7063,6 +7101,7 @@ function dispatchInput(e: UniInputEvent) {
     }
     if (checkBrightnessKey(e)) return;
     if (checkVolumeKey(e)) return;
+    if (checkMediaKey(e)) return;
     if (checkContextMenuKey(e)) return;
     // 滚轮/触摸板：先按窗口几何命中转发给 Wayland 客户端，再模拟 DOM 事件给桌面 UI。
     // 源信息（触摸板连续滚动、高精度刻度）随统一事件带下来，不能等模拟成 DOM WheelEvent 再取。

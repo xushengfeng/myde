@@ -57,20 +57,28 @@ export function canPoint(info: DeviceInfo) {
     return hasRelativeXY(info) || MInputMap.absPosMapping(info) !== undefined;
 }
 
-/** 音量/亮度/键盘灯等系统键：笔记本的 WMI hotkey 节点可能只有这些键，没有字母键 */
+/** 桌面会处理的媒体/亮度/键盘灯等系统键：WMI/hotkey 节点可能只有这些键，没有字母键 */
+const SYSTEM_KEY_CODES = new Set([
+    InputEventCodes.KEY_MUTE,
+    InputEventCodes.KEY_VOLUMEDOWN,
+    InputEventCodes.KEY_VOLUMEUP,
+    InputEventCodes.KEY_BRIGHTNESSDOWN,
+    InputEventCodes.KEY_BRIGHTNESSUP,
+    InputEventCodes.KEY_MICMUTE,
+    InputEventCodes.KEY_KBDILLUMTOGGLE,
+    InputEventCodes.KEY_KBDILLUMDOWN,
+    InputEventCodes.KEY_KBDILLUMUP,
+    InputEventCodes.KEY_PLAYPAUSE,
+    InputEventCodes.KEY_PLAY,
+    InputEventCodes.KEY_PLAYCD,
+    InputEventCodes.KEY_PAUSECD,
+    InputEventCodes.KEY_NEXTSONG,
+    InputEventCodes.KEY_PREVIOUSSONG,
+    InputEventCodes.KEY_STOPCD,
+]);
+
 function hasSystemKeys(info: DeviceInfo) {
-    return info.capabilities.keyCodes.some(
-        (code) =>
-            code === InputEventCodes.KEY_MUTE ||
-            code === InputEventCodes.KEY_VOLUMEDOWN ||
-            code === InputEventCodes.KEY_VOLUMEUP ||
-            code === InputEventCodes.KEY_BRIGHTNESSDOWN ||
-            code === InputEventCodes.KEY_BRIGHTNESSUP ||
-            code === InputEventCodes.KEY_MICMUTE ||
-            code === InputEventCodes.KEY_KBDILLUMTOGGLE ||
-            code === InputEventCodes.KEY_KBDILLUMDOWN ||
-            code === InputEventCodes.KEY_KBDILLUMUP,
-    );
+    return info.capabilities.keyCodes.some((code) => SYSTEM_KEY_CODES.has(code));
 }
 
 export function canKey(info: DeviceInfo) {

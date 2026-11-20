@@ -131,6 +131,9 @@ export class mprisPlayer extends EventEmitter<MprisPlayerEvents> {
     pause() {
         this.getPlayer().call("Pause");
     }
+    playPause() {
+        this.getPlayer().call("PlayPause");
+    }
     stop() {
         this.getPlayer().call("Stop");
     }

@@ -377,6 +377,8 @@ await MSysApi.brightness.refresh();
 
 菜单键（evdev 的 `KEY_COMPOSE` / `KEY_MENU` / `KEY_CONTEXT_MENU`，DOM 的 `ContextMenu`）在输入聚合层转换为当前指针位置的右键按下/抬起，和鼠标右键行为一致，不再作为键盘按键转发给应用。
 
+媒体键（evdev 的 `KEY_PLAYPAUSE` / `KEY_PLAY` / `KEY_PLAYCD` / `KEY_PAUSECD` / `KEY_NEXTSONG` / `KEY_PREVIOUSSONG` / `KEY_STOPCD` 等，DOM 的 `MediaPlayPause` / `MediaPlay` / `MediaPause` / `MediaTrackNext` / `MediaTrackPrevious` / `MediaStop` 等）通过 MPRIS 控制播放器：优先正在播放的播放器，没有时用最近加入的；播放/暂停键调用 `PlayPause`。没有可用播放器时按键仍被消费，不转发给应用。
+
 ### input
 
 原生输入设备读取（evdev），支持键盘、鼠标、触控板、数位板、触屏、游戏手柄。由 `myde-input` 模块提供（Rust 子进程读取，不占用渲染进程线程）。
