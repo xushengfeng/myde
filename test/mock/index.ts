@@ -1,3 +1,4 @@
+export { MockBrightnessDisplay, MockBrightnessManager } from "./brightness-mock";
 export type { MockConfig, MockWaylandClient, MockWaylandServer, MockWaylandWindow, MockWindowInfo } from "./myde-mock";
 export {
     clearMydeMock,

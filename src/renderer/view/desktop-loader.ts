@@ -10,6 +10,7 @@ import type { nowConfig } from "../../setting/config";
 import { setting } from "../../setting/setting";
 import { tray } from "../../sys_api/appIndicator";
 import { blue } from "../../sys_api/blue";
+import { brightness } from "../../sys_api/brightness";
 import { display } from "../../sys_api/display";
 import { getEnv } from "../../sys_api/env";
 import { vfs } from "../../sys_api/fs";
@@ -115,6 +116,7 @@ async function loadDesktop(p: string) {
     myde.MSysApi.power = new power(await newDBusIO(true));
     myde.MSysApi.powerProfiles = new powerProfiles(await newDBusIO(true));
     myde.MSysApi.lid = new lid(await newDBusIO(true));
+    myde.MSysApi.brightness = new brightness(await newDBusIO(true));
     myde.MSysApi.blue = new blue(await newDBusIO(true));
     myde.MSysApi.network = new network(await newDBusIO(true));
     myde.MSysApi.volume = new volumeControl();

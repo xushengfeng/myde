@@ -1071,6 +1071,48 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             ],
         };
     },
+    sun: (env) => {
+        const { center, size } = buildZb(256);
+        const w = 24;
+        const inner = 8 * 5;
+        const rayInner = 8 * 7.5;
+        const rayOuter = 8 * 11.5;
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "arc",
+                            data: {
+                                center,
+                                fromAngle: 0,
+                                endAngle: 0,
+                                r: inner,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        ...Array.from({ length: 8 }, (_, i) => {
+                            const angle = i * 45;
+                            return {
+                                type: "zline" as const,
+                                data: {
+                                    ps: [
+                                        { p: p(center, angle, rayInner), ri: w / 2, ro: w / 2 },
+                                        { p: p(center, angle, rayOuter), ri: w / 2, ro: w / 2 },
+                                    ],
+                                    width: w,
+                                    color: env.color,
+                                },
+                            };
+                        }),
+                    ],
+                },
+            ],
+        };
+    },
     speaker: (env) => {
         const { center, size } = buildZb(256);
         const w = 24;

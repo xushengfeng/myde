@@ -342,6 +342,35 @@ NetworkManager 属性变化发出 `changed`；无线设备属性、接入点增�
 
 音量条拖动这类高频输入在桌面层用 `MUtils.throttle` 限制写入频率（见“MUtils”），API 本身每次都立即生效
 
+### brightness
+
+屏幕亮度，内置屏和外接屏统一按 0-100 百分比控制：
+
+```typescript
+await MSysApi.brightness.init();
+// [{ id, kind: "backlight" | "ddc", name, brightness, writable }]
+const displays = MSysApi.brightness.getDisplays();
+
+// 返回实际生效值；同一屏幕的连续调用会合并成最新值
+await MSysApi.brightness.setBrightness(displays[0].id, 60);
+
+// 内置屏的 Fn 键等外部修改也会通知；外接屏不轮询
+MSysApi.brightness.on("changed", (id, value) => {
+    console.log(id, value);
+});
+
+// 外接屏热插拔后重新扫描
+await MSysApi.brightness.refresh();
+```
+
+内置屏读 `/sys/class/backlight/*`，写入优先直接写 sysfs；普通用户没有 sysfs 写权限时自动回退到 logind `Session.SetBrightness`（需要活动登录会话，polkit 对活动会话默认放行）。`fs.watch` 监听 sysfs，所以键盘亮度键或其他程序改亮度也能收到 `changed`。
+
+外接屏用 `ddcutil` 的 `detect` / `getvcp 10` / `setvcp 10`（DDC/CI）。需要安装 `ddcutil` 并有 i2c 权限（udev `uaccess` 规则或把用户加入 `i2c` 组）；不可读的显示器不会出现在列表里，只打印一次告警。`init()` 会跑一次 `ddcutil detect`（可能耗时一两秒），桌面入口不要阻塞等待它。
+
+官方桌面的顶栏亮度工具（太阳图标）为每个可控屏幕显示一个滑块，拖动在桌面层用 `MUtils.throttle` 节流；外接屏的亮度外部变化不会自动刷新，重新打开工具或调用 `refresh()` 后更新。
+
+键盘亮度键（evdev 的 `KEY_BRIGHTNESSUP` / `KEY_BRIGHTNESSDOWN`，DOM 的 `BrightnessUp` / `BrightnessDown`）在输入聚合层处理，锁屏时也能用，事件不再转发给应用。每次调整 5%：有内置屏时只调内置屏，没有内置屏时调所有可写外接屏。
+
 ### input
 
 原生输入设备读取（evdev），支持键盘、鼠标、触控板、数位板、触屏、游戏手柄。由 `myde-input` 模块提供（Rust 子进程读取，不占用渲染进程线程）。

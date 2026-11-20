@@ -25,7 +25,7 @@ const { MSysApi, MInputMap, MSetting } = myde;
 
 ## 动态设备管理
 
-支持动态添加和删除蓝牙设备、网络设备、电源设备、通知和音乐播放器。
+支持动态添加和删除蓝牙设备、网络设备、电源设备、通知、音乐播放器和屏幕亮度。
 
 ```typescript
 import {
@@ -38,6 +38,7 @@ import {
     MockNotificationManager,
     MockMprisManager, MockMprisPlayer,
     MockVolumeManager, MockAudioDevice, MockAudioStream,
+    MockBrightnessManager, MockBrightnessDisplay,
 } from "test/mock";
 
 // 创建管理器
@@ -109,6 +110,12 @@ volumeManager.addDevice(source);
 
 const stream = new MockAudioStream(81, "Firefox", "output", 1234, "Firefox", 0.7, false);
 volumeManager.addStream(stream);
+
+// 动态添加屏幕（内置屏 / 外接屏）
+const brightnessManager = new MockBrightnessManager(console.log);
+brightnessManager.addDisplay(new MockBrightnessDisplay("backlight:eDP-1", "backlight", "eDP-1", 60));
+brightnessManager.addDisplay(new MockBrightnessDisplay("ddc:card0-DP-1", "ddc", "DEL U2720Q (DP-1)", 80));
+brightnessManager.setBrightness("backlight:eDP-1", 40);
 ```
 
 ## 导出
@@ -136,6 +143,8 @@ volumeManager.addStream(stream);
 | `MockVolumeManager` | 类 | 音量管理器 |
 | `MockAudioDevice` | 类 | 音频设备mock |
 | `MockAudioStream` | 类 | 音频流mock |
+| `MockBrightnessManager` | 类 | 屏幕亮度管理器 |
+| `MockBrightnessDisplay` | 类 | 屏幕亮度mock |
 | `MockConfig` | 类型 | 配置选项 |
 
 ## MockConfig 配置
@@ -156,6 +165,7 @@ interface MockConfig {
     notificationManager?: MockNotificationManager; // 通知管理器
     mprisManager?: MockMprisManager;    // MPRIS管理器
     volumeManager?: MockVolumeManager;  // 音量管理器
+    brightnessManager?: MockBrightnessManager; // 屏幕亮度管理器
 }
 ```
 

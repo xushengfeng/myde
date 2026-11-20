@@ -22,7 +22,10 @@ import type {
     power,
     powerProfiles,
 } from "../../src/sys_api/power";
+import { throttle } from "../../src/utils/throttle";
 import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools";
+import type { MockBrightnessManager } from "./brightness-mock";
+import { createMockBrightness } from "./brightness-mock";
 import type { MockRenderTools } from "./render-tools";
 import type { MockVolumeManager } from "./volume-mock";
 import { createMockVolume } from "./volume-mock";
@@ -189,6 +192,8 @@ export interface MockConfig {
     trayManager?: MockTrayManager;
     /** 音量管理器 */
     volumeManager?: MockVolumeManager;
+    /** 屏幕亮度管理器 */
+    brightnessManager?: MockBrightnessManager;
 }
 
 type SettingInitReturn = ReturnType<DesktopApi["MSetting"]["init"]>;
@@ -1830,6 +1835,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         mprisManager,
         trayManager,
         volumeManager,
+        brightnessManager,
     } = config;
 
     const log = (method: string, ...args: unknown[]) => {
@@ -1905,6 +1911,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         blue: blueManager ? blueManager.createMock() : createMockBlue(log),
         network: networkManager ? networkManager.createMock() : createMockNetwork(log),
         volume: volumeManager ? volumeManager.createMock() : createMockVolume(log),
+        brightness: brightnessManager ? brightnessManager.createMock() : createMockBrightness(log),
         display: createMockDisplay(log),
         input: createMockInput(log),
         // 统一输入事件 → 模拟 DOM 事件：真实实现无外部依赖，mock 环境直接复用
@@ -1979,6 +1986,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
                     return createMockRenderTools();
                 }
             } as any,
+            throttle,
         },
         MSetting: settingOverride || defaultSetting,
         MConnect: connectOverride || defaultConnect,

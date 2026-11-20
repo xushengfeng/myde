@@ -51,6 +51,7 @@ import {
     nNotiList,
     nNumber,
     px,
+    rRange,
     sSize,
     sSize2,
     tTrayMenu,
@@ -176,6 +177,13 @@ interface RegistrySchema {
     "volume.input.default.muted": boolean;
     "volume.output.default.volume": number;
     "volume.input.default.volume": number;
+    "brightness.displays": id<"brightness.displays[]">[];
+    "brightness.displays[]": {
+        name: string;
+        kind: "backlight" | "ddc";
+        writable: boolean;
+    };
+    "brightness.displays[].brightness": number;
     "time.hour": number;
     "time.minute": number;
     "time.second": number;
@@ -1513,6 +1521,7 @@ const planteData: Plant[] = [
             { id: "connect" },
             { id: "power" },
             { id: "volume" },
+            { id: "brightness" },
             { id: "ime" },
             { id: "login" },
             { id: "notifications" },
@@ -5044,6 +5053,46 @@ MSysApi.volume.init().then(async () => {
     df();
 });
 
+/** 亮度键的目标值：连续按键时 API 内部会合并写入，这里保留最新目标避免读到旧值 */
+const brightnessTargets = new Map<string, number>();
+
+MSysApi.brightness
+    .init()
+    .then(() => {
+        const syncDisplays = () => {
+            const ids: id<"brightness.displays[]">[] = [];
+            for (const display of MSysApi.brightness.getDisplays()) {
+                const itemId = rawRegistry.buildVarId("brightness.displays[]", [display.id]);
+                const brightnessId = rawRegistry.buildVarId("brightness.displays[].brightness", [display.id]);
+                rawRegistry.setData(itemId, {
+                    name: display.name,
+                    kind: display.kind,
+                    writable: display.writable,
+                });
+                rawRegistry.setData(brightnessId, display.brightness);
+                rawRegistry.setSetCallback(brightnessId, async (value) => {
+                    await MSysApi.brightness.setBrightness(display.id, value);
+                });
+                brightnessTargets.set(display.id, display.brightness);
+                ids.push(display.id as id<"brightness.displays[]">);
+            }
+            rawRegistry.setData("brightness.displays", ids);
+            console.log("[brightness] ready, displays =", MSysApi.brightness.getDisplays());
+        };
+
+        MSysApi.brightness.on("added", syncDisplays);
+        MSysApi.brightness.on("removed", (displayId) => {
+            brightnessTargets.delete(displayId);
+            syncDisplays();
+        });
+        MSysApi.brightness.on("changed", (id, value) => {
+            brightnessTargets.set(id, value);
+            rawRegistry.setData(rawRegistry.buildVarId("brightness.displays[].brightness", [id]), value);
+        });
+        syncDisplays();
+    })
+    .catch((e) => console.warn("[brightness] init error", e));
+
 // UI 对象池
 const uipool = {
     "power.battery": () => {
@@ -5161,6 +5210,66 @@ const uipool = {
             unmount: () => {
                 unsub();
                 for (const s of us) s();
+            },
+        };
+    },
+    "brightness.displays": () => {
+        const source = rawRegistry.get("brightness.displays");
+        const list = view("y").style({ gap: px(sSize2.padding) });
+        const bar = ui.bar([list]);
+        bar.el.style({ width: px(sSize(6)) });
+        const unsubscribes = new Map<string, () => void>();
+
+        const unsub = source.getAndSubscribe((ids) => {
+            for (const unsubscribe of unsubscribes.values()) unsubscribe();
+            unsubscribes.clear();
+            list.clear();
+            bar.el.style({ display: ids.length > 0 ? "" : "none" });
+
+            for (const key of ids) {
+                const brightnessKey = rawRegistry.buildVarId("brightness.displays[].brightness", [key]);
+                const brightnessSource = rawRegistry.get(brightnessKey);
+                const track = view().style({ background: "white", borderRadius: px(sSize2.radius1) }).el;
+                const setBrightness = MUtils.throttle((v: number) => {
+                    brightnessSource.set?.(v * 100)?.catch((error) => {
+                        console.warn("[brightness] 设置亮度失败", key, error);
+                    });
+                }, 50);
+                const range = rRange({ mel: track, onEnd: () => setBrightness.flush() });
+                range.el.style({
+                    width: px(sSize(6)),
+                    height: px(sSize(1)),
+                    borderRadius: px(sSize2.radius1),
+                    overflow: "hidden",
+                    ...gGlassStyle.itemInBg,
+                });
+                range.onChange(setBrightness);
+                list.add(range.el);
+
+                const itemKey = rawRegistry.buildVarId("brightness.displays[]", [key]);
+                const unsubItem = rawRegistry.get(itemKey).getAndSubscribe((v) => {
+                    range.el.style({
+                        opacity: v.writable ? "1" : "0.5",
+                        pointerEvents: v.writable ? "auto" : "none",
+                    });
+                });
+                const unsubBrightness = brightnessSource.getAndSubscribe((v) => {
+                    range.sv(v / 100);
+                });
+                unsubscribes.set(key, () => {
+                    unsubItem();
+                    unsubBrightness();
+                });
+            }
+        });
+        return {
+            id: "brightness.displays",
+            type: "dynamic-list",
+            el: bar.el,
+            unmount: () => {
+                unsub();
+                for (const unsubscribe of unsubscribes.values()) unsubscribe();
+                unsubscribes.clear();
             },
         };
     },
@@ -6667,6 +6776,21 @@ tools.registerTool(
     { selfBackground: true },
 );
 
+tools.registerTool(
+    "brightness",
+    ({ tipEl, showTip }) => {
+        const btn = button(getIconXEl("sun", { size: 20, width: 24, height: 24 })).on("click", () => {
+            showTip();
+        });
+
+        const displays = uipool["brightness.displays"]();
+        displays.el.addInto(tipEl);
+
+        return btn;
+    },
+    { selfBackground: true },
+);
+
 (() => {
     const day = view("x");
     const clockEl = view("x");
@@ -6828,6 +6952,31 @@ function checkExitKey(e: UniInputEvent): boolean {
     return false;
 }
 
+/** 键盘亮度键：优先调内置屏，没有内置屏时调所有可写外接屏（每次 5%） */
+function adjustBrightness(delta: number) {
+    const writable = MSysApi.brightness.getDisplays().filter((display) => display.writable);
+    const backlights = writable.filter((display) => display.kind === "backlight");
+    const targets = backlights.length > 0 ? backlights : writable;
+    for (const display of targets) {
+        const base = brightnessTargets.get(display.id) ?? display.brightness;
+        const value = Math.min(100, Math.max(0, Math.round(base + delta)));
+        brightnessTargets.set(display.id, value);
+        void MSysApi.brightness.setBrightness(display.id, value).catch((error) => {
+            console.warn("[brightness] 调整亮度失败", display.id, error);
+        });
+    }
+}
+
+/** 亮度键在输入聚合层处理，锁屏时也可用；不再转发给客户端 */
+function checkBrightnessKey(e: UniInputEvent): boolean {
+    if (e.kind !== "key" || e.type !== "down") return false;
+    const up = e.code === InputEventCodes.KEY_BRIGHTNESSUP || e.webCode === "BrightnessUp";
+    const down = e.code === InputEventCodes.KEY_BRIGHTNESSDOWN || e.webCode === "BrightnessDown";
+    if (!up && !down) return false;
+    if (!e.repeat) adjustBrightness(up ? 5 : -5);
+    return true;
+}
+
 /** 分发：统一传入新 api（当前行为为模拟 DOM 事件） */
 function dispatchInput(e: UniInputEvent) {
     if (checkExitKey(e)) {
@@ -6843,6 +6992,7 @@ function dispatchInput(e: UniInputEvent) {
         if (stateLock.getState() === "xipin") stateLock.setState("lock");
         return;
     }
+    if (checkBrightnessKey(e)) return;
     // 滚轮/触摸板：先按窗口几何命中转发给 Wayland 客户端，再模拟 DOM 事件给桌面 UI。
     // 源信息（触摸板连续滚动、高精度刻度）随统一事件带下来，不能等模拟成 DOM WheelEvent 再取。
     if (e.kind === "pointer" && e.type === "wheel") {

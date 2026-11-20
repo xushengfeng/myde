@@ -4,6 +4,8 @@
 
 `lid.ts` 通过 logind 读取并监听笔记本合盖状态（`LidClosed`）。
 
+`brightness.ts` 控制屏幕亮度：内置屏读 `/sys/class/backlight/*`，写入优先直接写 sysfs、没有权限时走 logind 的 `org.freedesktop.login1.Session.SetBrightness`（活动会话默认放行）；外接屏调用 `ddcutil`（DDC/CI，VCP 0x10），需要 i2c 权限（udev `uaccess` 规则或 i2c 组），`ddcutil` 不可用时只影响外接屏。内置屏用 `fs.watch` 监听 sysfs，Fn 键或其他程序修改亮度也会发出 `changed`；外接屏不轮询，热插拔后调用 `refresh()`。
+
 `polkit.ts` 是 polkit 的认证前端 agent：在系统总线注册 logind session，接收 polkitd 的认证请求并通过事件交给桌面；PAM 由 polkit-agent-helper-1 完成。
 
 `run.ts` 负责启动应用。`runApp()` 必须读取应用的 stdout/stderr（否则写满 64 KiB 后应用阻塞），输出写到 `$XDG_STATE_HOME/myde/logs/apps/`。`runApp(exec, { env })` 可以把应用自带的环境变量合并进子进程环境（最后合并，优先级最高）。子进程会拿到 `USER`/`LOGNAME`/`HOME`；启动身份取桌面进程自身，不依赖启动环境里的 `USER`（应用内再启动的桌面可能没有这个变量，按 `USER` 兜底会变成 root 并 `spawn EPERM`）。

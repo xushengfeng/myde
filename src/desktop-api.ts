@@ -8,6 +8,7 @@ import { getPid, getPidTree } from "./sys_api/app_control";
 import type { tray } from "./sys_api/appIndicator";
 import { getDesktopEntries, getDesktopEntry, getDesktopIcon, refreshDesktopEntries } from "./sys_api/application";
 import type { blue } from "./sys_api/blue";
+import type { brightness } from "./sys_api/brightness";
 import type { display } from "./sys_api/display";
 import { getEnv } from "./sys_api/env";
 import { vfs } from "./sys_api/fs";
@@ -48,6 +49,7 @@ export const _myde = {
         power: undefined as unknown as power,
         powerProfiles: undefined as unknown as powerProfiles,
         blue: undefined as unknown as blue,
+        brightness: undefined as unknown as brightness,
         network: undefined as unknown as network,
         polkit: undefined as unknown as PolkitApi,
         display: undefined as unknown as display,
@@ -79,6 +81,7 @@ export const _myde = {
 export type DesktopApi = typeof _myde;
 export type { ConnectConnection, ConnectEvents, PairingSession } from "./connect/connect";
 export type { DesktopIconConfig } from "./sys_api/application";
+export type { BrightnessDisplay, BrightnessEvents, BrightnessKind } from "./sys_api/brightness";
 
 declare global {
     var myde: DesktopApi;
