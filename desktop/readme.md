@@ -342,6 +342,8 @@ NetworkManager 属性变化发出 `changed`；无线设备属性、接入点增�
 
 音量条拖动这类高频输入在桌面层用 `MUtils.throttle` 限制写入频率（见“MUtils”），API 本身每次都立即生效
 
+键盘音量键（evdev 的 `KEY_VOLUMEUP` / `KEY_VOLUMEDOWN` / `KEY_MUTE`，DOM 的 `AudioVolumeUp` / `AudioVolumeDown` / `AudioVolumeMute`）在输入聚合层处理，锁屏时也能用，事件不再转发给应用。音量键每次调整默认输出 5%（最高 100%），静音键切换默认输出的静音状态。
+
 ### brightness
 
 屏幕亮度，内置屏和外接屏统一按 0-100 百分比控制：
@@ -370,6 +372,10 @@ await MSysApi.brightness.refresh();
 官方桌面的顶栏亮度工具（太阳图标）为每个可控屏幕显示一个滑块，拖动在桌面层用 `MUtils.throttle` 节流；外接屏的亮度外部变化不会自动刷新，重新打开工具或调用 `refresh()` 后更新。
 
 键盘亮度键（evdev 的 `KEY_BRIGHTNESSUP` / `KEY_BRIGHTNESSDOWN`，DOM 的 `BrightnessUp` / `BrightnessDown`）在输入聚合层处理，锁屏时也能用，事件不再转发给应用。每次调整 5%：有内置屏时只调内置屏，没有内置屏时调所有可写外接屏。
+
+### 键盘特殊键
+
+菜单键（evdev 的 `KEY_COMPOSE` / `KEY_MENU` / `KEY_CONTEXT_MENU`，DOM 的 `ContextMenu`）在输入聚合层转换为当前指针位置的右键按下/抬起，和鼠标右键行为一致，不再作为键盘按键转发给应用。
 
 ### input
 

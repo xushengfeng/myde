@@ -4988,6 +4988,9 @@ MSysApi.tray.init().then(async () => {
     }
 });
 
+/** 音量键的目标值：pactl 写入是异步的，连续按键时按本地目标累加 */
+const volumeTargets = new Map<number, number>();
+
 MSysApi.volume.init().then(async () => {
     const volume = MSysApi.volume;
     const d = volume.getDevices();
@@ -5011,7 +5014,7 @@ MSysApi.volume.init().then(async () => {
     }
     function df() {
         volume.ev.on("deviceVolumeChange", (id, v) => {
-            console.log(id, v); // todo 没触发 bug
+            volumeTargets.set(id, v);
             const { output, input } = findDefault();
             if (output?.id === id) {
                 rawRegistry.setData("volume.output.default.volume", v);
@@ -5020,6 +5023,7 @@ MSysApi.volume.init().then(async () => {
                 rawRegistry.setData("volume.input.default.volume", v);
             }
         });
+        volume.ev.on("deviceRemove", (id) => volumeTargets.delete(id));
         volume.ev.on("deviceMuteChange", (id, b) => {
             const { output, input } = findDefault();
             if (output?.id === id) rawRegistry.setData("volume.output.default.muted", b);
@@ -5031,7 +5035,10 @@ MSysApi.volume.init().then(async () => {
 
         rawRegistry.setSetCallback("volume.output.default.volume", (v) => {
             const { output } = findDefault();
-            if (output?.id !== undefined) volume.setDeviceVolume(output.id, v);
+            if (output?.id !== undefined) {
+                volumeTargets.set(output.id, v);
+                volume.setDeviceVolume(output.id, v);
+            }
             return Promise.resolve();
         });
         rawRegistry.setSetCallback("volume.input.default.volume", (v) => {
@@ -6969,11 +6976,73 @@ function adjustBrightness(delta: number) {
 
 /** 亮度键在输入聚合层处理，锁屏时也可用；不再转发给客户端 */
 function checkBrightnessKey(e: UniInputEvent): boolean {
-    if (e.kind !== "key" || e.type !== "down") return false;
+    if (e.kind !== "key") return false;
     const up = e.code === InputEventCodes.KEY_BRIGHTNESSUP || e.webCode === "BrightnessUp";
     const down = e.code === InputEventCodes.KEY_BRIGHTNESSDOWN || e.webCode === "BrightnessDown";
     if (!up && !down) return false;
-    if (!e.repeat) adjustBrightness(up ? 5 : -5);
+    if (e.type === "down" && !e.repeat) adjustBrightness(up ? 5 : -5);
+    return true;
+}
+
+/** 默认输出设备；音量键只调它 */
+function defaultSink() {
+    return MSysApi.volume.getSinks().find((device) => device.isDefault);
+}
+
+/** 键盘音量键：默认输出每次 5% */
+function adjustVolume(delta: number) {
+    const sink = defaultSink();
+    if (!sink) return;
+    const base = volumeTargets.get(sink.id) ?? sink.volume ?? 0;
+    const value = Math.round(Math.min(1, Math.max(0, base + delta)) * 100) / 100;
+    volumeTargets.set(sink.id, value);
+    void MSysApi.volume.setDeviceVolume(sink.id, value);
+}
+
+/** 键盘静音键：切换默认输出的静音状态 */
+function toggleVolumeMute() {
+    const sink = defaultSink();
+    if (!sink) return;
+    void MSysApi.volume.setDeviceMute(sink.id, "toggle");
+}
+
+/** 音量/静音键在输入聚合层处理，锁屏时也可用；不再转发给客户端 */
+function checkVolumeKey(e: UniInputEvent): boolean {
+    if (e.kind !== "key") return false;
+    const up = e.code === InputEventCodes.KEY_VOLUMEUP || e.webCode === "AudioVolumeUp";
+    const down = e.code === InputEventCodes.KEY_VOLUMEDOWN || e.webCode === "AudioVolumeDown";
+    const mute = e.code === InputEventCodes.KEY_MUTE || e.webCode === "AudioVolumeMute";
+    if (!up && !down && !mute) return false;
+    if (e.type === "down" && !e.repeat) {
+        if (mute) toggleVolumeMute();
+        else adjustVolume(up ? 0.05 : -0.05);
+    }
+    return true;
+}
+
+/** 菜单键：在指针位置合成一次右键按下/抬起，客户端和桌面 UI 都按右键处理；不再转发给客户端 */
+function checkContextMenuKey(e: UniInputEvent): boolean {
+    if (e.kind !== "key") return false;
+    const menu =
+        e.code === InputEventCodes.KEY_COMPOSE ||
+        e.code === InputEventCodes.KEY_MENU ||
+        e.code === InputEventCodes.KEY_CONTEXT_MENU ||
+        e.webCode === "ContextMenu";
+    if (!menu) return false;
+    if (e.type !== "down" || e.repeat) return true;
+    const pointer: PointerInput = {
+        kind: "pointer",
+        type: "down",
+        x: mousePos.x,
+        y: mousePos.y,
+        button: 2,
+        pointerType: "mouse",
+        pointerId: 1,
+        isPrimary: true,
+        source: e.source,
+    };
+    dispatchInput(pointer);
+    dispatchInput({ ...pointer, type: "up" });
     return true;
 }
 
@@ -6993,6 +7062,8 @@ function dispatchInput(e: UniInputEvent) {
         return;
     }
     if (checkBrightnessKey(e)) return;
+    if (checkVolumeKey(e)) return;
+    if (checkContextMenuKey(e)) return;
     // 滚轮/触摸板：先按窗口几何命中转发给 Wayland 客户端，再模拟 DOM 事件给桌面 UI。
     // 源信息（触摸板连续滚动、高精度刻度）随统一事件带下来，不能等模拟成 DOM WheelEvent 再取。
     if (e.kind === "pointer" && e.type === "wheel") {
@@ -8018,8 +8089,8 @@ function useEvdevDevice(
         }
         if (BTN_TO_BUTTON[code] !== undefined) {
             if (value === 0 || value === 1) frameKeys.push({ code, value });
-        } else if (code < InputEventCodes.BTN_0) {
-            // 键盘按键
+        } else if (code < InputEventCodes.BTN_0 || code === InputEventCodes.KEY_CONTEXT_MENU) {
+            // 键盘按键（KEY_CONTEXT_MENU 数值落在 BTN_* 区间，但它是键盘键）
             frameKeys.push({ code, value });
         }
     });

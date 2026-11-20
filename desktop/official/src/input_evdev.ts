@@ -57,14 +57,31 @@ export function canPoint(info: DeviceInfo) {
     return hasRelativeXY(info) || MInputMap.absPosMapping(info) !== undefined;
 }
 
+/** 音量/亮度/键盘灯等系统键：笔记本的 WMI hotkey 节点可能只有这些键，没有字母键 */
+function hasSystemKeys(info: DeviceInfo) {
+    return info.capabilities.keyCodes.some(
+        (code) =>
+            code === InputEventCodes.KEY_MUTE ||
+            code === InputEventCodes.KEY_VOLUMEDOWN ||
+            code === InputEventCodes.KEY_VOLUMEUP ||
+            code === InputEventCodes.KEY_BRIGHTNESSDOWN ||
+            code === InputEventCodes.KEY_BRIGHTNESSUP ||
+            code === InputEventCodes.KEY_MICMUTE ||
+            code === InputEventCodes.KEY_KBDILLUMTOGGLE ||
+            code === InputEventCodes.KEY_KBDILLUMDOWN ||
+            code === InputEventCodes.KEY_KBDILLUMUP,
+    );
+}
+
 export function canKey(info: DeviceInfo) {
     // 仅纯键盘设备产生键盘事件，排除带按键的鼠标/触控板等复合设备
-    return (
-        info.type === "keyboard" ||
-        (info.capabilities.hasKeyboard &&
-            !info.capabilities.hasMouse &&
-            !info.capabilities.hasTouchpad &&
-            !info.capabilities.hasTouchscreen &&
-            !canPoint(info))
-    );
+    if (info.type === "keyboard") return true;
+    if (
+        info.capabilities.hasMouse ||
+        info.capabilities.hasTouchpad ||
+        info.capabilities.hasTouchscreen ||
+        canPoint(info)
+    )
+        return false;
+    return info.capabilities.hasKeyboard || hasSystemKeys(info);
 }
