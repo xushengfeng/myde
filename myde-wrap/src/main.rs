@@ -21,6 +21,10 @@ use smithay::reexports::{
     },
     wayland_server::Display,
 };
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -122,7 +126,45 @@ const DEBUG_PORT_ENVS: [(&str, &str); 2] = [
 ];
 
 /// 原样透传的调试参数：值是逗号分隔的 origin 列表或 `*`，只拦空白字符。
-const DEBUG_VALUE_ENVS: [(&str, &str); 1] = [("MYDE_REMOTE_ALLOW_ORIGINS", "--remote-allow-origins")];
+const DEBUG_VALUE_ENVS: [(&str, &str); 1] =
+    [("MYDE_REMOTE_ALLOW_ORIGINS", "--remote-allow-origins")];
+
+/// 认证 token 通过这个环境变量告知子进程它继承的 fd 号；token 本身不在环境里。
+const AUTH_FD_ENV: &str = "MYDE_WRAP_AUTH_FD";
+
+/// 从 /dev/urandom 取随机字节并转成 hex：用于 socket 文件名和认证 token。
+fn random_hex(bytes: usize) -> anyhow::Result<String> {
+    use std::fmt::Write as _;
+
+    let mut buf = vec![0u8; bytes];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut buf)?;
+    let mut out = String::with_capacity(bytes * 2);
+    for byte in buf {
+        let _ = write!(out, "{byte:02x}");
+    }
+    Ok(out)
+}
+
+/// 私有运行目录：优先 `XDG_RUNTIME_DIR`；没有时在临时目录下自建一个 0700
+/// 目录并设为 `XDG_RUNTIME_DIR`，Wayland socket、控制 socket 和子进程共用，
+/// 不再把 socket 直接暴露在 /tmp 里。
+fn runtime_dir() -> anyhow::Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+        if dir.is_absolute() {
+            return Ok(dir);
+        }
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "myde-wrap-{}-{}",
+        std::process::id(),
+        random_hex(8)?
+    ));
+    std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    // 必须在创建 Wayland listening socket 之前设置
+    unsafe { std::env::set_var("XDG_RUNTIME_DIR", &dir) };
+    Ok(dir)
+}
 
 fn debug_args(program_args: &[String]) -> Vec<String> {
     let mut extra = Vec::new();
@@ -192,7 +234,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
-    let socket_path = std::env::temp_dir().join("myde-wrap.sock");
+    // 控制 socket 和 Wayland socket 都放在私有运行目录里；没有 XDG_RUNTIME_DIR
+    // （例如直接在无会话的 TTY 上启动）时自建一个 0700 目录。
+    let runtime_dir = runtime_dir()?;
+    let socket_path = runtime_dir.join(format!(
+        "myde-wrap-{}-{}.sock",
+        std::process::id(),
+        random_hex(8)?
+    ));
+    // 每个 wrap 实例一份，只通过继承的 fd 交给桌面
+    let auth_token = random_hex(32)?;
     let socket_server = SocketServer::new(socket_path.clone())?;
 
     let mut event_loop: EventLoop<App> = EventLoop::try_new()?;
@@ -257,11 +308,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let screen_mode_supported = is_drm;
 
     // Set WAYLAND_DISPLAY to our socket name, so child processes connect to myde-wrap
-    // rather than the host compositor
-    unsafe { std::env::set_var("WAYLAND_DISPLAY", &state.socket_name) };
-    unsafe { std::env::set_var("XDG_SESSION_TYPE", "wayland") };
-    unsafe { std::env::set_var("MYDE_WRAP_SOCKET", socket_path.to_str().unwrap()) };
-
+    // rather than the host compositor. 只写进子进程环境（下面单独构造），不改
+    // wrap 自己的环境：winit 后端还要靠宿主桌面的 WAYLAND_DISPLAY。
     info!("MYDE_WRAP_SOCKET={:?}", socket_path);
     info!("WAYLAND_DISPLAY={:?}", state.socket_name);
     info!("XDG_SESSION_TYPE=wayland");
@@ -285,26 +333,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("run program: {} {:?}", program.display(), program_args);
 
-    // 继承所有父进程环境变量
+    // 继承父进程环境，但 Wayland / 会话 / 控制通道变量一律用本次启动的值覆盖，
+    // 避免嵌套启动时把上一层的 socket 传下去
     let mut envs: Vec<(String, String)> = std::env::vars().collect();
-    // 确保 socket 环境变量存在
-    if !envs.iter().any(|(k, _)| k == "MYDE_WRAP_SOCKET") {
-        envs.push((
-            "MYDE_WRAP_SOCKET".to_string(),
-            socket_path.to_str().unwrap().to_string(),
-        ));
-    }
-    // 确保 Wayland 环境变量存在
-    if !envs.iter().any(|(k, _)| k == "WAYLAND_DISPLAY") {
-        envs.push((
-            "WAYLAND_DISPLAY".to_string(),
-            state.socket_name.to_str().unwrap().to_string(),
-        ));
-    }
-    // 确保 XDG_SESSION_TYPE 环境变量存在
-    if !envs.iter().any(|(k, _)| k == "XDG_SESSION_TYPE") {
-        envs.push(("XDG_SESSION_TYPE".to_string(), "wayland".to_string()));
-    }
+    // 调试开关已经翻译成命令行参数，不再让子进程和它启动的应用继承
+    envs.retain(|(key, _)| {
+        !DEBUG_PORT_ENVS.iter().any(|(env, _)| key == env)
+            && !DEBUG_VALUE_ENVS.iter().any(|(env, _)| key == env)
+    });
+    envs.retain(|(key, _)| {
+        key != "WAYLAND_DISPLAY"
+            && key != "XDG_SESSION_TYPE"
+            && key != "MYDE_WRAP_SOCKET"
+            && key != AUTH_FD_ENV
+    });
+    envs.push((
+        "WAYLAND_DISPLAY".to_string(),
+        state.socket_name.to_str().unwrap().to_string(),
+    ));
+    envs.push(("XDG_SESSION_TYPE".to_string(), "wayland".to_string()));
+    envs.push((
+        "MYDE_WRAP_SOCKET".to_string(),
+        socket_path.to_str().unwrap().to_string(),
+    ));
     // 让myde以桌面运行
     envs.push(("runAsDesktop".to_string(), "true".to_string()));
     // 已注册 dmabuf global 时告知子进程：桌面可以走 GPU shared texture，
@@ -333,8 +384,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // 认证 token 走继承的文件描述符：环境变量对同 uid 进程可读，而一次性 pipe
+    // 被桌面读空后就不再有内容
+    let (auth_read, auth_write) = nix::unistd::pipe()?;
+    {
+        let mut writer = std::fs::File::from(auth_write);
+        writer.write_all(auth_token.as_bytes())?;
+    }
+    let auth_fd = auth_read.as_raw_fd();
+    envs.push((AUTH_FD_ENV.to_string(), auth_fd.to_string()));
+
     let mut child = match Command::new(&program)
         .args(program_args)
+        .env_clear()
         .envs(envs)
         .stdout(child_stdio())
         .stderr(child_stdio())
@@ -353,6 +415,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into());
         }
     };
+    // 子进程已经拿到 fd，父进程不再需要读端
+    drop(auth_read);
     let child_pid = child.id();
     info!("program started, PID: {}", child_pid);
 
@@ -456,20 +520,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let heartbeat_armed_for_accept = heartbeat_armed.clone();
     let heartbeat_ready_for_accept = heartbeat_ready.clone();
 
+    // 已认证的控制连接：同一时刻只有一个。页面重载时新连接顶掉旧连接；
+    // 未认证的连接既不能影响心跳，也不能把已就绪的桌面挤掉。
+    type ActiveConnection = Arc<std::sync::Mutex<Option<(u64, UnixStream)>>>;
+    let active_connection: ActiveConnection = Arc::new(std::sync::Mutex::new(None));
+    let connection_ids = Arc::new(AtomicU64::new(1));
+
     // 在单独的线程中接受和处理socket连接，完全不阻塞主事件循环
     std::thread::spawn(move || {
         let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
         loop {
             if let Some(stream) = socket_server_clone.accept() {
-                // 新连接先刷新心跳并重新等待桌面就绪，避免页面重载被误判为卡死
-                let now = heartbeat_base.elapsed().as_millis() as u64;
-                heartbeat_last_for_accept.store(now, Ordering::Release);
-                heartbeat_connected_at_for_accept.store(now, Ordering::Release);
-                heartbeat_armed_for_accept.store(true, Ordering::Release);
-                heartbeat_ready_for_accept.store(false, Ordering::Release);
+                let connection_id = connection_ids.fetch_add(1, Ordering::Relaxed);
                 let compositor = compositor.clone();
                 let rt_clone = rt.clone();
+                let active = active_connection.clone();
+                let expected_token = auth_token.clone();
                 let last = heartbeat_last_for_accept.clone();
+                let connected_at = heartbeat_connected_at_for_accept.clone();
+                let armed = heartbeat_armed_for_accept.clone();
                 let ready = heartbeat_ready_for_accept.clone();
                 // 为每个连接单独分配一个线程，长连接完全不干扰主循环
                 std::thread::spawn(move || {
@@ -484,35 +553,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let write_stream = Arc::new(std::sync::Mutex::new(stream));
                     let alive = Arc::new(AtomicBool::new(true));
 
-                    // 主动 Ping 页面，页面用 Pong 证明桌面入口已经跑完。
-                    // 读和写在不同线程，写用同一把锁避免消息交错。
+                    // 认证前限时：连上来不发 Auth 的连接不能长期占用线程
+                    if read_stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .is_err()
                     {
-                        let write_stream = write_stream.clone();
-                        let alive = alive.clone();
-                        std::thread::spawn(move || loop {
-                            std::thread::sleep(HEARTBEAT_INTERVAL);
-                            if !alive.load(Ordering::Acquire) {
-                                break;
-                            }
-                            let mut stream = write_stream.lock().unwrap();
-                            if let Err(e) =
-                                socket::write_message(&mut stream, &ServerResponse::Ping)
-                            {
-                                error!("failed to send heartbeat: {}", e);
-                                break;
-                            }
-                        });
+                        return;
                     }
 
+                    let mut authenticated = false;
                     loop {
                         match socket::read_message(&mut read_stream) {
                             Ok(msg) => {
+                                if !authenticated {
+                                    match msg {
+                                        ClientMessage::Auth { token }
+                                            if token == expected_token =>
+                                        {
+                                            authenticated = true;
+                                            // 新连接顶掉旧连接（页面重载）
+                                            if let Some((_, previous)) =
+                                                active.lock().unwrap().take()
+                                            {
+                                                let _ = previous.shutdown(std::net::Shutdown::Both);
+                                            }
+                                            if let Ok(stream) = read_stream.try_clone() {
+                                                *active.lock().unwrap() =
+                                                    Some((connection_id, stream));
+                                            }
+                                            if read_stream.set_read_timeout(None).is_err() {
+                                                break;
+                                            }
+                                            // 认证通过后才开始心跳计时和主动 Ping
+                                            let now = heartbeat_base.elapsed().as_millis() as u64;
+                                            last.store(now, Ordering::Release);
+                                            connected_at.store(now, Ordering::Release);
+                                            armed.store(true, Ordering::Release);
+                                            ready.store(false, Ordering::Release);
+                                            // 读和写在不同线程，写用同一把锁避免消息交错
+                                            let ping_stream = write_stream.clone();
+                                            let ping_alive = alive.clone();
+                                            std::thread::spawn(move || loop {
+                                                std::thread::sleep(HEARTBEAT_INTERVAL);
+                                                if !ping_alive.load(Ordering::Acquire) {
+                                                    break;
+                                                }
+                                                let mut stream = ping_stream.lock().unwrap();
+                                                if let Err(e) = socket::write_message(
+                                                    &mut stream,
+                                                    &ServerResponse::Ping,
+                                                ) {
+                                                    error!("failed to send heartbeat: {}", e);
+                                                    break;
+                                                }
+                                            });
+                                            continue;
+                                        }
+                                        _ => {
+                                            warn!("控制连接首帧不是有效认证，断开");
+                                            break;
+                                        }
+                                    }
+                                }
+
                                 last.store(
                                     heartbeat_base.elapsed().as_millis() as u64,
                                     Ordering::Release,
                                 );
                                 if matches!(msg, ClientMessage::Pong) {
                                     ready.store(true, Ordering::Release);
+                                } else if matches!(msg, ClientMessage::Auth { .. }) {
+                                    continue;
                                 } else {
                                     // 心跳每 3 秒一次，不刷日志
                                     info!("received message: {:?}", msg);
@@ -527,13 +638,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                             Err(e) => {
-                                // Socket可能正常断开
+                                // Socket可能正常断开；或认证超时
                                 tracing::debug!("Socket connection closed: {}", e);
                                 break;
                             }
                         }
                     }
                     alive.store(false, Ordering::Release);
+                    // 只清理自己：新连接已经顶替时不要动它的槽位。
+                    // 当前控制连接断开后保持 armed，让心跳超时把 wrap 带下去。
+                    let mut slot = active.lock().unwrap();
+                    if slot.as_ref().is_some_and(|(id, _)| *id == connection_id) {
+                        *slot = None;
+                    }
                 });
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -622,6 +739,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 恢复显示放在子进程之后，避免它最后几帧又盖回去
     state.shutdown_backend();
+    // 接受线程一直持有 Arc，SocketServer 的 Drop 不会执行；退出前显式清理控制 socket
+    let _ = std::fs::remove_file(&socket_path);
     if signaled && !heartbeat_lost {
         // 信号退出（Ctrl+C）是主动行为，不当作应用异常报错
         eprintln!("myde-wrap: 已退出");

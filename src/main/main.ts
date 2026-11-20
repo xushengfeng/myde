@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import { closeSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, readSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { format } from "node:util";
@@ -53,6 +53,38 @@ mainLog(
     `start: version=${app.getVersion()} electron=${process.versions.electron} node=${process.versions.node} pid=${process.pid} argv=${JSON.stringify(process.argv)}`,
 );
 mainLog("info", `log file: ${mainLogFile.filePath}`);
+
+/**
+ * wrap 控制通道：socket 路径和一次性认证 token 只交给桌面进程本身。
+ * token 由 wrap 经继承的文件描述符传来，读一次即关闭；这些变量随后从
+ * process.env 删除，避免渲染进程、helper 和之后启动的应用继承。
+ */
+const wrapControl = (() => {
+    const socketPath = process.env.MYDE_WRAP_SOCKET;
+    let token: string | undefined;
+    const fdText = process.env.MYDE_WRAP_AUTH_FD;
+    const authFd = fdText ? Number(fdText) : Number.NaN;
+    if (Number.isInteger(authFd) && authFd > 2) {
+        try {
+            const buffer = Buffer.alloc(128);
+            const length = readSync(authFd, buffer, 0, buffer.length, null);
+            token = buffer.subarray(0, length).toString("utf8").trim() || undefined;
+        } catch (error) {
+            mainLog("warn", `读取 wrap 认证 token 失败: ${String(error)}`);
+        } finally {
+            try {
+                closeSync(authFd);
+            } catch {}
+        }
+    }
+    delete process.env.MYDE_WRAP_SOCKET;
+    delete process.env.MYDE_WRAP_AUTH_FD;
+    // 调试开关只在开发时显式设置，不留给桌面启动的应用
+    delete process.env.MYDE_REMOTE_DEBUGGING_PORT;
+    delete process.env.MYDE_INSPECT_PORT;
+    delete process.env.MYDE_REMOTE_ALLOW_ORIGINS;
+    return { socketPath, token };
+})();
 
 // polkit agent 的 helper 必须在 Chromium 把主进程搬进 app-*.scope 之前启动：
 // 它继承当前 cgroup，会留在登录会话里，从而能注册会话级 agent（覆盖应用子进程）。
@@ -184,7 +216,12 @@ async function createWin() {
     });
     if (process.env.desktop === ":test") {
         rendererPath(main_window.webContents, "test.html", {
-            query: { userData: app.getPath("userData"), env: JSON.stringify(process.env) },
+            query: {
+                userData: app.getPath("userData"),
+                env: JSON.stringify(process.env),
+                wrapSocket: wrapControl.socketPath ?? "",
+                ...(wrapControl.token ? { wrapToken: wrapControl.token } : {}),
+            },
         });
     } else {
         let desktop_path = process.env.desktop ?? "desktop/official";
@@ -197,6 +234,8 @@ async function createWin() {
                 userData: app.getPath("userData"),
                 env: JSON.stringify(process.env),
                 desktop: desktop_path,
+                wrapSocket: wrapControl.socketPath ?? "",
+                ...(wrapControl.token ? { wrapToken: wrapControl.token } : {}),
                 ...(process.env.nodeModule ? { nodeModule: "on" } : {}),
                 displayType: runAsDesktop ? "desktop" : "window",
             },

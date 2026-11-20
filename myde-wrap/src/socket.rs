@@ -1,7 +1,8 @@
 use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::protocol::{ClientMessage, ServerResponse};
 
@@ -11,13 +12,13 @@ pub struct SocketServer {
 }
 
 impl SocketServer {
+    /// 控制 socket 只给本用户：文件名由调用方保证唯一（不和多实例互踩），
+    /// 建好后收紧到 0600；所在目录是 0700 的私有运行目录。
     pub fn new(socket_path: PathBuf) -> anyhow::Result<Self> {
-        if socket_path.exists() {
-            std::fs::remove_file(&socket_path)?;
-        }
         let listener = UnixListener::bind(&socket_path)?;
         listener.set_nonblocking(true)?;
-        info!("Socket server listening on: {:?}", socket_path);
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;
+        info!("Socket server listening on: {:?} (mode 0600)", socket_path);
         Ok(Self {
             listener,
             socket_path,
@@ -32,6 +33,10 @@ impl SocketServer {
     pub fn accept(&self) -> Option<UnixStream> {
         match self.listener.accept() {
             Ok((stream, _)) => {
+                if !peer_is_same_user(&stream) {
+                    warn!("拒绝来自其他用户的控制连接");
+                    return None;
+                }
                 stream.set_nonblocking(false).ok();
                 Some(stream)
             }
@@ -40,6 +45,18 @@ impl SocketServer {
                 error!("Accept error: {}", e);
                 None
             }
+        }
+    }
+}
+
+/// 只接受与 wrap 同一用户的连接；文件权限之外再兜一层，避免 socket 所在
+/// 目录权限异常时其他用户也能控制合成器。
+fn peer_is_same_user(stream: &UnixStream) -> bool {
+    match nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::PeerCredentials) {
+        Ok(creds) => creds.uid() == nix::unistd::geteuid().as_raw(),
+        Err(e) => {
+            warn!("读取控制连接凭据失败: {}", e);
+            false
         }
     }
 }

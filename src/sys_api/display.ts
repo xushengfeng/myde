@@ -75,6 +75,8 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
 
     async connect(op: {
         socketPath: string;
+        /** wrap 的认证 token；加载器从 renderer URL 参数取出后传入 */
+        token?: string;
         mus: typeof import("myde-unix-socket");
         features?: string[];
     }): Promise<void> {
@@ -86,6 +88,17 @@ export class display extends EventEmitter<Record<string, [DisplayMessage]>> {
         this.features = new Set(op.features ?? []);
         const mus = op.mus;
         this.socket = new mus.USocket({ path: op.socketPath });
+
+        // 首帧认证：wrap 只接受带有效 token 的连接，其他连接会被直接断开
+        if (op.token) {
+            try {
+                this.send({ type: "Auth", token: op.token });
+            } catch (error) {
+                console.error("Display auth failed:", error);
+            }
+        } else {
+            console.warn("display: 缺少 wrap 认证 token，连接会被拒绝");
+        }
 
         this.socket.on("data", (data) => {
             // data is a Node Buffer: its underlying ArrayBuffer may be pooled,

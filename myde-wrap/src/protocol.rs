@@ -68,6 +68,11 @@ pub struct ScreenInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientMessage {
+    /// 控制连接的首帧认证。token 由 wrap 通过继承的文件描述符交给桌面，
+    /// 认证通过前连接不能收发其他消息。
+    Auth {
+        token: String,
+    },
     SetWindowSize {
         width: u32,
         height: u32,

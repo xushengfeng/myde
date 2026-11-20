@@ -62,14 +62,22 @@ async function loadDesktop(p: string) {
     myde.MSysApi.display.setType(urlParams.get("displayType") === "desktop" ? "desktop" : "window");
     if (myde.MSysApi.display.getType() === "desktop") {
         const env = getEnv();
-        await myde.MSysApi.display.connect({
-            socketPath: env.MYDE_WRAP_SOCKET,
-            mus,
-            features: [
-                ...(env.MYDE_WRAP_SCREEN_POWER === "1" ? ["screen-power"] : []),
-                ...(env.MYDE_WRAP_SCREEN_MODE === "1" ? ["screen-mode"] : []),
-            ],
-        });
+        // socket 路径和认证 token 由主进程从 env / 继承的 fd 里取出后经 URL 参数传入，
+        // 不再留在环境变量里被其他进程继承
+        const socketPath = urlParams.get("wrapSocket") ?? env.MYDE_WRAP_SOCKET;
+        if (socketPath) {
+            await myde.MSysApi.display.connect({
+                socketPath,
+                token: urlParams.get("wrapToken") ?? undefined,
+                mus,
+                features: [
+                    ...(env.MYDE_WRAP_SCREEN_POWER === "1" ? ["screen-power"] : []),
+                    ...(env.MYDE_WRAP_SCREEN_MODE === "1" ? ["screen-mode"] : []),
+                ],
+            });
+        } else {
+            console.warn("display: 桌面模式缺少 MYDE_WRAP_SOCKET，跳过 wrap 连接");
+        }
     }
     myde.MSysApi.fs = new vfs(dirPath);
     myde.MSysApi.nativefs = new nativefs();

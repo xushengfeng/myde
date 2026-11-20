@@ -100,6 +100,8 @@ impl Compositor {
                     },
                 }
             }
+            // 认证由连接线程处理，不会走到这里
+            ClientMessage::Auth { .. } => return None,
             // 心跳回包没有响应
             ClientMessage::Pong => return None,
         };

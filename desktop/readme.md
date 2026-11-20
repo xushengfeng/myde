@@ -145,6 +145,8 @@ if (MSysApi.display.supports("screen-mode")) {
 
 桌面模式下 `display` 会自动维持与 wrap 的心跳：wrap 每 3 秒发 `Ping`，但只有桌面入口脚本执行到末尾后 `display` 才回 `Pong`（加载器会自动在入口末尾调用 `display.markReady()`）。桌面初始化抛错或卡住时不会回 Pong，wrap 会在 30 秒启动超时后退出；就绪后页面事件循环卡死超过 10 秒也会退出并释放屏幕，避免最后一帧一直留在显示器上。
 
+控制连接带认证：wrap 的一次性 token 经继承的 fd（`MYDE_WRAP_AUTH_FD`）交给主进程，主进程读出后经 `wrapSocket` / `wrapToken` 两个 URL 参数交给渲染进程，并把 `MYDE_WRAP_SOCKET`、`MYDE_WRAP_AUTH_FD` 从环境里删掉。加载器负责在连接后立刻发 `Auth`，桌面本身不用处理。
+
 官方桌面的退出快捷键（Super+Shift+E、Ctrl+Alt+Delete）在输入聚合层（`dispatchInput`）判定，早于桌面 UI 和状态机，所以即使页面部分逻辑失效，只要输入读取和 JS 事件循环还在就能退出；整个事件循环卡死时则由上面的心跳兜底。
 
 `getScreens` 的 `refresh_rate` 与 `modes` 来自真实输出模式。DRM 下 wrap 启动时会在 EDID 首选分辨率里选刷新率最高的模式，`wp_presentation` 的 `refresh` 也跟随当前输出，而不是固定 120Hz。官方桌面的 `ScreenManager` 已提供 `getResolution()` / `getResolutions()` / `setResolution()` 和 `getRefreshRate()` / `getRefreshRates()` / `setRefreshRate()`，切换后会把新模式同步给 wayland server 的 `outputs.set`，分辨率变化时还会重设窗口尺寸并让最大化窗口重新 configure；设置窗口的"显示 → 分辨率 / 刷新率"就是这些接口的入口。

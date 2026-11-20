@@ -71,7 +71,9 @@ ARGS:
 
 应用通过环境变量`MYDE_WRAP_SOCKET`获取 Socket 路径，格式为`[4字节大端长度][JSON消息体]`。具体见 agents.md 的api定义
 
-调试参数用 `MYDE_REMOTE_DEBUGGING_PORT`、`MYDE_INSPECT_PORT`、`MYDE_REMOTE_ALLOW_ORIGINS` 指定：wrap 会把它们追加成子进程的 `--remote-debugging-port`、`--inspect`、`--remote-allow-origins` 参数，之后可以用 CDP 客户端连接，或在浏览器里打开 devtools 前端（`MYDE_REMOTE_ALLOW_ORIGINS=*` 允许任意来源）。
+控制连接要求认证：wrap 生成一次性 token，经继承的文件描述符交给子进程（`MYDE_WRAP_AUTH_FD` 是 fd 号），客户端连接后首帧必须发 `{"type":"Auth","token":"..."}`。wrap 只接受同 uid 的连接，同一时刻只有一个已认证控制连接（页面重载时新连接顶掉旧连接）；未认证连接不影响心跳。socket 位于 `XDG_RUNTIME_DIR`（缺失时自建 0700 目录），文件名随机、权限 0600。
+
+调试参数用 `MYDE_REMOTE_DEBUGGING_PORT`、`MYDE_INSPECT_PORT`、`MYDE_REMOTE_ALLOW_ORIGINS` 指定：wrap 会把它们追加成子进程的 `--remote-debugging-port`、`--inspect`、`--remote-allow-origins` 参数，之后可以用 CDP 客户端连接，或在浏览器里打开 devtools 前端（`MYDE_REMOTE_ALLOW_ORIGINS=*` 允许任意来源）。这些变量翻译后不会留在子进程环境里。
 
 ## 依赖
 
