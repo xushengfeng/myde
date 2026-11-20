@@ -2395,9 +2395,17 @@ function applyWindowModal(winid: MWinId, modal: boolean): void {
     if (modal && viewData.focusHandle === windowParents.get(winid)) viewData.focusWin(winid);
 }
 
+/**
+ * 服务端装饰标题栏的视觉高度，不参考 frame 当前是否全屏。
+ * 退出全屏时要按「恢复后的状态」算内容尺寸，此时 frame.fullscreen 可能还是 true。
+ */
+function decoratedTitlebarPx(frame: ClientWindowFrame) {
+    return frame.decorated ? Math.round(CLIENT_TITLEBAR_HEIGHT * uiScale) : 0;
+}
+
 /** 标题栏占用的视觉高度；全屏和未协商服务端装饰时为 0 */
 function titlebarPx(frame: ClientWindowFrame) {
-    return frame.decorated && !frame.fullscreen ? Math.round(CLIENT_TITLEBAR_HEIGHT * uiScale) : 0;
+    return frame.fullscreen ? 0 : decoratedTitlebarPx(frame);
 }
 
 /** 视觉按钮固定 22px；最大化时只放大透明点击区，不改变图标和圆底的大小 */
@@ -3627,7 +3635,7 @@ function reconfigureMaximizedWindows() {
             if (!info.states.maximized) continue;
             const scale = screenManager.getScale();
             const frame = clientWindowFrames.get(info.handle);
-            const contentHeight = Math.max(1, available.height - (frame ? titlebarPx(frame) : 0));
+            const contentHeight = Math.max(1, available.height - (frame ? decoratedTitlebarPx(frame) : 0));
             if (frame) {
                 setClientFrameLayout(frame, available.width, contentHeight);
                 setClientFramePosition(frame, available.x, available.y);
@@ -3880,12 +3888,17 @@ server.server.on("window.changed", (info) => {
             }
             server.server.notify("window.unfullscreen", info.handle, { width, height });
         } else {
+            const available = availableStageSize();
+            const contentHeight = Math.max(1, available.height - (frame ? decoratedTitlebarPx(frame) : 0));
             if (frame) {
-                const available = availableStageSize();
-                setClientFrameLayout(frame, available.width, Math.max(1, available.height - titlebarPx(frame)));
+                setClientFrameLayout(frame, available.width, contentHeight);
                 setClientFramePosition(frame, available.x, available.y);
             }
-            server.server.notify("window.unfullscreen", info.handle);
+            // 退出全屏恢复到最大化时，模块里的盒子还停在全屏尺寸；这里按可用区重新下发
+            server.server.notify("window.unfullscreen", info.handle, {
+                width: Math.max(1, Math.floor(available.width / info.scale)),
+                height: Math.max(1, Math.floor(contentHeight / info.scale)),
+            });
         }
         syncFullscreenChrome();
     }
@@ -3901,7 +3914,11 @@ server.server.on("window.changed", (info) => {
         if (frame && !previewingResize && !info.states.fullscreen) {
             if (info.states.maximized) {
                 const available = availableStageSize();
-                setClientFrameLayout(frame, available.width, Math.max(1, available.height - titlebarPx(frame)));
+                setClientFrameLayout(
+                    frame,
+                    available.width,
+                    Math.max(1, available.height - decoratedTitlebarPx(frame)),
+                );
                 setClientFramePosition(frame, available.x, available.y);
             } else if (frame.decorated) {
                 // 服务端装饰窗口只跟随渲染层回报的 surface 尺寸；window.changed 里的 rect 可能会早到
@@ -3922,7 +3939,7 @@ server.server.on("window.changed", (info) => {
         if (!frame) return;
         if (info.states.maximized) {
             const available = availableStageSize();
-            const contentHeight = Math.max(1, available.height - titlebarPx(frame));
+            const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
             setClientFrameLayout(frame, available.width, contentHeight);
             setClientFramePosition(frame, available.x, available.y);
             server.server.notify("window.maximize", info.handle, {
@@ -3944,7 +3961,7 @@ server.server.on("window.changed", (info) => {
         const previewingResize = resizingWindowId === info.handle || resizeSettleTimers.has(info.handle);
         if (!previewingResize) {
             const available = availableStageSize();
-            const contentHeight = Math.max(1, available.height - titlebarPx(frame));
+            const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
             setClientFrameLayout(frame, available.width, contentHeight);
             setClientFramePosition(frame, available.x, available.y);
             server.server.notify("window.maximize", info.handle, {
@@ -7086,7 +7103,7 @@ function toggleMaximizeWindow(winid = viewData.focusHandle) {
     syncClientFrameMaximized(frame, maximized);
     if (maximized) {
         const available = availableStageSize();
-        const contentHeight = Math.max(1, available.height - titlebarPx(frame));
+        const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
         setClientFrameLayout(frame, available.width, contentHeight);
         setClientFramePosition(frame, available.x, available.y);
         if (applied) {
@@ -7154,7 +7171,7 @@ function toggleFullscreen(winid = viewData.focusHandle) {
     if (frame) {
         if (restoredMaximized) {
             const available = availableStageSize();
-            const contentHeight = Math.max(1, available.height - titlebarPx(frame));
+            const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
             setClientFrameLayout(frame, available.width, contentHeight);
             setClientFramePosition(frame, available.x, available.y);
             server.server.notify("window.maximize", winid, {
