@@ -87,9 +87,13 @@ export const viewporterModule = defineModule({
             const viewport = ctx.objects.get(x.id);
             const surfaceId = viewport.data.surface;
             const surface = ctx.objects.get(surfaceId);
-            const current = surface.data.current.viewport;
+            // 双缓冲：pending 是提交前的累积状态；同步子 surface 还没生效的提交在 cache 里，
+            // 新的 set_source/set_destination 要接着缓存里最后一次 viewport 改，不能退回 current。
+            const cachedViewport = [...(surface.data.cache ?? [])]
+                .reverse()
+                .find((state) => Object.hasOwn(state, "viewport"))?.viewport;
+            const current = cachedViewport ?? surface.data.current.viewport;
             if (current === undefined) return;
-            // 双缓冲：pending 是提交前的累积状态；没有 pending 时从 current 复制一份。
             // 同一 commit 前的多次 set_source/set_destination 要作用在同一个 pending 上。
             surface.data.pending.viewport ??= { ...current };
             const viewportData = surface.data.pending.viewport;
@@ -114,7 +118,10 @@ export const viewporterModule = defineModule({
             const viewport = ctx.objects.get(x.id);
             const surfaceId = viewport.data.surface;
             const surface = ctx.objects.get(surfaceId);
-            const current = surface.data.current.viewport;
+            const cachedViewport = [...(surface.data.cache ?? [])]
+                .reverse()
+                .find((state) => Object.hasOwn(state, "viewport"))?.viewport;
+            const current = cachedViewport ?? surface.data.current.viewport;
             if (current === undefined) return;
             surface.data.pending.viewport ??= { ...current };
             const viewportData = surface.data.pending.viewport;
@@ -140,6 +147,7 @@ export const viewporterModule = defineModule({
             if (surface) {
                 delete surface.data.pending.viewport;
                 delete surface.data.current.viewport;
+                for (const state of surface.data.cache ?? []) delete state.viewport;
             }
         },
     },

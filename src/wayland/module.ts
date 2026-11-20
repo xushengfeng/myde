@@ -281,7 +281,22 @@ export type XdgPopupId = WaylandObjectId2<"xdg_popup">;
 export interface SubSurfaceApi {
     /** 返回 bad_surface / bad_parent 或 true，由调用方转成协议错误 */
     setWlSubSurface(sub: SubSurfaceId, parent: SurfaceId, child: SurfaceId): "bad_surface" | "bad_parent" | true;
+    /** 排到父 surface 的下一次提交（位置与堆叠都和 surface 状态一样双缓冲） */
     setPosition(id: SubSurfaceId, x: number, y: number): void;
+    /** place_above / place_below；sibling 必须是同父的另一个子 surface 或父 surface 本身 */
+    place(id: SubSurfaceId, sibling: SurfaceId, above: boolean): boolean;
+    /** set_sync / set_desync，立即生效（不影响已缓存状态的归属） */
+    setSync(id: SubSurfaceId, sync: boolean): void;
+    /**
+     * 该 surface 当前是否按同步模式提交：自身或祖先在同步模式，
+     * 或还没随父 surface 提交进入树中（新增子 surface 也是双缓冲的）。
+     */
+    isSynchronized(surface: SurfaceId): boolean;
+    /**
+     * 应用父 surface 的挂起堆叠顺序与 set_position，返回按堆叠顺序（底 → 顶）排列的子 surface。
+     * 调用方再决定是否应用这些子 surface 缓存的提交状态。
+     */
+    applyPending(parent: SurfaceId): SurfaceId[];
     /** 销毁前取关系：拿到 child surface 用于撤掉最后一帧 */
     getSubSurface(id: SubSurfaceId): { parent: SurfaceId; surface: SurfaceId; posi: { x: number; y: number } };
     destroySubSurface(id: SubSurfaceId): void;

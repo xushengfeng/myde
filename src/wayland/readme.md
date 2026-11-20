@@ -21,7 +21,8 @@
     - wl_data_offer 部分（selection / drag offer）
     - wl_data_source 部分
     - wl_subcompositor
-    - wl_subsurface 部分
+    - wl_subsurface（同步模式按提交顺序缓存，父 surface 生效时依次应用；place_above/place_below、
+      set_position 同样是父提交时应用的挂起状态；set_sync/set_desync 立即生效）
 
 - xdg-shell
     - xdg_wm_base

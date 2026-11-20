@@ -9,6 +9,7 @@ import {
     type SerialApi,
     type SurfaceId,
     type WaylandObjectId2,
+    type WaylandSurfaceData,
     type WaylandWinId,
 } from "../../module";
 import type { renderTools } from "../../render_tools";
@@ -122,6 +123,8 @@ declare module "../../module" {
             pending: WaylandSurfaceData;
             /** 提交序号：异步导入完成时据此丢弃被新提交/解绑取代的旧帧 */
             renderSeq?: number;
+            /** 同步子 surface 的提交缓存：按提交顺序排队，父 surface 状态生效时依次应用 */
+            cache?: WaylandSurfaceData[];
             /** 本 rAF 内已经合成过一帧；false 时提交的帧直接丢，见 wl_surface.commit */
             frameReady?: boolean;
             /** wp_viewport.source 的裁剪画布，按 surface 复用，避免每帧分配 */
@@ -491,6 +494,9 @@ export class wlSurfaceData {
     getWlSurface(id: WaylandObjectId2<"wl_surface">) {
         return this.wl_surface[id];
     }
+    getRole(id: WaylandObjectId2<"wl_surface">) {
+        return this.wl_surface[id]?.role;
+    }
     renderWlSurface(id: WaylandObjectId2<"wl_surface">, canvas: OffscreenCanvas) {
         const surface = this.wl_surface[id];
         surface.frame = canvas;
@@ -526,10 +532,20 @@ export class wlSubSurfaceData {
         {
             parent: WaylandObjectId2<"wl_surface">;
             child: WaylandObjectId2<"wl_surface">;
+            /** 已生效的位置（父 surface 坐标系） */
             posi: { x: number; y: number };
+            /** set_position 排定的位置，父 surface 状态生效时替换 posi */
+            pendingPos: { x: number; y: number };
+            /** 本 surface 自己的同步模式；默认同步 */
+            syncMode: boolean;
+            /** 是否已经随父 surface 的某次提交进入树中（新增子 surface 是双缓冲的） */
+            active: boolean;
         }
     > = {};
+    /** 已生效的堆叠顺序（底 → 顶），只有这些子 surface 参与合成/命中 */
     parentChildren = new Map<WaylandObjectId2<"wl_surface">, WaylandObjectId2<"wl_subsurface">[]>();
+    /** 挂起的堆叠顺序（含尚未生效的新增子 surface），父 surface 状态生效时整体复制到 parentChildren */
+    private pendingChildren = new Map<WaylandObjectId2<"wl_surface">, WaylandObjectId2<"wl_subsurface">[]>();
     private surface2subsurface = new Map<WaylandObjectId2<"wl_surface">, WaylandObjectId2<"wl_subsurface">>();
     private render: renderTools;
     private idScope: (id: unknown) => string;
@@ -553,25 +569,34 @@ export class wlSubSurfaceData {
         if (parent === child) {
             return "bad_parent";
         }
-        for (const c of this.getChildrenDeep(child)) {
-            if (c.id === parent) {
-                return "bad_parent";
-            }
+        if (this.isDescendant(child, parent)) {
+            return "bad_parent";
         }
         const oldRelationId = this.getSubSurfaceBySurface(child);
         if (oldRelationId) {
-            // 已经有父子关系了，先删除旧关系
+            // 已经有父子关系了，先删除旧关系（新关系仍要等父 surface 提交才生效）
             const oldRelation = this.wl_subsurface[oldRelationId];
-            this.detachChild(oldRelation.parent, oldRelationId);
+            if (oldRelation) this.detachChild(oldRelation.parent, oldRelationId);
+            this.surface2subsurface.delete(child);
+            delete this.wl_subsurface[oldRelationId];
         }
 
-        this.wl_subsurface[subRelationId] = { parent, child, posi: { x: 0, y: 0 } };
-        const parentData = this.parentChildren.get(parent) ?? [];
+        this.wl_subsurface[subRelationId] = {
+            parent,
+            child,
+            posi: { x: 0, y: 0 },
+            pendingPos: { x: 0, y: 0 },
+            syncMode: true,
+            active: false,
+        };
+        const parentData = this.pendingChildren.get(parent) ?? [];
         parentData.push(subRelationId);
-        this.parentChildren.set(parent, parentData);
+        this.pendingChildren.set(parent, parentData);
         this.surface2subsurface.set(child, subRelationId);
 
+        // 先挂到父节点下，避免子 surface 的画布作为根节点露出来；真正生效要等父 surface 提交
         this.render.setCanvasAnchor(this.idScope(child), this.idScope(parent));
+        this.render.setCanvasOffset(this.idScope(child), 0, 0);
 
         return true;
     }
@@ -596,10 +621,84 @@ export class wlSubSurfaceData {
     }
     setPosition(id: WaylandObjectId2<"wl_subsurface">, x: number, y: number) {
         const sub = this.wl_subsurface[id];
-        sub.posi.x = x;
-        sub.posi.y = y;
+        if (sub === undefined) return;
+        // 位置和堆叠一样双缓冲：父 surface 提交后才写 posi / 动 DOM
+        sub.pendingPos = { x, y };
+    }
+    place(id: WaylandObjectId2<"wl_subsurface">, sibling: WaylandObjectId2<"wl_surface">, above: boolean) {
+        const sub = this.wl_subsurface[id];
+        if (sub === undefined) return false;
+        // 参考面不能是自己；父 surface 本身表示栈底/栈顶
+        if (sibling === sub.child) return false;
+        let siblingRelationId: WaylandObjectId2<"wl_subsurface"> | undefined;
+        if (sibling !== sub.parent) {
+            siblingRelationId = this.surface2subsurface.get(sibling);
+            if (siblingRelationId === undefined) return false;
+            const siblingSub = this.wl_subsurface[siblingRelationId];
+            if (siblingSub === undefined || siblingSub.parent !== sub.parent) return false;
+        }
 
-        this.render.setCanvasOffset(this.idScope(sub.child), x, y);
+        const list = [...(this.pendingChildren.get(sub.parent) ?? [])];
+        const selfIndex = list.indexOf(id);
+        if (selfIndex === -1) return false;
+        list.splice(selfIndex, 1);
+
+        if (siblingRelationId === undefined) {
+            if (above) list.push(id);
+            else list.unshift(id);
+        } else {
+            const siblingIndex = list.indexOf(siblingRelationId);
+            if (siblingIndex === -1) return false;
+            list.splice(above ? siblingIndex + 1 : siblingIndex, 0, id);
+        }
+        this.pendingChildren.set(sub.parent, list);
+        return true;
+    }
+    setSync(id: WaylandObjectId2<"wl_subsurface">, sync: boolean) {
+        const sub = this.wl_subsurface[id];
+        if (sub !== undefined) sub.syncMode = sync;
+    }
+    isSynchronized(surface: WaylandObjectId2<"wl_surface">): boolean {
+        // 同步会沿子树递归：自己的模式是 desync，但祖先还是 sync 时仍按同步处理。
+        // 还没进入父 surface 已生效状态的子 surface 也先缓存，等父提交把它接进树。
+        let current = surface;
+        const seen = new Set<number>();
+        while (true) {
+            if (seen.has(current)) return false; // 防御：关系成环时不要卡死
+            seen.add(current);
+            const subId = this.surface2subsurface.get(current);
+            if (subId === undefined) return false; // 主 surface 永远按 desync 处理
+            const sub = this.wl_subsurface[subId];
+            if (sub === undefined) return false;
+            if (!sub.active || sub.syncMode) return true;
+            current = sub.parent;
+        }
+    }
+    /**
+     * 父 surface 的状态生效：复制挂起堆叠顺序、应用 set_position、重排 DOM。
+     * 返回当前生效的子 surface（底 → 顶），调用方接着应用它们缓存的提交。
+     */
+    applyPending(parent: WaylandObjectId2<"wl_surface">): WaylandObjectId2<"wl_surface">[] {
+        const pending = this.pendingChildren.get(parent) ?? [];
+        const active = this.parentChildren.get(parent) ?? [];
+        const changed = pending.length !== active.length || pending.some((subId, i) => subId !== active[i]);
+
+        if (pending.length === 0) this.parentChildren.delete(parent);
+        else this.parentChildren.set(parent, [...pending]);
+
+        const children: WaylandObjectId2<"wl_surface">[] = [];
+        for (const subId of pending) {
+            const sub = this.wl_subsurface[subId];
+            if (sub === undefined) continue;
+            sub.active = true;
+            children.push(sub.child);
+            if (changed) this.render.setCanvasAnchor(this.idScope(sub.child), this.idScope(parent));
+            if (sub.posi.x !== sub.pendingPos.x || sub.posi.y !== sub.pendingPos.y) {
+                sub.posi = { ...sub.pendingPos };
+                this.render.setCanvasOffset(this.idScope(sub.child), sub.posi.x, sub.posi.y);
+            }
+        }
+        return children;
     }
     getSubSurface(id: WaylandObjectId2<"wl_subsurface">) {
         return {
@@ -616,6 +715,7 @@ export class wlSubSurfaceData {
 
         // 递归并累加每层 set_position：返回的 offsetRect 都在 parent 坐标系里，
         // 命中检测与缩略图合成都直接可用（Firefox/GTK 会用多层子表面）。
+        // 顺序按生效的堆叠顺序（底 → 顶），调用方 toReversed() 就能从最上层开始命中。
         const walk = (parentId: WaylandObjectId2<"wl_surface">, baseX: number, baseY: number) => {
             for (const subId of this.parentChildren.get(parentId) ?? []) {
                 const sub = this.wl_subsurface[subId];
@@ -632,23 +732,42 @@ export class wlSubSurfaceData {
     }
     destroySubSurface(id: WaylandObjectId2<"wl_subsurface">) {
         const relation = this.wl_subsurface[id];
-        const parent = relation.parent;
-        const child = relation.child;
-        this.detachChild(parent, id);
-        this.surface2subsurface.delete(child);
+        if (relation === undefined) return;
+        this.detachChild(relation.parent, id);
+        this.surface2subsurface.delete(relation.child);
         delete this.wl_subsurface[id];
     }
 
+    /** 挂起树里是否包含 target（新增子 surface 还没生效，也要参与成环检查） */
+    private isDescendant(parent: WaylandObjectId2<"wl_surface">, target: WaylandObjectId2<"wl_surface">) {
+        const stack = [parent];
+        const seen = new Set<number>();
+        while (stack.length > 0) {
+            const current = stack.pop();
+            if (current === undefined || seen.has(current)) continue;
+            seen.add(current);
+            for (const subId of this.pendingChildren.get(current) ?? []) {
+                const sub = this.wl_subsurface[subId];
+                if (sub === undefined) continue;
+                if (sub.child === target) return true;
+                stack.push(sub.child);
+            }
+        }
+        return false;
+    }
+
     /**
-     * 从父 surface 的子表里摘掉一条关系；摘空后直接删 key。
+     * 从父 surface 的子表里摘掉一条关系（生效表与挂起表都摘）；摘空后直接删 key。
      * 只 set 空数组的话，反复建/毁子表面的长跑客户端会按父 surface 攒一堆空数组。
      */
     private detachChild(parent: WaylandObjectId2<"wl_surface">, subRelationId: WaylandObjectId2<"wl_subsurface">) {
-        const list = this.parentChildren.get(parent);
-        if (list === undefined) return;
-        const next = list.filter((c) => c !== subRelationId);
-        if (next.length === 0) this.parentChildren.delete(parent);
-        else this.parentChildren.set(parent, next);
+        for (const map of [this.parentChildren, this.pendingChildren]) {
+            const list = map.get(parent);
+            if (list === undefined) continue;
+            const next = list.filter((c) => c !== subRelationId);
+            if (next.length === 0) map.delete(parent);
+            else map.set(parent, next);
+        }
     }
 }
 
@@ -852,8 +971,11 @@ function sendPointer(ctx: ModuleCtx, seat: SeatRecord, ev: PointerCommand, hit: 
  * 下次 attach buffer 时尺寸变化会重新走 updateWlSurfaceSize + render。
  */
 function unmapSurface(ctx: ModuleCtx, surfaceId: SurfaceId): void {
-    const canvas = ctx.objects.getOption(surfaceId)?.data.canvas;
-    if (!canvas) return;
+    const surface = ctx.objects.getOption(surfaceId);
+    const canvas = surface?.data.canvas;
+    if (!surface || !canvas) return;
+    // 让还在异步导入的旧提交过期，避免解绑/销毁后又被画回来
+    surface.data.renderSeq = (surface.data.renderSeq ?? 0) + 1;
     canvas.width = 1;
     canvas.height = 1;
     ctx.core.surface.updateWlSurfaceSize(surfaceId, 0, 0);
@@ -1148,6 +1270,496 @@ function offerTo(ctx: ModuleCtx, selection: ClipboardOffer | null, seatName?: st
             ctx.sendNow(dataOfferId, "wl_data_offer.offer", { mime_type: mime });
         }
         ctx.sendNow(ddId, "wl_data_device.selection", { id: dataOfferId });
+    }
+}
+
+/**
+ * 同步子 surface 的提交缓存：不更新 current、不合成像素，按提交顺序排队，
+ * 等父 surface 状态生效时依次应用。每个提交的 buffer/damage 都是独立状态，
+ * 不能合成一个：后一个 buffer 未覆盖的区域可能仍是前一个 buffer 里的内容。
+ */
+function cacheSurfaceState(ctx: ModuleCtx, surfaceId: SurfaceId, data: WaylandSurfaceData): void {
+    const surface = ctx.objects.get(surfaceId);
+    const cache = surface.data.cache;
+    if (cache === undefined) surface.data.cache = [data];
+    else cache.push(data);
+}
+
+/** 依次应用一组已排队的提交；缓存的提交必须按顺序生效，不能并发（damage/buffer 有先后关系） */
+async function applyCachedStates(ctx: ModuleCtx, surfaceId: SurfaceId, states: WaylandSurfaceData[]): Promise<void> {
+    for (const state of states) {
+        if (ctx.objects.getOption(surfaceId) === undefined) return;
+        await applySurfaceState(ctx, surfaceId, state, true);
+    }
+}
+
+/** 丢弃尚未生效的缓存并归还其中的 buffer（surface/子 surface 销毁、关系解除时） */
+function discardCachedState(ctx: ModuleCtx, surfaceId: SurfaceId): void {
+    const surface = ctx.objects.getOption(surfaceId);
+    const cache = surface?.data.cache;
+    if (surface === undefined || cache === undefined) return;
+    surface.data.cache = undefined;
+    const bufferIds = new Set<WaylandObjectId2<"wl_buffer">>();
+    for (const state of cache) {
+        const buffer = state.buffer;
+        if (buffer) bufferIds.add(buffer.id);
+    }
+    for (const id of bufferIds) {
+        if (ctx.objects.has(id)) ctx.sendNow(id, "wl_buffer.release", {});
+    }
+}
+
+/**
+ * surface 状态生效后，应用中子 surface 的挂起位置/堆叠，再依次应用它们排队的提交。
+ * 缓存状态会继续走 applySurfaceState，从而递归应用到更深的子 surface。
+ */
+async function applySubsurfaceChildren(ctx: ModuleCtx, parent: SurfaceId): Promise<void> {
+    if (!ctx.objects.has(parent)) return;
+    for (const child of ctx.core.subsurface.applyPending(parent)) {
+        const surface = ctx.objects.getOption(child);
+        if (surface === undefined) continue;
+        const cache = surface.data.cache;
+        if (cache === undefined) continue;
+        // 取走缓存：父 surface 后续的提交不能重复应用旧状态
+        surface.data.cache = undefined;
+        try {
+            await applyCachedStates(ctx, child, cache);
+        } catch (error) {
+            console.error(`apply cached surface state failed (surface ${child}):`, error);
+        }
+    }
+}
+
+/**
+ * 应用一次 surface 提交（直接提交，或父 surface 生效时按顺序取出的同步缓存）。
+ *
+ * 更新 current、合成像素、回 frame callback，最后应用子 surface 的挂起位置/堆叠与缓存。
+ * 本函数可能在异步导入后被新提交取代；像素路径用 renderSeq 丢弃过期结果。
+ * `force` 用于父提交一次性应用多条缓存：这是同一批状态，不能按普通提交丢中间帧，
+ * 否则最后一条像素可能被丢弃，画面停在旧内容上。
+ */
+async function applySurfaceState(
+    ctx: ModuleCtx,
+    surfaceId: SurfaceId,
+    data: WaylandSurfaceData,
+    force = false,
+): Promise<void> {
+    const surface = ctx.objects.getOption(surfaceId);
+    if (!surface) return;
+    surface.data.current = Object.assign({}, surface.data.current, data);
+    try {
+        const buffer = data.buffer;
+        const bufferId = buffer?.id;
+        const bufferObj = ctx.objects.getOption(bufferId)?.data;
+        if (buffer === null) {
+            // attach(nil) 的提交：surface 进入 unmap，上一帧必须从画面里撤掉。
+            // unmapSurface 会推进 renderSeq，让还在异步导入的旧提交过期。
+            unmapSurface(ctx, surfaceId);
+            ctx.cursor.hide(surfaceId);
+            ctx.notify.commit(surfaceId, false);
+            // 没有新 buffer 的提交也可能请求了 frame callback（Firefox 的 vsync
+            // source 会这样取节拍）；不回复会让它退回 60Hz 软件定时器。
+            for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
+        } else if (!bufferObj) {
+            // 无 buffer 的 commit 也要让扩展看到：xdg 靠初始 commit 才能下发 configure
+            // （规范：客户端先不带 buffer 提交，合成器才回 configure，之后才允许 attach）
+            ctx.notify.commit(surfaceId, false);
+            for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
+        } else {
+            // 每个 surface 每个 rAF 最多合成一帧：客户端提交快于合成器时，多出来的帧
+            // 直接丢（归还 buffer、照常回 frame callback）。否则每帧都要一份新的 GPU
+            // 拷贝，主线程被占满后 rAF 停转、canvas 消费不掉，显存会按帧无限涨——
+            // 4K 视频几十秒就能吃掉整机内存，表现为整个桌面卡死。
+            // 尺寸变化不丢：客户端可能只提交一次 resize，跳过会一直停在旧尺寸。
+            // force（父提交一次性应用的同步缓存）不参与丢帧：整批状态必须按顺序落地。
+            if (
+                !force &&
+                surface.data.frameReady === false &&
+                bufferObj.width === surface.data.canvas.width &&
+                bufferObj.height === surface.data.canvas.height
+            ) {
+                if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
+                for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
+                return;
+            }
+            if (!force) {
+                surface.data.frameReady = false;
+                // 只管住节拍，不等这一帧处理完：处理中再来提交最多也就并发一两帧，
+                // 但 rAF 不会被提交洪峰饿死，画布能持续消费，显存不会按帧累积。
+                requestAnimationFrame(() => {
+                    surface.data.frameReady = true;
+                });
+            }
+            // 本次提交带像素：序号用于识别异步导入完成前是否已被更新的像素提交取代
+            const seq = (surface.data.renderSeq ?? 0) + 1;
+            surface.data.renderSeq = seq;
+            // surface 逻辑尺寸与 buffer 坐标的换算：
+            // k = buffer_scale；viewport.source 是 surface 坐标，乘 k 后落到 buffer 像素；
+            // destination 是逻辑尺寸（分数缩放时 buffer 保持高分辨率，只改显示尺寸）。
+            const current = surface.data.current;
+            const bufferScale = current.bufferScale ?? 1;
+            const viewport = current.viewport;
+            const bufferW = bufferObj.width;
+            const bufferH = bufferObj.height;
+            const extentW = bufferW / bufferScale;
+            const extentH = bufferH / bufferScale;
+            const source = viewport?.source;
+            const logicalW = Math.max(1, viewport?.destination?.width ?? source?.width ?? extentW);
+            const logicalH = Math.max(1, viewport?.destination?.height ?? source?.height ?? extentH);
+            const crop = source
+                ? {
+                      x: source.x * bufferScale,
+                      y: source.y * bufferScale,
+                      w: source.width * bufferScale,
+                      h: source.height * bufferScale,
+                  }
+                : { x: 0, y: 0, w: bufferW, h: bufferH };
+            const damageScaleX = crop.w / logicalW;
+            const damageScaleY = crop.h / logicalH;
+            const damageList: { x: number; y: number; width: number; height: number }[] = [];
+            for (const damage of data.damageList ?? []) {
+                // damage 是 surface 坐标：先落到 crop 区域，再换到 buffer 像素
+                damageList.push({
+                    x: crop.x + damage.x * damageScaleX,
+                    y: crop.y + damage.y * damageScaleY,
+                    width: damage.width * damageScaleX,
+                    height: damage.height * damageScaleY,
+                });
+            }
+            for (const damage of data.damageBufferList ?? []) {
+                // damage_buffer 已经是 buffer 坐标
+                damageList.push(damage);
+            }
+            // 转换/导入失败时保持 undefined：宁可掉这一帧，也不画透明像素
+            let image: ImageData | VideoFrame | undefined;
+            /** image 是否是 myde 自己的稳定副本（GPU 拷贝 / CPU 转换），而不是客户端 dmabuf 零拷贝 */
+            let imageStable = false;
+            /** 导入对象的 release 延后到 VideoFrame close 之后（见 closePendingVideoFrame） */
+            let releaseImported: (() => void) | undefined;
+            if (bufferObj.type === "shm") {
+                let frame = bufferObj.frame;
+                if (!frame) {
+                    const imageData = new ImageData(bufferObj.width, bufferObj.height);
+                    // 直接复用 ImageData 自己的像素内存，模块写进去后
+                    // putImageData 不需要再拷贝一遍。
+                    const rgba = Buffer.from(
+                        imageData.data.buffer as ArrayBuffer,
+                        imageData.data.byteOffset,
+                        imageData.data.byteLength,
+                    );
+                    frame = { rgba, imageData };
+                    bufferObj.frame = frame;
+                }
+                try {
+                    const options = {
+                        fd: bufferObj.fd,
+                        offset: bufferObj.offset,
+                        stride: bufferObj.stride,
+                        width: bufferObj.width,
+                        height: bufferObj.height,
+                        format: bufferObj.format,
+                    };
+                    // damage 是相对上一帧的变更区域：只转换这块，其余像素
+                    // 已经在 canvas 里，复用上次的 RGBA 输出即可。
+                    let region: { x: number; y: number; width: number; height: number } | null | undefined;
+                    if (damageList.length) {
+                        let minX = Number.POSITIVE_INFINITY;
+                        let minY = Number.POSITIVE_INFINITY;
+                        let maxX = Number.NEGATIVE_INFINITY;
+                        let maxY = Number.NEGATIVE_INFINITY;
+                        for (const damage of damageList) {
+                            const x0 = Math.max(0, Math.floor(damage.x));
+                            const y0 = Math.max(0, Math.floor(damage.y));
+                            const x1 = Math.min(bufferObj.width, Math.ceil(damage.x + damage.width));
+                            const y1 = Math.min(bufferObj.height, Math.ceil(damage.y + damage.height));
+                            if (x1 <= x0 || y1 <= y0) continue;
+                            minX = Math.min(minX, x0);
+                            minY = Math.min(minY, y0);
+                            maxX = Math.max(maxX, x1);
+                            maxY = Math.max(maxY, y1);
+                        }
+                        region =
+                            maxX > minX && maxY > minY
+                                ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+                                : null;
+                    }
+                    if (region === undefined) {
+                        convertShmToRgba(options, frame.rgba);
+                    } else if (region !== null) {
+                        convertShmToRgbaRegion(options, frame.rgba, region);
+                    }
+                    image = frame.imageData;
+                } catch (error) {
+                    console.error(`shm format 0x${bufferObj.format.toString(16)} conversion failed:`, error);
+                }
+            } else {
+                const modifierX = bufferObj.planes[0];
+                const modifier = (BigInt(modifierX.modifier_hi >>> 0) << 32n) | BigInt(modifierX.modifier_lo >>> 0);
+                // myde-wrap 支持 dmabuf 时走 GPU shared texture；旧版 wrap（只有 wl_shm）
+                // 下 Electron GPU 创建 shared image 会失败甚至崩溃，桌面模式退回 CPU 拷贝。
+                // 主进程把 env 通过 URL 的 env 参数传进来（renderer 的 process.env 不可靠）。
+                let desktopDisplay = false;
+                let rendererEnv: Record<string, string | undefined> = {};
+                try {
+                    if (globalThis.location !== undefined) {
+                        const params = new URLSearchParams(globalThis.location.search);
+                        desktopDisplay = params.get("displayType") === "desktop";
+                        const rawEnv = params.get("env");
+                        if (rawEnv) rendererEnv = JSON.parse(rawEnv);
+                    }
+                } catch {
+                    // 纯 node 环境或 env 解析失败：按窗口模式处理
+                }
+                const forceCpu =
+                    rendererEnv.MYDE_FORCE_CPU_DMABUF === "1" ||
+                    (desktopDisplay && rendererEnv.MYDE_WRAP_DMABUF !== "1");
+                if (forceCpu) {
+                    // 诊断/回退：完全不经过主进程 shared texture import，CPU 拷贝
+                    try {
+                        const rgba = convertDmabufToRgba({
+                            width: bufferObj.width,
+                            height: bufferObj.height,
+                            format: bufferObj.format,
+                            modifier,
+                            planes: bufferObj.planes.map((p) => ({
+                                fd: p.fd,
+                                offset: p.offset,
+                                stride: p.stride,
+                            })),
+                        });
+                        image = new ImageData(
+                            new Uint8ClampedArray(rgba.buffer as ArrayBuffer, rgba.byteOffset, rgba.byteLength),
+                            bufferObj.width,
+                            bufferObj.height,
+                        );
+                    } catch (error) {
+                        console.error(`dmabuf format 0x${bufferObj.format.toString(16)} CPU conversion failed:`, error);
+                    }
+                } else {
+                    const pixelFormat = getElectronPixelFormat(bufferObj.format);
+                    let imageFromGpu: VideoFrame | undefined;
+                    let converted: ImageData | undefined;
+                    // 默认先 GPU 拷贝一份稳定副本：VideoFrame 不再引用客户端 dmabuf，
+                    // 客户端复用 buffer 时不会闪旧帧。myde-drm 内部按尺寸复用一块
+                    // buffer 池（按内存预算自动分配，默认 256MB，MYDE_DRM_POOL_MB），
+                    // 槽位按 client+surface 隔离，拷贝在消费者释放导入纹理后才还给
+                    // 池子，不会按帧累积，也不会串到别的窗口。MYDE_DMABUF_COPY=0
+                    // 可退回零拷贝。
+                    const forceCopy = rendererEnv.MYDE_DMABUF_COPY !== "0";
+
+                    if (forceCopy || !pixelFormat) {
+                        try {
+                            const gpu = convertDmabufToTexture({
+                                width: bufferObj.width,
+                                height: bufferObj.height,
+                                format: bufferObj.format,
+                                modifier,
+                                // 池按 client+surface 隔离：不同窗口不共用拷贝缓冲，
+                                // 避免一个窗口闪出另一个窗口的内容。
+                                owner: `${ctx.client.id}:${surfaceId}`,
+                                planes: bufferObj.planes.map((p) => ({
+                                    fd: p.fd,
+                                    offset: p.offset,
+                                    stride: p.stride,
+                                })),
+                            });
+                            if (gpu) {
+                                let imported = false;
+                                try {
+                                    const t = await importSharedTexture({
+                                        textureInfo: {
+                                            handle: {
+                                                nativePixmap: {
+                                                    planes: gpu.planes.map((p) => ({
+                                                        stride: p.stride,
+                                                        offset: p.offset ?? 0,
+                                                        size: p.size ?? p.stride * bufferObj.height,
+                                                        fd: p.fd,
+                                                    })),
+                                                    modifier: gpu.modifier.toString(),
+                                                    supportsZeroCopyWebGpuImport: true,
+                                                },
+                                            },
+                                            codedSize: { height: bufferObj.height, width: bufferObj.width },
+                                            pixelFormat: gpu.pixelFormat,
+                                        },
+                                    });
+                                    imageFromGpu = t.getVideoFrame();
+                                    imported = true;
+                                    // 拷贝占用的池槽位要等导入纹理释放后才归还，
+                                    // 否则下一帧可能复用还在被宿主采样的 buffer。
+                                    releaseImported = () => {
+                                        t.release();
+                                        gpu.close();
+                                    };
+                                    imageStable = true;
+                                } finally {
+                                    if (!imported) gpu.close();
+                                }
+                            }
+                        } catch (error) {
+                            console.error(
+                                `dmabuf format 0x${bufferObj.format.toString(16)} GPU conversion failed:`,
+                                error,
+                            );
+                        }
+
+                        if (!pixelFormat && !imageFromGpu) {
+                            try {
+                                const rgba = convertDmabufToRgba({
+                                    width: bufferObj.width,
+                                    height: bufferObj.height,
+                                    format: bufferObj.format,
+                                    modifier,
+                                    planes: bufferObj.planes.map((p) => ({
+                                        fd: p.fd,
+                                        offset: p.offset,
+                                        stride: p.stride,
+                                    })),
+                                });
+                                converted = new ImageData(
+                                    new Uint8ClampedArray(rgba.buffer as ArrayBuffer, rgba.byteOffset, rgba.byteLength),
+                                    bufferObj.width,
+                                    bufferObj.height,
+                                );
+                                imageStable = true;
+                            } catch (error) {
+                                console.error(
+                                    `dmabuf format 0x${bufferObj.format.toString(16)} conversion failed:`,
+                                    error,
+                                );
+                            }
+                        }
+                    }
+
+                    if (imageFromGpu) {
+                        image = imageFromGpu;
+                    } else if (converted) {
+                        image = converted;
+                    } else {
+                        try {
+                            const t = await importSharedTexture({
+                                textureInfo: {
+                                    handle: {
+                                        nativePixmap: {
+                                            planes: bufferObj.planes.map((p) => ({
+                                                stride: p.stride,
+                                                offset: p.offset,
+                                                size: p.stride * bufferObj.height,
+                                                fd: p.fd,
+                                            })),
+                                            modifier: modifier.toString(),
+                                            supportsZeroCopyWebGpuImport: true,
+                                        },
+                                    },
+                                    codedSize: { height: bufferObj.height, width: bufferObj.width },
+                                    pixelFormat: pixelFormat ?? "bgra",
+                                },
+                            });
+                            image = t.getVideoFrame();
+                            releaseImported = () => t.release();
+                        } catch (error) {
+                            console.error(`dmabuf format 0x${bufferObj.format.toString(16)} import failed:`, error);
+                        }
+                    }
+                }
+            }
+            // 异步导入期间 surface 可能已被解绑/销毁/被新提交接管：
+            // 这一帧已经过期或没有像素，丢掉它，保留画布上的上一帧。
+            const latest = ctx.objects.getOption(surfaceId);
+            if (!image || !latest || latest.data.renderSeq !== seq) {
+                if (image instanceof VideoFrame) image.close();
+                releaseImported?.();
+                if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
+                for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
+                return;
+            }
+            let canvas = latest.data.canvas;
+            const sizeChanged = bufferW !== canvas.width || bufferH !== canvas.height;
+            if (sizeChanged) {
+                // 给 canvas 设宽高会清空位图。新 buffer 的 damage 往往只覆盖变化区域，
+                // 其余像素就变成透明（整窗闪透明）。先用上一帧铺满新尺寸，再让新帧覆盖：
+                // 客户端重绘前最多是短暂变形，不会露出壁纸。
+                const next = new OffscreenCanvas(bufferW, bufferH);
+                const nextCtx = next.getContext("2d");
+                if (nextCtx) {
+                    nextCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, bufferW, bufferH);
+                    canvas = next;
+                    latest.data.canvas = next;
+                } else {
+                    canvas.width = bufferW;
+                    canvas.height = bufferH;
+                }
+            }
+            // biome-ignore lint/style/noNonNullAssertion: 2d context 在 OffscreenCanvas 上必然可用
+            const c2d = canvas.getContext("2d")!;
+            // surface 的逻辑尺寸与 buffer 尺寸是两回事：viewport destination 变化时
+            // buffer 可能完全没变，但窗口/命中检测尺寸必须更新。
+            ctx.core.surface.updateWlSurfaceSize(surfaceId, logicalW, logicalH);
+            // buffer 已应用、像素尚未合成：交给扩展（xdg 在此按尺寸变化发 configure）
+            ctx.notify.commit(surfaceId, sizeChanged);
+
+            // damage 是「相对上一帧的变更区域」：组合器保留 damage 外的旧内容。
+            // 新 buffer 在 damage 外的像素可能是复用缓冲区的旧数据/未定义内容，
+            // 不能整帧覆盖，只能把 damage 区域贴到已有画布上。
+            if (damageList.length) {
+                for (const damage of damageList) {
+                    const dx = Math.max(0, Math.floor(damage.x));
+                    const dy = Math.max(0, Math.floor(damage.y));
+                    const x1 = Math.min(canvas.width, Math.ceil(damage.x + damage.width));
+                    const y1 = Math.min(canvas.height, Math.ceil(damage.y + damage.height));
+                    const dw = x1 - dx;
+                    const dh = y1 - dy;
+                    if (dw <= 0 || dh <= 0) continue;
+                    if (image instanceof VideoFrame) {
+                        // VideoFrame 走 source-over，先清掉 damage 区域，透明像素才是替换
+                        c2d.clearRect(dx, dy, dw, dh);
+                        c2d.drawImage(image, dx, dy, dw, dh, dx, dy, dw, dh);
+                    } else c2d.putImageData(image, 0, 0, dx, dy, dw, dh);
+                }
+            } else {
+                // 没有 damage 的提交（少见）：按整帧处理
+                if (image instanceof VideoFrame) {
+                    c2d.clearRect(0, 0, canvas.width, canvas.height);
+                    c2d.drawImage(image, 0, 0, canvas.width, canvas.height);
+                } else c2d.putImageData(image, 0, 0);
+            }
+            // 零拷贝 VideoFrame 仍然引用客户端 dmabuf：等到下一次 rAF（本轮 DOM
+            // canvas 提交之后）再 close + release，避免客户端复用旧内容。
+            // GPU/CPU 稳定副本已经与客户端 buffer 解耦，可以立刻归还，避免只带
+            // 两个 buffer 的客户端被多扣一帧后掉到 60Hz。
+            if (image instanceof VideoFrame) {
+                if (imageStable) {
+                    // 稳定副本：立即把客户端 buffer 还回去；VideoFrame 自己再留一帧，
+                    // 让 canvas 的 GPU 绘制有机会完成。导入对象的 release 也延后到
+                    // VideoFrame close 之后，避免 GPU 资源提前/迟迟不释放。
+                    if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
+                    releaseVideoFrameLater(image, releaseImported);
+                } else {
+                    const frame = image;
+                    releaseVideoFrameLater(frame, () => {
+                        releaseImported?.();
+                        if (bufferId && ctx.objects.has(bufferId)) {
+                            ctx.sendNow(bufferId, "wl_buffer.release", {});
+                        }
+                    });
+                }
+            } else if (bufferId) {
+                // shm/CPU 路径已经同步拷贝完，可以立刻归还
+                ctx.sendNow(bufferId, "wl_buffer.release", {});
+            }
+            // frame callback 走 rAF 排队，把每个 surface 的提交节拍钉在桌面刷新率上。
+            for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
+
+            // 渲染之前交给扩展后处理（viewporter 的裁剪缩放）
+            const fcanvas = ctx.notify.frame(surfaceId, canvas, data);
+            ctx.core.surface.renderWlSurface(surfaceId, fcanvas);
+
+            // 只有当前光标surface才推送光标，隐藏后commit不应重新显示
+            ctx.cursor.updateFrame(surfaceId, fcanvas, { width: logicalW, height: logicalH });
+        }
+    } finally {
+        await applySubsurfaceChildren(ctx, surfaceId);
     }
 }
 
@@ -1623,428 +2235,27 @@ export const waylandCoreModule = defineModule({
             surface.data.pending.callbacks = callbacks;
         },
         "wl_surface.commit": async (x, ctx) => {
-            const surfaceId = x.id;
-            const surface = ctx.objects.get(surfaceId);
+            const surface = ctx.objects.get(x.id);
             const data = surface.data.pending;
-            surface.data.current = Object.assign({}, surface.data.current, data);
             surface.data.pending = {};
-            const buffer = data.buffer;
-            const bufferId = buffer?.id;
-            const bufferObj = ctx.objects.getOption(bufferId)?.data;
-            if (buffer === null) {
-                // attach(nil) 的提交：surface 进入 unmap，上一帧必须从画面里撤掉。
-                // 同时让还在异步导入的旧提交过期，避免解绑后又被画回来。
-                surface.data.renderSeq = (surface.data.renderSeq ?? 0) + 1;
-                unmapSurface(ctx, surfaceId);
-                ctx.cursor.hide(surfaceId);
-                ctx.notify.commit(surfaceId, false);
-                // 没有新 buffer 的提交也可能请求了 frame callback（Firefox 的 vsync
-                // source 会这样取节拍）；不回复会让它退回 60Hz 软件定时器。
-                for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
-            } else if (!bufferObj) {
-                // 无 buffer 的 commit 也要让扩展看到：xdg 靠初始 commit 才能下发 configure
-                // （规范：客户端先不带 buffer 提交，合成器才回 configure，之后才允许 attach）
-                ctx.notify.commit(surfaceId, false);
-                for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
-            } else {
-                // 每个 surface 每个 rAF 最多合成一帧：客户端提交快于合成器时，多出来的帧
-                // 直接丢（归还 buffer、照常回 frame callback）。否则每帧都要一份新的 GPU
-                // 拷贝，主线程被占满后 rAF 停转、canvas 消费不掉，显存会按帧无限涨——
-                // 4K 视频几十秒就能吃掉整机内存，表现为整个桌面卡死。
-                // 尺寸变化不丢：客户端可能只提交一次 resize，跳过会一直停在旧尺寸。
-                if (
-                    surface.data.frameReady === false &&
-                    bufferObj.width === surface.data.canvas.width &&
-                    bufferObj.height === surface.data.canvas.height
-                ) {
-                    if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
-                    for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
-                    return;
-                }
-                surface.data.frameReady = false;
-                // 只管住节拍，不等这一帧处理完：处理中再来提交最多也就并发一两帧，
-                // 但 rAF 不会被提交洪峰饿死，画布能持续消费，显存不会按帧累积。
-                requestAnimationFrame(() => {
-                    surface.data.frameReady = true;
-                });
-                // 本次提交带像素：序号用于识别异步导入完成前是否已被更新的像素提交取代
-                const seq = (surface.data.renderSeq ?? 0) + 1;
-                surface.data.renderSeq = seq;
-                // surface 逻辑尺寸与 buffer 坐标的换算：
-                // k = buffer_scale；viewport.source 是 surface 坐标，乘 k 后落到 buffer 像素；
-                // destination 是逻辑尺寸（分数缩放时 buffer 保持高分辨率，只改显示尺寸）。
-                const current = surface.data.current;
-                const bufferScale = current.bufferScale ?? 1;
-                const viewport = current.viewport;
-                const bufferW = bufferObj.width;
-                const bufferH = bufferObj.height;
-                const extentW = bufferW / bufferScale;
-                const extentH = bufferH / bufferScale;
-                const source = viewport?.source;
-                const logicalW = Math.max(1, viewport?.destination?.width ?? source?.width ?? extentW);
-                const logicalH = Math.max(1, viewport?.destination?.height ?? source?.height ?? extentH);
-                const crop = source
-                    ? {
-                          x: source.x * bufferScale,
-                          y: source.y * bufferScale,
-                          w: source.width * bufferScale,
-                          h: source.height * bufferScale,
-                      }
-                    : { x: 0, y: 0, w: bufferW, h: bufferH };
-                const damageScaleX = crop.w / logicalW;
-                const damageScaleY = crop.h / logicalH;
-                const damageList: { x: number; y: number; width: number; height: number }[] = [];
-                for (const damage of data.damageList ?? []) {
-                    // damage 是 surface 坐标：先落到 crop 区域，再换到 buffer 像素
-                    damageList.push({
-                        x: crop.x + damage.x * damageScaleX,
-                        y: crop.y + damage.y * damageScaleY,
-                        width: damage.width * damageScaleX,
-                        height: damage.height * damageScaleY,
-                    });
-                }
-                for (const damage of data.damageBufferList ?? []) {
-                    // damage_buffer 已经是 buffer 坐标
-                    damageList.push(damage);
-                }
-                // 转换/导入失败时保持 undefined：宁可掉这一帧，也不画透明像素
-                let image: ImageData | VideoFrame | undefined;
-                /** image 是否是 myde 自己的稳定副本（GPU 拷贝 / CPU 转换），而不是客户端 dmabuf 零拷贝 */
-                let imageStable = false;
-                /** 导入对象的 release 延后到 VideoFrame close 之后（见 closePendingVideoFrame） */
-                let releaseImported: (() => void) | undefined;
-                if (bufferObj.type === "shm") {
-                    let frame = bufferObj.frame;
-                    if (!frame) {
-                        const imageData = new ImageData(bufferObj.width, bufferObj.height);
-                        // 直接复用 ImageData 自己的像素内存，模块写进去后
-                        // putImageData 不需要再拷贝一遍。
-                        const rgba = Buffer.from(
-                            imageData.data.buffer as ArrayBuffer,
-                            imageData.data.byteOffset,
-                            imageData.data.byteLength,
-                        );
-                        frame = { rgba, imageData };
-                        bufferObj.frame = frame;
-                    }
-                    try {
-                        const options = {
-                            fd: bufferObj.fd,
-                            offset: bufferObj.offset,
-                            stride: bufferObj.stride,
-                            width: bufferObj.width,
-                            height: bufferObj.height,
-                            format: bufferObj.format,
-                        };
-                        // damage 是相对上一帧的变更区域：只转换这块，其余像素
-                        // 已经在 canvas 里，复用上次的 RGBA 输出即可。
-                        let region: { x: number; y: number; width: number; height: number } | null | undefined;
-                        if (damageList.length) {
-                            let minX = Number.POSITIVE_INFINITY;
-                            let minY = Number.POSITIVE_INFINITY;
-                            let maxX = Number.NEGATIVE_INFINITY;
-                            let maxY = Number.NEGATIVE_INFINITY;
-                            for (const damage of damageList) {
-                                const x0 = Math.max(0, Math.floor(damage.x));
-                                const y0 = Math.max(0, Math.floor(damage.y));
-                                const x1 = Math.min(bufferObj.width, Math.ceil(damage.x + damage.width));
-                                const y1 = Math.min(bufferObj.height, Math.ceil(damage.y + damage.height));
-                                if (x1 <= x0 || y1 <= y0) continue;
-                                minX = Math.min(minX, x0);
-                                minY = Math.min(minY, y0);
-                                maxX = Math.max(maxX, x1);
-                                maxY = Math.max(maxY, y1);
-                            }
-                            region =
-                                maxX > minX && maxY > minY
-                                    ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
-                                    : null;
-                        }
-                        if (region === undefined) {
-                            convertShmToRgba(options, frame.rgba);
-                        } else if (region !== null) {
-                            convertShmToRgbaRegion(options, frame.rgba, region);
-                        }
-                        image = frame.imageData;
-                    } catch (error) {
-                        console.error(`shm format 0x${bufferObj.format.toString(16)} conversion failed:`, error);
-                    }
-                } else {
-                    const modifierX = bufferObj.planes[0];
-                    const modifier = (BigInt(modifierX.modifier_hi >>> 0) << 32n) | BigInt(modifierX.modifier_lo >>> 0);
-                    // myde-wrap 支持 dmabuf 时走 GPU shared texture；旧版 wrap（只有 wl_shm）
-                    // 下 Electron GPU 创建 shared image 会失败甚至崩溃，桌面模式退回 CPU 拷贝。
-                    // 主进程把 env 通过 URL 的 env 参数传进来（renderer 的 process.env 不可靠）。
-                    let desktopDisplay = false;
-                    let rendererEnv: Record<string, string | undefined> = {};
-                    try {
-                        if (globalThis.location !== undefined) {
-                            const params = new URLSearchParams(globalThis.location.search);
-                            desktopDisplay = params.get("displayType") === "desktop";
-                            const rawEnv = params.get("env");
-                            if (rawEnv) rendererEnv = JSON.parse(rawEnv);
-                        }
-                    } catch {
-                        // 纯 node 环境或 env 解析失败：按窗口模式处理
-                    }
-                    const forceCpu =
-                        rendererEnv.MYDE_FORCE_CPU_DMABUF === "1" ||
-                        (desktopDisplay && rendererEnv.MYDE_WRAP_DMABUF !== "1");
-                    if (forceCpu) {
-                        // 诊断/回退：完全不经过主进程 shared texture import，CPU 拷贝
-                        try {
-                            const rgba = convertDmabufToRgba({
-                                width: bufferObj.width,
-                                height: bufferObj.height,
-                                format: bufferObj.format,
-                                modifier,
-                                planes: bufferObj.planes.map((p) => ({
-                                    fd: p.fd,
-                                    offset: p.offset,
-                                    stride: p.stride,
-                                })),
-                            });
-                            image = new ImageData(
-                                new Uint8ClampedArray(rgba.buffer as ArrayBuffer, rgba.byteOffset, rgba.byteLength),
-                                bufferObj.width,
-                                bufferObj.height,
-                            );
-                        } catch (error) {
-                            console.error(
-                                `dmabuf format 0x${bufferObj.format.toString(16)} CPU conversion failed:`,
-                                error,
-                            );
-                        }
-                    } else {
-                        const pixelFormat = getElectronPixelFormat(bufferObj.format);
-                        let imageFromGpu: VideoFrame | undefined;
-                        let converted: ImageData | undefined;
-                        // 默认先 GPU 拷贝一份稳定副本：VideoFrame 不再引用客户端 dmabuf，
-                        // 客户端复用 buffer 时不会闪旧帧。myde-drm 内部按尺寸复用一块
-                        // buffer 池（按内存预算自动分配，默认 256MB，MYDE_DRM_POOL_MB），
-                        // 槽位按 client+surface 隔离，拷贝在消费者释放导入纹理后才还给
-                        // 池子，不会按帧累积，也不会串到别的窗口。MYDE_DMABUF_COPY=0
-                        // 可退回零拷贝。
-                        const forceCopy = rendererEnv.MYDE_DMABUF_COPY !== "0";
-
-                        if (forceCopy || !pixelFormat) {
-                            try {
-                                const gpu = convertDmabufToTexture({
-                                    width: bufferObj.width,
-                                    height: bufferObj.height,
-                                    format: bufferObj.format,
-                                    modifier,
-                                    // 池按 client+surface 隔离：不同窗口不共用拷贝缓冲，
-                                    // 避免一个窗口闪出另一个窗口的内容。
-                                    owner: `${ctx.client.id}:${surfaceId}`,
-                                    planes: bufferObj.planes.map((p) => ({
-                                        fd: p.fd,
-                                        offset: p.offset,
-                                        stride: p.stride,
-                                    })),
-                                });
-                                if (gpu) {
-                                    let imported = false;
-                                    try {
-                                        const t = await importSharedTexture({
-                                            textureInfo: {
-                                                handle: {
-                                                    nativePixmap: {
-                                                        planes: gpu.planes.map((p) => ({
-                                                            stride: p.stride,
-                                                            offset: p.offset ?? 0,
-                                                            size: p.size ?? p.stride * bufferObj.height,
-                                                            fd: p.fd,
-                                                        })),
-                                                        modifier: gpu.modifier.toString(),
-                                                        supportsZeroCopyWebGpuImport: true,
-                                                    },
-                                                },
-                                                codedSize: { height: bufferObj.height, width: bufferObj.width },
-                                                pixelFormat: gpu.pixelFormat,
-                                            },
-                                        });
-                                        imageFromGpu = t.getVideoFrame();
-                                        imported = true;
-                                        // 拷贝占用的池槽位要等导入纹理释放后才归还，
-                                        // 否则下一帧可能复用还在被宿主采样的 buffer。
-                                        releaseImported = () => {
-                                            t.release();
-                                            gpu.close();
-                                        };
-                                        imageStable = true;
-                                    } finally {
-                                        if (!imported) gpu.close();
-                                    }
-                                }
-                            } catch (error) {
-                                console.error(
-                                    `dmabuf format 0x${bufferObj.format.toString(16)} GPU conversion failed:`,
-                                    error,
-                                );
-                            }
-
-                            if (!pixelFormat && !imageFromGpu) {
-                                try {
-                                    const rgba = convertDmabufToRgba({
-                                        width: bufferObj.width,
-                                        height: bufferObj.height,
-                                        format: bufferObj.format,
-                                        modifier,
-                                        planes: bufferObj.planes.map((p) => ({
-                                            fd: p.fd,
-                                            offset: p.offset,
-                                            stride: p.stride,
-                                        })),
-                                    });
-                                    converted = new ImageData(
-                                        new Uint8ClampedArray(
-                                            rgba.buffer as ArrayBuffer,
-                                            rgba.byteOffset,
-                                            rgba.byteLength,
-                                        ),
-                                        bufferObj.width,
-                                        bufferObj.height,
-                                    );
-                                    imageStable = true;
-                                } catch (error) {
-                                    console.error(
-                                        `dmabuf format 0x${bufferObj.format.toString(16)} conversion failed:`,
-                                        error,
-                                    );
-                                }
-                            }
-                        }
-
-                        if (imageFromGpu) {
-                            image = imageFromGpu;
-                        } else if (converted) {
-                            image = converted;
-                        } else {
-                            try {
-                                const t = await importSharedTexture({
-                                    textureInfo: {
-                                        handle: {
-                                            nativePixmap: {
-                                                planes: bufferObj.planes.map((p) => ({
-                                                    stride: p.stride,
-                                                    offset: p.offset,
-                                                    size: p.stride * bufferObj.height,
-                                                    fd: p.fd,
-                                                })),
-                                                modifier: modifier.toString(),
-                                                supportsZeroCopyWebGpuImport: true,
-                                            },
-                                        },
-                                        codedSize: { height: bufferObj.height, width: bufferObj.width },
-                                        pixelFormat: pixelFormat ?? "bgra",
-                                    },
-                                });
-                                image = t.getVideoFrame();
-                                releaseImported = () => t.release();
-                            } catch (error) {
-                                console.error(`dmabuf format 0x${bufferObj.format.toString(16)} import failed:`, error);
-                            }
-                        }
-                    }
-                }
-                // 异步导入期间 surface 可能已被解绑/销毁/被新提交接管：
-                // 这一帧已经过期或没有像素，丢掉它，保留画布上的上一帧。
-                const latest = ctx.objects.getOption(surfaceId);
-                if (!image || !latest || latest.data.renderSeq !== seq) {
-                    if (image instanceof VideoFrame) image.close();
-                    releaseImported?.();
-                    if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
-                    for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
-                    return;
-                }
-                let canvas = latest.data.canvas;
-                const sizeChanged = bufferW !== canvas.width || bufferH !== canvas.height;
-                if (sizeChanged) {
-                    // 给 canvas 设宽高会清空位图。新 buffer 的 damage 往往只覆盖变化区域，
-                    // 其余像素就变成透明（整窗闪透明）。先用上一帧铺满新尺寸，再让新帧覆盖：
-                    // 客户端重绘前最多是短暂变形，不会露出壁纸。
-                    const next = new OffscreenCanvas(bufferW, bufferH);
-                    const nextCtx = next.getContext("2d");
-                    if (nextCtx) {
-                        nextCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, bufferW, bufferH);
-                        canvas = next;
-                        latest.data.canvas = next;
-                    } else {
-                        canvas.width = bufferW;
-                        canvas.height = bufferH;
-                    }
-                }
-                // biome-ignore lint/style/noNonNullAssertion: 2d context 在 OffscreenCanvas 上必然可用
-                const c2d = canvas.getContext("2d")!;
-                // surface 的逻辑尺寸与 buffer 尺寸是两回事：viewport destination 变化时
-                // buffer 可能完全没变，但窗口/命中检测尺寸必须更新。
-                ctx.core.surface.updateWlSurfaceSize(surfaceId, logicalW, logicalH);
-                // buffer 已应用、像素尚未合成：交给扩展（xdg 在此按尺寸变化发 configure）
-                ctx.notify.commit(surfaceId, sizeChanged);
-
-                // damage 是「相对上一帧的变更区域」：组合器保留 damage 外的旧内容。
-                // 新 buffer 在 damage 外的像素可能是复用缓冲区的旧数据/未定义内容，
-                // 不能整帧覆盖，只能把 damage 区域贴到已有画布上。
-                if (damageList.length) {
-                    for (const damage of damageList) {
-                        const dx = Math.max(0, Math.floor(damage.x));
-                        const dy = Math.max(0, Math.floor(damage.y));
-                        const x1 = Math.min(canvas.width, Math.ceil(damage.x + damage.width));
-                        const y1 = Math.min(canvas.height, Math.ceil(damage.y + damage.height));
-                        const dw = x1 - dx;
-                        const dh = y1 - dy;
-                        if (dw <= 0 || dh <= 0) continue;
-                        if (image instanceof VideoFrame) {
-                            // VideoFrame 走 source-over，先清掉 damage 区域，透明像素才是替换
-                            c2d.clearRect(dx, dy, dw, dh);
-                            c2d.drawImage(image, dx, dy, dw, dh, dx, dy, dw, dh);
-                        } else c2d.putImageData(image, 0, 0, dx, dy, dw, dh);
-                    }
-                } else {
-                    // 没有 damage 的提交（少见）：按整帧处理
-                    if (image instanceof VideoFrame) {
-                        c2d.clearRect(0, 0, canvas.width, canvas.height);
-                        c2d.drawImage(image, 0, 0, canvas.width, canvas.height);
-                    } else c2d.putImageData(image, 0, 0);
-                }
-                // 零拷贝 VideoFrame 仍然引用客户端 dmabuf：等到下一次 rAF（本轮 DOM
-                // canvas 提交之后）再 close + release，避免客户端复用旧内容。
-                // GPU/CPU 稳定副本已经与客户端 buffer 解耦，可以立刻归还，避免只带
-                // 两个 buffer 的客户端被多扣一帧后掉到 60Hz。
-                if (image instanceof VideoFrame) {
-                    if (imageStable) {
-                        // 稳定副本：立即把客户端 buffer 还回去；VideoFrame 自己再留一帧，
-                        // 让 canvas 的 GPU 绘制有机会完成。导入对象的 release 也延后到
-                        // VideoFrame close 之后，避免 GPU 资源提前/迟迟不释放。
-                        if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
-                        releaseVideoFrameLater(image, releaseImported);
-                    } else {
-                        const frame = image;
-                        releaseVideoFrameLater(frame, () => {
-                            releaseImported?.();
-                            if (bufferId && ctx.objects.has(bufferId)) {
-                                ctx.sendNow(bufferId, "wl_buffer.release", {});
-                            }
-                        });
-                    }
-                } else if (bufferId) {
-                    // shm/CPU 路径已经同步拷贝完，可以立刻归还
-                    ctx.sendNow(bufferId, "wl_buffer.release", {});
-                }
-                // frame callback 走 rAF 排队，把每个 surface 的提交节拍钉在桌面刷新率上。
-                for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
-
-                // 渲染之前交给扩展后处理（viewporter 的裁剪缩放）
-                const fcanvas = ctx.notify.frame(surfaceId, canvas, data);
-                ctx.core.surface.renderWlSurface(surfaceId, fcanvas);
-
-                // 只有当前光标surface才推送光标，隐藏后commit不应重新显示
-                ctx.cursor.updateFrame(surfaceId, fcanvas, { width: logicalW, height: logicalH });
+            // 同步子 surface 先缓存提交状态，等父 surface 状态生效时再应用
+            if (ctx.core.subsurface.isSynchronized(x.id)) {
+                cacheSurfaceState(ctx, x.id, data);
+                return;
             }
+            // 已切到 desync 但还留着同步期间缓存的提交：按协议把 pending 加到缓存后整体应用，
+            // 否则旧缓存会在之后的父提交里被重新应用，状态顺序就反了。
+            const cache = surface.data.cache;
+            if (cache !== undefined) {
+                surface.data.cache = undefined;
+                await applyCachedStates(ctx, x.id, [...cache, data]);
+                return;
+            }
+            await applySurfaceState(ctx, x.id, data);
         },
         "wl_surface.destroy": (x, ctx) => {
             const surfaceId = x.id;
+            discardCachedState(ctx, surfaceId);
             ctx.domain.output.surfaces.delete(surfaceId);
             // 光标surface销毁后隐藏光标
             ctx.cursor.hide(surfaceId);
@@ -2079,6 +2290,8 @@ export const waylandCoreModule = defineModule({
             surface.data.pending.inputRegion = region?.data.rects;
         },
         "wl_surface.offset": (x, ctx) => {
+            // wl_subsurface 文档要求子 surface 忽略 wl_surface.offset，移动用 set_position
+            if (ctx.core.surface.getRole(x.id) === "subsurface") return;
             ctx.core.surface.setWlSurfaceOffset(x.id, x.args.x, x.args.y);
         },
         "wl_seat.get_pointer": (x, ctx) => {
@@ -2168,15 +2381,43 @@ export const waylandCoreModule = defineModule({
             if (r === "bad_surface")
                 ctx.postError("wl_subcompositor", x.id, "bad_surface", "Surface already has a role");
             else if (r === "bad_parent")
-                ctx.postError("wl_subcompositor", x.id, "bad_parent", "Parent cannot be itself");
+                ctx.postError("wl_subcompositor", x.id, "bad_parent", "Parent cannot be itself or its descendant");
             if (r !== true) return;
         },
         "wl_subsurface.set_position": (x, ctx) => {
             ctx.core.subsurface.setPosition(x.id, x.args.x, x.args.y);
         },
+        "wl_subsurface.place_above": (x, ctx) => {
+            if (!ctx.core.subsurface.place(x.id, x.args.sibling, true)) {
+                ctx.postError("wl_subsurface", x.id, "bad_surface", "Sibling is not a sibling surface or the parent");
+            }
+        },
+        "wl_subsurface.place_below": (x, ctx) => {
+            if (!ctx.core.subsurface.place(x.id, x.args.sibling, false)) {
+                ctx.postError("wl_subsurface", x.id, "bad_surface", "Sibling is not a sibling surface or the parent");
+            }
+        },
+        "wl_subsurface.set_sync": (x, ctx) => {
+            ctx.core.subsurface.setSync(x.id, true);
+        },
+        "wl_subsurface.set_desync": (x, ctx) => {
+            const sub = ctx.core.subsurface.getSubSurface(x.id);
+            ctx.core.subsurface.setSync(x.id, false);
+            // set_sync/set_desync 立即生效；父链已是 desync 时，缓存状态在 set_desync 当场应用。
+            // 父链仍同步或子 surface 还没进入树中时，缓存继续等父 surface 状态生效。
+            if (ctx.core.subsurface.isSynchronized(sub.surface)) return;
+            const surface = ctx.objects.getOption(sub.surface);
+            const cache = surface?.data.cache;
+            if (surface === undefined || cache === undefined) return;
+            surface.data.cache = undefined;
+            void applyCachedStates(ctx, sub.surface, cache).catch((error) =>
+                console.error(`apply cached surface state failed (surface ${sub.surface}):`, error),
+            );
+        },
         "wl_subsurface.destroy": (x, ctx) => {
             const sub = ctx.core.subsurface.getSubSurface(x.id);
             ctx.core.subsurface.destroySubSurface(x.id);
+            discardCachedState(ctx, sub.surface);
             // 销毁后 surface 不再参与合成；客户端常只 attach(nil)+destroy，
             // 不在这里撤掉会留下最后一帧（Chrome 的地址栏补全下拉就是这种生命周期）
             unmapSurface(ctx, sub.surface);
