@@ -41,6 +41,11 @@ export type WaylandSurfaceData = {
     callbacks?: WaylandObjectId2<"wl_callback">[];
     /** 与 wl_region 模块声明的 rects 同形；此处内联以免 module.ts 反向依赖声明方 */
     inputRegion?: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
+    /**
+     * `wl_surface.set_opaque_region` 的纯优化提示：region 为空/未设置时整块 surface
+     * 都可能透明。按协议在请求时拷贝快照，之后客户端再改或销毁 wl_region 不影响它。
+     */
+    opaqueRegion?: { x: number; y: number; width: number; height: number; type: "+" | "-" }[];
     /** `wl_surface.set_buffer_scale`，默认 1；buffer 像素 ÷ scale = surface 逻辑像素 */
     bufferScale?: number;
     /** `wl_surface.set_buffer_transform`，目前只按 normal 合成 */

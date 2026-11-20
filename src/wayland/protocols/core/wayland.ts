@@ -2067,6 +2067,12 @@ export const waylandCoreModule = defineModule({
         "wl_output.release": (x, ctx) => {
             ctx.domain.output.outputs.delete(x.id as WaylandObjectId2<"wl_output">);
         },
+        "wl_surface.set_opaque_region": (x, ctx) => {
+            const surface = ctx.objects.get(x.id);
+            const region = ctx.objects.getOption(waylandObjectId(x.args.region, "wl_region"));
+            // 协议要求拷贝：region 之后还能 add/subtract 或 destroy，pending 快照不能跟着变
+            surface.data.pending.opaqueRegion = region ? [...region.data.rects] : undefined;
+        },
         "wl_surface.set_input_region": (x, ctx) => {
             const surface = ctx.objects.get(x.id);
             const region = ctx.objects.getOption(waylandObjectId(x.args.region, "wl_region"));
