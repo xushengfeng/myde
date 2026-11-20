@@ -1044,6 +1044,27 @@ export function forcePointerGrab(ctx: ModuleCtx, seat: SeatRecord, reason: "canc
 }
 
 /**
+ * 一组 surface 即将消失（popup 销毁、`attach(nil)` 解 map 等）时结束以它们为目标的隐式 grab。
+ *
+ * 只按根 surface 比对不够：客户端（Firefox 的弹层）常把内容放在 subsurface 上，按下的
+ * surface 就是 subsurface；popup 销毁后这个 surface 可能还活着但不显示，grab 不清掉
+ * 会让之后的 motion/button 一直喂给它。surface 还活着时先补 release，再清 focus。
+ */
+export function endPointerGrabForSurfaces(
+    ctx: ModuleCtx,
+    surfaces: Iterable<SurfaceId>,
+    reason: "cancel" | "destroy" = "destroy",
+): void {
+    const set = new Set(surfaces);
+    if (set.size === 0) return;
+    for (const seat of ctx.domain.seat.all()) {
+        const grab = seat.pointerGrab;
+        if (grab === undefined || grab.buttons.size === 0 || !set.has(grab.surface)) continue;
+        forcePointerGrab(ctx, seat, reason);
+    }
+}
+
+/**
  * 指针事件注入（发给这一把 seat 的全部 pointer）：坐标已由 hitTest 归一到 surface 局部。
  * 返回本次 button 事件的 serial；move 或没有 pointer 资源时返回 undefined。
  */
@@ -1498,6 +1519,9 @@ async function applySurfaceState(ctx: ModuleCtx, surfaceId: SurfaceId, data: Way
         if (buffer === null) {
             // attach(nil) 的提交：surface 进入 unmap，上一帧必须从画面里撤掉。
             // unmapSurface 会推进 renderSeq，让还在异步导入的旧提交过期。
+            // 先结束以它为目标的隐式 grab：客户端可能用 attach(nil) 隐藏一个仍按着的
+            // surface（Firefox 复用弹层 surface），不结束的话后续 motion/button 会一直喂给它。
+            ctx.core.endPointerGrabForSurfaces([surfaceId]);
             unmapSurface(ctx, surfaceId);
             ctx.cursor.hide(surfaceId);
             ctx.notify.commit(surfaceId, false);
@@ -1915,6 +1939,7 @@ export const waylandCoreModule = defineModule({
                 const seat = ctx.domain.seat.byName(seatName ?? "seat0");
                 if (seat !== undefined) forcePointerGrab(ctx, seat, reason ?? "cancel");
             },
+            endPointerGrabForSurfaces: (surfaces, reason) => endPointerGrabForSurfaces(ctx, surfaces, reason),
             /** 清 pointer focus；有活跃 grab 时忽略，避免 grab 期间焦点被外部清掉 */
             leavePointer: (seatName) => {
                 const seat = ctx.domain.seat.byName(seatName ?? "seat0");

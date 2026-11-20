@@ -406,6 +406,12 @@ export interface CoreApi {
      * 再按 reason 决定是否离开当前 pointer focus。
      */
     forcePointerGrab(seat?: string, reason?: "cancel" | "destroy" | "compositor"): void;
+    /**
+     * 一组 surface 即将消失（popup 销毁、`attach(nil)` 解 map 等）时调用：
+     * 以其中任意一个 surface 为目标的隐式 grab 先补 release 再结束，pointer focus 一并清掉。
+     * 不处理的话 motion/button 会一直被路由到已经不可见的 surface。
+     */
+    endPointerGrabForSurfaces(surfaces: Iterable<SurfaceId>, reason?: "cancel" | "destroy"): void;
     /** 清掉该 seat 的 pointer focus（有活跃 grab 时忽略）；没有焦点时幂等 */
     leavePointer(seat?: string): void;
     /**

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { InputEventCodes } from "../../../input_codes/types";
 import type { ModuleCtx, SeatRecord, SurfaceId, WaylandObjectId2, WaylandWinId } from "../../module";
-import { xdgShellModule } from "../ext/xdg_shell";
-import { forcePointerGrab, SeatStore, waylandCoreModule } from "./wayland";
+import { xdgShellModule, xdgSurfaceData } from "../ext/xdg_shell";
+import { endPointerGrabForSurfaces, forcePointerGrab, SeatStore, waylandCoreModule } from "./wayland";
 
 /**
  * 隐式 grab 的 core 单元测试：不启动 Wayland 连接，只验证路由、按钮码空间和清理。
@@ -135,6 +135,28 @@ describe("指针隐式 grab", () => {
         expect(holdCalls.at(-1)).toMatchObject({ win: otherWinId });
         expect(seat.pointerFocus).toBe(otherSurfaceId);
         expect(seat.pointerGrab?.buttons.size).toBe(0);
+    });
+
+    it("surface 消失时结束以它为目标的 grab，并补 release", () => {
+        const { ctx, store, seat, sent } = makeCtx();
+        store.beginPointerGrab(seat, winId, surfaceId, InputEventCodes.BTN_LEFT, 1);
+
+        endPointerGrabForSurfaces(ctx, [surfaceId]);
+
+        const events = sent.filter((e) => e.event === "wl_pointer.button");
+        expect(events).toHaveLength(1);
+        expect(events[0].args).toMatchObject({ button: InputEventCodes.BTN_LEFT, state: 0 });
+        expect(seat.pointerGrab?.buttons.size).toBe(0);
+        expect(seat.pointerFocus).toBeNull();
+    });
+
+    it("只结束命中的 surface，别的 surface 上的 grab 保持不变", () => {
+        const { ctx, store, seat } = makeCtx();
+        store.beginPointerGrab(seat, winId, surfaceId, InputEventCodes.BTN_LEFT, 1);
+
+        endPointerGrabForSurfaces(ctx, [otherSurfaceId]);
+
+        expect(seat.pointerGrab?.buttons.size).toBe(1);
     });
 
     it("没有对应 down 的 up 丢弃，不改焦点", () => {
@@ -277,5 +299,56 @@ describe("xdg_toplevel 销毁时的 grab 收尾", () => {
             InputEventCodes.BTN_LEFT,
             InputEventCodes.BTN_RIGHT,
         ]);
+    });
+});
+
+describe("popup 销毁时的 grab 清理", () => {
+    it("grab 落在 popup 的 subsurface 上也会被结束", () => {
+        const popupXdg = 300 as WaylandObjectId2<"xdg_surface">;
+        const parentXdg = 301 as WaylandObjectId2<"xdg_surface">;
+        const popupSurface = 400 as SurfaceId;
+        const parentSurface = 402 as SurfaceId;
+        const popupSub = 401 as SurfaceId;
+        const popupId = 500 as WaylandObjectId2<"xdg_popup">;
+
+        const store = new SeatStore();
+        store.addSeat(seatId, "seat0");
+        const seat = store.byName("seat0") as SeatRecord;
+        seat.pointerFocus = popupSub;
+        seat.pointerGrab = {
+            winId,
+            surface: popupSub,
+            buttons: new Set([InputEventCodes.BTN_LEFT]),
+            serial: 1,
+        };
+        const cleared: SurfaceId[][] = [];
+        const ctx = {
+            core: {
+                surface: {
+                    render: { createXdgSurfaceEle: () => {}, destroyXdgSurfaceEle: () => {} },
+                    idScope: (id: unknown) => String(id),
+                },
+                subsurface: {
+                    getChildrenDeep: (id: SurfaceId) =>
+                        id === popupSurface ? [{ id: popupSub, offsetRect: { x: 0, y: 0, w: 0, h: 0 } }] : [],
+                },
+                endPointerGrabForSurfaces: (surfaces: Iterable<SurfaceId>) => cleared.push([...surfaces]),
+                leavePointer: () => {},
+                focusKeyboard: () => {},
+            },
+            domain: { seat: store },
+            sendNow: () => {},
+        } as unknown as ModuleCtx;
+
+        const xdg = new xdgSurfaceData(ctx);
+        xdg.addXdgSurface(parentXdg, parentSurface);
+        xdg.addXdgSurface(popupXdg, popupSurface);
+        xdg.setRelation(parentXdg, popupXdg);
+        xdg.xdg_popup.set(popupId, popupXdg);
+
+        xdg.popupDestroyed(popupId, ctx);
+
+        expect(cleared).toEqual([[popupSub]]);
+        expect(xdg.xdg_popup.has(popupId)).toBe(false);
     });
 });

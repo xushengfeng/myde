@@ -726,6 +726,18 @@ export class xdgSurfaceData {
         if (id === undefined) {
             return;
         }
+        // popup 的根 surface、它的 subsurface 子树和嵌套 popup 都算它的一部分：
+        // 隐式 grab 落在 subsurface 上时，只比对根 surface 会漏掉，grab 会一直留着。
+        const surfaces = this.surfaceTree(id);
+        for (const seat of ctx.domain.seat.all()) {
+            if (seat.pointerGrab !== undefined && seat.pointerGrab.buttons.size > 0) {
+                if (surfaces.has(seat.pointerGrab.surface))
+                    ctx.core.endPointerGrabForSurfaces([seat.pointerGrab.surface]);
+            }
+            if (seat.pointerFocus !== null && surfaces.has(seat.pointerFocus)) ctx.core.leavePointer(seat.name);
+            if (seat.keyboardFocus !== null && surfaces.has(seat.keyboardFocus))
+                ctx.core.focusKeyboard(null, seat.name);
+        }
         this.removePopupGrabs(popupId, id, ctx);
         const xdgSurface = this.getXdgSurface(id);
         const parent = xdgSurface.parent;
@@ -734,6 +746,19 @@ export class xdgSurfaceData {
         }
         this.xdgSurfaceDestroyed(id, "popup");
         this.xdg_popup.delete(popupId);
+    }
+    /** xdg_surface 及其后代 popup 拥有的全部 wl_surface（根 + subsurface 子树） */
+    private surfaceTree(id: WaylandObjectId2<"xdg_surface">): Set<SurfaceId> {
+        const out = new Set<SurfaceId>();
+        const walkXdg = (xdgId: WaylandObjectId2<"xdg_surface">) => {
+            const info = this.xdg_surface[xdgId];
+            if (info === undefined) return;
+            out.add(info.surface);
+            for (const child of this.subsurface.getChildrenDeep(info.surface)) out.add(child.id);
+            for (const child of info.children) walkXdg(child);
+        };
+        walkXdg(id);
+        return out;
     }
     toplevelDestroyed(toplevelId: WaylandObjectId2<"xdg_toplevel">) {
         const id = this.xdg_toplevel.get(toplevelId);
@@ -1130,12 +1155,6 @@ export const xdgShellModule = defineModule({
             const xid = x.id;
             const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByPopup(xid);
             if (xdgSurfaceId === undefined) return;
-            const surface = ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
-            for (const seat of ctx.domain.seat.all()) {
-                if (seat.pointerGrab?.surface === surface) ctx.core.forcePointerGrab(seat.name, "destroy");
-                if (seat.pointerFocus === surface) ctx.core.leavePointer(seat.name);
-                if (seat.keyboardFocus === surface) ctx.core.focusKeyboard(null, seat.name);
-            }
             ctx.domain.xdgSurface.popupDestroyed(xid, ctx);
         },
         "xdg_toplevel.set_parent": (x, ctx) => {
