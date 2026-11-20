@@ -37,24 +37,20 @@ import {
 
 const fs = require("node:fs") as typeof import("node:fs");
 
-/**
- * myde-drm 的 GPU 转换在 glFlush 后就把新 GBM buffer 交给 Electron 导入，
- * 依赖 dma-buf 隐式 fence 让导入方等到画完。驱动/时序不保证时会采样到还没写入的
- * 新 buffer（整块透明）或旧内容。默认用 glFinish：宁可这一帧晚一点（掉帧），
- * 也不要把透明/旧帧推到屏幕上。`MYDE_DRM_GPU_FINISH=0` 可恢复异步行为。
+/*
+ * myde-drm 的 GPU 转换在 glFlush 后就把新 GBM buffer 交给 Electron 导入，依赖
+ * dma-buf 隐式 fence 让导入方等到画完。默认保持模块的 flush：每帧 glFinish 会
+ * 把 JS 主线程按帧等 GPU，4K 下直接吃掉 8.3ms 预算的一大块。
+ * 某些驱动对隐式 fence 支持不好（出现整块透明/旧帧）时，用 `MYDE_DRM_GPU_FINISH=1`
+ * 让转换器改回 glFinish 等待（模块自己读这个环境变量）。
  */
-try {
-    if (globalThis.location !== undefined) process.env.MYDE_DRM_GPU_FINISH ||= "1";
-} catch {
-    // 纯 node 环境没有 location：保持 myde-drm 默认行为
-}
-
 const {
     convertDmabufToRgba,
     convertDmabufToTexture,
     convertShmToRgba,
     convertShmToRgbaRegion,
     getElectronPixelFormat,
+    needsConversion,
 } = require("myde-drm") as typeof import("myde-drm");
 
 import { importSharedTexture } from "../../utils/shared_texture";
@@ -121,12 +117,36 @@ declare module "../../module" {
             canvas: OffscreenCanvas;
             current: WaylandSurfaceData;
             pending: WaylandSurfaceData;
-            /** 提交序号：异步导入完成时据此丢弃被新提交/解绑取代的旧帧 */
+            /** 像素提交序号：unmap/销毁时递增，取消还在异步导入的旧帧 */
             renderSeq?: number;
             /** 同步子 surface 的提交缓存：按提交顺序排队，父 surface 状态生效时依次应用 */
             cache?: WaylandSurfaceData[];
-            /** 本 rAF 内已经合成过一帧；false 时提交的帧直接丢，见 wl_surface.commit */
-            frameReady?: boolean;
+            /**
+             * 提交排队：damage 是「相对上一次 commit」的，像素必须按提交顺序贴进
+             * 画布。dmabuf 导入是异步的，并发完成会乱序，所以在这里排队而不是丢帧。
+             */
+            draining?: boolean;
+            /** 已入队、尚未应用的提交状态（surface 销毁时要归还其中的 buffer） */
+            queuedStates?: WaylandSurfaceData[];
+            /** 最近一次合成、等待呈现的帧；同一 surface 每 rAF 只上屏一次 */
+            pendingPresent?: {
+                canvas: OffscreenCanvas;
+                width: number;
+                height: number;
+                /** 该帧对应的提交状态（viewporter 等 onFrame 钩子要用） */
+                data: WaylandSurfaceData;
+            };
+            /** 已排队一次 rAF 呈现 */
+            presentScheduled?: boolean;
+            /** 本帧已经上过屏：同一帧里更晚的提交合并到下一帧 */
+            presentedThisFrame?: boolean;
+            /** presentedThisFrame 的世代：旧帧的解锁回调不能清掉新帧的状态 */
+            presentToken?: number;
+            /**
+             * 等本次呈现之后再释放的 VideoFrame / 导入资源。Canvas2D 没有完成事件，
+             * 以「呈现后的下一帧」为界，避免宿主还在采样就把资源还回池子/客户端。
+             */
+            pendingReleases?: { frame: VideoFrame; onClose?: () => void }[];
             /** wp_viewport.source 的裁剪画布，按 surface 复用，避免每帧分配 */
             viewportCanvas?: OffscreenCanvas;
         };
@@ -250,9 +270,9 @@ function sendPreferredScale(ctx: ModuleCtx, surface: SurfaceId, output: OutputIn
 const PACING_KEEPALIVE_FRAMES = 60;
 
 /**
- * 等 rAF 再 close 的 VideoFrame。rAF 被提交洪峰饿住时，这个队列会一直涨；稳定副本
+ * 等呈现后再 close 的 VideoFrame。宿主被提交洪峰饿住时，这个队列会一直涨；稳定副本
  * 每帧都是新分配的 GPU dmabuf（4K 一帧 ~33MB），不设上限就会把内存吃光。超过上限
- * 时提前关最旧的：老的早就过了合成时机，宁可丢它也不能让 GPU 内存无上限增长。
+ * 时提前关最旧的：老的早就过了呈现时机，宁可丢它也不能让 GPU 内存无上限增长。
  */
 const MAX_PENDING_VIDEO_FRAMES = 8;
 const pendingVideoFrames = new Map<VideoFrame, () => void>();
@@ -273,7 +293,13 @@ function closePendingVideoFrame(frame: VideoFrame) {
 
 function releaseVideoFrameLater(frame: VideoFrame, onClose?: () => void) {
     pendingVideoFrames.set(frame, onClose ?? (() => {}));
-    requestAnimationFrame(() => closePendingVideoFrame(frame));
+    // rAF 是主路径；页面被节流/遮挡时 rAF 可能停，用定时器兜底，避免 buffer 和
+    // 拷贝池槽位永远不还导致客户端停摆。
+    const timer = setTimeout(() => closePendingVideoFrame(frame), 100);
+    requestAnimationFrame(() => {
+        clearTimeout(timer);
+        closePendingVideoFrame(frame);
+    });
     while (pendingVideoFrames.size > MAX_PENDING_VIDEO_FRAMES) {
         const oldest = pendingVideoFrames.keys().next().value;
         if (oldest === undefined) break;
@@ -325,6 +351,90 @@ function scheduleFrameDone(ctx: ModuleCtx, surfaceId: SurfaceId, callback: Wayla
     };
     pacing.raf = true;
     requestAnimationFrame(drain);
+}
+
+/** 只能按 bgra 猜格式直导的 fourcc 已警告过，避免每帧刷日志 */
+const warnedUnimportableFormats = new Set<number>();
+function warnUnimportableFormat(format: number): void {
+    if (warnedUnimportableFormats.has(format) || warnedUnimportableFormats.size >= 16) return;
+    warnedUnimportableFormats.add(format);
+    console.warn(
+        `dmabuf format 0x${format.toString(16)}: Electron 不能直接导入、myde-drm 也不能转换` +
+            "（多平面 / 非 LINEAR / 未知格式），按 bgra 直导",
+    );
+}
+
+/** 呈现兜底定时器：rAF 是首选（与宿主合成对齐），被节流/遮挡时也要继续推进。 */
+const PRESENT_FALLBACK_MS = 50;
+
+/**
+ * 合成完成 → 上屏。
+ *
+ * 本帧还没上过屏就直接上屏（提交到合成不跨帧，避免给正常节奏多加一帧延迟）；
+ * 本帧已经上过屏就合并到下一帧（一次 DOM 整画布上传），期间的提交只更新画布、
+ * 不会丢 damage。rAF 被宿主节流时用定时器兜底：迟到的呈现只会让画面晚一拍，
+ * 不会停在旧内容，也不会让客户端的 buffer 永远等不到归还。
+ */
+function schedulePresent(ctx: ModuleCtx, surfaceId: SurfaceId): void {
+    const surface = ctx.objects.getOption(surfaceId);
+    if (!surface || surface.data.presentScheduled) return;
+    if (surface.data.presentedThisFrame !== true) {
+        presentSurface(ctx, surfaceId);
+        return;
+    }
+    surface.data.presentScheduled = true;
+    const timer = setTimeout(() => presentSurface(ctx, surfaceId), PRESENT_FALLBACK_MS);
+    requestAnimationFrame(() => {
+        clearTimeout(timer);
+        presentSurface(ctx, surfaceId);
+    });
+}
+
+/**
+ * 把待呈现帧交给桌面：viewporter 裁剪 → DOM canvas → 光标。
+ *
+ * VideoFrame/导入资源的释放放到这一帧之后（见 pendingReleases）：Canvas2D 没有
+ * 完成事件，只能以「呈现后的下一帧」为界，避免宿主还在采样就把资源还回去。
+ */
+function presentSurface(ctx: ModuleCtx, surfaceId: SurfaceId): void {
+    const surface = ctx.objects.getOption(surfaceId);
+    if (!surface) return;
+    surface.data.presentScheduled = false;
+    const pending = surface.data.pendingPresent;
+    surface.data.pendingPresent = undefined;
+    try {
+        if (pending) {
+            const fcanvas = ctx.notify.frame(surfaceId, pending.canvas, pending.data);
+            ctx.core.surface.renderWlSurface(surfaceId, fcanvas);
+            ctx.cursor.updateFrame(surfaceId, fcanvas, { width: pending.width, height: pending.height });
+            // 本帧已经上屏，下一帧再解锁（同一帧里更晚的提交合并到下一帧）
+            surface.data.presentedThisFrame = true;
+            surface.data.presentToken = (surface.data.presentToken ?? 0) + 1;
+            const token = surface.data.presentToken;
+            requestAnimationFrame(() => {
+                const latest = ctx.objects.getOption(surfaceId);
+                if (latest?.data.presentToken === token) latest.data.presentedThisFrame = false;
+            });
+        }
+    } catch (error) {
+        console.error(`present surface failed (surface ${surfaceId}):`, error);
+    } finally {
+        // 无论呈现是否成功都把资源放掉：宁可这一帧没上屏，也不能让客户端
+        // buffer 或拷贝池槽位永远卡住。
+        const releases = surface.data.pendingReleases;
+        surface.data.pendingReleases = undefined;
+        for (const item of releases ?? []) releaseVideoFrameLater(item.frame, item.onClose);
+    }
+}
+
+/** 丢弃待呈现帧与待释放资源（unmap/销毁）；不释放会让客户端 buffer 永远卡住 */
+function discardPendingPresent(ctx: ModuleCtx, surfaceId: SurfaceId): void {
+    const surface = ctx.objects.getOption(surfaceId);
+    if (!surface) return;
+    surface.data.pendingPresent = undefined;
+    const releases = surface.data.pendingReleases;
+    surface.data.pendingReleases = undefined;
+    for (const item of releases ?? []) releaseVideoFrameLater(item.frame, item.onClose);
 }
 
 /**
@@ -974,8 +1084,10 @@ function unmapSurface(ctx: ModuleCtx, surfaceId: SurfaceId): void {
     const surface = ctx.objects.getOption(surfaceId);
     const canvas = surface?.data.canvas;
     if (!surface || !canvas) return;
-    // 让还在异步导入的旧提交过期，避免解绑/销毁后又被画回来
+    // 让还在异步导入的旧提交过期，避免解绑/销毁后又被画回来；
+    // 排队中的呈现/待释放资源也要撤掉，否则会把旧画面重新画回去或卡住 buffer。
     surface.data.renderSeq = (surface.data.renderSeq ?? 0) + 1;
+    discardPendingPresent(ctx, surfaceId);
     canvas.width = 1;
     canvas.height = 1;
     ctx.core.surface.updateWlSurfaceSize(surfaceId, 0, 0);
@@ -1285,11 +1397,39 @@ function cacheSurfaceState(ctx: ModuleCtx, surfaceId: SurfaceId, data: WaylandSu
     else cache.push(data);
 }
 
-/** 依次应用一组已排队的提交；缓存的提交必须按顺序生效，不能并发（damage/buffer 有先后关系） */
-async function applyCachedStates(ctx: ModuleCtx, surfaceId: SurfaceId, states: WaylandSurfaceData[]): Promise<void> {
-    for (const state of states) {
-        if (ctx.objects.getOption(surfaceId) === undefined) return;
-        await applySurfaceState(ctx, surfaceId, state, true);
+/**
+ * 按 surface 串行应用提交状态（同一批缓存状态也按顺序）。
+ *
+ * 像素必须按提交顺序贴进画布：damage 是「相对上一次 commit」的，异步导入乱序
+ * 完成会让后面的 damage 先落地、前面的被丢弃。队列同时是 dmabuf 的背压：buffer
+ * 要等它的像素进画布才 release，客户端想过量提交只会卡在自己的 buffer 上。
+ */
+function enqueueSurfaceStates(ctx: ModuleCtx, surfaceId: SurfaceId, states: WaylandSurfaceData[]): void {
+    const surface = ctx.objects.getOption(surfaceId);
+    if (!surface) return;
+    if (surface.data.queuedStates === undefined) surface.data.queuedStates = [];
+    surface.data.queuedStates.push(...states);
+    if (surface.data.draining === true) return;
+    surface.data.draining = true;
+    // 空闲时在 commit 的同一次调用里同步开始（applySurfaceState 在第一个 await
+    // 之前是同步的：shm 的格式转换和 buffer 查表不跨任务）。
+    void drainSurfaceStates(ctx, surfaceId);
+}
+
+/** 依次应用排队的提交；队列排空后停，下一次提交再同步启动 */
+async function drainSurfaceStates(ctx: ModuleCtx, surfaceId: SurfaceId): Promise<void> {
+    try {
+        for (;;) {
+            const surface = ctx.objects.getOption(surfaceId);
+            const state = surface?.data.queuedStates?.shift();
+            if (surface === undefined || state === undefined) return;
+            await applySurfaceState(ctx, surfaceId, state);
+        }
+    } catch (error) {
+        console.error(`apply surface state failed (surface ${surfaceId}):`, error);
+    } finally {
+        const surface = ctx.objects.getOption(surfaceId);
+        if (surface) surface.data.draining = false;
     }
 }
 
@@ -1299,14 +1439,28 @@ function discardCachedState(ctx: ModuleCtx, surfaceId: SurfaceId): void {
     const cache = surface?.data.cache;
     if (surface === undefined || cache === undefined) return;
     surface.data.cache = undefined;
+    releaseStateBuffers(ctx, cache);
+}
+
+/** 归还一组未应用提交里挂着的 buffer（同一对象只还一次） */
+function releaseStateBuffers(ctx: ModuleCtx, states: WaylandSurfaceData[]): void {
     const bufferIds = new Set<WaylandObjectId2<"wl_buffer">>();
-    for (const state of cache) {
+    for (const state of states) {
         const buffer = state.buffer;
         if (buffer) bufferIds.add(buffer.id);
     }
     for (const id of bufferIds) {
         if (ctx.objects.has(id)) ctx.sendNow(id, "wl_buffer.release", {});
     }
+}
+
+/** surface 销毁时丢弃还没应用的提交，否则这些 buffer 永远不会 release */
+function discardQueuedStates(ctx: ModuleCtx, surfaceId: SurfaceId): void {
+    const surface = ctx.objects.getOption(surfaceId);
+    const queue = surface?.data.queuedStates;
+    if (surface === undefined || queue === undefined) return;
+    surface.data.queuedStates = undefined;
+    releaseStateBuffers(ctx, queue);
 }
 
 /**
@@ -1322,11 +1476,7 @@ async function applySubsurfaceChildren(ctx: ModuleCtx, parent: SurfaceId): Promi
         if (cache === undefined) continue;
         // 取走缓存：父 surface 后续的提交不能重复应用旧状态
         surface.data.cache = undefined;
-        try {
-            await applyCachedStates(ctx, child, cache);
-        } catch (error) {
-            console.error(`apply cached surface state failed (surface ${child}):`, error);
-        }
+        enqueueSurfaceStates(ctx, child, cache);
     }
 }
 
@@ -1334,16 +1484,10 @@ async function applySubsurfaceChildren(ctx: ModuleCtx, parent: SurfaceId): Promi
  * 应用一次 surface 提交（直接提交，或父 surface 生效时按顺序取出的同步缓存）。
  *
  * 更新 current、合成像素、回 frame callback，最后应用子 surface 的挂起位置/堆叠与缓存。
- * 本函数可能在异步导入后被新提交取代；像素路径用 renderSeq 丢弃过期结果。
- * `force` 用于父提交一次性应用多条缓存：这是同一批状态，不能按普通提交丢中间帧，
- * 否则最后一条像素可能被丢弃，画面停在旧内容上。
+ * 调用方保证按提交顺序串行（见 enqueueSurfaceStates）；renderSeq 只在 unmap/销毁时
+ * 推进，用来取消还在异步导入的旧帧。
  */
-async function applySurfaceState(
-    ctx: ModuleCtx,
-    surfaceId: SurfaceId,
-    data: WaylandSurfaceData,
-    force = false,
-): Promise<void> {
+async function applySurfaceState(ctx: ModuleCtx, surfaceId: SurfaceId, data: WaylandSurfaceData): Promise<void> {
     const surface = ctx.objects.getOption(surfaceId);
     if (!surface) return;
     surface.data.current = Object.assign({}, surface.data.current, data);
@@ -1366,31 +1510,10 @@ async function applySurfaceState(
             ctx.notify.commit(surfaceId, false);
             for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
         } else {
-            // 每个 surface 每个 rAF 最多合成一帧：客户端提交快于合成器时，多出来的帧
-            // 直接丢（归还 buffer、照常回 frame callback）。否则每帧都要一份新的 GPU
-            // 拷贝，主线程被占满后 rAF 停转、canvas 消费不掉，显存会按帧无限涨——
-            // 4K 视频几十秒就能吃掉整机内存，表现为整个桌面卡死。
-            // 尺寸变化不丢：客户端可能只提交一次 resize，跳过会一直停在旧尺寸。
-            // force（父提交一次性应用的同步缓存）不参与丢帧：整批状态必须按顺序落地。
-            if (
-                !force &&
-                surface.data.frameReady === false &&
-                bufferObj.width === surface.data.canvas.width &&
-                bufferObj.height === surface.data.canvas.height
-            ) {
-                if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
-                for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
-                return;
-            }
-            if (!force) {
-                surface.data.frameReady = false;
-                // 只管住节拍，不等这一帧处理完：处理中再来提交最多也就并发一两帧，
-                // 但 rAF 不会被提交洪峰饿死，画布能持续消费，显存不会按帧累积。
-                requestAnimationFrame(() => {
-                    surface.data.frameReady = true;
-                });
-            }
-            // 本次提交带像素：序号用于识别异步导入完成前是否已被更新的像素提交取代
+            // 本次提交带像素。提交不能丢：damage 是相对上一次 commit 的，丢掉这次
+            // 提交就等于丢掉一块再也没人补画的内容（后面的 damage 不会覆盖它）。
+            // 上屏频率由 present 那一层控制（见 schedulePresent），这里只保证按顺序
+            // 把每个提交的 damage 贴进画布。序号用于 unmap/销毁时取消在飞的导入。
             const seq = (surface.data.renderSeq ?? 0) + 1;
             surface.data.renderSeq = seq;
             // surface 逻辑尺寸与 buffer 坐标的换算：
@@ -1539,15 +1662,25 @@ async function applySurfaceState(
                     const pixelFormat = getElectronPixelFormat(bufferObj.format);
                     let imageFromGpu: VideoFrame | undefined;
                     let converted: ImageData | undefined;
+                    // myde-drm 的转换器只支持单平面 32 位 + LINEAR。NV12/NV16/P010
+                    // （多平面）和带 tiled modifier 的 buffer 根本无法拷贝，直接用
+                    // Electron 导入 —— 不要拿异常探测，否则这类客户端每帧都要抛一次
+                    // 错并打一条日志。
+                    const copyable =
+                        bufferObj.planes.length === 1 &&
+                        modifier === 0n &&
+                        (pixelFormat !== null || needsConversion(bufferObj.format));
                     // 默认先 GPU 拷贝一份稳定副本：VideoFrame 不再引用客户端 dmabuf，
                     // 客户端复用 buffer 时不会闪旧帧。myde-drm 内部按尺寸复用一块
                     // buffer 池（按内存预算自动分配，默认 256MB，MYDE_DRM_POOL_MB），
                     // 槽位按 client+surface 隔离，拷贝在消费者释放导入纹理后才还给
                     // 池子，不会按帧累积，也不会串到别的窗口。MYDE_DMABUF_COPY=0
-                    // 可退回零拷贝。
+                    // 可退回零拷贝（接受“客户端 buffer 何时被改写”不可观测）。
                     const forceCopy = rendererEnv.MYDE_DMABUF_COPY !== "0";
 
-                    if (forceCopy || !pixelFormat) {
+                    // 显式强制拷贝，或者 Electron 不能直接导入、必须转换时才拷贝。
+                    // 零拷贝模式（MYDE_DMABUF_COPY=0）只对 Electron 认识的格式生效。
+                    if (copyable && (forceCopy || !pixelFormat)) {
                         try {
                             const gpu = convertDmabufToTexture({
                                 width: bufferObj.width,
@@ -1637,6 +1770,9 @@ async function applySurfaceState(
                     } else if (converted) {
                         image = converted;
                     } else {
+                        // 直导：pixelFormat 有值时 Electron 自己认识；没有时只能按 bgra
+                        // 猜（例如 tiled 的 XRGB 系列），每个格式只警告一次。
+                        if (!pixelFormat) warnUnimportableFormat(bufferObj.format);
                         try {
                             const t = await importSharedTexture({
                                 textureInfo: {
@@ -1724,39 +1860,40 @@ async function applySurfaceState(
                     c2d.drawImage(image, 0, 0, canvas.width, canvas.height);
                 } else c2d.putImageData(image, 0, 0);
             }
-            // 零拷贝 VideoFrame 仍然引用客户端 dmabuf：等到下一次 rAF（本轮 DOM
-            // canvas 提交之后）再 close + release，避免客户端复用旧内容。
-            // GPU/CPU 稳定副本已经与客户端 buffer 解耦，可以立刻归还，避免只带
-            // 两个 buffer 的客户端被多扣一帧后掉到 60Hz。
+            // 呈现之后才释放：Canvas2D/Chromium 的采样时机不可观测（可能只引用纹理、
+            // 延迟栅格化），以「呈现后的下一帧」为界（见 presentSurface）。
+            // 稳定副本（GPU 拷贝 / CPU 转换）已经与客户端 buffer 解耦，客户端 buffer
+            // 可以立刻归还，避免只带两个 buffer 的客户端被多扣一帧后掉到 60Hz。
             if (image instanceof VideoFrame) {
+                if (latest.data.pendingReleases === undefined) latest.data.pendingReleases = [];
+                const releases = latest.data.pendingReleases;
                 if (imageStable) {
-                    // 稳定副本：立即把客户端 buffer 还回去；VideoFrame 自己再留一帧，
-                    // 让 canvas 的 GPU 绘制有机会完成。导入对象的 release 也延后到
-                    // VideoFrame close 之后，避免 GPU 资源提前/迟迟不释放。
                     if (bufferId) ctx.sendNow(bufferId, "wl_buffer.release", {});
-                    releaseVideoFrameLater(image, releaseImported);
+                    releases.push({ frame: image, onClose: releaseImported });
                 } else {
                     const frame = image;
-                    releaseVideoFrameLater(frame, () => {
-                        releaseImported?.();
-                        if (bufferId && ctx.objects.has(bufferId)) {
-                            ctx.sendNow(bufferId, "wl_buffer.release", {});
-                        }
+                    releases.push({
+                        frame,
+                        onClose: () => {
+                            releaseImported?.();
+                            if (bufferId && ctx.objects.has(bufferId)) {
+                                ctx.sendNow(bufferId, "wl_buffer.release", {});
+                            }
+                        },
                     });
                 }
             } else if (bufferId) {
-                // shm/CPU 路径已经同步拷贝完，可以立刻归还
+                // shm/CPU 路径已经同步拷贝完（putImageData 会把像素写进画布后备），
+                // 客户端 buffer 可以立刻归还。
                 ctx.sendNow(bufferId, "wl_buffer.release", {});
             }
             // frame callback 走 rAF 排队，把每个 surface 的提交节拍钉在桌面刷新率上。
             for (const callback of data.callbacks ?? []) scheduleFrameDone(ctx, surfaceId, callback);
 
-            // 渲染之前交给扩展后处理（viewporter 的裁剪缩放）
-            const fcanvas = ctx.notify.frame(surfaceId, canvas, data);
-            ctx.core.surface.renderWlSurface(surfaceId, fcanvas);
-
-            // 只有当前光标surface才推送光标，隐藏后commit不应重新显示
-            ctx.cursor.updateFrame(surfaceId, fcanvas, { width: logicalW, height: logicalH });
+            // 合成完成：交给下一个 rAF 呈现。同一 surface 每帧只上屏一次，期间的
+            // 提交只更新画布并覆盖待呈现帧，不会丢 damage。
+            latest.data.pendingPresent = { canvas, width: logicalW, height: logicalH, data };
+            schedulePresent(ctx, surfaceId);
         }
     } finally {
         await applySubsurfaceChildren(ctx, surfaceId);
@@ -2248,14 +2385,16 @@ export const waylandCoreModule = defineModule({
             const cache = surface.data.cache;
             if (cache !== undefined) {
                 surface.data.cache = undefined;
-                await applyCachedStates(ctx, x.id, [...cache, data]);
+                enqueueSurfaceStates(ctx, x.id, [...cache, data]);
                 return;
             }
-            await applySurfaceState(ctx, x.id, data);
+            enqueueSurfaceStates(ctx, x.id, [data]);
         },
         "wl_surface.destroy": (x, ctx) => {
             const surfaceId = x.id;
             discardCachedState(ctx, surfaceId);
+            discardQueuedStates(ctx, surfaceId);
+            discardPendingPresent(ctx, surfaceId);
             ctx.domain.output.surfaces.delete(surfaceId);
             // 光标surface销毁后隐藏光标
             ctx.cursor.hide(surfaceId);
@@ -2410,9 +2549,7 @@ export const waylandCoreModule = defineModule({
             const cache = surface?.data.cache;
             if (surface === undefined || cache === undefined) return;
             surface.data.cache = undefined;
-            void applyCachedStates(ctx, sub.surface, cache).catch((error) =>
-                console.error(`apply cached surface state failed (surface ${sub.surface}):`, error),
-            );
+            enqueueSurfaceStates(ctx, sub.surface, cache);
         },
         "wl_subsurface.destroy": (x, ctx) => {
             const sub = ctx.core.subsurface.getSubSurface(x.id);

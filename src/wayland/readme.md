@@ -98,28 +98,43 @@
 
 v1 和 v3 是竞争协议，单客户端内仲裁：按协议（manager）一侧计，后激活者胜出（zwp_text_input_v1.activate / zwp_text_input_v3.enable 抢占），文本只发给持有对象，v3 的 enter/leave 跟随**该把 seat** 的键盘焦点（`get_text_input` 的 seat 参数记在 `TextInputV3Data.seat`，跨 seat 的输入直接忽略）。
 
-## 合成策略：宁可掉帧也不要透明
+## 合成策略：提交不丢 damage，上屏按刷新节流
 
-窗口闪一帧透明比掉一帧显眼得多，所以像素链路上任何「不确定」都按丢帧处理：
+窗口闪一帧透明比掉一帧显眼得多，但**丢内容**比丢呈现严重得多：damage 是「相对上一次
+commit」的，被丢掉的提交不会有人再补画。所以像素链路分成两层：
 
+- **提交 = 只合成**：每个 `wl_surface.commit` 都按顺序把它的 damage 贴进 surface 画布，
+  不做「一个 rAF 只合成一帧」的丢弃。同一 surface 的提交走一条串行链
+  （`enqueueSurfaceStates`）：dmabuf 导入是异步的，乱序完成会让前面的 damage 被后面的
+  覆盖。串行同时就是背压——buffer 要等它的像素进画布才 `release`，客户端提交再快也会
+  卡在自己有限的 buffer 上，显存不会按帧累积。
+- **呈现 = 每 rAF 一次**：同一 surface 每帧最多上屏一次（`schedulePresent` / `presentSurface`），
+  期间更晚的提交只更新画布并覆盖待呈现帧。rAF 被宿主节流时用 50ms 定时器兜底，
+  迟到的呈现只会晚一拍，不会停在旧内容，也不会让 buffer 永远等不到归还。
 - **转换/导入失败**（shm/dmabuf 格式不支持、EGL 导入失败、fd 失效）只打日志并跳过本次提交的像素，
   画布保留上一帧；同时照常 `wl_buffer.release` 和跑 frame callback，客户端不会卡住。
+  这是唯一会丢内容的地方，属于「宁可掉帧也不要透明」的兜底。
 - **canvas 尺寸变化**不清成透明：先把上一帧拉伸铺满新尺寸，再让新帧的 damage 覆盖。
   客户端重绘前最多是短暂变形，不会露出壁纸。
-- **dmabuf 异步导入**期间若来了更新的像素提交或 `attach(nil)`，旧提交回来时按 surface 的
-  `renderSeq` 丢弃，避免旧帧覆盖新画面、也避免解绑后又被画回来。
-- **默认**用 `MYDE_DRM_GPU_FINISH=1`：转换器 `glFinish` 后才把 GPU 转换出的
-  GBM buffer 交给 Electron 导入。转换器依赖 dma-buf 隐式 fence；驱动/时序不可靠时导入方会
-  采样到还没画完的 buffer（整块透明）。等完成会牺牲一点吞吐，但保证推上去的每帧都是完整的；
-  `MYDE_DRM_GPU_FINISH=0` 可恢复异步。
+- **`renderSeq` 只用于取消**：`unmap` / surface 销毁时推进序号，让还在异步导入的旧提交
+  过期，避免解绑后又被画回来；正常提交按队列顺序应用，不会互相取代。
+- **VideoFrame/导入资源等呈现之后再释放**：Canvas2D 没有完成事件（Chromium 可能只引用
+  纹理、延迟栅格化），以「呈现后的下一帧」为界（`pendingReleases`）。稳定副本（GPU 拷贝 /
+  CPU 转换）可以立刻归还客户端 buffer；零拷贝要等到那时才 `release`。
 - **默认**把 dmabuf 先 GPU 拷贝到 myde 自己的 ARGB8888 dmabuf，再导入 Electron：
-  `VideoFrame` 不再引用客户端的 dma-buf，客户端复用 buffer 时不会闪旧帧。myde-drm
-  按尺寸复用一个小 buffer 池，池子按**内存预算**自动分配（默认 256MB，`MYDE_DRM_POOL_MB`
-  可调），一个拷贝占用的槽位要等导入纹理释放后才归还；槽位按 client+surface 隔离，
-  别的窗口只能回收空闲 ≥1s（`MYDE_DRM_STEAL_IDLE_MS`）的槽位，避免 A 窗口闪出 B 窗口
-  的内容；4K 帧约 33MB、1080p 约 8MB，上限随窗口大小自动变化；
-  池满时回退到零拷贝，避免按帧新建高 order GBM buffer（xe 上会触发回收循环、显存按帧
-  上涨）。`MYDE_DMABUF_COPY=0` 可强制零拷贝。
+  `VideoFrame` 不再引用客户端的 dma-buf，客户端复用 buffer 时不会闪旧帧，也让「何时可以
+  归还客户端 buffer」变成确定的事。myde-drm 按尺寸复用一个小 buffer 池，池子按**内存预算**
+  自动分配（默认 256MB，`MYDE_DRM_POOL_MB` 可调），一个拷贝占用的槽位要等导入纹理释放后
+  才归还；槽位按 client+surface 隔离，别的窗口只能回收空闲 ≥1s（`MYDE_DRM_STEAL_IDLE_MS`）
+  的槽位，避免 A 窗口闪出 B 窗口的内容；4K 帧约 33MB、1080p 约 8MB，上限随窗口大小自动
+  变化；池满时回退到零拷贝。`MYDE_DMABUF_COPY=0` 可强制零拷贝（接受「客户端 buffer 何时
+  被改写」不可观测）。
+- **不能拷贝的直接导入**：myde-drm 的转换器只支持单平面 32 位 + LINEAR；NV12/NV16/P010
+  和带 tiled modifier 的 buffer 直接交给 Electron 导入，不尝试转换（否则这类客户端每帧
+  都要抛一次错并打日志）。按格式/modifier 预先判断，不拿异常探测。
+- **转换默认只 `glFlush`**，依赖 dma-buf 隐式 fence 与 Electron 的导入同步，避免每帧
+  `glFinish` 把 JS 主线程按帧等 GPU。驱动对隐式 fence 支持不好时（整块透明/旧帧）用
+  `MYDE_DRM_GPU_FINISH=1` 让转换器改回 `glFinish`。
 
 ## 对外 API（桌面侧）
 
