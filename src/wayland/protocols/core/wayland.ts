@@ -562,12 +562,7 @@ export class wlSubSurfaceData {
         if (oldRelationId) {
             // 已经有父子关系了，先删除旧关系
             const oldRelation = this.wl_subsurface[oldRelationId];
-            // biome-ignore lint/style/noNonNullAssertion: 关系与parentchildren应该是同步的
-            const oldTree = this.parentChildren.get(oldRelation.parent)!;
-            this.parentChildren.set(
-                oldRelation.parent,
-                oldTree.filter((c) => c !== oldRelationId),
-            );
+            this.detachChild(oldRelation.parent, oldRelationId);
         }
 
         this.wl_subsurface[subRelationId] = { parent, child, posi: { x: 0, y: 0 } };
@@ -639,15 +634,21 @@ export class wlSubSurfaceData {
         const relation = this.wl_subsurface[id];
         const parent = relation.parent;
         const child = relation.child;
-        const parentData = this.parentChildren.get(parent);
-        if (parentData) {
-            this.parentChildren.set(
-                parent,
-                parentData.filter((c) => c !== id),
-            );
-        }
+        this.detachChild(parent, id);
         this.surface2subsurface.delete(child);
         delete this.wl_subsurface[id];
+    }
+
+    /**
+     * 从父 surface 的子表里摘掉一条关系；摘空后直接删 key。
+     * 只 set 空数组的话，反复建/毁子表面的长跑客户端会按父 surface 攒一堆空数组。
+     */
+    private detachChild(parent: WaylandObjectId2<"wl_surface">, subRelationId: WaylandObjectId2<"wl_subsurface">) {
+        const list = this.parentChildren.get(parent);
+        if (list === undefined) return;
+        const next = list.filter((c) => c !== subRelationId);
+        if (next.length === 0) this.parentChildren.delete(parent);
+        else this.parentChildren.set(parent, next);
     }
 }
 
