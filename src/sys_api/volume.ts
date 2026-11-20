@@ -398,8 +398,11 @@ export class volumeControl {
         const clamped = clampVolume(volume);
         try {
             await run(`pactl set-${kind}-volume ${decodeId(id)} ${scaledVolume(clamped)}`);
+            const value = quantizeVolume(clamped);
             const device = this.devices.get(id);
-            if (device) device.volume = quantizeVolume(clamped);
+            if (device) device.volume = value;
+            // 缓存先写成目标值会让 refresh 的差分失效，本地修改要自己通知
+            this.ev.emit("deviceVolumeChange", id, value);
             return true;
         } catch (_error) {
             return false;
@@ -421,7 +424,13 @@ export class volumeControl {
         try {
             await run(`pactl set-${kind}-mute ${decodeId(id)} ${muteValue(mute)}`);
             const device = this.devices.get(id);
-            if (device) device.isMuted = mute === "toggle" ? !device.isMuted : mute;
+            if (device) {
+                const muted = mute === "toggle" ? !device.isMuted : mute;
+                device.isMuted = muted;
+                this.ev.emit("deviceMuteChange", id, muted);
+            } else if (mute !== "toggle") {
+                this.ev.emit("deviceMuteChange", id, mute);
+            }
             return true;
         } catch (_error) {
             return false;
@@ -461,8 +470,10 @@ export class volumeControl {
         const clamped = clampVolume(volume);
         try {
             await run(`pactl set-${kind}-volume ${decodeId(streamId)} ${scaledVolume(clamped)}`);
+            const value = quantizeVolume(clamped);
             const stream = this.streams.get(streamId);
-            if (stream) stream.volume = quantizeVolume(clamped);
+            if (stream) stream.volume = value;
+            this.ev.emit("streamVolumeChange", streamId, value);
             return true;
         } catch (_error) {
             return false;
@@ -483,7 +494,13 @@ export class volumeControl {
         try {
             await run(`pactl set-${kind}-mute ${decodeId(streamId)} ${muteValue(mute)}`);
             const stream = this.streams.get(streamId);
-            if (stream) stream.isMuted = mute === "toggle" ? !stream.isMuted : mute;
+            if (stream) {
+                const muted = mute === "toggle" ? !stream.isMuted : mute;
+                stream.isMuted = muted;
+                this.ev.emit("streamMuteChange", streamId, muted);
+            } else if (mute !== "toggle") {
+                this.ev.emit("streamMuteChange", streamId, mute);
+            }
             return true;
         } catch (_error) {
             return false;
