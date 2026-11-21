@@ -167,9 +167,6 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     private pressedButton: number | undefined;
     /** touch 超时 / tapped 窗口 / second 判断 / dragWait 锁定 */
     private timer: ReturnType<typeof setTimeout> | undefined;
-    /** touch/second 判定期间先不移动光标，攒下的位移在确认是移动/拖拽时一次补上 */
-    private suppressedMoveX = 0;
-    private suppressedMoveY = 0;
     /** 当前三指及以上手势的手指数，0 表示没有 */
     private multiFingers = 0;
     /** 本轮接触出现过多指：之后残留的两指/单指不再产生滚动、捏合、hold 或光标移动 */
@@ -277,8 +274,6 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         this.roundActive = false;
         this.roundMaxFingers = 0;
         this.multiRound = false;
-        this.suppressedMoveX = 0;
-        this.suppressedMoveY = 0;
     }
 
     private flush(): void {
@@ -332,20 +327,14 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             // 双指分类器优先：判定前暂存滚动，避免先发滚动导致客户端忽略随后的 pinch
             const twoFingerHandled = this.updatePinch(contacts, count, dx, dy, actions);
 
-            // 判定期间先别移动光标：轻触的按下点要落在最初接触的位置，不能带上抖动位移
+            // 判定期间不移动光标：轻触的按下点要落在最初接触的位置，不能带上抖动位移。
+            // 这段位移直接丢弃而不是攒着补发，否则确认是移动/拖拽时会把攒下的位移
+            // 一次发出去，光标在开始移动时跳一下（libinput 同样丢弃判定期间的位移）。
             const decidingMotion = this.phase === "touch" || this.phase === "second";
             const single = count === 1 || (count === 0 && all.length === 1);
             if (single && decidingMotion) {
-                this.suppressedMoveX += dx;
-                this.suppressedMoveY += dy;
                 dx = 0;
                 dy = 0;
-            } else if (single && (this.suppressedMoveX !== 0 || this.suppressedMoveY !== 0)) {
-                // 确认是移动/拖拽：把判定期间攒下的位移一次补上
-                dx += this.suppressedMoveX;
-                dy += this.suppressedMoveY;
-                this.suppressedMoveX = 0;
-                this.suppressedMoveY = 0;
             }
 
             if (dx !== 0 || dy !== 0) {
@@ -869,8 +858,6 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 this.schedule(TAP_TIMEOUT, () => {
                     if (this.phase !== "second") return;
                     this.phase = "dragging";
-                    // 第二下被判成拖拽后，把判定期间攒的位移补出去，客户端才不会把按下+抬起当成点击
-                    this.flushSuppressedMove();
                 });
                 break;
             default:
@@ -913,8 +900,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 });
                 break;
             case "dragging":
-                // 手指抬起，结束拖拽；先补上还没发出的位移
-                this.flushSuppressedMove();
+                // 手指抬起，结束拖拽
                 this.release(actions);
                 break;
             default:
@@ -930,8 +916,6 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         this.pinch = undefined;
         this.endHold(false);
         this.holdBlocked = false;
-        this.suppressedMoveX = 0;
-        this.suppressedMoveY = 0;
         this.contacts.clear();
         this.fallback = undefined;
     }
@@ -982,16 +966,6 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         }, delay);
         (timer as { unref?: () => void }).unref?.();
         this.timer = timer;
-    }
-
-    /** 把判定期间攒下的位移直接补发（定时器/结束拖拽时用，没有 actions 上下文） */
-    private flushSuppressedMove(): void {
-        if (this.suppressedMoveX === 0 && this.suppressedMoveY === 0) return;
-        const dx = this.suppressedMoveX;
-        const dy = this.suppressedMoveY;
-        this.suppressedMoveX = 0;
-        this.suppressedMoveY = 0;
-        this.emit("move", dx, dy);
     }
 
     private cancelTimer(): void {

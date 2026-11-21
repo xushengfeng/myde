@@ -215,6 +215,25 @@ describe("TouchpadInput gestures", () => {
         expect(events.at(-1)?.[0]).toBe("scrollEnd");
     });
 
+    it("does not replay motion accumulated while deciding a tap", () => {
+        const { events, sync, contact, move, lift } = setup();
+        contact(0, 1, 1000, 2000);
+        sync();
+        // 第一帧移动 0.8mm，还没到轻触的 1.3mm 阈值：光标不动
+        move(0, 1080, 2000);
+        sync();
+        expect(events.some((e) => e[0] === "move")).toBe(false);
+        // 第二帧累计越过阈值：只发这一帧的位移，不能把上一帧攒下的补上，否则光标会跳一下
+        move(0, 1160, 2000);
+        sync();
+        const moves = events.filter((e) => e[0] === "move");
+        expect(moves).toHaveLength(1);
+        expect(moves[0][1]).toBeCloseTo(20);
+        expect(moves[0][2]).toBe(0);
+        lift(0);
+        sync();
+    });
+
     it("does not scroll for a two-finger tap with a little drift", () => {
         const { events, sync, contact, move, lift } = setup();
         contact(0, 1, 1000, 2000);
