@@ -449,6 +449,8 @@ const OVERVIEW_GRID_BLEND_START = 0.8;
 const OVERVIEW_GRID_ROW_STAGGER = 0.16;
 /** 聚焦面板比卡片略大 */
 const FOCUS_PANEL_SCALE = 1.04;
+/** 聚焦面板出现/消失的独立过渡时长（ms），不跟移动进度 */
+const FOCUS_PANEL_FADE = 180;
 /** 三指手势每个轴各自生效前的死区（CSS px）；横竖两轴独立，不锁定方向 */
 const GESTURE_AXIS_DEADZONE = 12;
 /** 三指上下滑从常规到全局预览的完整行程，按可用高度比例 */
@@ -545,9 +547,13 @@ class ViewData {
     private readonly focusPanelEl: ElType<HTMLElement>;
     /** 聚焦面板跟随的屏；退出时保留，直到淡出结束 */
     private focusPanelId: string | undefined;
-    /** 聚焦面板当前是否已经显示，用来决定退出动画期间是否继续跟随 */
-    private focusPanelShown = false;
+    /** 聚焦面板的目标显示状态；出现/消失各自是一次独立过渡，可互相打断 */
+    private focusPanelVisible = false;
+    /** 本次手势是否已经触发过聚焦面板显示；手势中一旦显示就不逐帧撤掉 */
+    private gestureFocusPanelTriggered = false;
     private focusPanelTimer: number | undefined;
+    /** 聚焦面板透明度动画；出现/消失独立，可互相打断，不跟移动进度 */
+    private readonly focusPanelGear: AnimationGear<{ opacity: number }>;
     private launcher?: LauncherController;
 
     private currentId = "";
@@ -603,6 +609,13 @@ class ViewData {
                 background: "#fff",
             })
             .addInto(windowEl);
+        this.focusPanelGear = new AnimationGear(
+            { opacity: 0 },
+            { transition: { duration: FOCUS_PANEL_FADE, map: timingFunction.easeOut } },
+        );
+        this.focusPanelGear.setUpdateCallback((value) => {
+            this.focusPanelEl.style({ opacity: `${value.opacity}` });
+        });
         this.render(false);
     }
 
@@ -984,6 +997,7 @@ class ViewData {
         if (this.gesture || (!this.overview && this.screens.length < 2)) return;
         this.settleAnimation();
         this.launcher?.settle();
+        this.gestureFocusPanelTriggered = false;
         this.focusVisual = this.currentIndex();
         const launcherBinding: LauncherBinding = this.launcher?.getBinding() ?? {
             kind: "line",
@@ -1112,6 +1126,9 @@ class ViewData {
             applyScreenTransform(screen.el, value);
         }
         this.syncFocusPanelGesture(p);
+        // 只在这里跨过触发点：手势中一旦显示就保持到手势结束，不被后续移动反复打断
+        if (p > 0) this.gestureFocusPanelTriggered = true;
+        this.syncFocusPanelVisibility(true);
     }
 
     private gestureGridProgress(gesture: NonNullable<ViewData["gesture"]>) {
@@ -1224,9 +1241,7 @@ class ViewData {
         this.launcher?.applyBinding(gesture.launcherBinding);
         if (!this.overview) {
             this.overviewFocusId = undefined;
-            this.cancelFocusPanelTimer();
-            this.focusPanelShown = false;
-            this.setFocusPanelOpacity(0, false);
+            this.syncFocusPanelVisibility(false);
         }
     }
 
@@ -1414,48 +1429,33 @@ class ViewData {
         if (!this.focusPanelEl) return;
         const rect = this.focusPanelGeometry(value);
         this.focusPanelEl.style({
-            transition: "opacity 180ms ease-out",
             transform: `translate3d(${rect.x}px, ${rect.y}px, 0) scale(${rect.scale})`,
         });
     }
 
-    private setFocusPanelOpacity(opacity: number, fade: boolean) {
-        if (!this.focusPanelEl) return;
-        this.focusPanelEl.style({
-            transition: fade ? "opacity 180ms ease-out" : "none",
-            opacity: `${opacity}`,
-        });
+    /** 透明度用独立 gear 驱动，出现/消失各启动一次，互相打断时从当前值继续 */
+    private setFocusPanelOpacity(opacity: number, animate = true) {
+        this.focusPanelGear.moveTo({ opacity }, animate ? FOCUS_PANEL_FADE : 0);
     }
 
     /** 动画帧里让聚焦面板跟着选中的卡片自己的 gear 走，退出时也跟到最后 */
     private syncFocusPanelFrame(screen: ViewScreen) {
         if (!this.focusPanelEl || this.focusPanelId !== screen.id) return;
-        // 进入和退出动画期间都跟住卡片；退出淡出完成后停止
-        if (!this.overview && !this.focusPanelShown) return;
         this.applyFocusPanelTransform(screen.visual);
     }
 
-    /** 手势中聚焦面板跟着连续 focusPos 移动；透明度不跟进度，保持可见 */
+    /** 手势中聚焦面板的位置跟着连续 focusPos 走；出现/消失由独立过渡控制，不在这里改透明度 */
     private syncFocusPanelGesture(progress: number) {
-        this.cancelFocusPanelTimer();
         const gesture = this.gesture;
         const order = this.overviewFocusOrder();
-        if (!gesture || progress <= 0 || order.length === 0) {
-            this.focusPanelShown = false;
-            this.setFocusPanelOpacity(0, false);
-            return;
-        }
+        if (!gesture || progress <= 0 || order.length === 0) return;
         const p = clampNumber(gesture.focusPos, 0, order.length - 1);
         const i0 = Math.floor(p);
         const i1 = Math.min(order.length - 1, Math.ceil(p));
         const t = p - i0;
         const from = order[i0];
         const to = order[i1];
-        if (!from || !to) {
-            this.focusPanelShown = false;
-            this.setFocusPanelOpacity(0, false);
-            return;
-        }
+        if (!from || !to) return;
         const a = from.visual;
         const b = to.visual;
         const value = {
@@ -1463,66 +1463,60 @@ class ViewData {
             y: a.y + (b.y - a.y) * t,
             scale: a.scale + (b.scale - a.scale) * t,
         };
-        this.focusPanelShown = true;
-        const rect = this.focusPanelGeometry(value);
-        this.focusPanelEl.style({
-            transition: "none",
-            opacity: "1",
-            transform: `translate3d(${rect.x}px, ${rect.y}px, 0) scale(${rect.scale})`,
-        });
+        this.applyFocusPanelTransform(value);
     }
 
     /**
-     * 进入预览时和手势一样立刻可见，位置和缩放由卡片动画连续驱动，不等到动画结束才出现；
-     * 退出时继续跟着焦点卡片移动到动画结束再淡出。
+     * 出现/消失由独立 gear 驱动：只在状态跨过触发点时启动一次，可互相打断，
+     * 不会被手势逐帧驱动。位置仍由卡片/手势连续更新。
      */
-    private updateFocusPanelVisibility(animate: boolean) {
-        this.cancelFocusPanelTimer();
-        if (this.focusPanelId === undefined) {
-            this.focusPanelShown = false;
-            this.setFocusPanelOpacity(0, false);
+    private syncFocusPanelVisibility(animate: boolean) {
+        if (!this.focusPanelEl) return;
+        const visible =
+            this.focusPanelId !== undefined &&
+            (this.gesture ? this.overview || this.gestureFocusPanelTriggered : this.overview);
+        if (visible) {
+            this.cancelFocusPanelTimer();
+            if (!this.focusPanelVisible) {
+                this.focusPanelVisible = true;
+                this.setFocusPanelOpacity(1, animate);
+            }
             return;
         }
-        if (this.overview) {
-            this.focusPanelShown = true;
-            this.setFocusPanelOpacity(1, false);
-            return;
+        if (this.focusPanelVisible) {
+            this.focusPanelVisible = false;
+            this.setFocusPanelOpacity(0, animate);
         }
-        if (!this.focusPanelShown) {
-            this.setFocusPanelOpacity(0, false);
-            return;
-        }
+        if (this.focusPanelId === undefined) return;
         if (!animate) {
-            this.focusPanelShown = false;
-            this.setFocusPanelOpacity(0, false);
+            this.cancelFocusPanelTimer();
             this.focusPanelId = undefined;
             return;
         }
-        // 退出动画期间继续跟随焦点卡片，动画结束后再淡出
-        this.setFocusPanelOpacity(1, false);
+        // 位置继续跟随退出动画；淡出结束后不再需要这块屏
+        if (this.focusPanelTimer !== undefined) return;
         this.focusPanelTimer = window.setTimeout(() => {
             this.focusPanelTimer = undefined;
-            this.focusPanelShown = false;
-            this.setFocusPanelOpacity(0, true);
+            if (this.focusPanelVisible) return;
             this.focusPanelId = undefined;
-        }, SCREEN_TRANSITION.duration);
+        }, SCREEN_TRANSITION.duration + FOCUS_PANEL_FADE);
     }
 
     /** 非手势状态下设置聚焦面板的初始位置，后续由卡片 gear 接管位置 */
     private syncFocusPanelRender(animate: boolean) {
         if (!this.focusPanelId) {
-            this.updateFocusPanelVisibility(animate);
+            this.syncFocusPanelVisibility(animate);
             return;
         }
         const screen = this.screens.find((s) => s.id === this.focusPanelId);
         if (!screen) {
             this.focusPanelId = undefined;
-            this.updateFocusPanelVisibility(animate);
+            this.syncFocusPanelVisibility(animate);
             return;
         }
         const value = animate ? screen.visual : screen.target;
         this.applyFocusPanelTransform({ x: value.x, y: value.y, scale: value.scale });
-        this.updateFocusPanelVisibility(animate);
+        this.syncFocusPanelVisibility(animate);
     }
 
     /** 预览里选中卡片要盖在其他卡片上；常规状态按当前屏决定层级 */
