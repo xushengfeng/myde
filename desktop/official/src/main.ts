@@ -996,6 +996,12 @@ class ViewData {
             if (updateLauncher) this.launcher?.exitOverview();
         }
         windowEl.el.toggleAttribute("data-overview", on);
+        this.setOverviewCloseOpacity(on ? 1 : 0);
+    }
+
+    /** 关闭按钮透明度绑定预览进度；手势里每帧直接跟 level */
+    private setOverviewCloseOpacity(progress: number) {
+        windowEl.el.style.setProperty("--overview-close-opacity", `${clampNumber(progress, 0, 1)}`);
     }
 
     private selectFromOverview(id: string) {
@@ -1014,6 +1020,8 @@ class ViewData {
         this.launcher?.settle();
         this.stopFocusSnap();
         this.focusSettle = undefined;
+        this.setOverviewCloseOpacity(this.overview ? 1 : 0);
+        windowEl.el.toggleAttribute("data-gesture", true);
         this.gestureFocusPanelTriggered = false;
         // 从当前稳定状态起手：已经在预览就当作 grid，否则从线性跟手开始
         for (const screen of this.screens) screen.pullMode = this.overview ? "grid" : "tracked";
@@ -1218,6 +1226,7 @@ class ViewData {
     private renderGestureFrame(gesture: NonNullable<ViewData["gesture"]>) {
         const progress = this.gestureGridProgress(gesture);
         this.overviewProgress = progress;
+        this.setOverviewCloseOpacity(progress);
         this.renderOverviewPull(progress, progress > 0 ? 0 : gesture.offset);
         if (gesture.launcherBinding.kind === "direct") {
             const progress = gesture.launcherBinding.from === "n" ? (gesture.level + 1) / 2 : (1 - gesture.level) / 2;
@@ -1231,6 +1240,7 @@ class ViewData {
         const gesture = this.gesture;
         if (!gesture) return;
         this.gesture = undefined;
+        windowEl.el.toggleAttribute("data-gesture", false);
         // 手势里直接写的是 visual；先把 gear 的内部值对齐，松手动画才不会从旧位置跳
         for (const screen of this.screens) screen.gear.moveTo(screen.visual, 0);
 
@@ -1276,6 +1286,8 @@ class ViewData {
         const gesture = this.gesture;
         if (!gesture) return;
         this.gesture = undefined;
+        windowEl.el.toggleAttribute("data-gesture", false);
+        this.setOverviewCloseOpacity(this.overview ? 1 : 0);
         for (const screen of this.screens) screen.gear.moveTo(screen.visual, 0);
         this.overviewProgress = this.overview ? 1 : 0;
         this.launcher?.applyBinding(gesture.launcherBinding);
@@ -2227,10 +2239,13 @@ addStyle({
         borderTopLeftRadius: "var(--window-radius, 18px)",
         borderTopRightRadius: "var(--window-radius, 18px)",
     },
-    // 总览里的关闭按钮用单独的覆盖层，避免和标题栏关闭按钮重叠
-    "[data-overview] [data-client-titlebar-close]": {
-        opacity: "0",
-        pointerEvents: "none",
+    // 桌面自建的内部窗口没有标题栏，关闭按钮同样随预览进度隐藏
+    "[data-internal-window] [data-desktop-ui='window-control']": {
+        opacity: "calc(1 - var(--overview-close-opacity, 0))",
+        transition: "opacity 120ms ease-out",
+    },
+    "[data-gesture] [data-internal-window] [data-desktop-ui='window-control']": {
+        transition: "none",
     },
     // 总览里隐藏缩放热区，避免缩小后挡住窗口缩略图
     "[data-overview] [data-desktop-ui='resize-handle']": {
@@ -2249,12 +2264,15 @@ addStyle({
     },
     // 卡片关闭按钮只在全局预览里出现，且要抢在内容禁指针之上
     "[data-desktop-ui='window-close']": {
-        opacity: "0",
+        opacity: "var(--overview-close-opacity, 0)",
         pointerEvents: "none",
         transition: "opacity 120ms ease-out",
     },
+    // 手势中直接跟 level，不再叠加过渡，避免和手指错拍
+    "[data-gesture] [data-desktop-ui='window-close']": {
+        transition: "none",
+    },
     "[data-overview] [data-view-id] [data-desktop-ui='window-close']": {
-        opacity: "1",
         pointerEvents: "auto",
     },
 });
