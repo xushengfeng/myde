@@ -425,6 +425,8 @@ type ViewScreen = {
     gear: AnimationGear<ViewTransform>;
     visual: ViewTransform;
     target: ViewTransform;
+    /** 手势进入预览时这张卡片的接力方式：跟手线性 / 定时去 grid / 打断后回线性 */
+    pullMode: "tracked" | "grid" | "linear";
 };
 
 type OverviewLayout = {
@@ -443,10 +445,10 @@ const DEFAULT_GESTURE_GAIN = 4;
 const DEFAULT_REORDER_DELAY = 3000;
 /** 总览卡片间距（CSS px） */
 const OVERVIEW_GAP = 24;
-/** 最后这段纵向进度才从线性排布重排成 grid，之前只做缩放和横移 */
-const OVERVIEW_GRID_BLEND_START = 0.8;
-/** grid 重排按行接力：每后一行比前一行晚这么多进度出发 */
-const OVERVIEW_GRID_ROW_STAGGER = 0.16;
+/** 过了这段纵向进度就从线性排布定时重排到 grid，不再绑定 level */
+const OVERVIEW_GRID_HANDOFF = 0.8;
+/** 跨过接力点后从线性布局重排到 grid 的定时动画 */
+const OVERVIEW_GRID_TRANSITION = { duration: 200, map: timingFunction.easeOut };
 /** 聚焦面板比卡片略大 */
 const FOCUS_PANEL_SCALE = 1.04;
 /** 聚焦面板出现/消失的独立过渡时长（ms），不跟移动进度 */
@@ -700,6 +702,7 @@ class ViewData {
             gear,
             visual: { ...start },
             target: { ...start },
+            pullMode: "tracked",
         };
         gear.setUpdateCallback((value) => {
             screen.visual = value;
@@ -998,6 +1001,8 @@ class ViewData {
         this.settleAnimation();
         this.launcher?.settle();
         this.gestureFocusPanelTriggered = false;
+        // 从当前稳定状态起手：已经在预览就当作 grid，否则从线性跟手开始
+        for (const screen of this.screens) screen.pullMode = this.overview ? "grid" : "tracked";
         this.focusVisual = this.currentIndex();
         const launcherBinding: LauncherBinding = this.launcher?.getBinding() ?? {
             kind: "line",
@@ -1071,27 +1076,22 @@ class ViewData {
         return Math.max(100, this.stageHeight * LAUNCHER_SWIPE_DISTANCE);
     }
 
-    /** 按连续进度把每个虚拟屏从常规位置插值到 grid；offset 是常规切屏的跟手位移 */
+    /** 手势中把每个虚拟屏从常规位置插值到 grid：接力点前跟手线性，接力点后定时重排 */
     private renderOverviewPull(progress: number, offset = 0) {
-        // 常规基准用连续焦点位置；p→1 时所有焦点都会插值到同一份 grid，所以中途横滑可以改变它
+        // 常规基准用连续焦点位置；进入 grid 前横滑可以改变它
         const normal = this.normalTargets(offset, this.focusVisual);
         const layout = this.overviewLayout();
         const overview = layout.targets;
         const hidden = { x: -this.stageWidth * 2, y: 0, scale: 1, opacity: 0, blur: 0 };
         const p = clampNumber(progress, 0, 1);
         const overviewVisual = p > 0;
-        // 缩放线性跑到接力点，之后保持卡片大小；排布从那一刻的快照接力到 grid
+        const handoff = OVERVIEW_GRID_HANDOFF;
+        // 接力点之前线性缩放、加间距，这段时间直接跟手
         const gridScale = layout.cards.length > 0 ? layout.cardWidth / this.stageWidth : 1;
-        const handoff = OVERVIEW_GRID_BLEND_START;
         const scaleProgress = Math.min(1, p / handoff);
         const scale = 1 + (gridScale - 1) * scaleProgress;
-        const gridBlend = clampNumber((p - handoff) / (1 - handoff), 0, 1);
-        // 接力后不再继续缩放，也不让线性排布继续变化，只做从快照到 grid 的位置移动
         const rowScale = p < handoff ? scale : gridScale;
         const rowGap = OVERVIEW_GAP * (p < handoff ? Math.min(1, p * 4) : 1);
-        const rows = layout.cards.length > 0 ? Math.ceil(layout.cards.length / layout.cols) : 1;
-        const staggerSpan = 1 + Math.max(0, rows - 1) * OVERVIEW_GRID_ROW_STAGGER;
-        const gridRow = new Map(layout.cards.map((screen, index) => [screen.id, Math.floor(index / layout.cols)]));
         const centerX = this.stageWidth / 2;
         const centerY = this.stageHeight / 2;
         // grid 可见时层级跟着预览里的焦点走，焦点和当前屏分开管理
@@ -1108,22 +1108,38 @@ class ViewData {
                 opacity: from.opacity,
                 blur: from.blur,
             };
-            const to = overview.get(screen.id);
-            const row = gridRow.get(screen.id) ?? 0;
-            const rowProgress = clampNumber(gridBlend * staggerSpan - row * OVERVIEW_GRID_ROW_STAGGER, 0, 1);
-            const cardProgress = rowProgress * rowProgress * (3 - 2 * rowProgress);
-            const value = to
-                ? {
-                      x: linear.x + (to.x - linear.x) * cardProgress,
-                      y: linear.y + (to.y - linear.y) * cardProgress,
-                      scale: rowScale,
-                      opacity: linear.opacity + (to.opacity - linear.opacity) * cardProgress,
-                      blur: linear.blur + (to.blur - linear.blur) * cardProgress,
-                  }
-                : linear;
-            screen.visual = value;
-            screen.target = value;
-            applyScreenTransform(screen.el, value);
+            if (p >= handoff) {
+                // 过了接力点就不再跟 level：定时重排到 grid，手势继续移动也随它去
+                if (screen.pullMode !== "grid") {
+                    const target = overview.get(screen.id) ?? linear;
+                    screen.pullMode = "grid";
+                    screen.target = target;
+                    screen.gear.moveTo(target, OVERVIEW_GRID_TRANSITION);
+                }
+                continue;
+            }
+            if (screen.pullMode === "grid") {
+                // 从 grid 动画中途打断回线性：gear 从当前视觉接着走
+                screen.pullMode = "linear";
+                const running = screen.gear.getRunningAnimation();
+                const rest = running.isRunning ? running.remainingTime : OVERVIEW_GRID_TRANSITION.duration;
+                screen.target = linear;
+                screen.gear.moveTo(linear, rest);
+                continue;
+            }
+            if (screen.pullMode === "linear") {
+                // 手指已经在跟踪线性布局：每帧按上帧残留时间续接目标，收敛到 0 后完全绑定
+                const running = screen.gear.getRunningAnimation();
+                if (running.isRunning && running.remainingTime > 0) {
+                    screen.target = linear;
+                    screen.gear.moveTo(linear, running.remainingTime);
+                    continue;
+                }
+                screen.pullMode = "tracked";
+            }
+            // 完全跟手：线性布局直接绑定
+            screen.target = linear;
+            screen.gear.moveTo(linear, 0);
         }
         this.syncFocusPanelGesture(p);
         // 只在这里跨过触发点：手势中一旦显示就保持到手势结束，不被后续移动反复打断
@@ -1184,7 +1200,7 @@ class ViewData {
         this.renderGestureFrame(gesture);
     }
 
-    /** 手势中的一帧：同一个连续坐标同时驱动 grid、搜索栏和跟手切屏 */
+    /** 手势中的一帧：同一个连续坐标驱动线性排布、搜索栏和跟手切屏；grid 重排在接力点后改为定时动画 */
     private renderGestureFrame(gesture: NonNullable<ViewData["gesture"]>) {
         const progress = this.gestureGridProgress(gesture);
         this.overviewProgress = progress;
@@ -1440,7 +1456,16 @@ class ViewData {
 
     /** 动画帧里让聚焦面板跟着选中的卡片自己的 gear 走，退出时也跟到最后 */
     private syncFocusPanelFrame(screen: ViewScreen) {
-        if (!this.focusPanelEl || this.focusPanelId !== screen.id) return;
+        if (!this.focusPanelEl) return;
+        // 手势中焦点可能落在两张卡片之间，按连续焦点重新插值，避免被单张卡片带偏
+        if (this.gesture) {
+            const progress = this.gestureGridProgress(this.gesture);
+            if (progress > 0) {
+                this.syncFocusPanelGesture(progress);
+                return;
+            }
+        }
+        if (this.focusPanelId !== screen.id) return;
         this.applyFocusPanelTransform(screen.visual);
     }
 
