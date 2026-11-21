@@ -556,6 +556,12 @@ class ViewData {
     private focusPanelTimer: number | undefined;
     /** 聚焦面板透明度动画；出现/消失独立，可互相打断，不跟移动进度 */
     private readonly focusPanelGear: AnimationGear<{ opacity: number }>;
+    /** 聚焦面板当前所在的连续焦点位置（可落在两张卡片之间） */
+    private focusPanelPos = 0;
+    /** 全局预览里松手后把面板吸附到实际聚焦屏 */
+    private readonly focusSnapGear: AnimationGear<{ pos: number }>;
+    /** 松手回常规时复用连续焦点的跟踪，进度由虚拟屏自己的吸附动画推进 */
+    private focusSettle: { from: number; to: number } | undefined;
     private launcher?: LauncherController;
 
     private currentId = "";
@@ -617,6 +623,11 @@ class ViewData {
         );
         this.focusPanelGear.setUpdateCallback((value) => {
             this.focusPanelEl.style({ opacity: `${value.opacity}` });
+        });
+        // 和虚拟屏吸附用同一条过渡，焦点下标与窗口布局同步推进
+        this.focusSnapGear = new AnimationGear({ pos: 0 }, { transition: SCREEN_TRANSITION });
+        this.focusSnapGear.setUpdateCallback((value) => {
+            this.applyFocusPanelAtPos(value.pos);
         });
         this.render(false);
     }
@@ -966,6 +977,7 @@ class ViewData {
     }
 
     private setOverviewInternal(on: boolean, updateLauncher = true) {
+        this.focusSettle = undefined;
         const wasOverview = this.overview;
         this.overview = on;
         this.overviewProgress = on ? 1 : 0;
@@ -1000,6 +1012,8 @@ class ViewData {
         if (this.gesture || (!this.overview && this.screens.length < 2)) return;
         this.settleAnimation();
         this.launcher?.settle();
+        this.stopFocusSnap();
+        this.focusSettle = undefined;
         this.gestureFocusPanelTriggered = false;
         // 从当前稳定状态起手：已经在预览就当作 grid，否则从线性跟手开始
         for (const screen of this.screens) screen.pullMode = this.overview ? "grid" : "tracked";
@@ -1141,7 +1155,7 @@ class ViewData {
             screen.target = linear;
             screen.gear.moveTo(linear, 0);
         }
-        this.syncFocusPanelGesture(p);
+        this.syncFocusPanelGesture();
         // 只在这里跨过触发点：手势中一旦显示就保持到手势结束，不被后续移动反复打断
         if (p > 0) this.gestureFocusPanelTriggered = true;
         this.syncFocusPanelVisibility(true);
@@ -1225,19 +1239,27 @@ class ViewData {
             const visualIndex = this.focusVisual - gesture.offset / this.stageWidth;
             const targetIndex = clampNumber(Math.round(visualIndex), 0, this.screens.length - 1);
             const target = this.screens[targetIndex];
-            if (!target || target.id === this.currentId) return;
-            this.currentId = target.id;
-            if (target.winId) this.focusWin(target.winId);
-            else this.blurAll();
+            if (!target) return;
+            if (target.id !== this.currentId) {
+                this.currentId = target.id;
+                if (target.winId) this.focusWin(target.winId);
+                else this.blurAll();
+            }
+            // 面板跟着窗口自己的吸附动画走，目标就是实际选中的窗口
+            if (this.focusPanelId !== undefined) this.focusPanelId = target.id;
         };
 
         if (gesture.horizontalMode === "screens") settleScreens();
+        // 松手时沿用和手势一样的连续重心位置
+        const focus = this.focusVisual - gesture.offset / this.stageWidth;
 
         if (gesture.launcherBinding.kind === "line") {
             const targetLevel = gesture.level >= 0.5 ? 1 : gesture.level <= -0.5 ? -1 : 0;
             this.launcher?.animateLineTo(targetLevel);
             this.applyOverview(targetLevel === 1, false);
             if (targetLevel !== 1) this.overviewFocusId = undefined;
+            if (targetLevel === 1) this.settleFocusPanel(focus);
+            else this.beginFocusSettle(focus);
             return;
         }
 
@@ -1246,6 +1268,8 @@ class ViewData {
         this.launcher?.animateDirectTo(targetProgress);
         this.applyOverview(targetState === "t", false);
         if (targetState !== "t") this.overviewFocusId = undefined;
+        if (targetState === "t") this.settleFocusPanel(focus);
+        else this.beginFocusSettle(focus);
     }
 
     private cancelGesture() {
@@ -1459,22 +1483,47 @@ class ViewData {
         if (!this.focusPanelEl) return;
         // 手势中焦点可能落在两张卡片之间，按连续焦点重新插值，避免被单张卡片带偏
         if (this.gesture) {
-            const progress = this.gestureGridProgress(this.gesture);
-            if (progress > 0) {
-                this.syncFocusPanelGesture(progress);
+            this.syncFocusPanelGesture();
+            return;
+        }
+        // 回常规的松手收尾：直接复用连续焦点跟踪，进度取虚拟屏自己的吸附进度
+        if (this.focusSettle) {
+            const settle = this.focusSettle;
+            const running = screen.gear.getRunningAnimation();
+            if (running.isRunning) {
+                const map = running.config.map ?? ((value: number) => value);
+                this.applyFocusPanelAtPos(settle.from + (settle.to - settle.from) * map(running.progress));
                 return;
             }
+            this.applyFocusPanelAtPos(settle.to);
+            this.focusSettle = undefined;
+            return;
+        }
+        // 吸附中：卡片每更新一帧，就用它最新的 visual 重新算一次重心
+        const snap = this.focusSnapGear.getRunningAnimation();
+        if (snap.isRunning) {
+            const map = snap.config.map ?? ((value: number) => value);
+            const pos = snap.fromValue.pos + (snap.toValue.pos - snap.fromValue.pos) * map(snap.progress);
+            this.applyFocusPanelAtPos(pos);
+            return;
         }
         if (this.focusPanelId !== screen.id) return;
         this.applyFocusPanelTransform(screen.visual);
     }
 
-    /** 手势中聚焦面板的位置跟着连续 focusPos 走；出现/消失由独立过渡控制，不在这里改透明度 */
-    private syncFocusPanelGesture(progress: number) {
+    /** 手势中聚焦面板按当前连续焦点取重心；常规滑屏的横向偏移也要算进去 */
+    private syncFocusPanelGesture() {
         const gesture = this.gesture;
+        if (!gesture) return;
+        // 预览里 offset 恒为 0；退回常规后 offset 跟手移动，焦点下标要跟着补偿
+        this.applyFocusPanelAtPos(this.focusVisual - gesture.offset / this.stageWidth);
+    }
+
+    /** 按连续焦点位置在卡片之间插值面板位置；位置可能落在两张卡片之间 */
+    private applyFocusPanelAtPos(pos: number) {
         const order = this.overviewFocusOrder();
-        if (!gesture || progress <= 0 || order.length === 0) return;
-        const p = clampNumber(gesture.focusPos, 0, order.length - 1);
+        if (order.length === 0) return;
+        const p = clampNumber(pos, 0, order.length - 1);
         const i0 = Math.floor(p);
         const i1 = Math.min(order.length - 1, Math.ceil(p));
         const t = p - i0;
@@ -1483,12 +1532,43 @@ class ViewData {
         if (!from || !to) return;
         const a = from.visual;
         const b = to.visual;
-        const value = {
+        this.focusPanelPos = p;
+        this.applyFocusPanelTransform({
             x: a.x + (b.x - a.x) * t,
             y: a.y + (b.y - a.y) * t,
             scale: a.scale + (b.scale - a.scale) * t,
-        };
-        this.applyFocusPanelTransform(value);
+        });
+    }
+
+    /** 松手回常规：不新建动画，沿用连续焦点跟踪，进度跟虚拟屏吸附同步 */
+    private beginFocusSettle(from: number) {
+        if (this.focusPanelId === undefined) return;
+        const order = this.overviewFocusOrder();
+        const target = order.findIndex((screen) => screen.id === this.focusPanelId);
+        if (target < 0 || Math.abs(target - from) < 1e-3) return;
+        this.focusSettle = { from, to: target };
+        this.applyFocusPanelAtPos(from);
+    }
+
+    /** 停掉未完成的吸附，保留当前视觉位置 */
+    private stopFocusSnap() {
+        if (this.focusSnapGear.getRunningAnimation().isRunning) {
+            this.focusSnapGear.moveTo({ pos: this.focusPanelPos }, 0);
+        }
+    }
+
+    /** 松手后从连续焦点按重心插值吸附到实际聚焦屏 */
+    private settleFocusPanel(pos: number) {
+        if (this.focusPanelId === undefined) return;
+        const order = this.overviewFocusOrder();
+        if (order.length <= 1) return;
+        const from = clampNumber(pos, 0, order.length - 1);
+        const targetIndex = order.findIndex((screen) => screen.id === this.focusPanelId);
+        const to = targetIndex >= 0 ? targetIndex : Math.round(from);
+        if (Math.abs(to - from) < 1e-3) return;
+        // 先对齐当前连续位置，再和虚拟屏吸附用同一条过渡
+        this.focusSnapGear.moveTo({ pos: from }, 0);
+        this.focusSnapGear.moveTo({ pos: to }, SCREEN_TRANSITION);
     }
 
     /**
@@ -1529,6 +1609,7 @@ class ViewData {
 
     /** 非手势状态下设置聚焦面板的初始位置，后续由卡片 gear 接管位置 */
     private syncFocusPanelRender(animate: boolean) {
+        if (!this.overview) this.stopFocusSnap();
         if (!this.focusPanelId) {
             this.syncFocusPanelVisibility(animate);
             return;
@@ -1539,8 +1620,10 @@ class ViewData {
             this.syncFocusPanelVisibility(animate);
             return;
         }
-        const value = animate ? screen.visual : screen.target;
-        this.applyFocusPanelTransform({ x: value.x, y: value.y, scale: value.scale });
+        if (!this.focusSettle && !this.focusSnapGear.getRunningAnimation().isRunning) {
+            const value = animate ? screen.visual : screen.target;
+            this.applyFocusPanelTransform({ x: value.x, y: value.y, scale: value.scale });
+        }
         this.syncFocusPanelVisibility(animate);
     }
 
