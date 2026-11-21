@@ -447,7 +447,7 @@ const OVERVIEW_GAP = 24;
 const OVERVIEW_GRID_BLEND_START = 0.8;
 /** grid 重排按行接力：每后一行比前一行晚这么多进度出发 */
 const OVERVIEW_GRID_ROW_STAGGER = 0.16;
-/** 聚焦毛玻璃面板比卡片略大 */
+/** 聚焦面板比卡片略大 */
 const FOCUS_PANEL_SCALE = 1.04;
 /** 三指手势每个轴各自生效前的死区（CSS px）；横竖两轴独立，不锁定方向 */
 const GESTURE_AXIS_DEADZONE = 12;
@@ -541,11 +541,11 @@ class ViewData {
     private overviewFocusId: string | undefined;
     /** 常规插值基准的连续屏序号；预览里横滑时跟手连续变化 */
     private focusVisual = 0;
-    /** 预览里的聚焦毛玻璃面板，横滑时在卡片间跟手移动 */
+    /** 预览里的聚焦面板，横滑时在卡片间跟手移动 */
     private readonly focusPanelEl: ElType<HTMLElement>;
     /** 聚焦面板跟随的屏；退出时保留，直到淡出结束 */
     private focusPanelId: string | undefined;
-    /** 聚焦面板当前是否已经显示，用来只在进出动画结尾做透明度过渡 */
+    /** 聚焦面板当前是否已经显示，用来决定退出动画期间是否继续跟随 */
     private focusPanelShown = false;
     private focusPanelTimer: number | undefined;
     private launcher?: LauncherController;
@@ -599,8 +599,8 @@ class ViewData {
                 opacity: "0",
                 willChange: "transform, opacity",
                 borderRadius: "calc((var(--window-radius, 18px) + 2px) * var(--desktop-ui-scale, 1))",
-                background: "rgba(255,255,255,0.32)",
-                backdropFilter: "blur(24px)",
+                // 纯白不透明，避免 backdrop-filter 带来的合成压力
+                background: "#fff",
             })
             .addInto(windowEl);
         this.render(false);
@@ -1430,7 +1430,7 @@ class ViewData {
     /** 动画帧里让聚焦面板跟着选中的卡片自己的 gear 走，退出时也跟到最后 */
     private syncFocusPanelFrame(screen: ViewScreen) {
         if (!this.focusPanelEl || this.focusPanelId !== screen.id) return;
-        // 退出淡出完成后就不用再跟了；进入动画期间即使还没显示也要跟住卡片
+        // 进入和退出动画期间都跟住卡片；退出淡出完成后停止
         if (!this.overview && !this.focusPanelShown) return;
         this.applyFocusPanelTransform(screen.visual);
     }
@@ -1472,7 +1472,10 @@ class ViewData {
         });
     }
 
-    /** 进出预览时只在动画结尾做透明度过渡；退出时位置继续跟着焦点卡片 */
+    /**
+     * 进入预览时和手势一样立刻可见，位置和缩放由卡片动画连续驱动，不等到动画结束才出现；
+     * 退出时继续跟着焦点卡片移动到动画结束再淡出。
+     */
     private updateFocusPanelVisibility(animate: boolean) {
         this.cancelFocusPanelTimer();
         if (this.focusPanelId === undefined) {
@@ -1481,22 +1484,8 @@ class ViewData {
             return;
         }
         if (this.overview) {
-            if (this.focusPanelShown) {
-                this.setFocusPanelOpacity(1, false);
-                return;
-            }
-            if (!animate) {
-                this.focusPanelShown = true;
-                this.setFocusPanelOpacity(1, false);
-                return;
-            }
-            // 卡片动画期间先隐藏，结尾再淡入
-            this.setFocusPanelOpacity(0, false);
-            this.focusPanelTimer = window.setTimeout(() => {
-                this.focusPanelTimer = undefined;
-                this.focusPanelShown = true;
-                this.setFocusPanelOpacity(1, true);
-            }, SCREEN_TRANSITION.duration);
+            this.focusPanelShown = true;
+            this.setFocusPanelOpacity(1, false);
             return;
         }
         if (!this.focusPanelShown) {
