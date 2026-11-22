@@ -697,7 +697,7 @@ class ViewData {
         this.render(false);
     }
 
-    private createScreen(kind: "empty" | "launchpad") {
+    private createScreen(kind: "empty" | "launchpad" | "app") {
         const id = `view-${this.nextId++}`;
         const el = createScreenEl(id, () => {
             if (this.overview) this.selectFromOverview(id);
@@ -736,6 +736,44 @@ class ViewData {
         const screen = this.createScreen("launchpad");
         this.screens.push(screen);
         return screen;
+    }
+
+    /** 启动动画先占一个应用屏；窗口创建后通过 attachWindowToScreen 绑定 */
+    addPendingAppScreen() {
+        this.cancelGesture();
+        const screen = this.createScreen("app");
+        const emptyIndex = this.screens.findIndex((s) => s.empty);
+        if (emptyIndex >= 0) this.screens.splice(emptyIndex, 0, screen);
+        else {
+            const launchpadIndex = this.screens.findIndex((s) => s.launchpad);
+            this.screens.splice(launchpadIndex >= 0 ? launchpadIndex : this.screens.length, 0, screen);
+        }
+        screen.used = ++this.usedSeq;
+        this.currentId = screen.id;
+        this.setOverviewInternal(false);
+        this.scheduleReorder();
+        this.render(true);
+        return screen;
+    }
+
+    /** 把真实窗口绑到启动动画预先创建的应用屏 */
+    attachWindowToScreen(winid: MWinId, screen: ViewScreen) {
+        this.cancelGesture();
+        screen.empty = false;
+        screen.winId = winid;
+        screen.used = ++this.usedSeq;
+        this.win2Screen.set(winid, screen);
+        this.currentId = screen.id;
+        this.setOverviewInternal(false);
+        this.scheduleReorder();
+        this.render(true);
+        return screen;
+    }
+
+    /** 托盘面板关闭时回收没有窗口的应用屏 */
+    discardPendingScreen(screen: ViewScreen) {
+        if (screen.winId !== undefined) return;
+        this.removeOwnScreen(screen);
     }
 
     /**
@@ -1864,18 +1902,21 @@ class WindowCenterManager {
         return this.config.enabled;
     }
 
+    /** 按当前可用区和窗口外框尺寸算居中位置；启动动画也用它对齐 */
+    centeredPosition(windowWidth: number, windowHeight: number) {
+        const { x, y, width, height } = this.config.viewport;
+        return {
+            left: Math.round(x + (width - windowWidth) / 2),
+            top: Math.round(y + (height - windowHeight) / 2),
+        };
+    }
+
     centerWindow(windowId: string) {
         const element = this.windowElements.get(windowId);
         if (!element) return;
-
-        const windowWidth = element.offsetWidth;
-        const windowHeight = element.offsetHeight;
-
-        const centerX = this.config.viewport.x + (this.config.viewport.width - windowWidth) / 2;
-        const centerY = this.config.viewport.y + (this.config.viewport.height - windowHeight) / 2;
-
-        element.style.left = `${Math.round(centerX)}px`;
-        element.style.top = `${Math.round(centerY)}px`;
+        const position = this.centeredPosition(element.offsetWidth, element.offsetHeight);
+        element.style.left = `${position.left}px`;
+        element.style.top = `${position.top}px`;
     }
 
     private recenterAll() {
@@ -2849,9 +2890,27 @@ function applyClientFrameChrome(frame: ClientWindowFrame) {
  * 宽高 = surface 显示尺寸 + 标题栏。由渲染层在画布尺寸写入 DOM 的同一时刻触发，
  * 不用 ResizeObserver，避免回调晚一帧。
  */
+/** 内部 xdg surface DOM 的显示尺寸；渲染层写进去的 CSS 尺寸带小数，比 offset 更准 */
+function frameContentDisplaySize(frame: ClientWindowFrame) {
+    const styleWidth = Number.parseFloat(frame.content.style.width);
+    const styleHeight = Number.parseFloat(frame.content.style.height);
+    return {
+        width: styleWidth > 0 ? styleWidth : frame.content.offsetWidth,
+        height: styleHeight > 0 ? styleHeight : frame.content.offsetHeight,
+    };
+}
+
 function applyFrameSurfaceSize(frame: ClientWindowFrame, width?: number, height?: number) {
     if (width !== undefined) frame.surfaceWidth = Math.max(1, width);
     if (height !== undefined) frame.surfaceHeight = Math.max(1, height);
+    if (width === undefined && height === undefined) {
+        // 服务端 buffer 尺寸可能包含客户端阴影，外框跟内部 surface DOM 走
+        const content = frameContentDisplaySize(frame);
+        if (content.width > 1 && content.height > 1) {
+            frame.surfaceWidth = Math.max(1, content.width);
+            frame.surfaceHeight = Math.max(1, content.height);
+        }
+    }
     const bar = titlebarPx(frame);
     frame.el.style({
         width: `${frame.surfaceWidth}px`,
@@ -3436,14 +3495,29 @@ MSysApi.portal?.on("fileChooser.request", (request) => {
     }
 });
 
-function appLauncher(iconPath: () => Promise<string>, name: string, exec: string, env?: Record<string, string>) {
-    const p = appIconEl(exec, env);
+type AppIconLaunchInfo = {
+    name: string;
+    appid?: string;
+    icon?: () => Promise<string | undefined>;
+    /** 启动前收起所在弹窗（开始菜单、顶部快捷应用） */
+    onLaunch?: () => void;
+};
+
+function appLauncher(
+    iconPath: () => Promise<string>,
+    name: string,
+    exec: string,
+    env?: Record<string, string>,
+    appid?: string,
+    onLaunch?: () => void,
+) {
+    const p = appIconEl(exec, env, { name, appid, icon: iconPath, onLaunch });
     loadAppIcon(p, iconPath, name);
     return p;
 }
 
 /** 只创建应用图标容器，图标由调用方在需要时再加载 */
-function appIconEl(exec?: string, env?: Record<string, string>) {
+function appIconEl(exec?: string, env?: Record<string, string>, launch?: AppIconLaunchInfo) {
     const p = view().style({
         width: "48px",
         height: "48px",
@@ -3454,10 +3528,16 @@ function appIconEl(exec?: string, env?: Record<string, string>) {
         flexShrink: 0,
     });
     if (exec !== undefined) {
-        p.on("click", async () => {
-            console.log("exec", exec);
-            await server.startXwayland();
-            server.runApp(exec, { env });
+        p.on("click", () => {
+            launch?.onLaunch?.();
+            launchApp({
+                exec,
+                env,
+                name: launch?.name || exec,
+                appid: launch?.appid,
+                icon: launch?.icon,
+                sourceEl: p.el,
+            });
         });
     }
     return p;
@@ -3531,6 +3611,806 @@ function loadAppIcon(
                 .addInto(p);
         })
         .catch(() => {});
+}
+
+// ── 应用启动动画 ─────────────────────────────────────────────────────────────
+// 从图标启动时先在图标位置出现白色面板，下压回弹后跟着新虚拟屏飞入并放大，
+// 最后嵌进虚拟屏，等真实窗口出现再替换。屏幕位置每帧从 ViewScreen.visual 读取，
+// 所以切屏、总览缩放等变化都会被面板实时跟踪。
+
+type LaunchRect = { left: number; top: number; width: number; height: number };
+
+type AppLaunchRequest = {
+    exec: string;
+    env?: Record<string, string>;
+    name: string;
+    appid?: string;
+    icon?: () => Promise<string | undefined>;
+    sourceEl?: HTMLElement;
+    sourceRect?: LaunchRect;
+    iconSrc?: string;
+};
+
+type LaunchPhase = "press" | "flying" | "embedded" | "replaced";
+
+type PendingLaunch = {
+    exec: string;
+    appid?: string;
+    child?: ReturnType<typeof server.runApp>;
+    panel: ElType<HTMLElement>;
+    /** 面板的白色底和图标层；窗口淡入时一起淡出 */
+    cover: ElType<HTMLElement>;
+    iconImg: ElType<HTMLImageElement>;
+    iconLetter: ElType<HTMLElement>;
+    closeBtn: ElType<HTMLElement>;
+    /** 按下时先缩小的图标；透明后移除，面板这时才出现 */
+    intro?: ElType<HTMLElement>;
+    introSetIcon?: (src: string | undefined) => void;
+    startRect: LaunchRect;
+    phase: LaunchPhase;
+    screen?: ViewScreen;
+    /** 飞入起点是真实屏幕，不跟虚拟屏；只有被手势/总览/切屏接管后才跟屏 */
+    trackScreen: boolean;
+    trackFrom?: { p: number; centerX: number; centerY: number };
+    flightTarget?: { x: number; y: number; scale: number };
+    flightProgress: number;
+    /** 飞入过程中面板的视口尺寸；单独用 gear 改尺寸，不等同于位置进度 */
+    flightSize: { width: number; height: number };
+    /** 跟屏时尺寸目标对应的 visual.scale，缩放变化时重新瞄准尺寸 */
+    sizeScale?: number;
+    frame?: ClientWindowFrame;
+    winHandle?: WinHandle;
+    /** 默认窗口尺寸（已乘输出缩放）；窗口出现后换成真实尺寸 */
+    targetWidth: number;
+    targetHeight: number;
+    /** 从 WindowInfo 先算出的窗口外框尺寸（显示 px，含服务端装饰标题栏） */
+    windowWidth?: number;
+    windowHeight?: number;
+    replacing: boolean;
+    revealed: boolean;
+    claiming: boolean;
+    closing: boolean;
+    arrivedAt: number;
+    flightGear?: AnimationGear<{ p: number }>;
+    sizeGear?: AnimationGear<{ width: number; height: number }>;
+    trayTimer?: number;
+};
+
+const pendingLaunches = new Set<PendingLaunch>();
+/** 等待窗口时多久后把面板当成托盘应用，显示关闭按钮 */
+const LAUNCH_TRAY_DELAY = 3000;
+const LAUNCH_PRESS_IN = { duration: 130, map: timingFunction.easeIn };
+const LAUNCH_PRESS_OUT = { duration: 180, map: timingFunction.easeOut };
+/** 面板飞入按真实屏幕的终点走直线；快进慢停，不跟虚拟屏自己的滑动曲线 */
+const LAUNCH_FLIGHT = { duration: 240, map: timingFunction.cubicBezier(0.16, 1, 0.3, 1) };
+const LAUNCH_REPLACE_FADE = { duration: 180, map: timingFunction.easeInOut };
+const CLOSE_FADE = { duration: 220, map: timingFunction.easeOut };
+
+let launchLayer: ElType<HTMLElement> | undefined;
+let closeLayer: ElType<HTMLElement> | undefined;
+
+function ensureCloseLayer() {
+    if (closeLayer) return closeLayer;
+    closeLayer = view()
+        .style({
+            position: "absolute",
+            inset: "0",
+            overflow: "hidden",
+            pointerEvents: "none",
+            // 和虚拟屏同层附近，但在所有屏之上；关闭的窗口不再属于任何屏
+            zIndex: "3",
+        })
+        .addInto(windowElWarp);
+    return closeLayer;
+}
+
+function fullStageSize() {
+    return {
+        width: windowEl.el.offsetWidth || window.innerWidth,
+        height: windowEl.el.offsetHeight || window.innerHeight,
+    };
+}
+
+function elementRect(el: HTMLElement): LaunchRect {
+    const rect = el.getBoundingClientRect();
+    return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+}
+
+function sourceIconSrc(el: HTMLElement | undefined) {
+    return el?.querySelector("img")?.getAttribute("src") || undefined;
+}
+
+function ensureLaunchLayer() {
+    if (launchLayer) return launchLayer;
+    launchLayer = view()
+        .style({
+            position: "fixed",
+            inset: "0",
+            overflow: "hidden",
+            pointerEvents: "none",
+            // 在工具栏/搜索栏之上、锁屏和光标之下
+            zIndex: "25",
+        })
+        .addInto(mainEl);
+    return launchLayer;
+}
+
+function setPanelRect(panel: ElType<HTMLElement>, rect: LaunchRect) {
+    panel.style({
+        left: `${rect.left}px`,
+        top: `${rect.top}px`,
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+    });
+}
+
+/**
+ * 启动动画用的应用外框尺寸：外壳 data-client-frame 的尺寸可能不准，
+ * 以内部 surface DOM 的实际大小为准，再补服务端装饰标题栏高度。
+ */
+function launchFrameOuterSize(frame: ClientWindowFrame, state?: PendingLaunch) {
+    const content = frameContentDisplaySize(frame);
+    const fallbackWidth = state?.windowWidth || frame.surfaceWidth || 1;
+    const fallbackHeight = state?.windowHeight || frame.surfaceHeight + titlebarPx(frame) || 1;
+    return {
+        width: Math.max(1, content.width || fallbackWidth),
+        height: Math.max(1, content.height > 0 ? content.height + titlebarPx(frame) : fallbackHeight),
+    };
+}
+
+/** 面板尺寸变化时，把里面的真实窗口按比例缩放并居中，动画里看到的是缩小的应用 */
+function layoutLaunchFrameInPanel(state: PendingLaunch, panelWidth: number, panelHeight: number) {
+    const frame = state.frame;
+    if (!frame || frame.el.el.parentElement !== state.panel.el) return;
+    // 用内部 surface DOM 的真实尺寸（再补服务端装饰标题栏），外壳尺寸可能不准
+    const { width: windowWidth, height: windowHeight } = launchFrameOuterSize(frame, state);
+    const scale = Math.max(0.0001, Math.min(panelWidth / windowWidth, panelHeight / windowHeight));
+    frame.el.style({
+        left: `${(panelWidth - windowWidth * scale) / 2}px`,
+        top: `${(panelHeight - windowHeight * scale) / 2}px`,
+        transform: `scale(${scale})`,
+        transformOrigin: "0 0",
+    });
+}
+
+function setLaunchPanelRect(state: PendingLaunch, rect: LaunchRect) {
+    setPanelRect(state.panel, rect);
+    layoutLaunchFrameInPanel(state, rect.width, rect.height);
+}
+
+/** 面板在虚拟屏里的目标矩形：真实窗口出现后贴住窗口，否则居中 800×600（乘输出缩放） */
+function launchTargetLocalRect(state: PendingLaunch): LaunchRect {
+    const frame = state.frame;
+    if (frame) {
+        // 和 WindowCenterManager 的 ResizeObserver 用同一套外框尺寸/可用区/取整方式
+        const width = Math.max(1, frame.el.el.offsetWidth || state.windowWidth || state.targetWidth);
+        const height = Math.max(1, frame.el.el.offsetHeight || state.windowHeight || state.targetHeight);
+        const position = windowCenterManager.centeredPosition(width, height);
+        return { left: position.left, top: position.top, width, height };
+    }
+    const available = availableStageSize();
+    return {
+        left: Math.round(available.x + (available.width - state.targetWidth) / 2),
+        top: Math.round(available.y + (available.height - state.targetHeight) / 2),
+        width: state.targetWidth,
+        height: state.targetHeight,
+    };
+}
+
+/**
+ * 窗口刚创建时先用 WindowInfo 算出显示尺寸，不等首帧 surface：
+ * 内容逻辑尺寸乘输出缩放，服务端装饰再加标题栏高度。
+ */
+function prepareLaunchWindowSize(state: PendingLaunch, frame: ClientWindowFrame, info: WindowInfo) {
+    const scale = info.scale || screenManager.getScale() || 1;
+    frame.surfaceWidth = Math.max(1, Math.round((info.rect.w || 800) * scale));
+    frame.surfaceHeight = Math.max(1, Math.round((info.rect.h || 600) * scale));
+    applyFrameSurfaceSize(frame);
+    state.windowWidth = frame.surfaceWidth;
+    state.windowHeight = frame.surfaceHeight + titlebarPx(frame);
+    // 首帧提交前面板是白色，窗口也用白底过渡，交叉淡入时不会露出透明空洞
+    frame.el.el.style.background = "#fff";
+    frame.el.el.style.borderRadius = "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))";
+}
+
+function setLaunchIcon(state: PendingLaunch, src: string | undefined) {
+    if (!src || !pendingLaunches.has(state)) return;
+    state.iconImg.attr({ src });
+    state.iconImg.style({ display: "block" });
+    state.iconLetter.style({ display: "none" });
+    state.introSetIcon?.(src);
+}
+
+function createLaunchPanel(name: string, iconSrc: string | undefined, onClose: () => void) {
+    const iconLetter = txt((name.trim()[0] || "?").toUpperCase()).style({
+        fontSize: "28px",
+        fontWeight: "600",
+        color: "#555",
+    });
+    const iconImg = ele("img")
+        .style({ width: "100%", height: "100%", objectFit: "contain", display: "none" })
+        .attr({ alt: "", draggable: false });
+    const iconBox = view().style({
+        width: "70%",
+        height: "70%",
+        maxWidth: "calc(96px * var(--desktop-ui-scale, 1))",
+        maxHeight: "calc(96px * var(--desktop-ui-scale, 1))",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: "0",
+    });
+    iconBox.add([iconLetter, iconImg]);
+
+    // 白色底和图标单独一层，替换窗口时和窗口一起淡出，最后面板本身是透明的
+    const cover = view().style({
+        position: "absolute",
+        inset: "0",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#fff",
+        borderRadius: "inherit",
+    });
+    cover.add(iconBox);
+
+    const panel = view()
+        .data({ "desktop-ui": "launch-panel" })
+        .style({
+            position: "absolute",
+            boxSizing: "border-box",
+            pointerEvents: "none",
+            borderRadius: "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))",
+            transformOrigin: "50% 50%",
+            willChange: "left, top, width, height, transform",
+        })
+        .add(cover);
+
+    const closeBtn = createWindowCloseButton({ size: 26, onClick: onClose }).style({
+        position: "absolute",
+        top: "10px",
+        right: "10px",
+        display: "none",
+        pointerEvents: "auto",
+    });
+    panel.add(closeBtn);
+
+    const setIcon = (src: string | undefined) => {
+        if (!src) return;
+        iconImg.attr({ src });
+        iconImg.style({ display: "block" });
+        iconLetter.style({ display: "none" });
+    };
+    setIcon(iconSrc);
+
+    return { panel, cover, iconImg, iconLetter, closeBtn, setIcon };
+}
+
+/** 启动入口：所有应用启动都经过这里。source 用于让动画从点击的图标开始 */
+function launchApp(req: AppLaunchRequest) {
+    const sourceRect = req.sourceRect ?? (req.sourceEl ? elementRect(req.sourceEl) : undefined);
+    const stage = fullStageSize();
+    const rect: LaunchRect = sourceRect ?? {
+        left: stage.width / 2 - 32,
+        top: stage.height / 2 - 32,
+        width: 64,
+        height: 64,
+    };
+    const initialIcon = req.iconSrc ?? sourceIconSrc(req.sourceEl);
+    const scale = screenManager.getScale();
+    let state!: PendingLaunch;
+    const { panel, cover, iconImg, iconLetter, closeBtn } = createLaunchPanel(
+        req.name,
+        initialIcon,
+        () => void forceQuitLaunch(state),
+    );
+    const intro = createLaunchPanel(req.name, initialIcon, () => {});
+    state = {
+        exec: req.exec,
+        appid: req.appid,
+        panel,
+        cover,
+        iconImg,
+        iconLetter,
+        closeBtn,
+        intro: intro.panel,
+        introSetIcon: intro.setIcon,
+        startRect: rect,
+        phase: "press",
+        trackScreen: false,
+        flightProgress: 0,
+        flightSize: { width: rect.width, height: rect.height },
+        targetWidth: 800 * scale,
+        targetHeight: 600 * scale,
+        replacing: false,
+        revealed: false,
+        claiming: false,
+        closing: false,
+        arrivedAt: Date.now(),
+    };
+    pendingLaunches.add(state);
+    ensureLaunchLayer().add(intro.panel);
+    setPanelRect(intro.panel, rect);
+    if (!initialIcon && req.icon) {
+        void req
+            .icon()
+            .then((src) => setLaunchIcon(state, src))
+            .catch(() => {});
+    }
+
+    startLaunchPress(state);
+
+    void (async () => {
+        try {
+            await server.startXwayland();
+            const child = server.runApp(req.exec, { env: req.env });
+            state.child = child;
+            // 启动失败/提前退出：没有窗口就按托盘面板保留，关掉它时才回收
+            child.once("error", () => markLaunchAsTray(state));
+            child.once("exit", () => markLaunchAsTray(state));
+        } catch (error) {
+            console.warn(`[launch] 启动 ${req.exec} 失败:`, error);
+            markLaunchAsTray(state);
+        }
+    })();
+}
+
+function startLaunchPress(state: PendingLaunch) {
+    const intro = state.intro;
+    if (!intro) {
+        startLaunchFlight(state);
+        return;
+    }
+    // 图标先缩小淡出；完全透明时再创建白色面板，让面板从同样的缩小状态淡回来
+    const gear = new AnimationGear({ p: 0 }, { transition: LAUNCH_PRESS_IN });
+    gear.setUpdateCallback(({ p }) => {
+        intro.style({ transform: `scale(${1 - 0.14 * p})`, opacity: `${1 - p}` });
+    });
+    gear.moveTo({ p: 1 }, LAUNCH_PRESS_IN, () => {
+        intro.remove();
+        state.intro = undefined;
+        state.introSetIcon = undefined;
+        if (!pendingLaunches.has(state) || state.closing) return;
+
+        ensureLaunchLayer().add(state.panel);
+        setLaunchPanelRect(state, state.startRect);
+        state.panel.style({ opacity: "0", transform: "scale(0.86)" });
+        const back = new AnimationGear({ p: 0 }, { transition: LAUNCH_PRESS_OUT });
+        back.setUpdateCallback(({ p }) => {
+            state.panel.style({ opacity: `${p}`, transform: `scale(${0.86 + 0.14 * p})` });
+        });
+        back.moveTo({ p: 1 }, LAUNCH_PRESS_OUT, () => {
+            if (!pendingLaunches.has(state) || state.phase !== "press") return;
+            state.panel.style({ opacity: "1", transform: "none" });
+            startLaunchFlight(state);
+        });
+    });
+}
+
+/** 虚拟屏局部矩形 → 屏幕（视口）矩形 */
+function screenRectOf(transform: { x: number; y: number; scale: number }, local: LaunchRect): LaunchRect {
+    return {
+        left: transform.x + local.left * transform.scale,
+        top: transform.y + local.top * transform.scale,
+        width: local.width * transform.scale,
+        height: local.height * transform.scale,
+    };
+}
+
+function localRectOf(rect: LaunchRect, transform: { x: number; y: number; scale: number }): LaunchRect {
+    const scale = Math.max(0.0001, transform.scale);
+    return {
+        left: (rect.left - transform.x) / scale,
+        top: (rect.top - transform.y) / scale,
+        width: rect.width / scale,
+        height: rect.height / scale,
+    };
+}
+
+/** 创屏滑动以外的操作（手势、总览、切屏按钮等）接管了虚拟屏时，面板才改为跟屏 */
+function launchScreenTakenOver(state: PendingLaunch) {
+    if (viewData.gestureActive || viewData.overview) return true;
+    const target = state.screen?.target;
+    const base = state.flightTarget;
+    if (!target || !base) return false;
+    return (
+        Math.abs(target.x - base.x) > 0.5 ||
+        Math.abs(target.y - base.y) > 0.5 ||
+        Math.abs(target.scale - base.scale) > 0.001
+    );
+}
+
+function startLaunchFlight(state: PendingLaunch) {
+    if (!pendingLaunches.has(state)) return;
+    state.phase = "flying";
+    // 回弹后从工具栏层级降到虚拟屏附近：仍在窗口层之上，但不再盖住工具栏
+    windowElWarp.add(state.panel);
+    state.panel.style({ zIndex: "3", transform: "none" });
+    // 按下期间先不切屏。现在才把窗口放进新建的虚拟屏（或补一个空屏）。
+    if (!state.screen) {
+        if (state.frame) {
+            state.screen = viewData.addWindowScreen(state.frame.handle);
+            addWindow(state.screen, state.frame.el.el, state.frame.handle, true);
+            viewData.focusWin(state.frame.handle);
+        } else {
+            state.screen = viewData.addPendingAppScreen();
+        }
+    } else {
+        viewData.setCurrentScreen(state.screen.id, true);
+    }
+
+    state.trackScreen = false;
+    state.trackFrom = undefined;
+    state.flightProgress = 0;
+    state.flightSize = { width: state.startRect.width, height: state.startRect.height };
+    state.flightTarget = {
+        x: state.screen.target.x,
+        y: state.screen.target.y,
+        scale: state.screen.target.scale,
+    };
+    const targetLocal = launchTargetLocalRect(state);
+    const targetViewport = screenRectOf(state.flightTarget, targetLocal);
+
+    // 位置按中心直线走；尺寸单独用 gear。窗口尺寸中途变化时只重新瞄准尺寸，不改变中心轨迹。
+    const gear = new AnimationGear({ p: 0 }, { transition: LAUNCH_FLIGHT });
+    state.flightGear = gear;
+    gear.setUpdateCallback(({ p }) => {
+        state.flightProgress = p;
+        renderLaunchGeometry(state);
+    });
+    const sizeGear = new AnimationGear(
+        { width: state.startRect.width, height: state.startRect.height },
+        { transition: LAUNCH_FLIGHT },
+    );
+    state.sizeGear = sizeGear;
+    sizeGear.setUpdateCallback((value) => {
+        if (!pendingLaunches.has(state)) return;
+        state.flightSize = value;
+        renderLaunchGeometry(state);
+    });
+    sizeGear.moveTo({ width: targetViewport.width, height: targetViewport.height }, LAUNCH_FLIGHT);
+    gear.moveTo({ p: 1 }, LAUNCH_FLIGHT, () => finishLaunchFlight(state));
+    if (state.frame) beginLaunchReplacement(state);
+}
+
+function renderLaunchGeometry(state: PendingLaunch) {
+    const screen = state.screen;
+    if (!screen || !pendingLaunches.has(state)) return;
+    const p = state.flightProgress;
+    const targetLocal = launchTargetLocalRect(state);
+    const targetTransform = state.flightTarget ?? screen.target;
+    const targetViewport = screenRectOf(targetTransform, targetLocal);
+    const startX = state.startRect.left + state.startRect.width / 2;
+    const startY = state.startRect.top + state.startRect.height / 2;
+    const targetX = targetViewport.left + targetViewport.width / 2;
+    const targetY = targetViewport.top + targetViewport.height / 2;
+    const baseX = startX + (targetX - startX) * p;
+    const baseY = startY + (targetY - startY) * p;
+    const size = state.flightSize;
+
+    if (!state.trackScreen && launchScreenTakenOver(state)) {
+        state.trackScreen = true;
+        const scale = Math.max(0.0001, screen.visual.scale);
+        state.sizeScale = scale;
+        state.trackFrom = {
+            p,
+            centerX: (baseX - screen.visual.x) / scale,
+            centerY: (baseY - screen.visual.y) / scale,
+        };
+        // 跟屏后尺寸目标和位置方向都变了，用飞入自己的剩余时间重新瞄准
+        retimeLaunchFlight(state);
+        retimeLaunchSize(state);
+    }
+
+    if (state.trackScreen && state.trackFrom) {
+        const visual = screen.visual;
+        const scale = Math.max(0.0001, visual.scale);
+        if (Math.abs(scale - (state.sizeScale ?? scale)) > 0.005) {
+            state.sizeScale = scale;
+            retimeLaunchSize(state);
+        }
+        const from = state.trackFrom;
+        const t = p <= from.p ? 0 : clampNumber((p - from.p) / Math.max(0.0001, 1 - from.p), 0, 1);
+        const targetCenterX = targetLocal.left + targetLocal.width / 2;
+        const targetCenterY = targetLocal.top + targetLocal.height / 2;
+        const centerX = from.centerX + (targetCenterX - from.centerX) * t;
+        const centerY = from.centerY + (targetCenterY - from.centerY) * t;
+        const localWidth = size.width / scale;
+        const localHeight = size.height / scale;
+        setLaunchPanelRect(
+            state,
+            screenRectOf(visual, {
+                left: centerX - localWidth / 2,
+                top: centerY - localHeight / 2,
+                width: localWidth,
+                height: localHeight,
+            }),
+        );
+        return;
+    }
+
+    setLaunchPanelRect(state, {
+        left: baseX - size.width / 2,
+        top: baseY - size.height / 2,
+        width: size.width,
+        height: size.height,
+    });
+}
+
+/** 飞入结束后不急着嵌入：等虚拟屏自己的创屏滑动停稳，再让面板成为屏的子元素 */
+function finishLaunchFlight(state: PendingLaunch) {
+    if (!state.screen || !pendingLaunches.has(state)) return;
+    state.flightGear = undefined;
+    waitForLaunchScreenSettled(state);
+}
+
+function waitForLaunchScreenSettled(state: PendingLaunch) {
+    const tick = () => {
+        const screen = state.screen;
+        if (!screen || !pendingLaunches.has(state)) return;
+        // 等待期间仍按 p=1 跟踪屏；期间被手势/总览接管也一样跟住
+        renderLaunchGeometry(state);
+        const screenRunning = screen.gear.getRunningAnimation().isRunning;
+        const sizeRunning = state.sizeGear?.getRunningAnimation().isRunning ?? false;
+        if (screenRunning || sizeRunning) {
+            requestAnimationFrame(tick);
+            return;
+        }
+        embedLaunchPanel(state);
+    };
+    requestAnimationFrame(tick);
+}
+
+function embedLaunchPanel(state: PendingLaunch) {
+    const screen = state.screen;
+    if (!screen || !pendingLaunches.has(state)) return;
+    // 面板当前还是视口坐标。按虚拟屏此刻的 visual 换成屏内坐标再 append，
+    // 避免因为屏的中心/缩放/滑动而在嵌入这一帧跳一下。
+    const current = elementRect(state.panel.el);
+    const local = localRectOf(current, screen.visual);
+    screen.el.add(state.panel);
+    setLaunchPanelRect(state, local);
+    state.phase = "embedded";
+    state.trackFrom = undefined;
+    state.flightTarget = undefined;
+    state.sizeScale = undefined;
+    state.sizeGear = undefined;
+    state.panel.style({ transform: "none", zIndex: "100" });
+    if (state.frame) {
+        if (!state.replacing) beginLaunchReplacement(state);
+        finishLaunchReplacementIfReady(state);
+    } else startLaunchTrayTimer(state);
+}
+
+function startLaunchTrayTimer(state: PendingLaunch) {
+    clearLaunchTrayTimer(state);
+    state.trayTimer = window.setTimeout(() => {
+        state.trayTimer = undefined;
+        if (!pendingLaunches.has(state) || state.frame) return;
+        markLaunchAsTray(state);
+    }, LAUNCH_TRAY_DELAY);
+}
+
+function clearLaunchTrayTimer(state: PendingLaunch) {
+    if (state.trayTimer === undefined) return;
+    clearTimeout(state.trayTimer);
+    state.trayTimer = undefined;
+}
+
+function markLaunchAsTray(state: PendingLaunch) {
+    if (!pendingLaunches.has(state) || state.frame || state.replacing || state.closing) return;
+    if (state.phase === "press" || state.phase === "flying") return;
+    state.panel.style({ pointerEvents: "auto" });
+    state.closeBtn.style({ display: "flex" });
+}
+
+/** 面板已经嵌入并停稳后，把真实窗口放进面板内部淡入，完成后再移回虚拟屏 */
+function beginLaunchReplacement(state: PendingLaunch) {
+    const frame = state.frame;
+    if (!frame || !pendingLaunches.has(state) || state.replacing || state.closing) return;
+    state.replacing = true;
+    clearLaunchTrayTimer(state);
+    state.closeBtn.style({ display: "none" });
+    state.panel.style({ pointerEvents: "none" });
+    // 窗口已经挂在面板内部；面板 overflow 裁掉它，动画不会漏到外面
+    mountLaunchFrameInPanel(state);
+    frame.el.style({ opacity: "0", pointerEvents: "none" });
+
+    const gear = new AnimationGear({ fade: 0 }, { transition: LAUNCH_REPLACE_FADE });
+    gear.setUpdateCallback(({ fade }) => {
+        if (!pendingLaunches.has(state)) return;
+        state.cover.style({ opacity: `${1 - fade}` });
+        frame.el.style({ opacity: `${fade}` });
+    });
+    gear.moveTo({ fade: 1 }, LAUNCH_REPLACE_FADE, () => {
+        if (!pendingLaunches.has(state)) return;
+        state.revealed = true;
+        finishLaunchReplacementIfReady(state);
+    });
+}
+
+/** 面板已经嵌入后，窗口也淡入完，才把窗口移回虚拟屏并撤掉面板 */
+function finishLaunchReplacementIfReady(state: PendingLaunch) {
+    const frame = state.frame;
+    const screen = state.screen;
+    if (!frame || !screen || !pendingLaunches.has(state)) return;
+    if (!state.revealed || state.phase !== "embedded") return;
+    const final = launchTargetLocalRect(state);
+    addWindow(screen, frame.el.el, frame.handle, true);
+    setClientFramePosition(frame, final.left, final.top);
+    frame.el.style({ opacity: "1", pointerEvents: "auto", transform: "none", transformOrigin: "" });
+    state.panel.remove();
+    pendingLaunches.delete(state);
+    state.flightGear = undefined;
+    state.sizeGear = undefined;
+}
+
+/** 目标尺寸在飞入途中变了：用飞入自己的剩余时间把剩余进度走完 */
+function retimeLaunchFlight(state: PendingLaunch) {
+    const gear = state.flightGear;
+    if (!gear) return;
+    const running = gear.getRunningAnimation();
+    if (!running.isRunning) return;
+    gear.moveTo({ p: 1 }, { duration: Math.max(1, running.remainingTime), map: LAUNCH_FLIGHT.map });
+}
+
+/** 目标尺寸变化只重新瞄准尺寸，中心直线不变；每次 resize 使用同样时长 */
+function retimeLaunchSize(state: PendingLaunch) {
+    const gear = state.sizeGear;
+    if (!gear) return;
+    const targetLocal = launchTargetLocalRect(state);
+    const scale = state.trackScreen ? (state.screen?.visual.scale ?? 1) : (state.flightTarget?.scale ?? 1);
+    gear.moveTo({ width: targetLocal.width * scale, height: targetLocal.height * scale }, LAUNCH_FLIGHT);
+}
+
+function claimPendingLaunch(info: WindowInfo) {
+    let best: PendingLaunch | undefined;
+    let bestScore = -Infinity;
+    let candidates = 0;
+    const appid = info.appid.toLowerCase().replace(/\.desktop$/, "");
+    for (const state of pendingLaunches) {
+        if (state.frame || state.claiming || state.phase === "replaced") continue;
+        const age = Date.now() - state.arrivedAt;
+        let score = appid ? 5 : 10;
+        const target = state.appid?.toLowerCase().replace(/\.desktop$/, "");
+        if (target && appid) {
+            if (appid === target) score = 100;
+            else if (appid.endsWith(target) || target.endsWith(appid)) score = 80;
+            // 两边都有 appid 却完全对不上：不要用“只剩一个待启动”兜底认领
+            else score = -10;
+        }
+        const execName = state.exec.trim().split(/\s+/)[0]?.split("/").pop()?.toLowerCase();
+        if (appid && execName) {
+            if (appid === execName) score = Math.max(score, 70);
+            else if (appid.includes(execName) || execName.includes(appid)) score = Math.max(score, 60);
+        }
+        // 两分钟后只有明确 appid/exec 匹配还能认领；托盘面板之后弹出的本应用窗口仍会替换它
+        if (age > 120000 && score < 40) continue;
+        candidates++;
+        if (score > bestScore) {
+            best = state;
+            bestScore = score;
+        }
+    }
+    if (!best) return undefined;
+    // 有明确匹配才在多任务并发时认领；只剩一个待启动项时允许按时间兜底
+    if (bestScore >= 40 || (candidates === 1 && bestScore > 0)) {
+        best.claiming = true;
+        return best;
+    }
+    return undefined;
+}
+
+/** 把真实窗口放进面板内部；面板裁掉超出部分，窗口随面板一起变换 */
+function mountLaunchFrameInPanel(state: PendingLaunch) {
+    const frame = state.frame;
+    if (!frame || frame.el.el.parentElement === state.panel.el) return;
+    windowCenterManager.removeWindow(frame.handle);
+    frame.el.el.remove();
+    state.panel.add(frame.el);
+    frame.el.style({ opacity: "0", pointerEvents: "none" });
+    layoutLaunchFrameInPanel(
+        state,
+        state.panel.el.offsetWidth || state.startRect.width,
+        state.panel.el.offsetHeight || state.startRect.height,
+    );
+}
+
+function attachWindowToLaunch(state: PendingLaunch, frame: ClientWindowFrame) {
+    state.frame = frame;
+    state.winHandle = frame.handle;
+    state.claiming = false;
+    clearLaunchTrayTimer(state);
+    state.closeBtn.style({ display: "none" });
+    state.panel.style({ pointerEvents: "none" });
+    frame.el.style({ opacity: "0", pointerEvents: "none" });
+    // 只要有真实窗口就放进面板，按面板大小缩放居中；创建后立即开始淡入
+    mountLaunchFrameInPanel(state);
+    beginLaunchReplacement(state);
+}
+
+/** 渲染层报告首帧尺寸：更新真实外框并去掉过渡白底；飞行中则按剩余时间重新瞄尺寸 */
+function notifyLaunchWindowSized(frame: ClientWindowFrame) {
+    for (const state of pendingLaunches) {
+        if (state.frame !== frame) continue;
+        if (frame.surfaceWidth <= 1 || frame.surfaceHeight <= 1) return;
+        const outer = launchFrameOuterSize(frame, state);
+        state.windowWidth = outer.width;
+        state.windowHeight = outer.height;
+        frame.el.el.style.background = "";
+        frame.el.el.style.borderRadius = "";
+        if (state.replacing && state.phase === "embedded") {
+            const target = launchTargetLocalRect(state);
+            if (frame.el.el.parentElement === state.panel.el) {
+                // 已经在面板内部：面板跟着真实外框变，窗口在面板里保持 0,0
+                setLaunchPanelRect(state, target);
+            } else {
+                setClientFramePosition(frame, target.left, target.top);
+            }
+        }
+        retimeLaunchSize(state);
+        return;
+    }
+}
+
+function notifyLaunchWindowClosed(winid: WinHandle) {
+    for (const state of pendingLaunches) {
+        if (state.winHandle !== winid) continue;
+        clearLaunchTrayTimer(state);
+        state.intro?.remove();
+        state.intro = undefined;
+        state.panel.remove();
+        pendingLaunches.delete(state);
+        return;
+    }
+}
+
+async function killProcessTree(pid: number) {
+    try {
+        const tree = await MSysApi.appControl.getPidTree(pid);
+        const kill = (item: { pid: number; children: typeof tree.children }) => {
+            for (const child of item.children) kill(child);
+            try {
+                MSysApi.appControl.getPid(item.pid).kill();
+            } catch {
+                /* 已经退出 */
+            }
+        };
+        kill(tree);
+    } catch {
+        /* 进程表里已经找不到 */
+    }
+}
+
+/** 托盘面板的关闭按钮：强制退出启动出来的进程树 */
+function forceQuitLaunch(state: PendingLaunch) {
+    if (!pendingLaunches.has(state) || state.closing) return;
+    state.closing = true;
+    clearLaunchTrayTimer(state);
+    state.intro?.remove();
+    state.intro = undefined;
+    state.closeBtn.style({ display: "none" });
+    state.panel.style({ pointerEvents: "none" });
+
+    const pid = state.child?.pid;
+    if (pid !== undefined) {
+        void killProcessTree(pid).finally(() => {
+            try {
+                state.child?.kill("SIGKILL");
+            } catch {
+                /* 已经退出 */
+            }
+        });
+    }
+
+    const gear = new AnimationGear({ opacity: 1 }, { transition: CLOSE_FADE });
+    gear.setUpdateCallback(({ opacity }) => state.panel.style({ opacity: `${opacity}` }));
+    gear.moveTo({ opacity: 0 }, CLOSE_FADE, () => {
+        if (!pendingLaunches.has(state)) return;
+        state.panel.remove();
+        pendingLaunches.delete(state);
+        if (state.screen) viewData.discardPendingScreen(state.screen);
+    });
 }
 
 /**
@@ -3962,9 +4842,10 @@ const render = new MUtils.renderToolsHtmlEl();
 render.on({
     onToplevelRemove: (wid) => {
         const el = render.getXdgSurfaceEle(wid);
-        if (el) {
-            el.remove();
-        }
+        if (!el) return;
+        // 窗口关闭要淡出，最后提交的内容先留着；外框移除时一起清掉
+        if (el.closest("[data-client-frame]")) setTimeout(() => el.remove(), 400);
+        else el.remove();
     },
     // 渲染层把 surface 尺寸写进画布的同一任务里同步外框；不用异步的 ResizeObserver
     onXdgSurfaceSize: (xdgId, width, height) => {
@@ -3972,9 +4853,12 @@ render.on({
         if (!frame) return;
         frame.surfaceWidth = Math.max(1, width);
         frame.surfaceHeight = Math.max(1, height);
-        if (frame.decorated && !frame.fullscreen) applyFrameSurfaceSize(frame);
+        // 外框尺寸统一以内部 surface DOM 为准；buffer 尺寸只作 fallback，未装饰窗口也不用 window.changed 覆盖
+        if (!frame.fullscreen) applyFrameSurfaceSize(frame);
         // 子窗口（对话框）的尺寸由客户端决定，首次拿到真实尺寸后重新在父窗口正中摆一次
         placeChildWindow(frame.handle);
+        // 启动面板等到首帧真实尺寸后再替换成窗口
+        notifyLaunchWindowSized(frame);
     },
 });
 const server = MSysApi.server({ render });
@@ -4101,6 +4985,48 @@ function resumeCenteringForFullscreen(handle: WinHandle) {
     windowCenterManager.resumeCentering(handle);
 }
 
+/** 窗口关闭：先让外框透明度淡出，动画结束再回收虚拟屏并切换过去 */
+function closeClientFrameWithFade(wid: WinHandle, frame: ClientWindowFrame) {
+    const connected = frame.el.el.isConnected;
+    if (connected) {
+        // 先按当前视觉矩形把外框移到关闭层，不再依赖它属于哪个屏/面板；
+        // 这样虚拟屏立即回收也不会带走正在淡出的窗口
+        const rect = frame.el.el.getBoundingClientRect();
+        const layoutWidth = Math.max(1, frame.el.el.offsetWidth);
+        const layoutHeight = Math.max(1, frame.el.el.offsetHeight);
+        const scale = Math.max(0.0001, rect.width / layoutWidth);
+        ensureCloseLayer().add(frame.el);
+        frame.el.style({
+            left: `${rect.left}px`,
+            top: `${rect.top}px`,
+            width: `${layoutWidth}px`,
+            height: `${layoutHeight}px`,
+            transformOrigin: "0 0",
+            transform: Math.abs(scale - 1) > 0.001 ? `scale(${scale})` : "none",
+            zIndex: "1",
+            pointerEvents: "none",
+        });
+        frame.el.el.style.setProperty("--view-inv-scale", `${1 / scale}`);
+        frame.el.el.setAttribute("data-closing", "");
+    }
+    // 屏立刻回收，窗口自己在关闭层上淡出
+    viewData.closeWin(wid);
+
+    const raw = frame.el.el.style.opacity;
+    const from = raw === "" ? 1 : Number(raw);
+    if (!connected || !(from > 0.01)) {
+        frame.el.el.remove();
+        return;
+    }
+    const gear = new AnimationGear({ opacity: from }, { transition: CLOSE_FADE });
+    gear.setUpdateCallback(({ opacity }) => {
+        frame.el.style({ opacity: `${opacity}`, pointerEvents: "none" });
+    });
+    gear.moveTo({ opacity: 0 }, CLOSE_FADE, () => {
+        frame.el.el.remove();
+    });
+}
+
 server.server.on("window.created", (info) => {
     console.log(`Client ${info.clientId} created window ${info.handle}`, info.renderId);
     const wid = info.handle;
@@ -4119,15 +5045,21 @@ server.server.on("window.created", (info) => {
         if (info.modal) modalWindows.add(wid);
     }
 
-    const screen = viewData.addWindowScreen(wid, parent);
+    const pending = parent === undefined ? claimPendingLaunch(info) : undefined;
+    const screen = pending?.screen
+        ? viewData.attachWindowToScreen(wid, pending.screen)
+        : viewData.addWindowScreen(wid, parent);
+    if (pending) pending.screen = screen;
     // biome-ignore lint/style/noNonNullAssertion: 刚刚创建的，一定有
     const winEl = render.getXdgSurfaceEle(info.renderId)!;
     const frame = createClientWindowFrame(info, winEl);
     clientWindowFrames.set(wid, frame);
-    applyFrameSurfaceSize(frame);
+    if (pending) prepareLaunchWindowSize(pending, frame, info);
+    else applyFrameSurfaceSize(frame);
     setClientFramePosition(frame, wino.l, wino.t);
     addWindow(screen, frame.el.el, wid, parent === undefined);
     addResizeHandles(frame.el.el, wid, true, winEl);
+    if (pending) attachWindowToLaunch(pending, frame);
     // 子窗口不在总览里单独成卡，关闭按钮由父窗口那张卡负责
     if (parent === undefined) {
         createOverviewWindowCloseButton(() => server.server.notify("window.close", wid)).addInto(frame.el);
@@ -4139,7 +5071,7 @@ server.server.on("window.created", (info) => {
         wid,
         parent === undefined ? { width: 800, height: 600 } : { width: 0, height: 0 },
     );
-    viewData.focusWin(wid);
+    if (screen) viewData.focusWin(wid);
     if (parent !== undefined) {
         placeChildWindow(wid, true);
         // 客户端提交首帧后尺寸才确定，下一帧再摆一次（用户拖过之后 placeChildWindow 自己会跳过）
@@ -4162,11 +5094,10 @@ server.server.on("window.closed", (wid) => {
     windowCenterManager.removeWindow(wid);
     const frame = clientWindowFrames.get(wid);
     clientWindowFrames.delete(wid);
-    if (frame) {
-        clientFrameByRenderId.delete(frame.renderId);
-        frame.el.el.remove();
-    }
-    viewData.closeWin(wid);
+    if (frame) clientFrameByRenderId.delete(frame.renderId);
+    if (frame) closeClientFrameWithFade(wid, frame);
+    else viewData.closeWin(wid);
+    notifyLaunchWindowClosed(wid);
     windowParents.delete(wid);
     modalWindows.delete(wid);
     childWindowPinned.delete(wid);
@@ -4306,12 +5237,14 @@ server.server.on("window.changed", (info) => {
                     Math.max(1, available.height - decoratedTitlebarPx(frame)),
                 );
                 setClientFramePosition(frame, available.x, available.y);
-            } else if (frame.decorated) {
-                // 服务端装饰窗口只跟随渲染层回报的 surface 尺寸；window.changed 里的 rect 可能会早到
-                if (decorationChanged) applyFrameSurfaceSize(frame);
+            } else if (frame.surfaceWidth <= 1 || frame.surfaceHeight <= 1) {
+                // 还没拿到内部 surface 尺寸时先用客户端几何占位；之后以实际 DOM 为准
+                frame.surfaceWidth = Math.max(1, Math.round(info.rect.w * info.scale));
+                frame.surfaceHeight = Math.max(1, Math.round(info.rect.h * info.scale));
+                applyFrameSurfaceSize(frame, frame.surfaceWidth, frame.surfaceHeight);
             } else {
-                // 没有桌面外框/阴影的窗口维持原来的内容几何
-                setClientFrameLayout(frame, info.rect.w * info.scale, info.rect.h * info.scale);
+                // 几何变化可能只改 set_window_geometry，不触发 buffer 尺寸回调；直接从内部 DOM 再同步一次
+                applyFrameSurfaceSize(frame);
             }
         }
         // 子窗口尺寸由客户端决定：几何一变就重新在父窗口正中摆一次（用户拖过则不动）
@@ -5870,6 +6803,9 @@ function searchIconByAppid(appid: string) {
 
 type ScoredSearchResult = { score: number; result: SearchResult };
 
+/** 搜索行执行前先记下图标矩形：closeSearch 会同步清空结果 DOM */
+let pendingSearchLaunchSource: { rect?: LaunchRect; iconSrc?: string } | undefined;
+
 function finishSearch(scored: ScoredSearchResult[], limit: number) {
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, limit).map((item) => item.result);
@@ -5897,9 +6833,17 @@ function createAppSearchProvider(): SearchProvider {
                         subtitle: app.nameLocal && app.nameLocal !== app.name ? app.name : undefined,
                         badge: "应用",
                         icon: searchIcon(app.icon),
-                        run: async () => {
-                            await server.startXwayland();
-                            server.runApp(app.exec, { env: app.env });
+                        run: () => {
+                            const source = pendingSearchLaunchSource;
+                            launchApp({
+                                exec: app.exec,
+                                env: app.env,
+                                name: app.nameLocal || app.name,
+                                appid: app.desktopFile,
+                                icon: searchIcon(app.icon),
+                                sourceRect: source?.rect,
+                                iconSrc: source?.iconSrc,
+                            });
                         },
                     },
                 });
@@ -5986,6 +6930,8 @@ type AppTileFactoryOptions = {
     /** 设置格子的白底容器尺寸，图标按容器减内边距 */
     settingsIconBox: number;
     onSettingsClick: () => void;
+    /** 应用启动后收起所在弹窗（开始菜单） */
+    onAppLaunch?: () => void;
 };
 
 function createAppTileFactory(op: AppTileFactoryOptions) {
@@ -6040,8 +6986,14 @@ function createAppTileFactory(op: AppTileFactoryOptions) {
             contentVisibility: "auto",
             containIntrinsicSize: `${op.tileWidth}px ${op.tileHeight}px`,
         });
+        const iconPath = async () => (await MSysApi.getDesktopIcon(app.icon, op.iconConfig)) || "";
         const iconView = view().addInto(appEl);
-        const iconEl = appIconEl(app.exec, app.env).style({
+        const iconEl = appIconEl(app.exec, app.env, {
+            name: app.nameLocal || app.name,
+            appid: app.desktopFile,
+            icon: iconPath,
+            onLaunch: op.onAppLaunch,
+        }).style({
             width: `${op.iconSize}px`,
             height: `${op.iconSize}px`,
         });
@@ -6055,10 +7007,7 @@ function createAppTileFactory(op: AppTileFactoryOptions) {
             }),
         );
 
-        const load = () =>
-            loadAppIcon(iconEl, async () => (await MSysApi.getDesktopIcon(app.icon, op.iconConfig)) || "", app.name, {
-                rasterSize: op.iconSize,
-            });
+        const load = () => loadAppIcon(iconEl, iconPath, app.name, { rasterSize: op.iconSize });
         if (observer) {
             iconLoaders.set(appEl.el, load);
             observer.observe(appEl.el);
@@ -6503,11 +7452,18 @@ function createLauncher(): LauncherController {
     function activateResult(index: number) {
         const result = results[index];
         if (!result) return;
+        // 先量图标，closeSearch 会同步清空结果 DOM；启动动画从这一格开始
+        const iconBox = resultEls[index]?.el.firstElementChild as HTMLElement | undefined;
+        const rect = iconBox ? elementRect(iconBox) : undefined;
+        pendingSearchLaunchSource = rect ? { rect, iconSrc: sourceIconSrc(iconBox) } : undefined;
         // 确认结果后先收起搜索栏；全局预览里由退出预览的流程恢复停靠位置
         closeSearch();
         void Promise.resolve()
             .then(result.run)
-            .catch((error) => console.warn(`[search] 执行 ${result.id} 失败:`, error));
+            .catch((error) => console.warn(`[search] 执行 ${result.id} 失败:`, error))
+            .finally(() => {
+                pendingSearchLaunchSource = undefined;
+            });
     }
 
     function clearSearch() {
@@ -6728,6 +7684,7 @@ function createStartMenu(
             showTip({ state: "hide" });
             openSettingsWindow();
         },
+        onAppLaunch: () => showTip({ state: "hide" }),
     });
 
     // 元数据在空闲时预取，但不创建 DOM / 不读图标
@@ -6819,6 +7776,8 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
                 browserApp.name,
                 browserApp.exec,
                 browserApp.env,
+                browserApp.desktopFile,
+                () => showTip({ state: "hide" }),
             ).addInto(appsEl);
         }
         if (fileManagerApp) {
@@ -6829,6 +7788,8 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
                 fileManagerApp.name,
                 fileManagerApp.exec,
                 fileManagerApp.env,
+                fileManagerApp.desktopFile,
+                () => showTip({ state: "hide" }),
             ).addInto(appsEl);
         }
         if (terminalApp) {
@@ -6839,6 +7800,8 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
                 terminalApp.name,
                 terminalApp.exec,
                 terminalApp.env,
+                terminalApp.desktopFile,
+                () => showTip({ state: "hide" }),
             ).addInto(appsEl);
         }
     });
