@@ -631,10 +631,10 @@ export function uChoiceRow(op: {
 /** 电池信息行：电池图标 + 百分比 + 充电状态 */
 export function uBatteryInfo(initial: { percentage: number; charging: boolean }) {
     const battery = getIconXEl("battery", { size: 24, width: 28, height: 24 });
-    const valueText = aLineText().style({
-        ...gTextStyle.display,
+    const valueText = aNumberText({
+        fontSize: 20,
+        lineHeight: 26,
         color: gTextStyle.color.primary,
-        width: "fit-content",
     });
     const statusText = aLineText().style({
         ...gTextStyle.caption,
@@ -652,7 +652,7 @@ export function uBatteryInfo(initial: { percentage: number; charging: boolean })
     return {
         el: view("x")
             .style({ alignItems: "center", gap: px(sSize2.padding) })
-            .add([view().add(battery), view("y").style({ gap: "1px", minWidth: "0" }).add([valueText, statusText])]),
+            .add([view().add(battery), view("y").style({ gap: "1px", minWidth: "0" }).add([valueText.el, statusText])]),
         setValue: (nextPercentage: number, nextCharging: boolean) => {
             percentage = nextPercentage;
             charging = nextCharging;
@@ -729,10 +729,16 @@ export function uBatteryRow(label: string, percentage: number) {
     const battery = getIconXEl("battery", { size: 18, width: 22, height: 18 });
     let value = percentage;
     const render = () => battery.sv("value", Math.max(0, Math.min(1, value / 100)));
+    const valueText = aNumberText({
+        fontSize: 12,
+        lineHeight: 17,
+        color: gTextStyle.color.secondary,
+    });
+    valueText.sv(`${value}%`);
     const row = uChoiceRow({
         label,
-        detail: `${value}%`,
         icon: view().add(battery),
+        right: valueText.el,
     });
     render();
     return {
@@ -740,7 +746,7 @@ export function uBatteryRow(label: string, percentage: number) {
         setValue: (nextLabel: string, nextPercentage: number) => {
             value = nextPercentage;
             row.setLabel(nextLabel);
-            row.setDetail(`${value}%`);
+            valueText.sv(`${value}%`);
             render();
         },
     };
@@ -1047,22 +1053,26 @@ export function mMedia(op: {
                 })
                 .on("pointerdown", (e) => e.stopPropagation())
                 .addInto(card);
-            const currentText = aLineText()
+            const currentText = aNumberText({
+                fontSize: 10,
+                lineHeight: 12,
+                color: gTextStyle.color.secondary,
+            });
+            currentText.el
                 .style({
-                    ...gTextStyle.micro,
-                    color: gTextStyle.color.secondary,
-                    width: "fit-content",
                     position: "absolute",
                     left: "0",
                     top: "50%",
                     transform: "translateY(-50%)",
                 })
                 .addInto(controls);
-            const durationText = aLineText()
+            const durationText = aNumberText({
+                fontSize: 10,
+                lineHeight: 12,
+                color: gTextStyle.color.secondary,
+            });
+            durationText.el
                 .style({
-                    ...gTextStyle.micro,
-                    color: gTextStyle.color.secondary,
-                    width: "fit-content",
                     position: "absolute",
                     right: "0",
                     top: "50%",
@@ -1357,10 +1367,28 @@ export function nNumber(n: string, op?: { fontSize?: number; lineHeight?: number
     for (const n of l) {
         if (!(n in map)) console.warn(`cannot conver "${n}"`);
         else {
-            t.add(getIconXEl(map[n].name, { size: fontSize, width: map[n].w * r, height: lightHeight }));
+            t.add(
+                getIconXEl(map[n].name, {
+                    size: fontSize,
+                    width: map[n].w * r,
+                    height: lightHeight,
+                    color: op?.color,
+                }),
+            );
         }
     }
     return t;
+}
+
+/** 自绘等宽数字文本；`sv` 用新内容整体重排 */
+export function aNumberText(op?: { fontSize?: number; lineHeight?: number; color?: string }) {
+    const el = view("x").style({ width: "fit-content", flexShrink: "0" });
+    return {
+        el,
+        sv: (text: string) => {
+            el.clear().add(nNumber(text, op));
+        },
+    };
 }
 
 export function rRange(op?: {

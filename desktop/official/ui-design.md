@@ -88,7 +88,7 @@
 - 默认单行：`aLineText`，不换行、溢出省略、不可选。
 - 需要文章式换行时才刻意使用 `txt` 等；常规界面不要让文本自然换行。
 - 默认文本不可选择：桌面根节点 `userSelect: none`；需要复制的内容显式 `userSelect: text`（ID、密码、路径等）。
-- 等宽文本用 `gTextStyle.monoFamily`。
+- 等宽文本用 `gTextStyle.monoFamily`；电量百分比、媒体播放时间用自绘等宽数字 `aNumberText`，避免比例字体跳动。
 - 窗口标题用 `subtitle`；面板标题用 `title`。
 
 ## 6. 颜色与强调
@@ -220,6 +220,7 @@
   - `gGlassStyle`：毛玻璃与面板底
   - `sSize` / `sSize2`：尺寸
   - `aLineText`：单行文本
+  - `aNumberText`：自绘等宽数字文本
   - `sourceTag`：来源标签
   - `uScrollList`：带空提示的滚动列表
   - `uSelectMark`：托盘勾选 / 单选标记

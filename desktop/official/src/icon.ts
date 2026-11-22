@@ -535,7 +535,14 @@ export function getIconComment(name: string) {
 
 export function getIconXEl(
     name: string,
-    op?: { size: number; width?: number; height?: number; padding?: number; data?: Record<string, any> },
+    op?: {
+        size: number;
+        width?: number;
+        height?: number;
+        padding?: number;
+        color?: string;
+        data?: Record<string, any>;
+    },
 ) {
     const size = op?.size ?? 16;
     const width = op?.width ?? size;
@@ -549,7 +556,7 @@ export function getIconXEl(
     el.style.overflow = "hidden";
     const data = structuredClone(op?.data) ?? {};
     function r() {
-        const icon = iconsName[name]({ color: "#000", data });
+        const icon = iconsName[name]({ color: op?.color ?? "#000", data });
         const rsize = icon.size;
         el.innerHTML = render(icon);
         const svg = el.querySelector("svg");
