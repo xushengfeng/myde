@@ -276,12 +276,13 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
         };
     },
     connect: (env) => {
-        const { size } = buildZb(256);
+        const { size, center } = buildZb(256);
         const w = 18;
-        const node = 52;
-        const top = { x: size / 2, y: 62 };
-        const left = { x: 60, y: 194 };
-        const right = { x: 196, y: 194 };
+        const node = 64;
+        const top = { x: size / 2, y: node / 2 };
+        const co = 96;
+        const left = { x: center.x - co, y: size - node / 2 };
+        const right = { x: center.x + co, y: size - node / 2 };
         return {
             size,
             layout: [
@@ -983,7 +984,14 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
         };
     },
     clipboard: (env) => {
-        const { size } = buildZb(256);
+        const { size, center } = buildZb(256);
+        const w = 24;
+        const padding = w / 2;
+
+        const bWH = 4 * 20;
+
+        const handleWH = 40;
+        const handleHH = 20;
         return {
             size,
             layout: [
@@ -994,12 +1002,12 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: { x: 56, y: 48 }, ri: 12, ro: 26 },
-                                    { p: { x: 200, y: 48 }, ri: 12, ro: 26 },
-                                    { p: { x: 200, y: 232 }, ri: 12, ro: 26 },
-                                    { p: { x: 56, y: 232 }, ri: 12, ro: 26 },
+                                    { p: { x: center.x - bWH, y: padding + handleHH }, ri: 12, ro: 26 },
+                                    { p: { x: center.x + bWH, y: padding + handleHH }, ri: 12, ro: 26 },
+                                    { p: { x: center.x + bWH, y: size - padding }, ri: 12, ro: 26 },
+                                    { p: { x: center.x - bWH, y: size - padding }, ri: 12, ro: 26 },
                                 ],
-                                width: 16,
+                                width: w,
                                 close: true,
                                 color: env.color,
                             },
@@ -1008,10 +1016,10 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "zline",
                             data: {
                                 ps: [
-                                    { p: { x: 96, y: 34 }, ri: 8, ro: 16 },
-                                    { p: { x: 160, y: 34 }, ri: 8, ro: 16 },
-                                    { p: { x: 160, y: 68 }, ri: 8, ro: 16 },
-                                    { p: { x: 96, y: 68 }, ri: 8, ro: 16 },
+                                    { p: { x: center.x - handleWH, y: padding }, ri: 0, ro: 16 },
+                                    { p: { x: center.x + handleWH, y: padding }, ri: 0, ro: 16 },
+                                    { p: { x: center.x + handleWH, y: padding + handleHH * 2 }, ri: 0, ro: 16 },
+                                    { p: { x: center.x - handleWH, y: padding + handleHH * 2 }, ri: 0, ro: 16 },
                                 ],
                                 width: 16,
                                 close: true,
@@ -1177,9 +1185,9 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
     sun: (env) => {
         const { center, size } = buildZb(256);
         const w = 24;
-        const inner = 8 * 5;
-        const rayInner = 8 * 7.5;
-        const rayOuter = 8 * 11.5;
+        const inner = 8 * 7;
+        const rayInner = 8 * 10;
+        const rayOuter = 8 * 16;
         return {
             size,
             layout: [
@@ -2320,14 +2328,26 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
     },
     settings: (env) => {
         const { size, center } = buildZb(256);
+        const r = 4 * 21;
         const teeth = [0, 45, 90, 135, 180, 225, 270, 315].map((angle) => ({
             type: "zline" as const,
             data: {
                 ps: [
-                    { p: p(center, angle, 76), ro: 10, ri: 10 },
-                    { p: p(center, angle, 112), ro: 10, ri: 10 },
+                    { p: p(center, angle, r), ro: 10, ri: 10 },
+                    { p: p(center, angle, 8 * 16), ro: 10, ri: 10 },
                 ],
-                width: 22,
+                width: 24,
+                color: env.color,
+            },
+        }));
+        const cc = [-90, 120 - 90, 240 - 90].map((angle) => ({
+            type: "zline" as const,
+            data: {
+                ps: [
+                    { p: center, ro: 10, ri: 10 },
+                    { p: p(center, angle, r), ro: 10, ri: 10 },
+                ],
+                width: 24,
                 color: env.color,
             },
         }));
@@ -2341,7 +2361,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             type: "arc",
                             data: {
                                 center,
-                                r: 68,
+                                r: r,
                                 width: 24,
                                 fromAngle: 0,
                                 endAngle: 0,
@@ -2349,6 +2369,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                             },
                         },
                         ...teeth,
+                        ...cc,
                     ],
                 },
             ],
