@@ -1,4 +1,4 @@
-import { addClass, addStyle, button, check, type ElType, ele, image, input, pack, spacer, txt, view } from "dkh-ui";
+import { addClass, addStyle, button, type ElType, ele, image, input, pack, txt, view } from "dkh-ui";
 import { AnimationGear, timingFunction } from "myde-ui";
 import type {
     ConnectConnection,
@@ -50,18 +50,25 @@ import {
     gShadowStyle,
     gSurfaceStyle,
     gTextStyle,
-    iItem,
     mMedia,
     nNotiList,
     nNumber,
     px,
-    rRange,
     sourceTag,
     sSize,
     sSize2,
     tTrayMenu,
+    uBatteryInfo,
+    uBatteryRow,
+    uBrightnessList,
+    uBrightnessSlider,
+    uChoiceRow,
     ui,
     uScrollList,
+    uSegmented,
+    uSwitch,
+    uSystemMenu,
+    uToggleRow,
     vVolume,
 } from "./ui";
 
@@ -206,15 +213,9 @@ type BooleanRegistryKeys = "wifi.enabled" | "blue.power" | "connect.enabled";
 
 function createToggle(registry: tmpRegistry, id: BooleanRegistryKeys): ControlNode {
     const source = registry.get(id);
-    const toggle = check(id, ["on", "off"]);
-
-    const unsub = source.getAndSubscribe((v) => toggle.sv(v));
-
-    toggle.el.addEventListener("change", () => {
-        source.set?.(toggle.gv);
-    });
-
-    return { id, type: "toggle", el: toggle as unknown as ElType<HTMLElement>, unmount: unsub };
+    const sw = uSwitch(false, (value) => source.set?.(value));
+    const unsub = source.getAndSubscribe((v) => sw.setValue(v));
+    return { id, type: "toggle", el: sw.el, unmount: unsub };
 }
 
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
@@ -3099,9 +3100,8 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
         overflow: "hidden",
         whiteSpace: "nowrap",
         textOverflow: "ellipsis",
-        fontSize: "13px",
-        fontWeight: "500",
-        color: "#111",
+        ...gTextStyle.subtitle,
+        color: gTextStyle.color.primary,
         userSelect: "none",
     });
     const icon = view().style({
@@ -3296,7 +3296,7 @@ function openInternalWindow(op: InternalWindowOptions) {
         .add([
             ...(op.icon ? [op.icon] : []),
             txt(op.title).style({
-                fontWeight: "600",
+                ...gTextStyle.title,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
@@ -3840,9 +3840,9 @@ function setLaunchIcon(state: PendingLaunch, src: string | undefined) {
 
 function createLaunchPanel(name: string, iconSrc: string | undefined, onClose: () => void) {
     const iconLetter = txt((name.trim()[0] || "?").toUpperCase()).style({
+        ...gTextStyle.display,
         fontSize: "28px",
-        fontWeight: "600",
-        color: "#555",
+        color: gTextStyle.color.secondary,
     });
     const iconImg = ele("img")
         .style({ width: "100%", height: "100%", objectFit: "contain", display: "none" })
@@ -6260,11 +6260,11 @@ MSysApi.media
 
             const paused = await p.paused();
             mediaPlaying.set(serverName, !paused);
-            registry.setData(registry.buildVarId("media.list[].play", [serverName]), paused);
+            registry.setData(registry.buildVarId("media.list[].play", [serverName]), !paused);
             p.onStatusChange(async () => {
                 const paused = await p.paused();
                 mediaPlaying.set(serverName, !paused);
-                registry.setData(registry.buildVarId("media.list[].play", [serverName]), paused);
+                registry.setData(registry.buildVarId("media.list[].play", [serverName]), !paused);
             });
             registry.setSetCallback(registry.buildVarId("media.list[].play", [serverName]), (v) => {
                 if (v) p.play();
@@ -6455,22 +6455,21 @@ const uipool = {
     "power.battery": () => {
         const percentage = rawRegistry.get("power.battery");
         const charging = rawRegistry.get("power.battery.charging");
-        const label = aLineText();
+        const info = uBatteryInfo({ percentage: 0, charging: false });
         let percentageValue = 0;
         let chargingValue = false;
-        const render = () => label.sv(`${percentageValue} ${chargingValue ? "充电中" : "未充电"}`);
         const unsubPercentage = percentage.getAndSubscribe((v) => {
             percentageValue = v;
-            render();
+            info.setValue(percentageValue, chargingValue);
         });
         const unsubCharging = charging.getAndSubscribe((v) => {
             chargingValue = v;
-            render();
+            info.setValue(percentageValue, chargingValue);
         });
         return {
             id: "power.battery",
             type: "indicator",
-            el: label as unknown as ElType<HTMLElement>,
+            el: info.el,
             unmount: () => {
                 unsubPercentage();
                 unsubCharging();
@@ -6486,21 +6485,12 @@ const uipool = {
             direction: "down",
             keyExtractor: (x) => x,
             renderItem: (k) => {
-                const el = iItem({ type: "h", size: 1.5 }).style({
-                    display: "flex",
-                    alignItems: "center",
-                    padding: `${sSize2.padding}px`,
-                    gap: `${sSize2.padding}px`,
-                });
+                const row = uBatteryRow("", 0);
                 const s = rawRegistry.get(k as "power.devices[]").getAndSubscribe((v) => {
-                    el.clear().add([
-                        aLineText().sv(v.name),
-                        spacer(),
-                        aLineText().sv(v.percentage.toString()).style({ flexShrink: 0 }),
-                    ]);
+                    row.setValue(v.name, v.percentage);
                 });
                 us.push(s);
-                return el;
+                return row.el;
             },
         });
 
@@ -6520,109 +6510,87 @@ const uipool = {
     "power.profiles": () => {
         const source = rawRegistry.get("power.profiles");
         const activeSource = rawRegistry.get("power.profile");
-        const us: (() => void)[] = [];
-        const container = dynamicScrollList<string>({
-            itemSize: sSize(1.5),
-            containerSize: sSize(1.5) * 3,
-            direction: "down",
-            keyExtractor: (x) => x,
-            renderItem: (k) => {
-                const el = iItem({ type: "h", size: 1.5 }).style({
-                    display: "flex",
-                    alignItems: "center",
-                    padding: `${sSize2.padding}px`,
-                    gap: `${sSize2.padding}px`,
-                    cursor: "pointer",
-                });
-                let name = "";
-                let active = "";
-                const mark = txt().style({ flexShrink: 0 });
-                const renderMark = () => mark.sv(name !== "" && active === name ? "✓" : "○");
-                const usItem = rawRegistry.get(k as "power.profiles[]").getAndSubscribe((v) => {
-                    name = v.name;
-                    el.clear().add([aLineText().sv(v.label), spacer(), mark]);
-                    renderMark();
-                });
-                const usActive = activeSource.getAndSubscribe((v) => {
-                    active = v;
-                    renderMark();
-                });
-                us.push(usItem, usActive);
-                el.on("click", () => {
-                    if (!name) return;
-                    rawRegistry.get("power.profile").set?.(name);
-                });
-                return el;
-            },
+        const segments = uSegmented<string>({
+            items: [],
+            onChange: (name) => rawRegistry.get("power.profile").set?.(name),
         });
-
+        const unsubActive = activeSource.getAndSubscribe((v) => segments.setValue(v));
+        const unsubs: (() => void)[] = [];
         const unsub = source.getAndSubscribe((ids) => {
-            container.setList(ids);
-            container.el.style({ display: ids.length > 0 ? "" : "none" });
+            for (const u of unsubs) u();
+            unsubs.length = 0;
+            const data = new Map<string, { name: string; label: string }>();
+            const refresh = () => {
+                const items = ids
+                    .map((id) => data.get(id))
+                    .filter((v): v is { name: string; label: string } => !!v)
+                    .map((v) => ({ label: v.label, value: v.name }));
+                segments.setItems(items);
+            };
+            for (const id of ids) {
+                const us = rawRegistry.get(id as "power.profiles[]").getAndSubscribe((v) => {
+                    data.set(id, { name: v.name, label: v.label });
+                    refresh();
+                });
+                unsubs.push(us);
+            }
         });
         return {
             id: "power.profiles",
             type: "dynamic-list",
-            el: container.el.style({ width: px(sSize(6)) }),
+            el: segments.el,
             unmount: () => {
                 unsub();
-                for (const s of us) s();
+                unsubActive();
+                for (const u of unsubs) u();
             },
         };
     },
     "brightness.displays": () => {
         const source = rawRegistry.get("brightness.displays");
-        const list = view("y").style({ gap: px(sSize2.padding) });
-        const bar = ui.bar([list]);
-        bar.el.style({ width: px(sSize(6)) });
+        const grid = uBrightnessList();
         const unsubscribes = new Map<string, () => void>();
 
         const unsub = source.getAndSubscribe((ids) => {
             for (const unsubscribe of unsubscribes.values()) unsubscribe();
             unsubscribes.clear();
-            list.clear();
-            bar.el.style({ display: ids.length > 0 ? "" : "none" });
+            const sliders: ElType<HTMLElement>[] = [];
 
             for (const key of ids) {
                 const brightnessKey = rawRegistry.buildVarId("brightness.displays[].brightness", [key]);
                 const brightnessSource = rawRegistry.get(brightnessKey);
-                const track = view().style({ background: "white", borderRadius: px(sSize2.radius1) }).el;
                 const setBrightness = MUtils.throttle((v: number) => {
                     brightnessSource.set?.(v * 100)?.catch((error) => {
                         console.warn("[brightness] 设置亮度失败", key, error);
                     });
                 }, 50);
-                const range = rRange({ mel: track, onEnd: () => setBrightness.flush() });
-                range.el.style({
-                    width: px(sSize(6)),
-                    height: px(sSize(1)),
-                    borderRadius: px(sSize2.radius1),
-                    overflow: "hidden",
-                    ...gGlassStyle.itemInBg,
+                const slider = uBrightnessSlider({
+                    onChange: setBrightness,
+                    onEnd: () => setBrightness.flush(),
                 });
-                range.onChange(setBrightness);
-                list.add(range.el);
+                sliders.push(slider.el);
 
                 const itemKey = rawRegistry.buildVarId("brightness.displays[]", [key]);
                 const unsubItem = rawRegistry.get(itemKey).getAndSubscribe((v) => {
-                    range.el.style({
+                    slider.el.style({
                         opacity: v.writable ? "1" : "0.5",
                         pointerEvents: v.writable ? "auto" : "none",
                     });
                 });
                 const unsubBrightness = brightnessSource.getAndSubscribe((v) => {
-                    range.sv(v / 100);
+                    slider.sv(v / 100);
                 });
                 unsubscribes.set(key, () => {
                     unsubItem();
                     unsubBrightness();
                 });
             }
+            grid.setSliders(sliders);
         });
         return {
             id: "brightness.displays",
             type: "dynamic-list",
-            el: bar.el,
+            el: grid.el,
             unmount: () => {
                 unsub();
                 for (const unsubscribe of unsubscribes.values()) unsubscribe();
@@ -6640,21 +6608,15 @@ const uipool = {
             direction: "down",
             keyExtractor: (x) => x,
             renderItem: (k) => {
-                const el = iItem({ type: "h", size: 1.5 }).style({
-                    display: "flex",
-                    alignItems: "center",
-                    padding: `${sSize2.padding}px`,
-                    gap: `${sSize2.padding}px`,
+                const row = uChoiceRow({
+                    label: "",
                 });
                 const s = rawRegistry.get(k as "wifi.accessPoints[]").getAndSubscribe((v) => {
-                    el.clear().add([
-                        aLineText().sv(v.ssid),
-                        spacer(),
-                        aLineText().sv(v.connected.toString()).style({ flexShrink: 0 }),
-                    ]);
+                    row.setLabel(v.ssid);
+                    row.setSelected(v.connected);
                 });
                 us.push(s);
-                return el;
+                return row.el;
             },
         });
 
@@ -6681,37 +6643,34 @@ const uipool = {
             direction: "down",
             keyExtractor: (x) => x,
             renderItem: (k) => {
-                const el = iItem({ type: "h", size: 1.5 }).style({
-                    display: "flex",
-                    alignItems: "center",
-                    padding: `${sSize2.padding}px`,
-                    gap: `${sSize2.padding}px`,
+                let canClick = false;
+                const row = uChoiceRow({
+                    label: "",
+                    detail: "",
+                    onClick: async () => {
+                        if (!canClick) return;
+                        const device = await rawRegistry.get(k as "connect.devices[]").get();
+                        if (!device || !getConnectEnabled()) return;
+                        try {
+                            if (device.connected) {
+                                await connect.disconnect(device.id);
+                            } else {
+                                await connect.connect(device.id);
+                            }
+                        } catch (error) {
+                            console.warn("connect: toggle device failed", device.id, error);
+                        }
+                    },
                 });
                 const s = rawRegistry.get(k as "connect.devices[]").getAndSubscribe((v) => {
-                    el.clear().add([
-                        aLineText().sv(v.name),
-                        spacer(),
-                        aLineText()
-                            .sv(v.connected ? "已连接" : v.remembered ? "已记忆" : "临时")
-                            .style({ flexShrink: "0" }),
-                    ]);
-                    el.style({ cursor: v.connected || getConnectEnabled() ? "pointer" : "default" });
-                });
-                el.on("click", async () => {
-                    const device = await rawRegistry.get(k as "connect.devices[]").get();
-                    if (!device || !getConnectEnabled()) return;
-                    try {
-                        if (device.connected) {
-                            await connect.disconnect(device.id);
-                        } else {
-                            await connect.connect(device.id);
-                        }
-                    } catch (error) {
-                        console.warn("connect: toggle device failed", device.id, error);
-                    }
+                    canClick = v.connected || getConnectEnabled();
+                    row.setLabel(v.name);
+                    row.setDetail(v.connected ? "已连接" : v.remembered ? "已记忆" : "临时");
+                    row.setSelected(v.connected);
+                    row.el.style({ cursor: canClick ? "pointer" : "default" });
                 });
                 us.push(s);
-                return el;
+                return row.el;
             },
         });
 
@@ -6738,21 +6697,15 @@ const uipool = {
             direction: "down",
             keyExtractor: (x) => x,
             renderItem: (k) => {
-                const el = iItem({ type: "h", size: 1.5 }).style({
-                    display: "flex",
-                    alignItems: "center",
-                    padding: `${sSize2.padding}px`,
-                    gap: `${sSize2.padding}px`,
+                const row = uChoiceRow({
+                    label: "",
                 });
                 const s = rawRegistry.get(k as "blue.devices[]").getAndSubscribe((v) => {
-                    el.clear().add([
-                        aLineText().sv(v.name),
-                        spacer(),
-                        aLineText().sv(v.connected.toString()).style({ flexShrink: 0 }),
-                    ]);
+                    row.setLabel(v.name);
+                    row.setSelected(v.connected);
                 });
                 us.push(s);
-                return el;
+                return row.el;
             },
         });
 
@@ -7156,7 +7109,7 @@ function createLauncher(): LauncherController {
             background: "transparent",
             padding: "0",
             ...gTextStyle.title,
-            fontWeight: "400",
+            fontWeight: gTextStyle.weight.regular,
             color: gTextStyle.color.primary,
         })
         .attr({ placeholder: "搜索应用、窗口或虚拟屏" });
@@ -7410,8 +7363,7 @@ function createLauncher(): LauncherController {
             aLineText()
                 .sv((result.title.trim()[0] || "?").toUpperCase())
                 .style({
-                    ...gTextStyle.caption,
-                    fontWeight: "600",
+                    ...gTextStyle.captionStrong,
                     color: gTextStyle.color.secondary,
                     width: "100%",
                     textAlign: "center",
@@ -7998,53 +7950,22 @@ tools.registerTool(
             .style({ alignItems: "center" })
             .add(getIconXEl("shutdown", { size: 20, width: 24, height: 24 }));
 
-        function bButton(icon: HTMLElement, txt: string, onClick: () => void) {
-            return button()
-                .style({
-                    width: "100%",
-                    height: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "8px",
-                })
-                .add([icon, aLineText().sv(txt)])
-                .on("click", () => {
-                    onClick();
-                });
-        }
-
-        ui.bar([
-            ui.barItem().add(
-                iItem({ type: "h", size: 1 }).add(
-                    bButton(getIconXEl("lock", { size: 16 }).el, "锁屏", () => {
-                        state.setState("lock");
-                    }),
-                ),
-            ),
-            ui.barItem().add([
-                iItem({ type: "h", size: 1 }).add(
-                    bButton(getIconXEl("shutdown", { size: 16 }).el, "关机", async () => {
-                        const t = await confirm("确认 关机？");
-                        if (t) MSysApi.login("shutdown");
-                    }),
-                ),
-                iItem({ type: "h", size: 1 }).add(
-                    bButton(getIconXEl("reboot", { size: 16 }).el, "重启", async () => {
-                        const t = await confirm("确认 重启？");
-                        if (t) MSysApi.login("restart");
-                    }),
-                ),
-                iItem({ type: "h", size: 1 }).add(
-                    bButton(getIconXEl("suspend", { size: 16 }).el, "挂起", async () => {
-                        const t = await confirm("确认 挂起？");
-                        if (t) MSysApi.login("suspend");
-                    }),
-                ),
-            ]),
-        ])
-            .el.style({ width: px(sSize(3)) })
-            .addInto(tipEl);
+        const menu = uSystemMenu({
+            onLock: () => state.setState("lock"),
+            onShutdown: async () => {
+                const t = await confirm("确认 关机？");
+                if (t) MSysApi.login("shutdown");
+            },
+            onReboot: async () => {
+                const t = await confirm("确认 重启？");
+                if (t) MSysApi.login("restart");
+            },
+            onSuspend: async () => {
+                const t = await confirm("确认 挂起？");
+                if (t) MSysApi.login("suspend");
+            },
+        });
+        menu.el.addInto(tipEl);
 
         el.on("click", () => {
             showTip({ state: "toggle" });
@@ -8140,11 +8061,32 @@ tools.registerTool(
         const profiles = uipool["power.profiles"]();
         const deviceList = uipool["power.devices"]();
 
-        ui.bar([
-            ui.barItem().add(batteryInfo.el),
-            ui.barItem().add(profiles.el),
-            ui.barItem().add(deviceList.el),
-        ]).el.addInto(tipEl);
+        const infoBar = ui
+            .barItem()
+            .style({
+                height: px(sSize(1.5)),
+                display: "flex",
+                alignItems: "center",
+                padding: `0 ${px(sSize2.paddingx)}`,
+                boxSizing: "border-box",
+            })
+            .add(batteryInfo.el);
+        const profilesBar = ui
+            .barItem()
+            .style({ height: px(sSize(1)) })
+            .add(profiles.el);
+        const devicesBar = ui
+            .barItem()
+            .style({ height: px(sSize(1.5) * 4) })
+            .add(deviceList.el);
+        ui.bar([infoBar, profilesBar, devicesBar]).el.addInto(tipEl);
+
+        rawRegistry.get("power.profiles").getAndSubscribe((ids) => {
+            profilesBar.style({ display: ids.length > 0 ? "" : "none" });
+        });
+        rawRegistry.get("power.devices").getAndSubscribe((ids) => {
+            devicesBar.style({ display: ids.length > 0 ? "" : "none" });
+        });
 
         el.on("click", () => {
             showTip({ state: "show", anchorEl: el.el });
@@ -8185,7 +8127,14 @@ tools.registerTool(
             .add(getIconXEl("wifi", { size: 20, width: 24, height: 24 }));
         const toggle = uipool["wifi.toggle"]();
         const apList = uipool["wifi.accessPoints"]();
-        ui.bar([ui.barItem().add(toggle.el), ui.barItem().add(apList.el)]).el.addInto(tipEl);
+        const listBar = ui
+            .barItem()
+            .style({ height: px(sSize(1.5) * 4) })
+            .add(apList.el);
+        ui.bar([uToggleRow("Wi-Fi", toggle.el), listBar]).el.addInto(tipEl);
+        rawRegistry.get("wifi.accessPoints").getAndSubscribe((ids) => {
+            listBar.style({ display: ids.length > 0 ? "" : "none" });
+        });
 
         el.on("click", () => {
             showTip({ state: "show", anchorEl: el.el });
@@ -8204,12 +8153,51 @@ tools.registerTool(
             .add(getIconXEl("connect", { size: 20, width: 24, height: 24 }).el);
         const toggle = uipool["connect.toggle"]();
         const deviceList = uipool["connect.devices"]();
-        const idText = aLineText();
-        rawRegistry.get("connect.id").getAndSubscribe((id) => idText.sv(`本机 ID: ${id}`));
+        const idValue = txt("").style({
+            ...gTextStyle.caption,
+            color: gTextStyle.color.secondary,
+            fontFamily: gTextStyle.monoFamily,
+            flexGrow: "1",
+            minWidth: "0",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            textAlign: "right",
+            userSelect: "text",
+        });
+        rawRegistry.get("connect.id").getAndSubscribe((id) => idValue.sv(id));
+        const idRow = ui
+            .barItem()
+            .style({
+                height: px(sSize(1.5)),
+                display: "flex",
+                alignItems: "center",
+                gap: px(sSize2.paddingx),
+                padding: `0 ${px(sSize2.paddingx)}`,
+                boxSizing: "border-box",
+            })
+            .add([
+                aLineText()
+                    .sv("本机 ID")
+                    .style({
+                        ...gTextStyle.caption,
+                        color: gTextStyle.color.secondary,
+                        flexShrink: "0",
+                    }),
+                idValue,
+            ]);
+        const listBar = ui
+            .barItem()
+            .style({ height: px(sSize(1.5) * 4) })
+            .add(deviceList.el);
 
-        ui.bar([ui.barItem().add(toggle.el), ui.barItem().add(idText), ui.barItem().add(deviceList.el)]).el.addInto(
-            tipEl,
-        );
+        const connectBar = ui.bar([uToggleRow("互联", toggle.el), idRow, listBar]);
+        // 固定宽度，本机 ID 只在自己的行里省略，不撑开整个弹窗
+        connectBar.el.style({ width: px(sSize(6)) });
+        connectBar.el.addInto(tipEl);
+        rawRegistry.get("connect.devices").getAndSubscribe((ids) => {
+            listBar.style({ display: ids.length > 0 ? "" : "none" });
+        });
 
         el.on("click", () => {
             showTip({ state: "show", anchorEl: el.el });
@@ -8228,7 +8216,14 @@ tools.registerTool(
             .style({ alignItems: "center" });
         const toggle = uipool["blue.toggle"]();
         const deviceList = uipool["blue.devices"]();
-        ui.bar([ui.barItem().add(toggle.el), ui.barItem().add(deviceList.el)]).el.addInto(tipEl);
+        const listBar = ui
+            .barItem()
+            .style({ height: px(sSize(1.5) * 4) })
+            .add(deviceList.el);
+        ui.bar([uToggleRow("蓝牙", toggle.el), listBar]).el.addInto(tipEl);
+        rawRegistry.get("blue.devices").getAndSubscribe((ids) => {
+            listBar.style({ display: ids.length > 0 ? "" : "none" });
+        });
 
         el.on("click", () => {
             showTip({ state: "show", anchorEl: el.el });

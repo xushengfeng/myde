@@ -1,5 +1,9 @@
-import { addStyle, button, initDKH, txt, view } from "dkh-ui";
+import { addStyle, button, type ElType, initDKH, txt, view } from "dkh-ui";
+import type { ClipboardItem, ClipboardStation } from "../../src/clipboard";
+import { createClipboardStationTool } from "../../src/clipboard_tool";
+import { getIconXEl } from "../../src/icon";
 import { type PanelPreeditMode, resolveImePreedit } from "../../src/ime/ime";
+import type { BindingSource } from "../../src/registry";
 import { carousel, dynamicScrollList } from "../../src/scroll-list";
 import {
     aLineText,
@@ -11,14 +15,24 @@ import {
     iItem,
     imeCandidatePopup,
     imeTrayPanel,
+    mMedia,
     nNotiList,
     nNumber,
     rRange,
     sourceTag,
     sSize,
     sSize2,
+    uBatteryInfo,
+    uBatteryRow,
+    uBrightnessList,
+    uBrightnessSlider,
+    uChoiceRow,
     ui,
     uScrollList,
+    uSegmented,
+    uSwitch,
+    uSystemMenu,
+    uToggleRow,
     vVolume,
 } from "../../src/ui";
 
@@ -142,7 +156,7 @@ function typeRow(role: string, sample: string, style: { fontSize: string; fontWe
 const typeCard = view("y")
     .style({
         width: "440px",
-        height: "188px",
+        height: px(sSize(8)),
         padding: px(sSize2.padding + 4),
         boxSizing: "border-box",
         borderRadius: px(gRadius.container),
@@ -153,10 +167,14 @@ const typeCard = view("y")
     .addInto(tokenSection);
 typeCard.add([
     typeRow("display", "桌面与窗口", gTextStyle.display),
-    typeRow("title", "窗口标题 / 面板标题", gTextStyle.title),
+    typeRow("title", "面板标题", gTextStyle.title),
+    typeRow("subtitle", "窗口标题", gTextStyle.subtitle),
     typeRow("body", "正文内容与列表项", gTextStyle.body),
+    typeRow("strong", "正文强调", gTextStyle.strong),
     typeRow("caption", "次要说明与元数据", gTextStyle.caption),
+    typeRow("captionStrong", "小字强调", gTextStyle.captionStrong),
     typeRow("micro", "标签与快捷键提示", gTextStyle.micro),
+    typeRow("microStrong", "微小强调", gTextStyle.microStrong),
 ]);
 
 const colorRow = view("x").style({ gap: "16px", height: "20px", marginTop: "8px" }).addInto(typeCard);
@@ -203,6 +221,51 @@ const tagCard = view("x")
     })
     .addInto(tokenSection);
 tagCard.add(["应用", "窗口", "虚拟屏", "设置"].map((label) => sourceTag(label)));
+
+// 托盘选择标记：勾 / 圆只在 tray 出现，左侧图标与右侧标记对齐
+tokenSection.add(
+    aLineText()
+        .sv("托盘选择标记")
+        .style({ ...gTextStyle.title, color: gTextStyle.color.primary }),
+);
+
+const choiceDemo = ui.bar([
+    ui.barItem().add([
+        uChoiceRow({
+            label: "开关：开",
+            icon: view().add(getIconXEl("music", { size: 16 })),
+            mark: "check",
+            selected: true,
+            size: 1,
+            emphasize: false,
+        }).el,
+        uChoiceRow({
+            label: "开关：关",
+            icon: view().add(getIconXEl("settings", { size: 16 })),
+            mark: "check",
+            selected: false,
+            size: 1,
+            emphasize: false,
+        }).el,
+        uChoiceRow({
+            label: "单选：已选",
+            icon: view().add(getIconXEl("speaker", { size: 16 })),
+            mark: "radio",
+            selected: true,
+            size: 1,
+            emphasize: false,
+        }).el,
+        uChoiceRow({
+            label: "单选：未选",
+            icon: view().add(getIconXEl("wifi", { size: 16 })),
+            mark: "radio",
+            selected: false,
+            size: 1,
+            emphasize: false,
+        }).el,
+    ]),
+]);
+choiceDemo.el.style({ width: px(sSize(6)) }).addInto(tokenSection);
 
 // 阴影：窗口框架 / 工具弹窗与搜索框
 tokenSection.add(
@@ -514,6 +577,28 @@ const dottedBgPopup = createPopupWithBackground(
 );
 bgTestSection.add(dottedBgPopup);
 
+// ── 工具弹窗 mock ────────────────────────────────────────────────────────────────────────────────
+// 静态 mock：复用 uToggleRow / uChoiceRow / uSwitch / mMedia。
+// 真实弹窗依赖 registry 数据，不能直接 import；改列表行配置时要和 main.ts 同步。
+const popupDemo = view("y").style({ marginTop: "30px", gap: "12px" }).addInto();
+popupDemo.add(
+    aLineText()
+        .sv("工具弹窗 mock")
+        .style({ ...gTextStyle.display, color: gTextStyle.color.primary }),
+);
+const popupRow = view("x", "wrap").style({ gap: "24px", alignItems: "flex-start" }).addInto(popupDemo);
+
+function popupColumn(title: string, el: ElType<HTMLElement>) {
+    return view("y")
+        .style({ gap: "6px", alignItems: "flex-start" })
+        .add([
+            aLineText()
+                .sv(title)
+                .style({ ...gTextStyle.caption, color: gTextStyle.color.secondary }),
+            el,
+        ]);
+}
+
 const n = nNotiList({
     map: (k) => {
         return Promise.resolve({
@@ -534,28 +619,393 @@ const noMap = {
     },
 };
 const noSet = new Set<string>();
-n.el.style({ width: "fit-content" }).addInto();
-const noB = button("show")
-    .on("click", () => {
-        n.setList(["a", "b", "c"]);
-        noSet.clear();
-        noSet.add("a");
-        noSet.add("b");
-        noSet.add("c");
-    })
-    .addInto();
+n.el.style({ width: "fit-content" });
+const noB = button("show").on("click", () => {
+    n.setList(["a", "b", "c"]);
+    noSet.clear();
+    noSet.add("a");
+    noSet.add("b");
+    noSet.add("c");
+});
+const notificationColumn = popupColumn("通知", n.el);
+notificationColumn.add(noB);
+popupRow.add(notificationColumn);
 setTimeout(() => {
     noB.el.click();
 }, 800);
+
+function createMockClipboardStation(): ClipboardStation {
+    const listeners = new Set<() => void>();
+    const items: ClipboardItem[] = [
+        {
+            id: "clip-1",
+            mimes: ["text/plain;charset=utf-8"],
+            bytes: new Map<string, Uint8Array>(),
+            size: 0,
+            text: "hello world",
+            appid: "firefox",
+            seat: "seat0",
+            time: Date.now(),
+            kind: "clipboard",
+        },
+        {
+            id: "clip-2",
+            mimes: ["text/plain;charset=utf-8"],
+            bytes: new Map<string, Uint8Array>(),
+            size: 0,
+            text: "拖拽进来的内容",
+            appid: "files",
+            seat: "seat0",
+            time: Date.now() - 60_000,
+            kind: "drag",
+        },
+        {
+            id: "clip-3",
+            mimes: ["text/plain;charset=utf-8"],
+            bytes: new Map<string, Uint8Array>(),
+            size: 0,
+            text: "another clipboard item",
+            appid: "code",
+            seat: "seat0",
+            time: Date.now() - 120_000,
+            kind: "clipboard",
+        },
+    ];
+    const notify = () => {
+        for (const listener of listeners) listener();
+    };
+    return {
+        items,
+        offer: () => {},
+        copy: () => {},
+        remove: (id) => {
+            const index = items.findIndex((item) => item.id === id);
+            if (index >= 0) items.splice(index, 1);
+            notify();
+        },
+        clear: (kind) => {
+            if (!kind) {
+                items.length = 0;
+            } else {
+                for (let i = items.length - 1; i >= 0; i--) {
+                    if (items[i].kind === kind) items.splice(i, 1);
+                }
+            }
+            notify();
+        },
+        add: async () => undefined,
+        subscribe: (fn) => {
+            listeners.add(fn);
+            return () => {
+                listeners.delete(fn);
+            };
+        },
+        dispose: () => listeners.clear(),
+    };
+}
+
+const clipboardHost = view();
+createClipboardStationTool({
+    station: createMockClipboardStation(),
+    tipEl: clipboardHost.el,
+});
+popupRow.add(popupColumn("剪贴板", clipboardHost));
+
+const volume = vVolume();
+popupRow.add(popupColumn("音量", volume.el));
+
+const brightnessList = uBrightnessList();
+brightnessList.setSliders([uBrightnessSlider({ value: 0.72 }).el, uBrightnessSlider({ value: 0.38 }).el]);
+popupRow.add(popupColumn("亮度", brightnessList.el));
+
+const imePopupEntries = [
+    { uniqueName: "keyboard-us", name: "英语（美国）", label: "en", off: true },
+    { uniqueName: "rime", name: "中州韵", label: "中" },
+    { uniqueName: "pinyin", name: "拼音", label: "拼" },
+];
+let imePopupStatus: ImeTrayStatus = {
+    available: true,
+    currentUniqueName: "rime",
+    entries: imePopupEntries,
+    hint: "激活 Ctrl+Space · 切换 Super+Space / Super+Shift+Space",
+};
+const imePopupTray = imeTrayPanel(
+    {
+        select: (uniqueName) => {
+            imePopupStatus = { ...imePopupStatus, currentUniqueName: uniqueName };
+            imePopupTray.setStatus(imePopupStatus);
+        },
+    },
+    imePopupStatus,
+);
+popupRow.add(popupColumn("输入法", imePopupTray.el));
+
+const systemMenu = uSystemMenu({
+    onLock: () => {},
+    onShutdown: () => {},
+    onReboot: () => {},
+    onSuspend: () => {},
+});
+popupRow.add(popupColumn("系统菜单", systemMenu.el));
+
+function popupPanel(els: ElType<HTMLElement>[]) {
+    const p = ui.bar(els);
+    p.el.style({ width: px(sSize(6)) });
+    return p.el;
+}
+
+function listPanel(rows: ElType<HTMLElement>[], height: number) {
+    return ui
+        .barItem()
+        .style({ height: px(height) })
+        .add(rows);
+}
+
+function toggleRow(label: string, on: boolean) {
+    return uToggleRow(label, uSwitch(on, () => {}).el);
+}
+
+const wifiPopup = popupPanel([
+    toggleRow("Wi-Fi", true),
+    listPanel(
+        [
+            uChoiceRow({ label: "Home-5G", selected: true }).el,
+            uChoiceRow({ label: "Office" }).el,
+            uChoiceRow({ label: "访客网络" }).el,
+            uChoiceRow({ label: "Coffee Shop" }).el,
+        ],
+        sSize(1.5) * 4,
+    ),
+]);
+popupRow.add(popupColumn("Wi-Fi", wifiPopup));
+
+const bluePopup = popupPanel([
+    toggleRow("蓝牙", true),
+    listPanel(
+        [
+            uChoiceRow({ label: "MX Master 3S", selected: true }).el,
+            uChoiceRow({ label: "AirPods Pro" }).el,
+            uChoiceRow({ label: "键盘", selected: true }).el,
+            uChoiceRow({ label: "旧音箱" }).el,
+        ],
+        sSize(1.5) * 4,
+    ),
+]);
+popupRow.add(popupColumn("蓝牙", bluePopup));
+
+const connectPopup = popupPanel([
+    toggleRow("互联", true),
+    ui
+        .barItem()
+        .style({
+            height: px(sSize(1.5)),
+            display: "flex",
+            alignItems: "center",
+            gap: px(sSize2.paddingx),
+            padding: `0 ${px(sSize2.paddingx)}`,
+            boxSizing: "border-box",
+        })
+        .add([
+            aLineText()
+                .sv("本机 ID")
+                .style({
+                    ...gTextStyle.caption,
+                    color: gTextStyle.color.secondary,
+                    flexShrink: "0",
+                }),
+            aLineText()
+                .sv("7f3a-92c1")
+                .style({
+                    ...gTextStyle.caption,
+                    color: gTextStyle.color.secondary,
+                    fontFamily: gTextStyle.monoFamily,
+                    flexGrow: "1",
+                    minWidth: "0",
+                    textAlign: "right",
+                }),
+        ]),
+    listPanel(
+        [
+            uChoiceRow({ label: "工作室 Mac", detail: "已连接", selected: true }).el,
+            uChoiceRow({ label: "客厅主机", detail: "已记忆" }).el,
+            uChoiceRow({ label: "临时设备", detail: "临时" }).el,
+            uChoiceRow({ label: "备用设备", detail: "已记忆" }).el,
+        ],
+        sSize(1.5) * 4,
+    ),
+]);
+popupRow.add(popupColumn("互联", connectPopup));
+
+const batteryInfo = uBatteryInfo({ percentage: 86, charging: false });
+const batteryPopup = popupPanel([
+    ui
+        .barItem()
+        .style({
+            height: px(sSize(1.5)),
+            display: "flex",
+            alignItems: "center",
+            padding: `0 ${px(sSize2.paddingx)}`,
+            boxSizing: "border-box",
+        })
+        .add(batteryInfo.el),
+    ui
+        .barItem()
+        .style({ height: px(sSize(1)) })
+        .add(
+            uSegmented({
+                items: [
+                    { label: "节能", value: "power-saver" },
+                    { label: "平衡", value: "balanced" },
+                    { label: "性能", value: "performance" },
+                ],
+                value: "balanced",
+            }).el,
+        ),
+    listPanel(
+        [
+            uBatteryRow("鼠标", 64).el,
+            uBatteryRow("键盘", 92).el,
+            uBatteryRow("手柄", 30).el,
+            uBatteryRow("耳机", 55).el,
+        ],
+        sSize(1.5) * 4,
+    ),
+]);
+popupRow.add(popupColumn("电源", batteryPopup));
+
+function fakeBinding<T>(initial: T): BindingSource<T> {
+    let value = initial;
+    const subscribers = new Set<(next: T) => void>();
+    return {
+        get: async () => value,
+        subscribe: (cb) => {
+            subscribers.add(cb);
+            cb(value);
+            return () => subscribers.delete(cb);
+        },
+        getAndSubscribe: (cb) => {
+            const wrapped = (next: T) => cb(next, false);
+            subscribers.add(wrapped);
+            cb(value, true);
+            return () => subscribers.delete(wrapped);
+        },
+        set: async (next) => {
+            value = next;
+            for (const cb of subscribers) cb(value);
+        },
+    };
+}
+
+const mediaMock = mMedia({
+    map: async () => ({
+        data: fakeBinding({
+            title: "夜航星",
+            cover: "",
+            artist: ["不才"],
+            duration: 253,
+        }),
+        play: fakeBinding(false),
+        currentTime: fakeBinding(42),
+        next: () => {},
+        previous: () => {},
+    }),
+});
+let mediaMockHasItem = true;
+mediaMock.setList(["org.mpris.MediaPlayer2.mock"]);
+const mediaColumn = popupColumn("媒体", mediaMock.el);
+mediaColumn.add(
+    button("空 / 有").on("click", () => {
+        mediaMockHasItem = !mediaMockHasItem;
+        mediaMock.setList(mediaMockHasItem ? ["org.mpris.MediaPlayer2.mock"] : []);
+    }),
+);
+popupRow.add(mediaColumn);
+
+const trayPopup = popupPanel([
+    ui
+        .barItem()
+        .style({ height: px(sSize(1)), display: "flex", alignItems: "center", justifyContent: "center" })
+        .add(
+            aLineText()
+                .sv("music")
+                .style({
+                    ...gTextStyle.caption,
+                    color: gTextStyle.color.secondary,
+                    textAlign: "center",
+                }),
+        ),
+    listPanel(
+        [
+            uChoiceRow({
+                label: "显示歌词",
+                icon: view().add(getIconXEl("music", { size: 16 })),
+                mark: "check",
+                selected: true,
+                size: 1,
+                emphasize: false,
+            }).el,
+            uChoiceRow({
+                label: "均衡器",
+                icon: view().add(getIconXEl("settings", { size: 16 })),
+                mark: "radio",
+                selected: true,
+                size: 1,
+                emphasize: false,
+            }).el,
+            uChoiceRow({
+                label: "播放列表",
+                icon: view().add(getIconXEl("clipboard", { size: 16 })),
+                right: view().add(getIconXEl("chevron.right", { size: 14, width: 16, height: 16 })),
+                size: 1,
+                emphasize: false,
+            }).el,
+            uChoiceRow({
+                label: "音量增强",
+                icon: view().add(getIconXEl("speaker", { size: 16 })),
+                mark: "check",
+                selected: false,
+                size: 1,
+                emphasize: false,
+            }).el,
+            uChoiceRow({
+                label: "禁止休眠",
+                icon: view().add(getIconXEl("sun", { size: 16 })),
+                mark: "check",
+                selected: true,
+                size: 1,
+                emphasize: false,
+            }).el,
+            uChoiceRow({
+                label: "网络",
+                icon: view().add(getIconXEl("wifi", { size: 16 })),
+                right: view().add(getIconXEl("chevron.right", { size: 14, width: 16, height: 16 })),
+                size: 1,
+                emphasize: false,
+            }).el,
+            uChoiceRow({
+                label: "设备",
+                icon: view().add(getIconXEl("blue", { size: 16 })),
+                right: view().add(getIconXEl("chevron.right", { size: 14, width: 16, height: 16 })),
+                size: 1,
+                emphasize: false,
+            }).el,
+            uChoiceRow({
+                label: "退出",
+                icon: view().add(getIconXEl("shutdown", { size: 16 })),
+                size: 1,
+                emphasize: false,
+            }).el,
+        ],
+        sSize(1) * 8,
+    ),
+]);
+popupRow.add(popupColumn("托盘", trayPopup));
 
 const range = rRange();
 const rangePel = view().addInto().style({ width: "300px", height: "20px" });
 range.el.addInto(rangePel);
 const rangeText = txt().addInto(rangePel);
 range.onChange((v) => rangeText.sv(v.toString()));
-
-const volume = vVolume();
-volume.el.addInto();
 
 // 动态滚动列表测试（垂直向下）
 const scrollListDemo = view()
@@ -816,28 +1266,6 @@ carouselView.setList(carouselItems, true);
 // 输入法界面：候选窗和托盘弹窗，用于手动调整圆角/高亮/间距
 const imeDemo = view("y").style({ marginTop: "30px", gap: "12px", position: "relative" }).addInto();
 imeDemo.add(aLineText().sv("输入法界面"));
-
-const imeTrayEntries = [
-    { uniqueName: "keyboard-us", name: "英语（美国）", label: "en", off: true },
-    { uniqueName: "rime", name: "中州韵", label: "中" },
-    { uniqueName: "pinyin", name: "拼音", label: "拼" },
-];
-let imeTrayStatus: ImeTrayStatus = {
-    available: true,
-    currentUniqueName: "rime",
-    entries: imeTrayEntries,
-    hint: "激活 Ctrl+Space · 切换 Super+Space / Super+Shift+Space",
-};
-const imeTray = imeTrayPanel(
-    {
-        select: (uniqueName) => {
-            imeTrayStatus = { ...imeTrayStatus, currentUniqueName: uniqueName };
-            imeTray.setStatus(imeTrayStatus);
-        },
-    },
-    imeTrayStatus,
-);
-imeTray.el.addInto(imeDemo);
 
 const imePreview = view()
     .style({

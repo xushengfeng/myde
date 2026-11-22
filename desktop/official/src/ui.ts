@@ -34,38 +34,67 @@ export const gRadius = {
     icon: 12,
 } as const;
 
+const gFontWeight = {
+    regular: "400",
+    medium: "500",
+    strong: "600",
+} as const;
+
 /**
  * 文字层级：用字号、字重和颜色区分，不用 opacity。
- * display 页面/分区标题，title 面板与窗口标题，body 正文与列表项，
- * caption 次要说明，micro 标签和快捷键提示。
+ * display 页面/分区标题，title 面板标题，subtitle 窗口标题，
+ * body 正文与列表项，strong 正文强调，caption/captionStrong 次要说明，
+ * micro/microStrong 标签和快捷键提示。
+ * 字重走 weight token，后面换主题时只改这里。
  * 默认搭配 aLineText（单行、溢出省略、不可选）；需要文章式换行时才刻意使用 txt 等。
  */
 export const gTextStyle = {
     family: "sans-serif",
     monoFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    weight: gFontWeight,
     display: {
         fontSize: "20px",
-        fontWeight: "600",
+        fontWeight: gFontWeight.strong,
         lineHeight: "1.3",
     },
     title: {
         fontSize: "14px",
-        fontWeight: "600",
+        fontWeight: gFontWeight.strong,
         lineHeight: "1.4",
+    },
+    subtitle: {
+        fontSize: "13px",
+        fontWeight: gFontWeight.medium,
+        lineHeight: "1.45",
     },
     body: {
         fontSize: "13px",
-        fontWeight: "400",
+        fontWeight: gFontWeight.regular,
+        lineHeight: "1.45",
+    },
+    strong: {
+        fontSize: "13px",
+        fontWeight: gFontWeight.strong,
         lineHeight: "1.45",
     },
     caption: {
         fontSize: "12px",
-        fontWeight: "400",
+        fontWeight: gFontWeight.regular,
+        lineHeight: "1.4",
+    },
+    captionStrong: {
+        fontSize: "12px",
+        fontWeight: gFontWeight.strong,
         lineHeight: "1.4",
     },
     micro: {
         fontSize: "10px",
-        fontWeight: "400",
+        fontWeight: gFontWeight.regular,
+        lineHeight: "1.2",
+    },
+    microStrong: {
+        fontSize: "10px",
+        fontWeight: gFontWeight.strong,
         lineHeight: "1.2",
     },
     color: {
@@ -383,6 +412,373 @@ export function uScrollList<T>(op: {
     };
 }
 
+/** 统一开关：44 × 24，开启蓝底白钮 */
+export function uSwitch(initial: boolean, onChange: (value: boolean) => void) {
+    let value = initial;
+    const knob = view().style({
+        width: "20px",
+        height: "20px",
+        borderRadius: "50%",
+        background: "#fff",
+        boxShadow: "0 1px 3px #00000033",
+        transition: "all 0.15s ease",
+    });
+    const track = view("x")
+        .style({
+            width: "44px",
+            height: "24px",
+            padding: "2px",
+            boxSizing: "border-box",
+            borderRadius: "12px",
+            cursor: "pointer",
+            flexShrink: "0",
+            transition: "background 0.15s ease",
+        })
+        .add(knob);
+    const render = () => {
+        track.style({
+            background: value ? "#00aaff" : "#00000026",
+            justifyContent: value ? "flex-end" : "flex-start",
+        });
+    };
+    render();
+    track.on("click", () => {
+        value = !value;
+        render();
+        onChange(value);
+    });
+    return {
+        el: track,
+        setValue: (next: boolean) => {
+            if (next === value) return;
+            value = next;
+            render();
+        },
+    };
+}
+
+/** L2 设置行：左侧标签，右侧开关等控件 */
+export function uToggleRow(label: string, control: ElType<HTMLElement> | { el: HTMLElement }) {
+    return ui
+        .barItem()
+        .style({
+            height: px(sSize(1.5)),
+            display: "flex",
+            alignItems: "center",
+            gap: px(sSize2.paddingx),
+            padding: `0 ${px(sSize2.paddingx)}`,
+            boxSizing: "border-box",
+        })
+        .add([
+            aLineText()
+                .sv(label)
+                .style({
+                    ...gTextStyle.body,
+                    color: gTextStyle.color.primary,
+                    flexGrow: "1",
+                }),
+            control,
+        ]);
+}
+
+export type SelectMarkKind = "radio" | "checkbox" | "check";
+
+/** 选择标记：圆 = 单选，方 = 多选，勾 = 选中 / 托盘开关 */
+export function uSelectMark(kind: SelectMarkKind, selected = false, size = 16) {
+    const box = view().style({
+        position: "relative",
+        width: px(size),
+        height: px(size),
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: "0",
+    });
+    let value = selected;
+    const render = () => {
+        box.clear();
+        if (kind === "check") {
+            if (value) box.add(getIconXEl("check", { size, padding: 1 }));
+            return;
+        }
+        if (kind === "radio") {
+            box.add(getIconXEl("circle", { size, padding: 1 }));
+            if (value) {
+                box.add(
+                    view()
+                        .style({
+                            position: "absolute",
+                            inset: "0",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                        })
+                        .add(getIconXEl("circle.fill", { size: Math.round(size * 0.5) })),
+                );
+            }
+            return;
+        }
+        box.add(getIconXEl("square", { size, padding: 1 }));
+        if (value) {
+            box.add(
+                view()
+                    .style({
+                        position: "absolute",
+                        inset: "0",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                    })
+                    .add(getIconXEl("check", { size: Math.round(size * 0.7) })),
+            );
+        }
+    };
+    render();
+    return {
+        el: box,
+        setSelected: (next: boolean) => {
+            if (next === value) return;
+            value = next;
+            render();
+        },
+    };
+}
+
+/** 统一的列表行：左侧图标 / 文本，右侧详情 / 选择标记 */
+export function uChoiceRow(op: {
+    label: string;
+    detail?: string;
+    icon?: ElType<HTMLElement> | { el: HTMLElement };
+    right?: ElType<HTMLElement> | { el: HTMLElement };
+    mark?: SelectMarkKind;
+    selected?: boolean;
+    size?: 1 | 1.5;
+    /** 选中时是否用 L3 实心白强调；tray 菜单用 false，只显示勾 */
+    emphasize?: boolean;
+    onClick?: () => void;
+}) {
+    let selected = op.selected ?? false;
+    const emphasize = op.emphasize ?? true;
+    const row = iItem({ type: "h", size: op.size ?? 1.5 }).style({
+        display: "flex",
+        alignItems: "center",
+        padding: `0 ${px(sSize2.paddingx)}`,
+        gap: px(sSize2.paddingx),
+        boxSizing: "border-box",
+        cursor: op.onClick ? "pointer" : "default",
+    });
+    if (op.icon) row.add(op.icon);
+    const label = aLineText()
+        .sv(op.label)
+        .style({
+            ...gTextStyle.body,
+            color: gTextStyle.color.primary,
+            flexGrow: "1",
+            minWidth: "0",
+        });
+    row.add(label);
+    const detail = aLineText()
+        .sv(op.detail ?? "")
+        .style({
+            ...gTextStyle.caption,
+            color: gTextStyle.color.secondary,
+            width: "fit-content",
+            maxWidth: "45%",
+            flexShrink: "0",
+        });
+    detail.style({ display: op.detail ? "" : "none" });
+    row.add(detail);
+    const mark = op.mark ? uSelectMark(op.mark, selected) : undefined;
+    if (op.right) row.add(op.right);
+    else if (mark) row.add(mark.el);
+
+    const renderSelected = () => {
+        if (emphasize) {
+            row.style({ background: selected ? gSurfaceStyle.solid.backgroundColor : "transparent" });
+        }
+        mark?.setSelected(selected);
+    };
+    renderSelected();
+
+    if (op.onClick) row.on("click", () => op.onClick?.());
+
+    return {
+        el: row,
+        setLabel: (text: string) => label.sv(text),
+        setDetail: (text: string) => {
+            detail.sv(text);
+            detail.style({ display: text ? "" : "none" });
+        },
+        setSelected: (next: boolean) => {
+            selected = next;
+            renderSelected();
+        },
+    };
+}
+
+/** 电池信息行：电池图标 + 百分比 + 充电状态 */
+export function uBatteryInfo(initial: { percentage: number; charging: boolean }) {
+    const battery = getIconXEl("battery", { size: 24, width: 28, height: 24 });
+    const valueText = aLineText().style({
+        ...gTextStyle.display,
+        color: gTextStyle.color.primary,
+        width: "fit-content",
+    });
+    const statusText = aLineText().style({
+        ...gTextStyle.caption,
+        color: gTextStyle.color.secondary,
+        width: "fit-content",
+    });
+    let percentage = initial.percentage;
+    let charging = initial.charging;
+    const render = () => {
+        valueText.sv(`${percentage}%`);
+        statusText.sv(charging ? "充电中" : "未充电");
+        battery.sv("value", Math.max(0, Math.min(1, percentage / 100)));
+    };
+    render();
+    return {
+        el: view("x")
+            .style({ alignItems: "center", gap: px(sSize2.padding) })
+            .add([view().add(battery), view("y").style({ gap: "1px", minWidth: "0" }).add([valueText, statusText])]),
+        setValue: (nextPercentage: number, nextCharging: boolean) => {
+            percentage = nextPercentage;
+            charging = nextCharging;
+            render();
+        },
+    };
+}
+
+/** 均匀三等分（或任意等分）的横向选择条 */
+export function uSegmented<T extends string>(op: {
+    items: { label: string; value: T }[];
+    value?: T;
+    onChange?: (value: T) => void;
+}) {
+    const row = view("x").style({
+        width: "100%",
+        height: px(sSize(1)),
+        gap: "2px",
+    });
+    let items = op.items;
+    let value = op.value;
+    const render = () => {
+        row.clear();
+        for (const item of items) {
+            const selected = item.value === value;
+            const seg = iItem({ type: "h", size: 1 })
+                .style({
+                    flex: "1",
+                    minWidth: "0",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    overflow: "hidden",
+                    background: selected ? gSurfaceStyle.solid.backgroundColor : "transparent",
+                })
+                .add(
+                    aLineText()
+                        .sv(item.label)
+                        .style({
+                            ...gTextStyle.body,
+                            color: gTextStyle.color.primary,
+                            width: "fit-content",
+                            maxWidth: "100%",
+                            textAlign: "center",
+                        }),
+                );
+            seg.on("click", () => {
+                if (value === item.value) return;
+                value = item.value;
+                render();
+                op.onChange?.(value);
+            });
+            row.add(seg);
+        }
+    };
+    render();
+    return {
+        el: row,
+        setItems: (next: { label: string; value: T }[]) => {
+            items = next;
+            render();
+        },
+        setValue: (next: T) => {
+            if (next === value) return;
+            value = next;
+            render();
+        },
+    };
+}
+
+/** 电池设备行：电池图标 + 名称 + 百分比 */
+export function uBatteryRow(label: string, percentage: number) {
+    const battery = getIconXEl("battery", { size: 18, width: 22, height: 18 });
+    let value = percentage;
+    const render = () => battery.sv("value", Math.max(0, Math.min(1, value / 100)));
+    const row = uChoiceRow({
+        label,
+        detail: `${value}%`,
+        icon: view().add(battery),
+    });
+    render();
+    return {
+        el: row.el,
+        setValue: (nextLabel: string, nextPercentage: number) => {
+            value = nextPercentage;
+            row.setLabel(nextLabel);
+            row.setDetail(`${value}%`);
+            render();
+        },
+    };
+}
+
+/** 系统菜单：锁屏 + 关机 / 重启 / 挂起 */
+export function uSystemMenu(op: {
+    onLock: () => void;
+    onShutdown: () => void;
+    onReboot: () => void;
+    onSuspend: () => void;
+}) {
+    const action = (icon: string, label: string, onClick: () => void) =>
+        iItem({ type: "h", size: 1 })
+            .style({
+                display: "flex",
+                alignItems: "center",
+                gap: px(sSize2.paddingx),
+                padding: `0 ${px(sSize2.paddingx)}`,
+                boxSizing: "border-box",
+                cursor: "pointer",
+            })
+            .add([
+                getIconXEl(icon, { size: 16 }),
+                aLineText()
+                    .sv(label)
+                    .style({
+                        ...gTextStyle.body,
+                        color: gTextStyle.color.primary,
+                    }),
+            ])
+            .on("click", onClick);
+    const menu = ui.bar([
+        ui
+            .barItem()
+            .style({ height: px(sSize(1)) })
+            .add(action("lock", "锁屏", op.onLock)),
+        ui
+            .barItem()
+            .style({ height: px(sSize(1) * 3) })
+            .add([
+                action("shutdown", "关机", op.onShutdown),
+                action("reboot", "重启", op.onReboot),
+                action("suspend", "挂起", op.onSuspend),
+            ]),
+    ]);
+    menu.el.style({ width: px(sSize(3)) });
+    return { el: menu.el };
+}
+
 export function xView(els: ElType<HTMLElement>[]) {
     const el = view("y").style({
         gap: `${sSize2.padding}px`,
@@ -455,7 +851,10 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
     return {
         el: ui.bar([
             // todo 勿扰模式
-            ui.barItem().add(nl.el),
+            ui
+                .barItem()
+                .style({ height: px(sSize(2) * 4) })
+                .add(nl.el),
             ui
                 .barItem()
                 .style({ height: px(sSize(1)) })
@@ -487,110 +886,323 @@ export function mMedia(op: {
         currentTime: BindingSource<number>;
     }>;
 }) {
-    const main = view();
-    const list = view("x")
-        .style({ gap: px(sSize2.padding) })
-        .addInto(main);
+    const CARD_WIDTH = sSize(5.5);
+    const COVER_SIZE = sSize(2.5);
+
+    function formatTime(seconds: number) {
+        if (!Number.isFinite(seconds) || seconds <= 0) return "0:00";
+        const total = Math.floor(seconds);
+        return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+    }
+
+    const TAB_WIDTH = sSize(2);
+    const tabIds: string[] = [];
+    const tabIndexById = new Map<string, number>();
+    const tabEls = new Map<string, ElType<HTMLElement>>();
+    let activeTabIndex = 0;
+
+    function createTab(id: string) {
+        const name = id.replace("org.mpris.MediaPlayer2.", "").split(".")[0];
+        const tab = view("x").style({
+            width: "100%",
+            height: "100%",
+            borderRadius: px(gRadius.item),
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: `0 ${px(sSize2.paddingx)}`,
+            boxSizing: "border-box",
+            cursor: "pointer",
+            overflow: "hidden",
+            background: id === tabIds[activeTabIndex] ? gSurfaceStyle.solid.backgroundColor : "transparent",
+        });
+        tab.add(
+            aLineText().sv(name).style({
+                width: "fit-content",
+                maxWidth: "100%",
+                textAlign: "center",
+            }),
+        );
+        tab.on("click", () => {
+            const index = tabIndexById.get(id);
+            if (index === undefined) return;
+            s.scrollToPage(index);
+            setActiveTab(index);
+        });
+        tabEls.set(id, tab);
+        return tab;
+    }
+
+    const tabList = dynamicScrollList<string>({
+        itemSize: TAB_WIDTH,
+        containerSize: CARD_WIDTH,
+        direction: "right",
+        keyExtractor: (id) => id,
+        dragByMouse: true,
+        renderItem: (id) => createTab(id),
+    });
+    tabList.el.style({ width: px(CARD_WIDTH), height: px(sSize(1)) });
+
+    const setActiveTab = (index: number) => {
+        if (index === activeTabIndex) return;
+        activeTabIndex = index;
+        const activeId = tabIds[index];
+        for (const [id, tab] of tabEls) {
+            tab.style({
+                background: id === activeId ? gSurfaceStyle.solid.backgroundColor : "transparent",
+            });
+        }
+        tabList.scrollToPage(index, false);
+    };
+
+    const tabsBar = ui
+        .barItem()
+        .style({ height: px(sSize(1)) })
+        .add(tabList.el);
 
     const s = carousel<string>({
-        itemSize: 200,
+        itemSize: CARD_WIDTH,
         direction: "right",
         keyExtractor: (k) => k,
+        onScroll: (index, progress) => setActiveTab(Math.round(index + progress)),
         renderItem: (k) => {
-            const ditial = view("y").addInto(main);
+            const card = view("y").style({
+                width: px(CARD_WIDTH),
+                height: "100%",
+                padding: px(sSize2.padding),
+                boxSizing: "border-box",
+                alignItems: "center",
+                gap: "6px",
+            });
 
-            const cover = view().addInto(ditial);
-            const title = aLineText().addInto(ditial);
-            const artist = aLineText().addInto(ditial);
-
-            const controls = view("x")
-                .on("pointerdown", (e) => {
-                    // carousel可以用鼠标拖拽，这里交互式元素屏蔽拖拽
-                    e.stopPropagation();
-                })
-                .addInto(ditial);
-            const prevBtn = button(getIconXEl("media.backward.fill")).addInto(controls);
-            const playBtn = button(getIconXEl("media.play.fill")).addInto(controls);
-            const pauseBtn = button(getIconXEl("media.pause.fill")).addInto(controls);
-            const nextBtn = button(getIconXEl("media.forward.fill")).addInto(controls);
-            const time = view()
+            const cover = view()
                 .style({
-                    width: "160px",
-                    height: "10px",
-                    background: "rgba(0,0,0,0.1)",
-                    borderRadius: "5px",
+                    width: px(COVER_SIZE),
+                    height: px(COVER_SIZE),
+                    borderRadius: px(gRadius.item),
                     overflow: "hidden",
+                    background: "#0000000a",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: "0",
                 })
-                .addInto(controls);
-            const timex = view()
+                .addInto(card);
+            const title = aLineText()
+                .style({
+                    ...gTextStyle.title,
+                    color: gTextStyle.color.primary,
+                    width: "100%",
+                    textAlign: "center",
+                })
+                .addInto(card);
+            const artist = aLineText()
+                .style({
+                    ...gTextStyle.caption,
+                    color: gTextStyle.color.secondary,
+                    width: "100%",
+                    textAlign: "center",
+                })
+                .addInto(card);
+
+            const progress = view()
+                .style({
+                    width: "100%",
+                    height: "6px",
+                    background: "#00000012",
+                    borderRadius: px(gRadius.item),
+                    overflow: "hidden",
+                    flexShrink: "0",
+                })
+                .addInto(card);
+            const progressFill = view()
                 .style({
                     width: "0%",
                     height: "100%",
-                    background: "rgba(0,0,0,0.5)",
+                    background: gTextStyle.color.primary,
                 })
-                .addInto(time);
-            op.map(k).then(async (x) => {
-                let duration = 0;
+                .addInto(progress);
+
+            // 按钮严格居中，时间绝对定位在按钮两侧
+            const controls = view("x")
+                .style({
+                    position: "relative",
+                    width: "100%",
+                    height: px(28),
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: "0",
+                })
+                .on("pointerdown", (e) => e.stopPropagation())
+                .addInto(card);
+            const currentText = aLineText()
+                .style({
+                    ...gTextStyle.micro,
+                    color: gTextStyle.color.secondary,
+                    width: "fit-content",
+                    position: "absolute",
+                    left: "0",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                })
+                .addInto(controls);
+            const durationText = aLineText()
+                .style({
+                    ...gTextStyle.micro,
+                    color: gTextStyle.color.secondary,
+                    width: "fit-content",
+                    position: "absolute",
+                    right: "0",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                })
+                .addInto(controls);
+            const buttonGroup = view("x")
+                .style({ alignItems: "center", justifyContent: "center", gap: "4px" })
+                .addInto(controls);
+
+            let player: Awaited<ReturnType<typeof op.map>> | undefined;
+            let duration = 0;
+            let currentTimeValue = 0;
+            let playing = false;
+            const renderTime = () => {
+                const ratio = duration > 0 ? Math.min(1, currentTimeValue / duration) : 0;
+                progressFill.style({ width: `${ratio * 100}%` });
+                currentText.sv(formatTime(currentTimeValue));
+                durationText.sv(formatTime(duration));
+            };
+
+            const mediaButton = (icon: ElType<HTMLElement> | { el: HTMLElement }, onClick: () => void) => {
+                const btn = button(
+                    view().style({ display: "flex", alignItems: "center", justifyContent: "center" }).add(icon),
+                )
+                    .style({
+                        width: "28px",
+                        height: "28px",
+                        padding: "0",
+                        border: "none",
+                        background: "transparent",
+                        borderRadius: px(gRadius.item),
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        flexShrink: "0",
+                    })
+                    .on("click", onClick);
+                btn.on("pointerenter", () => btn.style({ background: "#0000000a" }));
+                btn.on("pointerleave", () => btn.style({ background: "transparent" }));
+                return btn;
+            };
+
+            const playIcon = view()
+                .style({ display: "flex", alignItems: "center", justifyContent: "center" })
+                .add(getIconXEl("media.play.fill", { size: 16 }));
+            const pauseIcon = view()
+                .style({ display: "none", alignItems: "center", justifyContent: "center" })
+                .add(getIconXEl("media.pause.fill", { size: 16 }));
+            const playPauseBtn = mediaButton(
+                view()
+                    .style({ display: "flex", alignItems: "center", justifyContent: "center" })
+                    .add([playIcon, pauseIcon]),
+                () => player?.play.set?.(!playing),
+            );
+
+            buttonGroup.add([
+                mediaButton(getIconXEl("media.backward.fill", { size: 16 }), () => player?.previous()),
+                playPauseBtn,
+                mediaButton(getIconXEl("media.forward.fill", { size: 16 }), () => player?.next()),
+            ]);
+            renderTime();
+
+            op.map(k).then((x) => {
+                player = x;
                 x.data.getAndSubscribe((data) => {
-                    const artCover = data.cover;
-                    if (artCover) {
-                        cover.clear();
-                        image(artCover, "cover")
-                            .style({ width: "100px", height: "100px", objectFit: "cover" })
+                    duration = data.duration;
+                    cover.clear();
+                    if (data.cover) {
+                        image(data.cover, "cover")
+                            .style({ width: "100%", height: "100%", objectFit: "cover" })
                             .addInto(cover);
                     } else {
-                        cover.clear();
+                        cover.add(getIconXEl("music", { size: 36, width: 36, height: 36 }));
                     }
                     title.sv(data.title);
-                    artist.sv(data.artist.join(", "));
-                    duration = data.duration;
+                    artist.sv(data.artist.join(", ") || "未知艺术家");
+                    renderTime();
                 });
-
-                // const play=await x.play.get()
-                playBtn.on("click", () => {
-                    x.play.set?.(true);
+                x.play.getAndSubscribe((v) => {
+                    playing = !!v;
+                    playIcon.style({ display: playing ? "none" : "flex" });
+                    pauseIcon.style({ display: playing ? "flex" : "none" });
                 });
-                pauseBtn.on("click", () => {
-                    x.play.set?.(false);
-                });
-                nextBtn.on("click", () => {
-                    x.next();
-                });
-                prevBtn.on("click", () => {
-                    x.previous();
-                });
-
                 x.currentTime.getAndSubscribe((v) => {
-                    timex.style({ width: `${(v / duration) * 100}%` });
+                    currentTimeValue = v;
+                    renderTime();
                 });
             });
-            return ditial;
+            return card;
         },
     });
+    const contentBar = ui
+        .barItem()
+        .style({ height: px(CARD_WIDTH), position: "relative" })
+        .add(s.el);
+    const emptyMask = view("x")
+        .style({
+            position: "absolute",
+            inset: "0",
+            display: "none",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "none",
+            background: "rgba(245, 245, 245, 0.72)",
+        })
+        .add(
+            aLineText()
+                .sv("没有播放器")
+                .style({
+                    ...gTextStyle.body,
+                    color: gTextStyle.color.secondary,
+                    width: "fit-content",
+                }),
+        );
+    contentBar.add(emptyMask);
 
-    main.style({ padding: px(sSize2.padding) }).add(s.el);
-
-    const nel = ui.bar([ui.barItem().add(main)]);
+    const nel = ui.bar([tabsBar, contentBar]);
 
     return {
         el: nel.el,
         setList: (l: string[]) => {
-            list.clear().add(
-                l.map((i, index) =>
-                    view()
-                        .add(i.replace("org.mpris.MediaPlayer2.", "").split(".")[0])
-                        .on("click", () => {
-                            s.scrollToPage(index);
-                        }),
-                ),
-            );
+            tabIds.length = 0;
+            tabIds.push(...l);
+            tabIndexById.clear();
+            l.forEach((id, index) => {
+                tabIndexById.set(id, index);
+            });
+            for (const id of [...tabEls.keys()]) {
+                if (!tabIndexById.has(id)) tabEls.delete(id);
+            }
+            activeTabIndex = -1;
+            tabsBar.style({ display: l.length > 0 ? "" : "none" });
+            emptyMask.style({ display: l.length > 0 ? "none" : "flex" });
+            tabList.setList(l);
+            tabList.scrollTo(0);
             s.setList(l);
+            if (l.length > 0) {
+                s.scrollToPage(0, false);
+                setActiveTab(0);
+            }
         },
     };
 }
 
 export function tTrayMenu(op: { click: () => void; clickItem: () => void }) {
-    const titleEl = aLineText();
+    const titleEl = aLineText().style({
+        ...gTextStyle.captionStrong,
+        color: gTextStyle.color.secondary,
+        textAlign: "center",
+    });
     const mainClick = view("x")
         .style({ alignItems: "center", justifyContent: "center", height: px(sSize(1)) })
         .add(titleEl)
@@ -601,6 +1213,8 @@ export function tTrayMenu(op: { click: () => void; clickItem: () => void }) {
         .style({ alignItems: "center", justifyContent: "center", height: px(sSize(1)) })
         .add(getIconXEl("chevron.left"));
     const data = new Map<number, MenuItem>();
+    /** 子菜单返回栈：每层保存上一层的 id 列表 */
+    const menuStack: number[][] = [];
     const list = dynamicScrollList<number>({
         itemSize: sSize(1),
         containerSize: sSize(1) * 8,
@@ -608,64 +1222,64 @@ export function tTrayMenu(op: { click: () => void; clickItem: () => void }) {
         keyExtractor: (k) => k.toString(),
         renderItem: (i, _, items) => {
             const item = data.get(i);
-            const itemEl = view("x").style({
-                padding: px(sSize2.paddingx),
-                gap: px(sSize2.paddingx),
-                alignItems: "center",
-            });
             if (!item) {
                 console.error(`tray ui ${i} cannot find item`);
-                return itemEl;
+                return iItem({ type: "h", size: 1 });
             }
-            const hasIcon = items.some((i) => data.get(i)?.iconUrl);
-            if (hasIcon) {
-                const iconEl = view().style({ width: "16px", height: "16px", flexShrink: 0 }).addInto(itemEl);
-                if (item.iconUrl) {
-                    item.iconUrl({ theme: "breeze" }).then((url) => {
-                        image(url ?? "", "icon")
-                            .style({ width: "16px", height: "16px", objectFit: "cover" })
-                            .addInto(iconEl);
-                    });
-                }
+            const hasIcon = items.some((id) => data.get(id)?.iconUrl);
+            const iconBox = hasIcon ? view().style({ width: "16px", height: "16px", flexShrink: "0" }) : undefined;
+            if (iconBox && item.iconUrl) {
+                item.iconUrl({ theme: "breeze" }).then((url) => {
+                    image(url ?? "", "icon")
+                        .style({ width: "16px", height: "16px", objectFit: "cover" })
+                        .addInto(iconBox);
+                });
             }
-            aLineText().sv(item.label).addInto(itemEl).style({ flexGrow: 1 });
-            // todo
-            if (item.children?.length) {
-                view().add(getIconXEl("chevron.right")).addInto(itemEl);
-            } else if (item.toggleType === "checkmark") {
-                if (item.toggleState) {
-                    view().add("v").addInto(itemEl);
-                } else {
-                    view().add("☐").addInto(itemEl);
-                }
-            } else if (item.toggleType === "radio") {
-                if (item.toggleState) {
-                    view().add("v").addInto(itemEl);
-                } else {
-                    view().add("○").addInto(itemEl);
-                }
-            }
-            itemEl.on("click", () => {
-                if (item.children?.length) {
-                    backMenu.on("click", () => {
-                        list.setList(items);
-                    });
-                    list.setList(
-                        item.children
-                            .filter((i) => i.visible)
-                            .filter((i) => i.type === "standard")
-                            .map((i) => i.id),
-                    );
-                } else {
+            const right = item.children?.length
+                ? view().add(getIconXEl("chevron.right", { size: 14, width: 16, height: 16 }))
+                : undefined;
+            const mark = item.children?.length
+                ? undefined
+                : item.toggleType === "checkmark"
+                  ? ("check" as const)
+                  : item.toggleType === "radio"
+                    ? ("radio" as const)
+                    : undefined;
+            const row = uChoiceRow({
+                label: item.label,
+                icon: iconBox,
+                right,
+                mark,
+                selected: !!item.toggleState,
+                size: 1,
+                emphasize: false,
+                onClick: () => {
+                    if (item.children?.length) {
+                        menuStack.push(items);
+                        list.setList(
+                            item.children
+                                .filter((child) => child.visible)
+                                .filter((child) => child.type === "standard")
+                                .map((child) => child.id),
+                        );
+                        backMenu.style({ display: "flex" });
+                        return;
+                    }
                     item.click();
                     op.clickItem();
-                }
+                },
             });
-
-            return itemEl;
+            return row.el;
         },
     });
     list.el.style({ width: px(sSize(6)) });
+    backMenu.style({ display: "none" });
+    backMenu.on("click", () => {
+        const prev = menuStack.pop();
+        if (!prev) return;
+        list.setList(prev);
+        backMenu.style({ display: menuStack.length > 0 ? "flex" : "none" });
+    });
     const menuEl = ui.bar([ui.barItem().add(mainClick), ui.barItem().add([backMenu, list.el])]);
 
     function set(tree: MenuItem[]) {
@@ -687,18 +1301,15 @@ export function tTrayMenu(op: { click: () => void; clickItem: () => void }) {
         // 其次，软件实现也有不同，有更新局部的，有全部更新的
         setTree: (tree: MenuItem[]) => {
             set(tree);
-            list.setList(
-                tree
-                    .filter((i) => i.visible)
-                    .filter((i) => i.type === "standard")
-                    .map((i) => i.id),
-                true,
-            );
-            if (tree.some((i) => i.children?.length)) {
-                backMenu.style({ display: "flex" });
-            } else {
-                backMenu.style({ display: "none" });
-            }
+            menuStack.length = 0;
+            backMenu.style({ display: "none" });
+            const ids = tree
+                .filter((i) => i.visible)
+                .filter((i) => i.type === "standard")
+                .map((i) => i.id);
+            // 完整重建，避免同 id 的行复用旧 label / icon
+            list.setList([], true);
+            list.setList(ids, true);
         },
         setTitle: (s: string) => titleEl.sv(s),
         el: menuEl.el,
@@ -836,16 +1447,49 @@ export function rRange(op?: {
     };
 }
 
+/** 亮度滑块：白色轨道 + 半透明底 */
+export function uBrightnessSlider(op?: { value?: number; onChange?: (v: number) => void; onEnd?: () => void }) {
+    const track = view().style({ background: "white", borderRadius: px(gRadius.item) }).el;
+    const range = rRange({ mel: track, onEnd: op?.onEnd });
+    range.el.style({
+        width: px(sSize(6)),
+        height: px(sSize(1)),
+        borderRadius: px(gRadius.item),
+        overflow: "hidden",
+        ...gGlassStyle.itemInBg,
+    });
+    if (op?.onChange) range.onChange(op.onChange);
+    range.sv(op?.value ?? 0.5);
+    return { el: range.el, sv: range.sv, onChange: range.onChange };
+}
+
+/** 亮度弹窗：滑块本身就是 L2，直接放进 L1 的网格，不再套一层 L2 */
+export function uBrightnessList() {
+    const grid = ui.bar([]);
+    grid.el.style({
+        display: "none",
+        gridTemplateColumns: "1fr",
+        gap: px(sSize2.padding),
+        width: px(sSize(6)),
+    });
+    return {
+        el: grid.el,
+        setSliders: (sliders: ElType<HTMLElement>[]) => {
+            grid.el.clear().add(sliders);
+            grid.el.style({
+                display: sliders.length > 0 ? "grid" : "none",
+                height: px(sliders.length * sSize(1) + Math.max(0, sliders.length - 1) * sSize2.padding),
+            });
+        },
+    };
+}
+
 export function vVolume(op?: {
     inputM: BindingSource<boolean>;
     outputM: BindingSource<boolean>;
     inputV: BindingSource<number>;
     outputV: BindingSource<number>;
 }) {
-    const output = view("x").style({ gap: px(sSize2.padding) });
-    const input = view("x").style({ gap: px(sSize2.padding) });
-    const p = ui.bar([output, input]);
-
     const d = 1;
 
     function muteB(icon: string) {
@@ -900,24 +1544,26 @@ export function vVolume(op?: {
     });
 
     rOutput.el.style({
+        width: "100%",
         height: px(sSize(d)),
-        flexGrow: 1,
         borderRadius: px(gRadius.item),
         overflow: "hidden",
         ...gGlassStyle.itemInBg,
     });
     rInput.el.style({
+        width: "100%",
         height: px(sSize(d)),
-        flexGrow: 1,
         borderRadius: px(gRadius.item),
         overflow: "hidden",
         ...gGlassStyle.itemInBg,
     });
 
-    output.add([bOutput, rOutput.el]);
-    input.add([bInput, rInput.el]);
-
+    // 按钮和条本身都是 L2；2 × 2 grid
+    const p = ui.bar([bOutput, rOutput.el, bInput, rInput.el]);
     p.el.style({
+        display: "grid",
+        gridTemplateColumns: "auto 1fr",
+        gridTemplateRows: "1fr 1fr",
         width: px(sSize(6)),
         height: px(sSize((d * 2) as 1)),
     });

@@ -1,7 +1,7 @@
 import { button, dynamicSelect, type ElType, input, select, spacer, txt, view } from "dkh-ui";
 import type { ConnectConnection, PairingSession } from "../../../src/desktop-api";
 import { createFrameChart } from "./frame_chart";
-import { aLineText, gGlassStyle, px, sSize2 } from "./ui";
+import { aLineText, gGlassStyle, gTextStyle, px, sSize2 } from "./ui";
 
 export type ImePanelPreeditMode = "auto" | "always" | "never";
 
@@ -73,7 +73,7 @@ function sectionTitle(title: string, desc?: string) {
     return view("y")
         .style({ gap: "4px" })
         .add([
-            txt(title).style({ fontSize: "20px", fontWeight: "600", lineHeight: "1.3" }),
+            txt(title).style({ ...gTextStyle.display, color: gTextStyle.color.primary }),
             ...(desc ? [txt(desc).style({ fontSize: "12px", opacity: "0.6", lineHeight: "1.5" })] : []),
         ]);
 }
@@ -313,7 +313,7 @@ function openConnectDialog(op: SettingsContentOptions, onDone: () => void) {
     const cancelButton = dialogButton("取消").on("click", close);
 
     card.add([
-        txt("添加互联设备").style({ fontSize: "17px", fontWeight: "600" }),
+        txt("添加互联设备").style({ ...gTextStyle.title, fontSize: "17px", color: gTextStyle.color.primary }),
         txt("把本机配对 ID 和 PIN 告诉对方，再输入对方的配对 ID 和 PIN。").style({
             fontSize: "11px",
             opacity: "0.6",
@@ -722,7 +722,7 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
                         ),
                         view("y")
                             .style({ gap: "6px" })
-                            .add([txt("设备").style({ fontSize: "13px", fontWeight: "600" }), list]),
+                            .add([txt("设备").style({ ...gTextStyle.strong, color: gTextStyle.color.primary }), list]),
                     ]);
             },
         },
@@ -791,7 +791,7 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
         for (const [sid, el] of navItems) {
             el.style({
                 background: sid === id ? "#ffffff" : "transparent",
-                fontWeight: sid === id ? "600" : "400",
+                fontWeight: sid === id ? gTextStyle.weight.strong : gTextStyle.weight.regular,
             });
         }
         const section = sections.find((s) => s.id === id);

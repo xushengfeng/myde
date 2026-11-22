@@ -54,6 +54,7 @@
 - `sSize2.padding = 8`，`sSize2.paddingx = 8`。
 - 第二、三层不设置层间距；控件内部给内容留的 padding 不算层间距。
 - 静态尺寸优先：窗口、面板、卡片、图标格用固定宽高，不根据内容撑开，不做响应式重排。
+- 每个 L2 面板都要有明确的宽高；列表行高度固定，不靠内容撑开。
 - 唯一的动态布局是 list 的滚动区；启动台和开始菜单的图标区按 list 处理。
 - 放宽的例外：L2 允许显示/隐藏（搜索结果面板隐藏或固定 7 × 48）；过渡动画后续再加。
 - list 目前按 `itemSize × n` 排，不支持 gap；后续让 list 支持 gap，才能和 `sSize` 的节奏完全对齐。
@@ -71,19 +72,24 @@
 
 | Token | 字号 / 字重 / 行高 | 用途 |
 | --- | --- | --- |
-| `gTextStyle.display` | 20px / 600 / 1.3 | 页面、分区标题 |
-| `gTextStyle.title` | 14px / 600 / 1.4 | 面板标题、列表分组标题 |
-| `gTextStyle.body` | 13px / 400 / 1.45 | 正文、列表项 |
-| `gTextStyle.caption` | 12px / 400 / 1.4 | 次要说明、元数据 |
-| `gTextStyle.micro` | 10px / 400 / 1.2 | 标签、快捷键提示 |
+| `gTextStyle.display` | 20px / strong / 1.3 | 页面、分区标题 |
+| `gTextStyle.title` | 14px / strong / 1.4 | 面板标题、列表分组标题 |
+| `gTextStyle.subtitle` | 13px / medium / 1.45 | 窗口标题 |
+| `gTextStyle.body` | 13px / regular / 1.45 | 正文、列表项 |
+| `gTextStyle.strong` | 13px / strong / 1.45 | 正文强调 |
+| `gTextStyle.caption` | 12px / regular / 1.4 | 次要说明、元数据 |
+| `gTextStyle.captionStrong` | 12px / strong / 1.4 | 小字强调 |
+| `gTextStyle.micro` | 10px / regular / 1.2 | 标签、快捷键提示 |
+| `gTextStyle.microStrong` | 10px / strong / 1.2 | 微小强调 |
 
+- 字重统一走 `gTextStyle.weight`（`regular` / `medium` / `strong`）；换主题或深色模式时只需要改这里。
 - 用字号、字重、颜色区分层级，不用 `opacity`；`opacity` 会连文字选区一起变淡。
 - 颜色：`primary #111111`、`secondary #666666`、`muted #999999`、`inverse #ffffff`。
 - 默认单行：`aLineText`，不换行、溢出省略、不可选。
 - 需要文章式换行时才刻意使用 `txt` 等；常规界面不要让文本自然换行。
 - 默认文本不可选择：桌面根节点 `userSelect: none`；需要复制的内容显式 `userSelect: text`（ID、密码、路径等）。
 - 等宽文本用 `gTextStyle.monoFamily`。
-- 窗口标题当前按 13px / 500 处理；面板标题用 `title` 的 14px / 600。
+- 窗口标题用 `subtitle`；面板标题用 `title`。
 
 ## 6. 颜色与强调
 
@@ -117,6 +123,7 @@
 2. 应用图标主题。
 
 - 不使用 CSS 画图标，不使用 `✓ ○ ☐ v` 等文本字符当图标。
+- 图标本体顶格绘制；留白在 `getIconXEl` 调用时用 `padding` 统一设置，不在图标数据里各画一圈内边距。
 - 图标尺寸按所在位置固定，不靠内容撑开；工具栏用 20，菜单/标题栏用 16–18，应用图标容器用固定像素。
 - 线宽、填充风格跟随生成器，不在业务代码里临时改。
 
@@ -137,7 +144,11 @@
 - L2：`ui.barItem` 面板。
 - L3：条目、当前项、滑块。
 - 通知列表用 `uScrollList`，没有通知时在列表区域内居中显示空提示。
-- 参考实现：音量、通知、电源、输入法。
+- 剪贴板列表同样用 `uScrollList` 复用空提示；底部两个清空按钮各放一个 L2，横向 grid 等分。
+- 电源模式用 `uSegmented` 横向等分；电池信息用 `uBatteryInfo`，电池设备行用 `uBatteryRow`。
+- 系统菜单用 `uSystemMenu`：锁屏，以及关机 / 重启 / 挂起。
+- 互联弹窗固定宽度；本机 ID 在行内单行省略，不参与撑宽弹窗。
+- 参考实现：音量、通知、剪贴板、电源、输入法、系统菜单。
 
 ### 10.2 输入法
 
@@ -177,10 +188,23 @@
 - 图标区按 list 处理，可以滚动。
 - 其它尺寸固定，不随内容重排。
 
-### 10.8 列表与空提示
+### 10.8 媒体
+
+- L1 外壳内放两个 L2：顶部播放器标签一个，下面内容一个。
+- 标签 L2 高 `sSize(1)`，标签区是横向滚动列表，标签项宽 `sSize(2)`；标签文字在 L3 里垂直居中，选中的标签用实心白。
+- 内容 L2 高 `sSize(5.5)`，封面 `sSize(2.5)`。
+- 内容从上到下：封面、标题 / 艺术家、进度条、控制按钮。
+- 控制按钮严格居中；当前时间和总时长绝对定位在按钮左右两侧。
+- 没有播放器时隐藏标签 L2，在内容 L2 上居中显示「没有播放器」遮罩。
+
+### 10.9 列表与空提示
 
 - 列表统一用 `uScrollList`：它包装 `dynamicScrollList`，新增 `empty` 空提示参数。
 - 空提示用单行 `aLineText`，在列表区域内水平 / 垂直居中；有内容时隐藏。
+- 选择型列表统一用 `uChoiceRow`：L3 行，左侧图标 / 文本，右侧详情和标记。
+- 选择标记只用于托盘菜单：`checkmark` 用勾，`radio` 用圆环 + 圆点；标记统一在右侧，左侧是托盘图标。
+- 其他列表不显示选择标记，只用 L3 实心白强调当前 / 已连接行。
+- 托盘菜单不铺白底，只显示勾 / 圆，左侧图标和右侧标记形成平衡。
 - 列表项进出沿用 `dynamicScrollList` 的默认动画，不额外写一套过渡。
 - key 必须稳定（搜索结果用来源 + id），否则列表会把所有行当成新项，只播放进出、没有位移动画。
 - 列表项是 L3，使用 `gRadius.item` 圆角；列表本身不加层间距。
@@ -197,10 +221,19 @@
   - `aLineText`：单行文本
   - `sourceTag`：来源标签
   - `uScrollList`：带空提示的滚动列表
+  - `uSelectMark`：托盘勾选 / 单选标记
+  - `uChoiceRow`：统一的列表行
+  - `uSwitch`：开关
+  - `uToggleRow`：左侧标签 + 右侧开关的 L2 设置行
+  - `uBrightnessSlider`：亮度滑块
+  - `uBatteryInfo`：电池信息行
+  - `uBatteryRow`：电池设备行
+  - `uSegmented`：横向等分选择条
+  - `uSystemMenu`：系统菜单
   - `iItem`：L3 item
   - `ui.bar` / `ui.barItem`：L1 / L2
   - `AnimationGear`：动效
-- `test/ui_example/ui_demo.ts`：token 与三层材质的可视化。
+- `test/ui_example/ui_demo.ts`：token、三层材质、选择标记和工具弹窗 mock 的可视化。
 - `src/main.ts`：工具栏、启动器、开始菜单、窗口框架。
 
 可视化页面：`npx vite desktop/official/test/ui_example`。

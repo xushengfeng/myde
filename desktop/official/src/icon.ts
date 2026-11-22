@@ -535,11 +535,13 @@ export function getIconComment(name: string) {
 
 export function getIconXEl(
     name: string,
-    op?: { size: number; width?: number; height?: number; data?: Record<string, any> },
+    op?: { size: number; width?: number; height?: number; padding?: number; data?: Record<string, any> },
 ) {
     const size = op?.size ?? 16;
     const width = op?.width ?? size;
     const height = op?.height ?? size;
+    /** 图标绘制本身顶格，留白统一在这里加 */
+    const padding = op?.padding ?? 0;
     const el = document.createElement("div");
     el.style.width = `${width}px`;
     el.style.height = `${height}px`;
@@ -555,15 +557,13 @@ export function getIconXEl(
             return;
         }
 
+        const inner = Math.max(1, size - padding * 2);
         const { offsetX, offsetY } = computeOffset(icon, size, width, height);
-        svg.style.width = `${size}px`;
+        svg.style.width = `${inner}px`;
+        svg.style.height = `${inner}px`;
         svg.style.position = "relative";
-        if (offsetX !== 0) {
-            svg.style.left = `${(offsetX / rsize) * size}px`;
-        }
-        if (offsetY !== 0) {
-            svg.style.top = `${(offsetY / rsize) * size}px`;
-        }
+        svg.style.left = `${(offsetX / rsize) * inner + padding}px`;
+        svg.style.top = `${(offsetY / rsize) * inner + padding}px`;
     }
     if (name in iconsName) {
         r();

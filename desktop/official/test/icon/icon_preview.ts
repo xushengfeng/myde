@@ -8,9 +8,15 @@ const l = [
     "rect",
     "rect.r",
     "rect.fill",
+    "check",
+    "circle",
+    "circle.fill",
+    "square",
     "blue",
     "battery",
     "wifi",
+    "connect",
+    "clipboard",
     "shutdown",
     "lock",
     "reboot",
@@ -27,6 +33,8 @@ const l = [
     "notification",
     "speaker",
     "mic",
+    "sun",
+    "settings",
     "number.0",
     "number.1",
     "number.2",
@@ -78,6 +86,17 @@ if ("document" in globalThis) {
             el.style.border = "1px solid blue";
             sm.add(el);
         }
+        const paddingRow = view("x").addInto(pel);
+        for (const padding of [0, 2, 4, 8, 12]) {
+            const el = getIconXEl(name, { size: 64, padding }).el;
+            el.style.border = "1px solid blue";
+            paddingRow.add(
+                view("y")
+                    .style({ alignItems: "center", gap: "4px" })
+                    .add([el, txt(`padding ${padding}`).style({ fontSize: "10px", fontFamily: "monospace" })]),
+            );
+        }
+
         const bel = view("x").addInto(pel);
         for (const b of [0, 2, 4, 6, 8, 10, 12, 14]) {
             const el = getIconXEl(name, { size: 64 }).el;

@@ -1,8 +1,7 @@
-import { button, type ElType, image, spacer, txt, view } from "dkh-ui";
+import { button, type ElType, image, view } from "dkh-ui";
 import type { ClipboardItem, ClipboardItemKind, ClipboardStation } from "./clipboard";
 import { getIconXEl } from "./icon";
-import { dynamicScrollList } from "./scroll-list";
-import { aLineText, gGlassStyle, iItem, px, sSize, sSize2, ui } from "./ui";
+import { aLineText, gGlassStyle, iItem, px, sourceTag, sSize, sSize2, ui, uScrollList } from "./ui";
 
 /** 弹窗和列表固定宽度，内容多少不影响布局 */
 const CONTENT_WIDTH = sSize(8);
@@ -66,24 +65,11 @@ export function createClipboardStationTool(op: {
         .style({ alignItems: "center" })
         .add(getIconXEl("clipboard", { size: 20, width: 24, height: 24 }));
 
-    const empty = view("x")
-        .style({
-            position: "absolute",
-            top: "0",
-            left: "0",
-            width: "100%",
-            height: "100%",
-            alignItems: "center",
-            justifyContent: "center",
-            opacity: 0.6,
-            pointerEvents: "none",
-        })
-        .add(aLineText().sv("暂无内容").style({ width: "auto" }));
-
-    const list = dynamicScrollList<string>({
+    const list = uScrollList<string>({
         itemSize: sSize(1.5),
         containerSize: LIST_HEIGHT,
         direction: "down",
+        crossSize: CONTENT_WIDTH,
         keyExtractor: (id) => id,
         renderItem: (id) => {
             const row = iItem({ type: "h", size: 1.5 }).style({
@@ -133,19 +119,7 @@ export function createClipboardStationTool(op: {
 
             const meta = view("x").style({ alignItems: "center", gap: px(4) });
             if (item.kind === "drag") {
-                meta.add(
-                    view("x")
-                        .style({
-                            flexShrink: 0,
-                            alignItems: "center",
-                            padding: `0 ${px(4)}`,
-                            borderRadius: px(4),
-                            fontSize: "0.75em",
-                            backgroundColor: "rgba(74,158,255,0.18)",
-                            color: "#2f6fdd",
-                        })
-                        .add(txt("拖拽")),
-                );
+                meta.add(sourceTag("拖拽"));
             }
             meta.add(
                 aLineText()
@@ -169,18 +143,20 @@ export function createClipboardStationTool(op: {
             });
             return row;
         },
+        empty: "暂无内容",
     });
-
-    list.el.style({ width: px(CONTENT_WIDTH) });
 
     function clearButton(label: string, kind: ClipboardItemKind) {
         return button()
             .style({
-                width: "fit-content",
-                height: "fit-content",
-                flexShrink: 0,
-                padding: `2px ${px(6)}`,
-                borderRadius: px(6),
+                width: "100%",
+                height: "100%",
+                flexShrink: "0",
+                padding: `0 ${px(sSize2.paddingx)}`,
+                borderRadius: "inherit",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
             })
             .add(aLineText().sv(label))
             .on("click", () => {
@@ -192,24 +168,40 @@ export function createClipboardStationTool(op: {
     const listItem = ui
         .barItem()
         .style({
-            position: "relative",
             width: px(CONTENT_WIDTH),
             height: px(LIST_HEIGHT),
             transition: "background-color 120ms",
         })
-        .add([list.el, empty]);
+        .add(list.el);
 
-    const actions = ui
+    const actions = view("x").style({
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        gap: px(sSize2.padding),
+        width: "100%",
+        height: px(sSize(1)),
+    });
+    const clearDrag = ui
         .barItem()
         .style({
+            height: px(sSize(1)),
             display: "flex",
             alignItems: "center",
-            height: px(sSize(1)),
-            padding: `0 ${px(sSize2.paddingx)}`,
-            boxSizing: "border-box",
-            gap: px(6),
+            justifyContent: "center",
+            overflow: "hidden",
         })
-        .add([clearButton("清空拖拽", "drag"), spacer(), clearButton("清空剪贴板", "clipboard")]);
+        .add(clearButton("清空拖拽", "drag"));
+    const clearClipboard = ui
+        .barItem()
+        .style({
+            height: px(sSize(1)),
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            overflow: "hidden",
+        })
+        .add(clearButton("清空剪贴板", "clipboard"));
+    actions.add([clearDrag, clearClipboard]);
 
     const panel = ui.bar([listItem, actions]);
     panel.el.addInto(op.tipEl);
@@ -242,7 +234,6 @@ export function createClipboardStationTool(op: {
             imageUrls.delete(key);
         }
         list.setList(ids);
-        empty.style({ display: ids.length > 0 ? "none" : "flex" });
     };
     station.subscribe(update);
     update();

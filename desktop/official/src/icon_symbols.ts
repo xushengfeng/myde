@@ -90,6 +90,109 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             ],
         };
     },
+    check: (env) => {
+        const { size } = buildZb(256);
+        const w = 28;
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: 14, y: 128 }, ri: 0, ro: w / 2 },
+                                    { p: { x: 96, y: 210 }, ri: 0, ro: w / 2 },
+                                    { p: { x: 242, y: 42 }, ri: 0, ro: w / 2 },
+                                ],
+                                extendNode: "both",
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    circle: (env) => {
+        const { size, center } = buildZb(256);
+        const w = 24;
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "arc",
+                            data: {
+                                center,
+                                r: size / 2 - w / 2,
+                                width: w,
+                                fromAngle: 0,
+                                endAngle: 0,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    "circle.fill": (env) => {
+        const { size, center } = buildZb(256);
+        const r = size / 2 - 8;
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "raw",
+                            data: {
+                                pathStr: `M ${center.x} ${center.y - r} A ${r} ${r} 0 1 1 ${center.x - 0.01} ${center.y - r} Z`,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    square: (env) => {
+        const { size } = buildZb(256);
+        const w = 24;
+        const pad = 14;
+        const r = 20;
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: pad, y: pad }, ri: 10, ro: r },
+                                    { p: { x: size - pad, y: pad }, ri: 10, ro: r },
+                                    { p: { x: size - pad, y: size - pad }, ri: 10, ro: r },
+                                    { p: { x: pad, y: size - pad }, ri: 10, ro: r },
+                                ],
+                                close: true,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
     rect: (env) => {
         const { size } = buildZb(256);
         return {

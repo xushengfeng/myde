@@ -1,7 +1,7 @@
 import { button, type ElType, input, select, textarea, txt, view } from "dkh-ui";
 import type { FileChooserRequest, NativeFsEntry, PortalChoice, PortalFilter } from "../../../src/desktop-api";
 import { matchFilter } from "../../../src/sys_api/xdg_desktop_portal/filters";
-import { aLineText, gGlassStyle, px, sSize2 } from "./ui";
+import { aLineText, gGlassStyle, gTextStyle, px, sSize2 } from "./ui";
 
 type Place = {
     id: string;
@@ -630,7 +630,7 @@ export function createFileChooserContent(op: FileChooserContentOptions): FileCho
                     gap: "8px",
                     flexShrink: "0",
                     background: active ? "#ffffff" : "transparent",
-                    fontWeight: active ? "600" : "400",
+                    fontWeight: active ? gTextStyle.weight.strong : gTextStyle.weight.regular,
                     transition: "background 0.12s ease",
                     userSelect: "none",
                 })
@@ -659,7 +659,7 @@ export function createFileChooserContent(op: FileChooserContentOptions): FileCho
                     cursor: "pointer",
                     flexShrink: "0",
                     maxWidth: "180px",
-                    fontWeight: last ? "600" : "400",
+                    fontWeight: last ? gTextStyle.weight.strong : gTextStyle.weight.regular,
                     transition: "background 0.12s ease",
                 })
                 .add(aLineText().sv(part.label))
