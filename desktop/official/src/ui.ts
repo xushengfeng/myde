@@ -735,10 +735,16 @@ export function uBatteryRow(label: string, percentage: number) {
         color: gTextStyle.color.secondary,
     });
     valueText.sv(`${value}%`);
+    // 设备行的电池图标和百分比一起靠右
+    const right = view("x").style({
+        alignItems: "center",
+        gap: px(6),
+        flexShrink: "0",
+    });
+    right.add([battery, valueText.el]);
     const row = uChoiceRow({
         label,
-        icon: view().add(battery),
-        right: valueText.el,
+        right,
     });
     render();
     return {
@@ -1022,6 +1028,8 @@ export function mMedia(op: {
                     textAlign: "center",
                 })
                 .addInto(card);
+
+            card.add(spacer());
 
             const progress = view()
                 .style({

@@ -145,7 +145,7 @@
 - L3：条目、当前项、滑块。
 - 通知列表用 `uScrollList`，没有通知时在列表区域内居中显示空提示。
 - 剪贴板列表同样用 `uScrollList` 复用空提示；底部两个清空按钮各放一个 L2，横向 grid 等分。
-- 电源模式用 `uSegmented` 横向等分；电池信息用 `uBatteryInfo`，电池设备行用 `uBatteryRow`。
+- 电源模式用 `uSegmented` 横向等分；电池信息用 `uBatteryInfo`，电池设备行用 `uBatteryRow`，设备行的电池图标和百分比一起靠右。
 - 系统菜单用 `uSystemMenu`：锁屏，以及关机 / 重启 / 挂起。
 - 互联弹窗固定宽度；本机 ID 在行内单行省略，不参与撑宽弹窗。
 - Wi-Fi / 蓝牙 / 互联的开关行带对应图标，整行点击即可切换，不必只点开关。
