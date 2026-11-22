@@ -326,6 +326,8 @@ export interface XdgSurfaceInfo {
     /** 最近一次广播给桌面的窗口尺寸（显式 winGeo 或退化的 surface 尺寸） */
     reportedSize?: { w: number; h: number };
     popupConfigure?: { x: number; y: number; width: number; height: number };
+    /** 等待随下一次 popup configure 一起发出的 reposition token（只保留最后一次） */
+    repositionToken?: number;
 }
 
 export interface XdgSurfaceApi {

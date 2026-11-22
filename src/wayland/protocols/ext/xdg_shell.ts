@@ -1,4 +1,5 @@
 import {
+    type DataOf,
     defineModule,
     type HitTestResult,
     type ModuleCtx,
@@ -163,6 +164,11 @@ function sendConfigure(ctx: ModuleCtx, xdgSurfaceId: WaylandObjectId2<"xdg_surfa
     if (ctx.objects.get(role).protocol.name === "xdg_popup") {
         const p = s.popupConfigure;
         if (p === undefined) return;
+        // repositioned 必须在随后的 configure 序列之前发出；多次 reposition 只保证最后一次
+        if (s.repositionToken !== undefined) {
+            send(role as WaylandObjectId2<"xdg_popup">, "xdg_popup.repositioned", { token: s.repositionToken });
+            s.repositionToken = undefined;
+        }
         send(role as WaylandObjectId2<"xdg_popup">, "xdg_popup.configure", {
             x: p.x,
             y: p.y,
@@ -201,6 +207,61 @@ function configureWin(ctx: ModuleCtx, winId: WaylandWinId): void {
     const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId);
     if (xdgSurfaceId === undefined) return;
     sendConfigure(ctx, xdgSurfaceId, true);
+}
+
+/**
+ * 按 positioner 算出 popup 相对父 xdg_surface 的位置（含 constraint_adjustment）。
+ *
+ * `get_popup` 与 `reposition` 共用：reposition 会丢弃旧 positioner 的参数，
+ * 所以两条路径必须用同一套算法，否则重新定位后的位置会和首次弹出不一致。
+ * 约束范围取根窗口（嵌套 popup 的可用区域是顶层窗口，不是父菜单本身）。
+ */
+function computePopupPosition(
+    ctx: ModuleCtx,
+    positionerData: DataOf<"xdg_positioner">,
+    parentXdgSurfaceId: WaylandObjectId2<"xdg_surface">,
+): { x: number; y: number; width: number; height: number } {
+    const { width, height } = positionerData.size;
+
+    const position = (anchorPointName: KeyPoint, popupPointName: KeyPoint) => {
+        const anchorPoint = getRectKeyPoint(positionerData.anchor_rect, anchorPointName);
+        const popupPoint = getRectKeyPoint({ x: 0, y: 0, width, height }, popupPointName);
+        return {
+            x: anchorPoint.x - popupPoint.x + positionerData.offset.x,
+            y: anchorPoint.y - popupPoint.y + positionerData.offset.y,
+        };
+    };
+
+    const anchorName = ANCHOR_POINT[positionerData.anchor] ?? "none";
+    const gravityName = GRAVITY_POINT[positionerData.gravity] ?? "none";
+    let pos = position(anchorName, gravityName);
+
+    const parentAbs = ctx.domain.xdgSurface.absoluteOffset(parentXdgSurfaceId);
+    const rootId = ctx.domain.xdgSurface.rootXdgSurface(parentXdgSurfaceId);
+    const bounds = ctx.domain.xdgSurface.getReRect(rootId);
+    const outsideX = (x: number) => x < 0 || x + width > bounds.w;
+    const outsideY = (y: number) => y < 0 || y + height > bounds.h;
+
+    const adj = positionerData.constraint_adjustment;
+    // 优先级按协议：flip → slide → resize
+    if (outsideX(parentAbs.x + pos.x) && adj & ADJ_FLIP_X) {
+        const flipped = position(flipPoint(anchorName, "x"), flipPoint(gravityName, "x"));
+        if (!outsideX(parentAbs.x + flipped.x)) pos = { ...pos, x: flipped.x };
+    }
+    if (outsideY(parentAbs.y + pos.y) && adj & ADJ_FLIP_Y) {
+        const flipped = position(flipPoint(anchorName, "y"), flipPoint(gravityName, "y"));
+        if (!outsideY(parentAbs.y + flipped.y)) pos = { ...pos, y: flipped.y };
+    }
+    if (adj & ADJ_SLIDE_X) {
+        const absX = parentAbs.x + pos.x;
+        pos.x = Math.min(Math.max(absX, 0), Math.max(0, bounds.w - width)) - parentAbs.x;
+    }
+    if (adj & ADJ_SLIDE_Y) {
+        const absY = parentAbs.y + pos.y;
+        pos.y = Math.min(Math.max(absY, 0), Math.max(0, bounds.h - height)) - parentAbs.y;
+    }
+
+    return { x: pos.x, y: pos.y, width, height };
 }
 
 /**
@@ -475,6 +536,8 @@ export class xdgSurfaceData {
             reportedSize?: { w: number; h: number };
             /** popup 的初始 configure 参数，get_popup 时按 positioner 算好 */
             popupConfigure?: { x: number; y: number; width: number; height: number };
+            /** 等待随下一次 popup configure 一起发出的 reposition token（只保留最后一次） */
+            repositionToken?: number;
         }
     > = {};
     xdg_popup = new Map<WaylandObjectId2<"xdg_popup">, WaylandObjectId2<"xdg_surface">>();
@@ -1078,62 +1141,18 @@ export const xdgShellModule = defineModule({
             }
 
             const positioner = ctx.objects.get(waylandObjectId(x.args.positioner, "xdg_positioner"));
-            const positionerData = positioner.data;
-            const width = positionerData.size.width;
-            const height = positionerData.size.height;
-
-            const position = (anchorPointName: KeyPoint, popupPointName: KeyPoint) => {
-                const anchorPoint = getRectKeyPoint(positionerData.anchor_rect, anchorPointName);
-                const popupPoint = getRectKeyPoint({ x: 0, y: 0, width, height }, popupPointName);
-                return {
-                    x: anchorPoint.x - popupPoint.x + positionerData.offset.x,
-                    y: anchorPoint.y - popupPoint.y + positionerData.offset.y,
-                };
-            };
-
-            const anchorName = ANCHOR_POINT[positionerData.anchor] ?? "none";
-            const gravityName = GRAVITY_POINT[positionerData.gravity] ?? "none";
-            let pos = position(anchorName, gravityName);
-
-            // 约束范围用根窗口（嵌套 popup 的可用区域是顶层窗口，不是父菜单本身）
-            const parentAbs = ctx.domain.xdgSurface.absoluteOffset(parentXdgSurfaceId);
-            const rootId = ctx.domain.xdgSurface.rootXdgSurface(parentXdgSurfaceId);
-            const bounds = ctx.domain.xdgSurface.getReRect(rootId);
-            const outsideX = (x: number) => x < 0 || x + width > bounds.w;
-            const outsideY = (y: number) => y < 0 || y + height > bounds.h;
-
-            const adj = positionerData.constraint_adjustment;
-            // 优先级按协议：flip → slide → resize
-            if (outsideX(parentAbs.x + pos.x) && adj & ADJ_FLIP_X) {
-                const flipped = position(flipPoint(anchorName, "x"), flipPoint(gravityName, "x"));
-                if (!outsideX(parentAbs.x + flipped.x)) pos = { ...pos, x: flipped.x };
-            }
-            if (outsideY(parentAbs.y + pos.y) && adj & ADJ_FLIP_Y) {
-                const flipped = position(flipPoint(anchorName, "y"), flipPoint(gravityName, "y"));
-                if (!outsideY(parentAbs.y + flipped.y)) pos = { ...pos, y: flipped.y };
-            }
-            if (adj & ADJ_SLIDE_X) {
-                const absX = parentAbs.x + pos.x;
-                pos.x = Math.min(Math.max(absX, 0), Math.max(0, bounds.w - width)) - parentAbs.x;
-            }
-            if (adj & ADJ_SLIDE_Y) {
-                const absY = parentAbs.y + pos.y;
-                pos.y = Math.min(Math.max(absY, 0), Math.max(0, bounds.h - height)) - parentAbs.y;
-            }
-
-            const nx = pos.x;
-            const ny = pos.y;
+            const rect = computePopupPosition(ctx, positioner.data, parentXdgSurfaceId);
 
             const xdgSurfaceM = ctx.domain.xdgSurface;
             xdgSurfaceM.setAsPopup(xid, popupId, parentXdgSurfaceId);
-            xdgSurfaceM.setOffset(xid, nx, ny);
+            xdgSurfaceM.setOffset(xid, rect.x, rect.y);
 
             // 初始 commit 后才发 configure（Qt/KDE 只认那时机的 configure）
             xdgSurfaceM.getXdgSurface(xid).popupConfigure = {
-                x: Math.floor(nx),
-                y: Math.floor(ny),
-                width: positionerData.size.width,
-                height: positionerData.size.height,
+                x: Math.floor(rect.x),
+                y: Math.floor(rect.y),
+                width: rect.width,
+                height: rect.height,
             };
         },
         "xdg_surface.ack_configure": (x, ctx) => {
@@ -1150,6 +1169,28 @@ export const xdgShellModule = defineModule({
                 return;
             }
             ctx.domain.xdgSurface.grabPopup(seat.name, x.id, xdgSurfaceId);
+        },
+        "xdg_popup.reposition": (x, ctx) => {
+            const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByPopup(x.id);
+            if (xdgSurfaceId === undefined) return;
+            const xdgSurface = ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId);
+            const parent = xdgSurface.parent;
+            // popup 一定挂在某个 xdg_surface 下；没有父节点说明状态已不完整，忽略
+            if (parent === undefined) return;
+
+            // 旧 positioner 的参数全部作废，按新的 positioner 重算位置与尺寸
+            const positioner = ctx.objects.get(x.args.positioner);
+            const rect = computePopupPosition(ctx, positioner.data, parent);
+            ctx.domain.xdgSurface.setOffset(xdgSurfaceId, rect.x, rect.y);
+            xdgSurface.popupConfigure = {
+                x: Math.floor(rect.x),
+                y: Math.floor(rect.y),
+                width: rect.width,
+                height: rect.height,
+            };
+            // repositioned 必须与 configure 序列一起发出；初始 commit 前先排队，只保留最后一次
+            xdgSurface.repositionToken = x.args.token;
+            ctx.domain.xdgSurface.requestConfigure(xdgSurfaceId);
         },
         "xdg_popup.destroy": (x, ctx) => {
             const xid = x.id;

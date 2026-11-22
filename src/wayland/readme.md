@@ -31,7 +31,7 @@
       退出全屏恢复进入前的最大化状态；`set_parent` 记父子关系，父窗口销毁时子窗口接到祖父窗口；
       `set_min_size` / `set_max_size` 进 `WindowInfo.minSize/maxSize`，负值和 min>max 报 `invalid_size`。
       未实现 `show_window_menu` / `resize` / `set_minimized`）
-    - xdg_popup 部分（`reposition` 未实现）
+    - xdg_popup 部分（`reposition` 按新 positioner 重算位置，回 `repositioned` + 新的 configure 序列）
     - xdg_positioner 部分
 
 - xdg-dialog-v1
