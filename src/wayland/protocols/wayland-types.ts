@@ -2,7 +2,7 @@
 import type { WaylandObjectId } from "../utils/wayland-binary";
 type WaylandObjectId2<T extends string> = WaylandObjectId & { __interface: T };
 
-export type WaylandInterfaces = "wl_display" | "wl_registry" | "wl_callback" | "wl_compositor" | "wl_shm_pool" | "wl_shm" | "wl_buffer" | "wl_surface" | "wl_seat" | "wl_pointer" | "wl_keyboard" | "wl_output" | "wl_region" | "wl_data_device" | "wl_data_device_manager" | "wl_data_offer" | "wl_data_source" | "wl_subcompositor" | "wl_subsurface" | "xdg_wm_base" | "xdg_surface" | "xdg_toplevel" | "xdg_popup" | "xdg_positioner" | "wp_viewporter" | "wp_viewport" | "wp_fractional_scale_manager_v1" | "wp_fractional_scale_v1" | "zxdg_output_manager_v1" | "zxdg_output_v1" | "wp_presentation" | "wp_presentation_feedback" | "zwp_linux_dmabuf_v1" | "zwp_linux_buffer_params_v1" | "zwp_linux_dmabuf_feedback_v1" | "zwp_text_input_v3" | "zwp_text_input_manager_v3" | "zwp_text_input_v1" | "zwp_text_input_manager_v1" | "wp_cursor_shape_manager_v1" | "wp_cursor_shape_device_v1" | "zxdg_decoration_manager_v1" | "zxdg_toplevel_decoration_v1" | "zwp_pointer_gestures_v1" | "zwp_pointer_gesture_swipe_v1" | "zwp_pointer_gesture_pinch_v1" | "zwp_pointer_gesture_hold_v1" | "xdg_wm_dialog_v1" | "xdg_dialog_v1" | "zxdg_exporter_v1" | "zxdg_exported_v1" | "zxdg_exporter_v2" | "zxdg_exported_v2";
+export type WaylandInterfaces = "wl_display" | "wl_registry" | "wl_callback" | "wl_compositor" | "wl_shm_pool" | "wl_shm" | "wl_buffer" | "wl_surface" | "wl_seat" | "wl_pointer" | "wl_keyboard" | "wl_output" | "wl_region" | "wl_data_device" | "wl_data_device_manager" | "wl_data_offer" | "wl_data_source" | "wl_subcompositor" | "wl_subsurface" | "xdg_wm_base" | "xdg_surface" | "xdg_toplevel" | "xdg_popup" | "xdg_positioner" | "wp_viewporter" | "wp_viewport" | "wp_fractional_scale_manager_v1" | "wp_fractional_scale_v1" | "zxdg_output_manager_v1" | "zxdg_output_v1" | "wp_presentation" | "wp_presentation_feedback" | "ext_background_effect_manager_v1" | "ext_background_effect_surface_v1" | "zwp_linux_dmabuf_v1" | "zwp_linux_buffer_params_v1" | "zwp_linux_dmabuf_feedback_v1" | "zwp_text_input_v3" | "zwp_text_input_manager_v3" | "zwp_text_input_v1" | "zwp_text_input_manager_v1" | "wp_cursor_shape_manager_v1" | "wp_cursor_shape_device_v1" | "zxdg_decoration_manager_v1" | "zxdg_toplevel_decoration_v1" | "zwp_pointer_gestures_v1" | "zwp_pointer_gesture_swipe_v1" | "zwp_pointer_gesture_pinch_v1" | "zwp_pointer_gesture_hold_v1" | "xdg_wm_dialog_v1" | "xdg_dialog_v1" | "zxdg_exporter_v1" | "zxdg_exported_v1" | "zxdg_exporter_v2" | "zxdg_exported_v2";
 
 export enum WaylandEventOpcode {
     wl_display__error = 0,
@@ -75,6 +75,7 @@ export enum WaylandEventOpcode {
     wp_presentation_feedback__sync_output = 0,
     wp_presentation_feedback__presented = 1,
     wp_presentation_feedback__discarded = 2,
+    ext_background_effect_manager_v1__capabilities = 0,
     zwp_linux_dmabuf_v1__format = 0,
     zwp_linux_dmabuf_v1__modifier = 1,
     zwp_linux_buffer_params_v1__created = 0,
@@ -484,6 +485,9 @@ export type WaylandEventObj = {
         flags: number;
     };
     "wp_presentation_feedback.discarded": {};
+    "ext_background_effect_manager_v1.capabilities": {
+        flags: number;
+    };
     "zwp_linux_dmabuf_v1.format": {
         /** DRM_FORMAT code*/
         format: number;
@@ -1102,6 +1106,18 @@ export type WaylandRequestObj = {
         /** new feedback object*/
         callback: WaylandObjectId2<"wp_presentation_feedback">;
     };
+    "ext_background_effect_manager_v1.destroy": {};
+    "ext_background_effect_manager_v1.get_background_effect": {
+        /** the new ext_background_effect_surface_v1 object*/
+        id: WaylandObjectId2<"ext_background_effect_surface_v1">;
+        /** the surface*/
+        surface: WaylandObjectId2<"wl_surface">;
+    };
+    "ext_background_effect_surface_v1.destroy": {};
+    "ext_background_effect_surface_v1.set_blur_region": {
+        /** blur region of the surface*/
+        region?: WaylandObjectId2<"wl_region">;
+    };
     "zwp_linux_dmabuf_v1.destroy": {};
     "zwp_linux_dmabuf_v1.create_params": {
         /** the new temporary*/
@@ -1325,6 +1341,9 @@ export type WaylandEnumObj = {
     "wp_fractional_scale_manager_v1.error": "fractional_scale_exists";
     "wp_presentation.error": "invalid_timestamp" | "invalid_flag";
     "wp_presentation_feedback.kind": "vsync" | "hw_clock" | "hw_completion" | "zero_copy";
+    "ext_background_effect_manager_v1.error": "background_effect_exists";
+    "ext_background_effect_manager_v1.capability": "blur";
+    "ext_background_effect_surface_v1.error": "surface_destroyed";
     "zwp_linux_buffer_params_v1.error": "already_used" | "plane_idx" | "plane_set" | "incomplete" | "invalid_format" | "invalid_dimensions" | "out_of_bounds" | "invalid_wl_buffer";
     "zwp_linux_buffer_params_v1.flags": "y_invert" | "interlaced" | "bottom_first";
     "zwp_linux_dmabuf_feedback_v1.tranche_flags": "scanout";

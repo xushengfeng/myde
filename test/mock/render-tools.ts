@@ -1,9 +1,12 @@
 import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools";
+import { rectsToClipPath, resolveRegion } from "../../src/wayland/utils/region";
 
 export class MockRenderTools implements renderTools {
     private canvasMap = new Map<string, { canvas: HTMLCanvasElement; container: HTMLElement }>();
     private xdgElMap = new Map<string, { element: HTMLElement; canvasId: string }>();
     private xdgSizes = new Map<string, { width: number; height: number }>();
+    private blurEls = new Map<string, HTMLElement>();
+    private blurRegions = new Map<string, { x: number; y: number; width: number; height: number; type: "+" | "-" }[]>();
     private _on: renderToolsOn = {};
     private idGen = 0;
 
@@ -38,6 +41,7 @@ export class MockRenderTools implements renderTools {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(canvas, 0, 0);
         }
+        this.applyBlur(id);
 
         // 与真实渲染器一致：xdg 根 surface 的画布尺寸变化时同步通知桌面
         const xdg = [...this.xdgElMap].find(([, e]) => e.canvasId === id);
@@ -53,6 +57,9 @@ export class MockRenderTools implements renderTools {
     destroyCanvas(id: string): void {
         const info = this.canvasMap.get(id);
         if (info) {
+            this.blurEls.get(id)?.remove();
+            this.blurEls.delete(id);
+            this.blurRegions.delete(id);
             info.container.remove();
             this.canvasMap.delete(id);
         }
@@ -80,6 +87,49 @@ export class MockRenderTools implements renderTools {
             info.canvas.style.left = `${x}px`;
             info.canvas.style.top = `${y}px`;
         }
+    }
+
+    setBlurRegion(
+        id: string,
+        region: { x: number; y: number; width: number; height: number; type: "+" | "-" }[] | undefined,
+    ): void {
+        if (region && region.length > 0) this.blurRegions.set(id, region);
+        else this.blurRegions.delete(id);
+        this.applyBlur(id);
+    }
+
+    private applyBlur(id: string): void {
+        const info = this.canvasMap.get(id);
+        if (!info) return;
+        const region = this.blurRegions.get(id);
+        const rects =
+            region && region.length > 0
+                ? resolveRegion(region, {
+                      width: Math.max(1, info.canvas.width),
+                      height: Math.max(1, info.canvas.height),
+                  })
+                : [];
+        let blur = this.blurEls.get(id);
+        if (rects.length === 0) {
+            blur?.remove();
+            this.blurEls.delete(id);
+            return;
+        }
+        if (!blur) {
+            blur = document.createElement("div");
+            blur.style.position = "absolute";
+            blur.style.pointerEvents = "none";
+            this.blurEls.set(id, blur);
+        }
+        if (blur.parentElement !== info.container || blur.nextSibling !== info.canvas) {
+            info.container.insertBefore(blur, info.canvas);
+        }
+        blur.style.left = "0px";
+        blur.style.top = "0px";
+        blur.style.width = `${info.canvas.width}px`;
+        blur.style.height = `${info.canvas.height}px`;
+        blur.style.backdropFilter = "blur(16px)";
+        blur.style.clipPath = `path("${rectsToClipPath(rects)}")`;
     }
 
     createXdgSurfaceEle(id: string, canvasId: string): void {
@@ -163,5 +213,7 @@ export class MockRenderTools implements renderTools {
             info.container.remove();
         }
         this.canvasMap.clear();
+        this.blurEls.clear();
+        this.blurRegions.clear();
     }
 }

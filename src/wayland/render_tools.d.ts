@@ -26,6 +26,15 @@ export interface renderTools {
      * 不传时保持位图原尺寸（外部实现的旧行为）。
      */
     renderCanvas(canvas: OffscreenCanvas, id: string, op?: { logicalWidth: number; logicalHeight: number }): void;
+    /**
+     * 背景模糊区域（`ext_background_effect_v1`，surface 局部逻辑坐标，含 `+`/`-` 语义）。
+     * 渲染在 surface 像素之下、桌面内容之上；`undefined`/空区域表示移除。
+     * 在 `wl_surface.commit` 后调用，和 `renderCanvas` 一样按 `setScale` 换到 CSS px。
+     */
+    setBlurRegion(
+        id: string,
+        region: { x: number; y: number; width: number; height: number; type: "+" | "-" }[] | undefined,
+    ): void;
     destroyCanvas(id: string): void;
     setCanvasAnchor(id: string, parentId: string): void;
     setCanvasOffset(id: string, x: number, y: number): void;

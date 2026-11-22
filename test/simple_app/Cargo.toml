@@ -16,9 +16,13 @@ path = "src/bin/dmabuf_one_frame.rs"
 name = "dmabuf_flood"
 path = "src/bin/dmabuf_flood.rs"
 
+[[bin]]
+name = "background_effect"
+path = "src/bin/background_effect.rs"
+
 [dependencies]
 wayland-client = "0.31"
-wayland-protocols = { version = "0.31", features = ["client", "staging"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 anyhow = "1"
 rustix = { version = "1", features = ["fs"] }
 memmap2 = "0.9"

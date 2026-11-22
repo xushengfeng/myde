@@ -54,6 +54,12 @@ export type WaylandSurfaceData = {
         source?: { x: number; y: number; width: number; height: number };
         destination?: { width: number; height: number };
     };
+    /**
+     * `ext_background_effect_surface_v1.set_blur_region` 的待生效/已生效区域（surface 局部逻辑坐标）。
+     * 与其它 commit 状态一起双缓冲：同步子 surface 的提交也会随父 surface 生效。
+     * `null` 表示客户端显式清除（NULL region），`undefined` 表示从未设置。
+     */
+    blurRegion?: { x: number; y: number; width: number; height: number; type: "+" | "-" }[] | null;
 };
 
 /**

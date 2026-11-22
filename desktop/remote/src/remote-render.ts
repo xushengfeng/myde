@@ -145,6 +145,22 @@ export class RemoteRender implements renderTools {
         });
     }
 
+    setBlurRegion(
+        id: string,
+        region: { x: number; y: number; width: number; height: number; type: "+" | "-" }[] | undefined,
+    ): void {
+        const tid = this.findToplevelForCanvas(id);
+        this.server.sendTo({
+            targetId: "anytarget",
+            json: this.buildM({
+                type: "setBlurRegion",
+                canvasId: id,
+                region: region ?? null,
+                ...(tid ? { toplevelId: tid } : {}),
+            }),
+        });
+    }
+
     createXdgSurfaceEle(id: string, canvasId: string) {
         this.surfaceMap.set(id, {
             canvasId,

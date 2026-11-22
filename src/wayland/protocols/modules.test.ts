@@ -34,6 +34,7 @@ describe("协议模块注册", () => {
             .map((m) => m.name)
             .sort();
         expect(withHooks).toEqual([
+            "ext-background-effect-v1",
             "fractional-scale-v1",
             "presentation-time",
             "text-input-unstable-v3",

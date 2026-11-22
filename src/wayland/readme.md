@@ -81,6 +81,15 @@
     - 与 `wl_surface.set_buffer_scale` / `wl_output.scale` 配合：surface 仍是逻辑坐标，
       buffer 按 `preferred_scale / 120` 放大，窗口 DOM 尺寸按输出 scale 放大。
 
+- ext-background-effect-v1
+    - ext_background_effect_manager_v1（bind 时广播 `blur` 能力）
+    - ext_background_effect_surface_v1
+    - `set_blur_region` 是双缓冲的 surface 状态（`WaylandSurfaceData.blurRegion`），随 commit /
+      同步子 surface 事务生效；NULL region 与 destroy 都在下一次 commit 移除。
+    - 渲染层（`renderTools.setBlurRegion`）把区域解析成互不重叠的裁剪路径，用 `backdrop-filter`
+      垫在 surface 画布下面；没有 buffer（未 attach / `attach(nil)`）时不显示。
+      模糊强度由合成器决定，当前为 16 surface px（渲染时乘输出 scale，`render_tools_el.ts`）。
+
 - xdg-output-unstable-v1
     - zxdg_output_manager_v1
     - zxdg_output_v1
@@ -183,6 +192,20 @@ commit」的，被丢掉的提交不会有人再补画。所以像素链路分�
 ```bash
 npx vitest run src/wayland/test/pointer.test.ts
 ```
+
+### 手动测试背景模糊
+
+`test/simple_app` 里的 `background_effect` 是真实 Wayland 客户端：半透明窗口、圆角、
+右下角一个 subtract 出来的透明洞（应看到清晰桌面）。在桌面里（`WAYLAND_DISPLAY` 已指向
+本服务器）运行：
+
+```bash
+cd test/simple_app
+cargo run --bin background_effect
+cargo run --bin background_effect -- --no-blur   # 对照：不设置模糊区域
+```
+
+它会打印协商到的 capability、区域矩形和每帧尺寸。
 
 写法上的四个硬约束（踩过一遍，违反基本跑不起来）：
 

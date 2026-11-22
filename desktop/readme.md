@@ -606,6 +606,9 @@ render.on({
 const el = render.getXdgSurfaceEle(renderId);
 ```
 
+客户端用 `ext-background-effect-v1` 声明模糊区域时，渲染器会在窗口画布下方垫一层
+`backdrop-filter`（裁剪到客户端给的区域）。桌面不需要额外代码，模糊强度由渲染器决定。
+
 ### throttle
 
 高频输入（拖动滑块、滚轮等）的节流工具，默认第一次立即执行、结束时补发最后一次。节流放在桌面层做，系统 API 不做频率限制。

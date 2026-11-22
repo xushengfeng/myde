@@ -1789,7 +1789,9 @@ function createScreenEl(id: string, onClick: () => void) {
             width: "100%",
             height: "100%",
             transformOrigin: "0 0",
-            willChange: "transform, opacity, filter",
+            // 只能是 transform：will-change 里出现 opacity / filter 会让这一屏成为 backdrop root，
+            // 屏内窗口的 ext_background_effect 就看不到壁纸和下层窗口了（模糊整块失效）。
+            willChange: "transform",
             overflow: "hidden",
         })
         .data({ "view-id": id })

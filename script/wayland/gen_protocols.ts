@@ -75,6 +75,13 @@ const supportedProtocols: Array<{
         ],
     },
     {
+        name: "ext-background-effect-v1",
+        interfaces: [
+            { name: "ext_background_effect_manager_v1", version: 1 },
+            { name: "ext_background_effect_surface_v1", version: 1 },
+        ],
+    },
+    {
         name: "linux-dmabuf-v1",
         interfaces: [
             { name: "zwp_linux_dmabuf_v1", version: 5 },

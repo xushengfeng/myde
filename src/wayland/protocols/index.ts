@@ -1,5 +1,6 @@
 import type { ProtocolModule } from "../module";
 import { waylandCoreModule } from "./core/wayland";
+import { backgroundEffectModule } from "./ext/background_effect";
 import { cursorShapeModule } from "./ext/cursor_shape";
 import { dmabufModule } from "./ext/dmabuf";
 import { fractionalScaleModule } from "./ext/fractional_scale";
@@ -25,6 +26,7 @@ export const protocolModules: readonly ProtocolModule[] = [
     // 发逻辑尺寸，客户端才会把两者当成同一次原子更新。
     xdgOutputModule,
     waylandCoreModule,
+    backgroundEffectModule,
     viewporterModule,
     fractionalScaleModule,
     cursorShapeModule,

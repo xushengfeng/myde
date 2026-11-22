@@ -1,5 +1,6 @@
 import { PeerjsAdapter } from "myde-remote-connect/peerjs_adapter";
 import { Connect } from "../../../../src/connect/connect";
+import { rectsToClipPath, resolveRegion } from "../../../../src/wayland/utils/region";
 
 interface ServerMsg {
     type: string;
@@ -17,6 +18,7 @@ interface ServerMsg {
     popupId?: string;
     toplevelId?: string;
     toplevels?: Array<{ id: string; surfaceId: string }>;
+    region?: Array<{ x: number; y: number; width: number; height: number; type: "+" | "-" }> | null;
 }
 
 class App {
@@ -28,6 +30,7 @@ class App {
     private canvasMap = new Map<string, HTMLCanvasElement>();
     private surfaceMap = new Map<string, { el: HTMLElement; toplevelId: string | null }>();
     private toplevelEls = new Map<string, HTMLElement>();
+    private blurMap = new Map<string, HTMLDivElement>();
 
     constructor() {
         this.connect = new Connect({
@@ -246,6 +249,9 @@ class App {
                     if (m.canvasId && m.x !== undefined && m.y !== undefined)
                         this.setCanvasOffset(m.canvasId, m.x, m.y);
                     break;
+                case "setBlurRegion":
+                    if (m.canvasId) this.setBlurRegion(m.canvasId, m.region ?? null);
+                    break;
                 case "createXdgSurfaceEle":
                     if (m.surfaceId && m.canvasId) this.createSurface(m.surfaceId, m.canvasId, m.toplevelId);
                     break;
@@ -326,9 +332,47 @@ class App {
     private destroyCanvas(cid: string) {
         const c = this.canvasMap.get(cid);
         if (c) {
+            this.blurMap.get(cid)?.remove();
+            this.blurMap.delete(cid);
             c.remove();
             this.canvasMap.delete(cid);
         }
+    }
+
+    private setBlurRegion(
+        cid: string,
+        region: Array<{ x: number; y: number; width: number; height: number; type: "+" | "-" }> | null,
+    ) {
+        const canvas = this.canvasMap.get(cid);
+        if (!canvas) return;
+        const rects =
+            region && region.length > 0
+                ? resolveRegion(region, {
+                      width: Math.max(1, canvas.width),
+                      height: Math.max(1, canvas.height),
+                  })
+                : [];
+        let blur = this.blurMap.get(cid);
+        if (rects.length === 0) {
+            blur?.remove();
+            this.blurMap.delete(cid);
+            return;
+        }
+        if (!blur) {
+            blur = document.createElement("div");
+            blur.style.position = "absolute";
+            blur.style.pointerEvents = "none";
+            this.blurMap.set(cid, blur);
+        }
+        if (blur.parentElement !== canvas.parentElement || blur.nextSibling !== canvas) {
+            canvas.parentElement?.insertBefore(blur, canvas);
+        }
+        blur.style.left = "0px";
+        blur.style.top = "0px";
+        blur.style.width = `${canvas.width}px`;
+        blur.style.height = `${canvas.height}px`;
+        blur.style.backdropFilter = "blur(16px)";
+        blur.style.clipPath = `path("${rectsToClipPath(rects)}")`;
     }
 
     private setCanvasAnchor(cid: string, pid: string) {

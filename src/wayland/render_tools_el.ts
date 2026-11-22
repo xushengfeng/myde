@@ -1,5 +1,9 @@
 import { type ElType, ele, view } from "dkh-ui";
 import type { renderTools, renderToolsOn } from "./render_tools";
+import { type RegionRect, rectsToClipPath, resolveRegion } from "./utils/region";
+
+/** 逻辑模糊半径（surface px）；实际 CSS px = 半径 × 输出缩放，和窗口尺寸一起缩放。 */
+const SURFACE_BLUR_RADIUS = 16;
 
 type CanvasEntry = {
     warpEl: ElType<HTMLElement>;
@@ -14,6 +18,10 @@ type CanvasEntry = {
     xdgRoot?: boolean;
     /** 该 canvas 所属的 xdg surface id（surface 尺寸回调用） */
     xdgId?: string;
+    /** 背景模糊层（垫在 canvas 下面）；没有模糊区域时为 undefined */
+    blurEl?: ElType<HTMLElement>;
+    /** ext_background_effect_v1 的区域（surface 局部逻辑坐标） */
+    blurRegion?: RegionRect[];
 };
 
 type XdgEntry = {
@@ -44,7 +52,10 @@ export class renderToolsHtmlEl implements renderTools {
     setScale(scale: number): void {
         if (!Number.isFinite(scale) || scale <= 0 || scale === this.scale) return;
         this.scale = scale;
-        for (const id of this.canvasMap.keys()) this.applyCanvas(id);
+        for (const id of this.canvasMap.keys()) {
+            this.applyCanvas(id);
+            this.applyBlur(id);
+        }
         for (const id of this.xdgElMap.keys()) this.applyXdg(id);
         // 逻辑尺寸没变但 CSS/物理尺寸变了，外框也要跟着换
         for (const entry of this.canvasMap.values()) {
@@ -87,6 +98,53 @@ export class renderToolsHtmlEl implements renderTools {
             });
         }
     }
+    /**
+     * 背景模糊层：铺满整个 surface，用 region 解析出的路径裁剪。
+     * 垫在 canvas 下面，所以 surface 自己的像素（文字、图标、半透明背景）仍然盖在模糊上；
+     * canvas 的透明区域透出的是「已模糊的桌面/下层窗口」。
+     */
+    private applyBlur(id: string) {
+        const entry = this.canvasMap.get(id);
+        if (!entry) return;
+        const region = entry.blurRegion;
+        const logical = entry.logical;
+        if (!region || !logical || logical.width <= 0 || logical.height <= 0) {
+            entry.blurEl?.remove();
+            entry.blurEl = undefined;
+            return;
+        }
+        const rects = resolveRegion(region, { width: logical.width, height: logical.height });
+        if (rects.length === 0) {
+            entry.blurEl?.remove();
+            entry.blurEl = undefined;
+            return;
+        }
+        if (!entry.blurEl) {
+            entry.blurEl = view().style({ position: "absolute", pointerEvents: "none" });
+        }
+        const el = entry.blurEl.el;
+        // 保持在 canvas 之前：模糊必须是「背后的内容」，不能盖住 surface 自己。
+        if (el.parentElement !== entry.warpEl.el || el.nextSibling !== entry.canvas.el) {
+            entry.warpEl.el.insertBefore(el, entry.canvas.el);
+        }
+        entry.blurEl.style({
+            left: "0px",
+            top: "0px",
+            width: `${logical.width * this.scale}px`,
+            height: `${logical.height * this.scale}px`,
+            backdropFilter: `blur(${SURFACE_BLUR_RADIUS * this.scale}px)`,
+            clipPath: `path("${rectsToClipPath(rects, this.scale)}")`,
+        });
+    }
+    setBlurRegion(id: string, region: RegionRect[] | undefined): void {
+        const entry = this.canvasMap.get(id);
+        if (!entry) {
+            console.error("Canvas element not found for id:", id, this.canvasMap);
+            return;
+        }
+        entry.blurRegion = region && region.length > 0 ? region : undefined;
+        this.applyBlur(id);
+    }
     renderCanvas(canvas: OffscreenCanvas, id: string, op?: { logicalWidth: number; logicalHeight: number }) {
         const entry = this.canvasMap.get(id);
         if (!entry) {
@@ -107,6 +165,7 @@ export class renderToolsHtmlEl implements renderTools {
         const prevLogical = entry.logical;
         if (op) entry.logical = { width: op.logicalWidth, height: op.logicalHeight };
         this.applyCanvas(id);
+        this.applyBlur(id);
         if (entry.xdgId && op && (prevLogical?.width !== op.logicalWidth || prevLogical?.height !== op.logicalHeight)) {
             // 画布 CSS 尺寸写进 DOM 之后再通知，外框和 surface 在同一任务里对齐
             this._on.onXdgSurfaceSize?.(entry.xdgId, op.logicalWidth * this.scale, op.logicalHeight * this.scale);

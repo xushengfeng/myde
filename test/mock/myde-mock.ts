@@ -213,6 +213,7 @@ function createMockRenderTools(): renderTools {
         setCanvasAnchor(_id: string, _parentId: string): void {},
         setCanvasOffset(_id: string, _x: number, _y: number): void {},
         setBufferOffset(_id: string, _x: number, _y: number): void {},
+        setBlurRegion(_id: string, _region: unknown): void {},
         createXdgSurfaceEle(_id: string, _canvasId: string): void {},
         getXdgSurfaceEle(_id: string): unknown {
             return undefined;

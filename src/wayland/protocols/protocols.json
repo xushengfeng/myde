@@ -2985,6 +2985,94 @@
       ]
     }
   ],
+  "ext-background-effect-v1": [
+    {
+      "name": "ext_background_effect_manager_v1",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "get_background_effect",
+          "args": [
+            {
+              "name": "id",
+              "type": "new_id",
+              "interface": "ext_background_effect_surface_v1",
+              "summary": "the new ext_background_effect_surface_v1 object"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface",
+              "summary": "the surface"
+            }
+          ]
+        }
+      ],
+      "event": [
+        {
+          "name": "capabilities",
+          "args": [
+            {
+              "name": "flags",
+              "type": "uint"
+            }
+          ]
+        }
+      ],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "background_effect_exists": 0
+          }
+        },
+        {
+          "name": "capability",
+          "enum": {
+            "blur": 1
+          },
+          "bitfield": true
+        }
+      ]
+    },
+    {
+      "name": "ext_background_effect_surface_v1",
+      "version": 1,
+      "request": [
+        {
+          "name": "destroy",
+          "args": [],
+          "isDestructor": true
+        },
+        {
+          "name": "set_blur_region",
+          "args": [
+            {
+              "name": "region",
+              "type": "object",
+              "interface": "wl_region",
+              "allowNull": true,
+              "summary": "blur region of the surface"
+            }
+          ]
+        }
+      ],
+      "event": [],
+      "enum": [
+        {
+          "name": "error",
+          "enum": {
+            "surface_destroyed": 0
+          }
+        }
+      ]
+    }
+  ],
   "linux-dmabuf-v1": [
     {
       "name": "zwp_linux_dmabuf_v1",
