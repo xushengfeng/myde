@@ -148,6 +148,7 @@
 - 电源模式用 `uSegmented` 横向等分；电池信息用 `uBatteryInfo`，电池设备行用 `uBatteryRow`。
 - 系统菜单用 `uSystemMenu`：锁屏，以及关机 / 重启 / 挂起。
 - 互联弹窗固定宽度；本机 ID 在行内单行省略，不参与撑宽弹窗。
+- Wi-Fi / 蓝牙 / 互联的开关行带对应图标，整行点击即可切换，不必只点开关。
 - 参考实现：音量、通知、剪贴板、电源、输入法、系统菜单。
 
 ### 10.2 输入法
@@ -224,7 +225,7 @@
   - `uSelectMark`：托盘勾选 / 单选标记
   - `uChoiceRow`：统一的列表行
   - `uSwitch`：开关
-  - `uToggleRow`：左侧标签 + 右侧开关的 L2 设置行
+  - `uToggleRow`：带图标和整行点击的 L2 开关行
   - `uBrightnessSlider`：亮度滑块
   - `uBatteryInfo`：电池信息行
   - `uBatteryRow`：电池设备行

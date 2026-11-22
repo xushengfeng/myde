@@ -442,10 +442,15 @@ export function uSwitch(initial: boolean, onChange: (value: boolean) => void) {
         });
     };
     render();
-    track.on("click", () => {
+    const toggle = () => {
         value = !value;
         render();
         onChange(value);
+    };
+    track.on("click", (e) => {
+        // 行本身也可点击；开关自己处理，避免冒泡后重复切换
+        e.stopPropagation();
+        toggle();
     });
     return {
         el: track,
@@ -454,31 +459,38 @@ export function uSwitch(initial: boolean, onChange: (value: boolean) => void) {
             value = next;
             render();
         },
+        toggle,
     };
 }
 
-/** L2 设置行：左侧标签，右侧开关等控件 */
-export function uToggleRow(label: string, control: ElType<HTMLElement> | { el: HTMLElement }) {
-    return ui
-        .barItem()
-        .style({
-            height: px(sSize(1.5)),
-            display: "flex",
-            alignItems: "center",
-            gap: px(sSize2.paddingx),
-            padding: `0 ${px(sSize2.paddingx)}`,
-            boxSizing: "border-box",
-        })
-        .add([
-            aLineText()
-                .sv(label)
-                .style({
-                    ...gTextStyle.body,
-                    color: gTextStyle.color.primary,
-                    flexGrow: "1",
-                }),
-            control,
-        ]);
+/** L2 设置行：左侧可选图标 + 标签，右侧开关等控件；整行可点击 */
+export function uToggleRow(
+    label: string,
+    control: { el: ElType<HTMLElement>; toggle?: () => void },
+    op?: { icon?: string },
+) {
+    const row = ui.barItem().style({
+        height: px(sSize(1.5)),
+        display: "flex",
+        alignItems: "center",
+        gap: px(sSize2.paddingx),
+        padding: `0 ${px(sSize2.paddingx)}`,
+        boxSizing: "border-box",
+    });
+    if (op?.icon) row.add(getIconXEl(op.icon, { size: 24, width: 28, height: 24 }));
+    row.add([
+        aLineText()
+            .sv(label)
+            .style({
+                ...gTextStyle.body,
+                color: gTextStyle.color.primary,
+                flexGrow: "1",
+            }),
+        control.el,
+    ]);
+    const toggle = control.toggle;
+    if (toggle) row.on("click", () => toggle());
+    return row;
 }
 
 export type SelectMarkKind = "radio" | "checkbox" | "check";

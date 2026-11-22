@@ -101,6 +101,8 @@ interface ControlNode {
     id: string;
     type: string;
     el: ElType<HTMLElement>;
+    /** 供整行点击等场景切换，开关类控件提供 */
+    toggle?(): void;
     unmount?(): void;
 }
 
@@ -215,7 +217,7 @@ function createToggle(registry: tmpRegistry, id: BooleanRegistryKeys): ControlNo
     const source = registry.get(id);
     const sw = uSwitch(false, (value) => source.set?.(value));
     const unsub = source.getAndSubscribe((v) => sw.setValue(v));
-    return { id, type: "toggle", el: sw.el, unmount: unsub };
+    return { id, type: "toggle", el: sw.el, toggle: sw.toggle, unmount: unsub };
 }
 
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
@@ -8131,7 +8133,10 @@ tools.registerTool(
             .barItem()
             .style({ height: px(sSize(1.5) * 4) })
             .add(apList.el);
-        ui.bar([uToggleRow("Wi-Fi", toggle.el), listBar]).el.addInto(tipEl);
+        const wifiBar = ui.bar([uToggleRow("Wi-Fi", toggle, { icon: "wifi" }), listBar]);
+        // 固定宽度，列表隐藏时也保持一致
+        wifiBar.el.style({ width: px(sSize(6)) });
+        wifiBar.el.addInto(tipEl);
         rawRegistry.get("wifi.accessPoints").getAndSubscribe((ids) => {
             listBar.style({ display: ids.length > 0 ? "" : "none" });
         });
@@ -8191,7 +8196,7 @@ tools.registerTool(
             .style({ height: px(sSize(1.5) * 4) })
             .add(deviceList.el);
 
-        const connectBar = ui.bar([uToggleRow("互联", toggle.el), idRow, listBar]);
+        const connectBar = ui.bar([uToggleRow("互联", toggle, { icon: "connect" }), idRow, listBar]);
         // 固定宽度，本机 ID 只在自己的行里省略，不撑开整个弹窗
         connectBar.el.style({ width: px(sSize(6)) });
         connectBar.el.addInto(tipEl);
@@ -8220,7 +8225,10 @@ tools.registerTool(
             .barItem()
             .style({ height: px(sSize(1.5) * 4) })
             .add(deviceList.el);
-        ui.bar([uToggleRow("蓝牙", toggle.el), listBar]).el.addInto(tipEl);
+        const blueBar = ui.bar([uToggleRow("蓝牙", toggle, { icon: "blue" }), listBar]);
+        // 固定宽度，列表隐藏时也保持一致
+        blueBar.el.style({ width: px(sSize(6)) });
+        blueBar.el.addInto(tipEl);
         rawRegistry.get("blue.devices").getAndSubscribe((ids) => {
             listBar.style({ display: ids.length > 0 ? "" : "none" });
         });

@@ -761,12 +761,16 @@ function listPanel(rows: ElType<HTMLElement>[], height: number) {
         .add(rows);
 }
 
-function toggleRow(label: string, on: boolean) {
-    return uToggleRow(label, uSwitch(on, () => {}).el);
+function toggleRow(label: string, on: boolean, icon?: string) {
+    return uToggleRow(
+        label,
+        uSwitch(on, () => {}),
+        { icon },
+    );
 }
 
 const wifiPopup = popupPanel([
-    toggleRow("Wi-Fi", true),
+    toggleRow("Wi-Fi", true, "wifi"),
     listPanel(
         [
             uChoiceRow({ label: "Home-5G", selected: true }).el,
@@ -780,7 +784,7 @@ const wifiPopup = popupPanel([
 popupRow.add(popupColumn("Wi-Fi", wifiPopup));
 
 const bluePopup = popupPanel([
-    toggleRow("蓝牙", true),
+    toggleRow("蓝牙", true, "blue"),
     listPanel(
         [
             uChoiceRow({ label: "MX Master 3S", selected: true }).el,
@@ -794,7 +798,7 @@ const bluePopup = popupPanel([
 popupRow.add(popupColumn("蓝牙", bluePopup));
 
 const connectPopup = popupPanel([
-    toggleRow("互联", true),
+    toggleRow("互联", true, "connect"),
     ui
         .barItem()
         .style({
