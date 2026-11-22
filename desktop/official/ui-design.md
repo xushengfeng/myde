@@ -133,7 +133,13 @@
 - 消失：模糊 + 透明 + 缩放。
 - 移动：位移。
 - 不打破层级关系：需要改变层级时，优先用位移/缩放「躲开」，不要直接换材质造成视觉突变。
-- 动效由 `AnimationGear` 驱动；时长、曲线、路径尚未专门设计，沿用 `ui.ts` 现有的 easeOut 和短时长。
+- 动效统一由 `myde-ui` 的 `AnimationGear` 驱动；新动效优先用它，不要手写 `requestAnimationFrame` 轮询或叠加 CSS transition。时长、曲线、路径沿用 `ui.ts` 现有的 easeOut 和短时长。
+  - 状态就是一组数字字段（如 `{ x, y, opacity }`），任意数值都能插值。
+  - 支持命名状态和状态图；`moveTo` 可去命名状态，也可只传要变化的部分字段。
+  - 动画可被打断，新目标会从当前视觉值继续，不会跳回起点。
+  - `duration: 0` 可直接跳转；每次 `moveTo` 可临时覆盖时长和缓动曲线。
+  - 通过 `setUpdateCallback` 把当前值写进 DOM；引擎本身不依赖 DOM，也能驱动 TUI。
+  - 状态回到自身可实现循环动画；`timingFunction` 提供常用缓动曲线。
 - 列表滚动是动态布局的例外；列表项的进出可以使用模糊、透明和位移动画。
 
 ## 10. 组件模式
@@ -234,7 +240,7 @@
   - `uSystemMenu`：系统菜单
   - `iItem`：L3 item
   - `ui.bar` / `ui.barItem`：L1 / L2
-  - `AnimationGear`：动效
+  - `AnimationGear`：优先使用的动效引擎
 - `test/ui_example/ui_demo.ts`：token、三层材质、选择标记和工具弹窗 mock 的可视化。
 - `src/main.ts`：工具栏、启动器、开始菜单、窗口框架。
 
