@@ -46,6 +46,8 @@ import { createSettingsContent, type ImePanelPreeditMode } from "./settings";
 import {
     aLineText,
     gGlassStyle,
+    gRadius,
+    gShadowStyle,
     iItem,
     mMedia,
     nNotiList,
@@ -292,10 +294,9 @@ class Tools {
                     tool.selfBackground
                         ? {}
                         : {
-                              padding: "6px",
-                              background: "rgba(255,255,255,0.8)",
-                              backdropFilter: "blur(12px)",
-                              borderRadius: "12px",
+                              padding: `${sSize2.padding}px`,
+                              ...gGlassStyle.bg,
+                              borderRadius: `${gRadius.container}px`,
                           },
                 )
                 .addInto(this.tipEl)
@@ -2247,7 +2248,7 @@ addStyle({
     },
     // 服务端装饰：只有标题栏有底色/模糊；内容区域保持透明，允许客户端透明窗口露出壁纸
     "[data-client-frame][data-decorated]": {
-        boxShadow: "0 12px 40px #0000002a",
+        boxShadow: gShadowStyle.window,
         borderRadius: "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))",
     },
     "[data-client-frame][data-decorated][data-active]": {
@@ -5309,6 +5310,8 @@ const mainEl = view()
         bottom: 0,
         overflow: "hidden",
         fontFamily: "sans-serif",
+        // 默认文本不可选择；需要复制的内容单独写 userSelect: "text"
+        userSelect: "none",
     })
     .addInto();
 
@@ -5722,10 +5725,9 @@ viewData.setStageSize(initRect.width, initRect.height);
 async function confirm(text: string) {
     const p = Promise.withResolvers<boolean>();
     const el = view().style({
-        background: "rgba(255, 255, 255, 0.6)",
-        borderRadius: "14px",
-        padding: "14px",
-        backdropFilter: "blur(10px)",
+        ...gGlassStyle.bg,
+        borderRadius: px(gRadius.container),
+        padding: px(sSize2.padding + 6),
         position: "absolute",
         left: "50%",
         transform: "translateX(-50%)",
@@ -7110,10 +7112,10 @@ function createLauncher(): LauncherController {
             alignItems: "stretch",
             gap: "0",
             overflow: "hidden",
-            borderRadius: "16px",
+            borderRadius: `${gRadius.container}px`,
             background: "rgba(255,255,255,0.94)",
             backdropFilter: "blur(20px)",
-            boxShadow: "0 12px 40px #00000033",
+            boxShadow: gShadowStyle.panel,
             border: "1px solid #ffffff88",
             opacity: "0",
             transform: "translateX(-50%)",
@@ -7662,13 +7664,13 @@ function createStartMenu(
             width: "calc(80vw / var(--desktop-ui-scale, 1))",
             height: "calc(80vh / var(--desktop-ui-scale, 1))",
             padding: "20px",
-            borderRadius: "20px",
+            borderRadius: `${gRadius.container}px`,
             // 内容滚动交给菜单自身，避免整个桌面参与滚动和重排
             overflowY: "auto",
             alignContent: "flex-start",
             background: "rgba(245, 245, 245, 0.96)",
             backdropFilter: "blur(12px)",
-            boxShadow: "0 8px 32px #00000033",
+            boxShadow: gShadowStyle.panel,
             contain: "layout paint style",
         })
         .addInto(tipEl);

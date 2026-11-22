@@ -3,6 +3,10 @@ import { type PanelPreeditMode, resolveImePreedit } from "../../src/ime/ime";
 import { carousel, dynamicScrollList } from "../../src/scroll-list";
 import {
     aLineText,
+    gRadius,
+    gShadowStyle,
+    gSurfaceStyle,
+    gTextStyle,
     type ImeTrayStatus,
     iItem,
     imeCandidatePopup,
@@ -92,6 +96,253 @@ view("y")
                     .add(view("y").add([aLineText().sv("标题title标题")])),
             ]),
     ]);
+
+// ── 设计 token ────────────────────────────────────────────────────────────────────────────────
+// 静态尺寸、单行文本、三层材质：
+// L1 内部只直接放 L2 面板；L2 只放 L3 item；L3 item 自带圆角。
+const tokenSection = view("y").style({ marginTop: "30px", gap: "12px", fontFamily: gTextStyle.family }).addInto();
+tokenSection.add(
+    aLineText()
+        .sv("设计 token")
+        .style({ ...gTextStyle.display, color: gTextStyle.color.primary }),
+);
+
+// 文字
+tokenSection.add(
+    aLineText()
+        .sv("文字")
+        .style({ ...gTextStyle.title, color: gTextStyle.color.primary }),
+);
+
+function typeRow(role: string, sample: string, style: { fontSize: string; fontWeight: string; lineHeight: string }) {
+    return view("x")
+        .style({ alignItems: "baseline", gap: "12px", height: "24px" })
+        .add([
+            aLineText()
+                .sv(role)
+                .style({
+                    ...gTextStyle.micro,
+                    color: gTextStyle.color.muted,
+                    width: "56px",
+                    flexShrink: "0",
+                }),
+            aLineText()
+                .sv(sample)
+                .style({
+                    ...style,
+                    flexGrow: "1",
+                    minWidth: "0",
+                    color: gTextStyle.color.primary,
+                }),
+        ]);
+}
+
+const typeCard = view("y")
+    .style({
+        width: "440px",
+        height: "188px",
+        padding: px(sSize2.padding + 4),
+        boxSizing: "border-box",
+        borderRadius: px(gRadius.container),
+        background: "#fff",
+        boxShadow: gShadowStyle.panel,
+        gap: "4px",
+    })
+    .addInto(tokenSection);
+typeCard.add([
+    typeRow("display", "桌面与窗口", gTextStyle.display),
+    typeRow("title", "窗口标题 / 面板标题", gTextStyle.title),
+    typeRow("body", "正文内容与列表项", gTextStyle.body),
+    typeRow("caption", "次要说明与元数据", gTextStyle.caption),
+    typeRow("micro", "标签与快捷键提示", gTextStyle.micro),
+]);
+
+const colorRow = view("x").style({ gap: "16px", height: "20px", marginTop: "8px" }).addInto(typeCard);
+for (const [name, color] of Object.entries(gTextStyle.color)) {
+    colorRow.add(
+        view("x")
+            .style({ alignItems: "center", gap: "6px" })
+            .add([
+                view().style({
+                    width: "14px",
+                    height: "14px",
+                    flexShrink: "0",
+                    borderRadius: "4px",
+                    background: color,
+                    border: "1px solid #00000014",
+                    boxSizing: "border-box",
+                }),
+                aLineText()
+                    .sv(name)
+                    .style({ ...gTextStyle.micro, color: gTextStyle.color.secondary, width: "44px" }),
+            ]),
+    );
+}
+
+// 阴影：窗口框架 / 工具弹窗与搜索框
+tokenSection.add(
+    aLineText()
+        .sv("阴影")
+        .style({ ...gTextStyle.title, color: gTextStyle.color.primary }),
+);
+
+function shadowCard(title: string, value: string, shadow: string) {
+    return view("y")
+        .style({
+            width: "230px",
+            height: "96px",
+            padding: "14px",
+            boxSizing: "border-box",
+            borderRadius: px(gRadius.container),
+            background: "#fff",
+            boxShadow: shadow,
+            gap: "4px",
+            flexShrink: "0",
+        })
+        .add([
+            aLineText()
+                .sv(title)
+                .style({ ...gTextStyle.title, color: gTextStyle.color.primary }),
+            // 刻意多行：完整展示阴影值，不按单行省略
+            txt(value).style({
+                ...gTextStyle.micro,
+                color: gTextStyle.color.secondary,
+                fontFamily: gTextStyle.monoFamily,
+                wordBreak: "break-all",
+            }),
+        ]);
+}
+
+view("x")
+    .style({
+        width: "540px",
+        height: "152px",
+        padding: "28px",
+        boxSizing: "border-box",
+        gap: "24px",
+        borderRadius: px(gRadius.container),
+        background: "linear-gradient(135deg, #e7ecf2, #f6f7f9)",
+    })
+    .addInto(tokenSection)
+    .add([
+        shadowCard("window · 窗口框架", gShadowStyle.window, gShadowStyle.window),
+        shadowCard("panel · 工具弹窗 / 搜索框", gShadowStyle.panel, gShadowStyle.panel),
+    ]);
+
+// 圆角与三层材质
+tokenSection.add(
+    aLineText()
+        .sv("圆角与三层材质")
+        .style({ ...gTextStyle.title, color: gTextStyle.color.primary }),
+);
+
+const layerStage = view("x")
+    .style({
+        width: "640px",
+        height: "196px",
+        padding: "24px",
+        boxSizing: "border-box",
+        gap: "24px",
+        alignItems: "flex-start",
+        borderRadius: px(gRadius.container),
+        background: "linear-gradient(135deg, #dce7f5, #f7e8df)",
+    })
+    .addInto(tokenSection);
+
+const radiusCard = view("y")
+    .style({
+        width: "260px",
+        height: "140px",
+        padding: "14px",
+        boxSizing: "border-box",
+        borderRadius: px(gRadius.container),
+        background: "#fff",
+        boxShadow: gShadowStyle.panel,
+        gap: "10px",
+        flexShrink: "0",
+    })
+    .addInto(layerStage);
+radiusCard.add(
+    aLineText()
+        .sv("圆角")
+        .style({ ...gTextStyle.title, color: gTextStyle.color.primary }),
+);
+
+const radiusRow = view("x").style({ gap: "16px", alignItems: "flex-end" }).addInto(radiusCard);
+
+function radiusSwatch(label: string, radius: number) {
+    return view("y")
+        .style({ width: "64px", gap: "4px", alignItems: "center" })
+        .add([
+            view().style({
+                width: "64px",
+                height: "64px",
+                borderRadius: px(radius),
+                background: "#eef2f7",
+                border: "1px solid #00000012",
+                boxSizing: "border-box",
+                flexShrink: "0",
+            }),
+            aLineText()
+                .sv(`${label} ${radius}`)
+                .style({
+                    ...gTextStyle.micro,
+                    color: gTextStyle.color.secondary,
+                    width: "64px",
+                    textAlign: "center",
+                }),
+        ]);
+}
+
+radiusRow.add([
+    radiusSwatch("container", gRadius.container),
+    radiusSwatch("item", gRadius.item),
+    radiusSwatch("icon", gRadius.icon),
+]);
+
+const layerColumn = view("y").style({ gap: "6px", alignItems: "flex-start" }).addInto(layerStage);
+layerColumn.add(
+    aLineText()
+        .sv("L1 · 背景毛玻璃")
+        .style({ ...gTextStyle.micro, color: gTextStyle.color.secondary }),
+);
+
+const layerCard = view("y")
+    .style({
+        width: "300px",
+        height: "112px",
+        padding: px(sSize2.padding),
+        boxSizing: "border-box",
+        borderRadius: px(gRadius.container),
+        ...gSurfaceStyle.backdrop,
+        color: gTextStyle.color.primary,
+    })
+    .addInto(layerColumn);
+
+// L1 内部只放 L2 面板，不放文字
+const layerPanel = ui.barItem().style({ width: "100%" }).addInto(layerCard);
+["列表项", "当前项", "列表项"].forEach((label, index) => {
+    // L3 item 用 iItem，自带 item 圆角；当前项用实心白强调
+    layerPanel.add(
+        iItem({ type: "h", size: 1 })
+            .style({
+                display: "flex",
+                alignItems: "center",
+                padding: `0 ${px(sSize2.paddingx)}`,
+                boxSizing: "border-box",
+                background: index === 1 ? gSurfaceStyle.solid.backgroundColor : "transparent",
+            })
+            .add(aLineText().sv(label)),
+    );
+});
+layerColumn.add(
+    aLineText()
+        .sv("L2 面板透明 · L3 条目实心白")
+        .style({
+            ...gTextStyle.micro,
+            color: gTextStyle.color.secondary,
+        }),
+);
 
 // 密码输入组件测试
 const i = ui.passwd();

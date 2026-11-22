@@ -21,11 +21,74 @@ export const sSize2 = {
     radius2: 18,
 };
 
+/**
+ * 圆角只有这几种来源：第一层容器、第二/三层条目、应用图标。
+ * 窗口圆角由设置里的 --window-radius 单独控制。
+ */
+export const gRadius = {
+    /** 第一层：毛玻璃容器、面板外壳 */
+    container: sSize2.radius2,
+    /** 第二层：面板；第三层：条目 */
+    item: sSize2.radius1,
+    /** 应用图标容器 */
+    icon: 12,
+} as const;
+
+/**
+ * 文字层级：用字号、字重和颜色区分，不用 opacity。
+ * display 页面/分区标题，title 面板与窗口标题，body 正文与列表项，
+ * caption 次要说明，micro 标签和快捷键提示。
+ * 默认搭配 aLineText（单行、溢出省略、不可选）；需要文章式换行时才刻意使用 txt 等。
+ */
+export const gTextStyle = {
+    family: "sans-serif",
+    monoFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    display: {
+        fontSize: "20px",
+        fontWeight: "600",
+        lineHeight: "1.3",
+    },
+    title: {
+        fontSize: "14px",
+        fontWeight: "600",
+        lineHeight: "1.4",
+    },
+    body: {
+        fontSize: "13px",
+        fontWeight: "400",
+        lineHeight: "1.45",
+    },
+    caption: {
+        fontSize: "12px",
+        fontWeight: "400",
+        lineHeight: "1.4",
+    },
+    micro: {
+        fontSize: "10px",
+        fontWeight: "400",
+        lineHeight: "1.2",
+    },
+    color: {
+        primary: "#111111",
+        secondary: "#666666",
+        muted: "#999999",
+        inverse: "#ffffff",
+    },
+} as const;
+
+/** 只有两种表面阴影：窗口框架，和工具弹窗/搜索框这类小面板 */
+export const gShadowStyle = {
+    /** 窗口：服务端绘制的窗口框架 */
+    window: "0 12px 40px #00000033",
+    /** 面板：工具弹窗、搜索框、开始菜单等浮层 */
+    panel: "0 2px 12px #0000001f",
+} as const;
+
 export const gGlassStyle = {
     bg: {
         backdropFilter: "blur(12px)",
         background: "rgba(245, 245, 245, 0.8)",
-        boxShadow: "0 0 4px #00000011",
+        boxShadow: gShadowStyle.panel,
     },
     itemInBg: {
         backgroundColor: "#ffffff88",
@@ -33,16 +96,30 @@ export const gGlassStyle = {
     justItem: {
         backdropFilter: "blur(12px)",
         backgroundColor: "rgb(250.88, 250.88, 250.88, 0.9066)",
-        boxShadow: "0 0 4px #00000011",
+        boxShadow: gShadowStyle.panel,
+    },
+} as const;
+
+/**
+ * 三层材质：第一层是唯一使用毛玻璃的层，第二层只叠透明，第三层是实心白强调。
+ * 第一层内部只直接放第二层面板，文字等内容放在第二/三层里。
+ * 第二、三层不带 padding / gap，间距统一由第一层给；第三层 item 用 iItem，自带 item 圆角。
+ */
+export const gSurfaceStyle = {
+    backdrop: gGlassStyle.bg,
+    panel: {
+        backgroundColor: gGlassStyle.itemInBg.backgroundColor,
+    },
+    solid: {
+        backgroundColor: "#ffffff",
     },
 } as const;
 
 const fontStyle = {
-    title: {
-        fontSize: "1.2em",
-    },
+    title: gTextStyle.title,
     low: {
-        opacity: 0.7,
+        ...gTextStyle.body,
+        color: gTextStyle.color.secondary,
     },
 };
 
@@ -75,7 +152,7 @@ export function uPasswdInput() {
     const pd: { rm: () => void; k: string; el: ReturnType<typeof view> }[] = [];
     let uiAnimatePdSize = 0;
     let placeholderText = "";
-    const placeholderEl = view().style({ color: "#999", pointerEvents: "none" });
+    const placeholderEl = view().style({ color: gTextStyle.color.muted, pointerEvents: "none" });
     const textEl = view("x")
         .style({
             whiteSpace: "nowrap",
@@ -211,7 +288,7 @@ export function uPasswdInput() {
 }
 
 export function iItem(op: { type: "h" | "v" | "sq"; size: 1 | 1.5 | 2 }) {
-    const el = view().style({ borderRadius: `${sSize2.radius1}px` });
+    const el = view().style({ borderRadius: `${gRadius.item}px` });
     const s = `${sSize(op.size)}px`;
     if (op.type === "h") {
         return el.style({ height: s });
@@ -231,7 +308,7 @@ export function xView(els: ElType<HTMLElement>[]) {
     const el = view("y").style({
         gap: `${sSize2.padding}px`,
         padding: `${sSize2.padding}px`,
-        borderRadius: `${sSize2.radius2}px`,
+        borderRadius: `${gRadius.container}px`,
         boxSizing: "content-box",
         ...gGlassStyle.bg,
     });
@@ -724,7 +801,7 @@ export function vVolume(op?: {
             .style({
                 width: px(sSize(d)),
                 height: px(sSize(d)),
-                borderRadius: px(sSize2.radius1),
+                borderRadius: px(gRadius.item),
                 ...gGlassStyle.itemInBg,
             })
             .add(
@@ -761,25 +838,25 @@ export function vVolume(op?: {
     const setInputVolume = throttle((v: number) => void op?.inputV.set?.(v), 50);
 
     const rOutput = rRange({
-        mel: view().style({ background: "white", borderRadius: px(sSize2.radius1) }).el,
+        mel: view().style({ background: "white", borderRadius: px(gRadius.item) }).el,
         onEnd: () => setOutputVolume.flush(),
     });
     const rInput = rRange({
-        mel: view().style({ background: "white", borderRadius: px(sSize2.radius1) }).el,
+        mel: view().style({ background: "white", borderRadius: px(gRadius.item) }).el,
         onEnd: () => setInputVolume.flush(),
     });
 
     rOutput.el.style({
         height: px(sSize(d)),
         flexGrow: 1,
-        borderRadius: px(sSize2.radius1),
+        borderRadius: px(gRadius.item),
         overflow: "hidden",
         ...gGlassStyle.itemInBg,
     });
     rInput.el.style({
         height: px(sSize(d)),
         flexGrow: 1,
-        borderRadius: px(sSize2.radius1),
+        borderRadius: px(gRadius.item),
         overflow: "hidden",
         ...gGlassStyle.itemInBg,
     });
@@ -840,7 +917,7 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
             display: "none",
             maxWidth: "min(560px, calc(90vw / var(--desktop-ui-scale, 1)))",
             padding: px(sSize2.padding),
-            borderRadius: px(sSize2.radius2),
+            borderRadius: px(gRadius.container),
             boxSizing: "border-box",
             pointerEvents: "auto",
             color: "#111",
@@ -897,7 +974,7 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
             .style({
                 width: px(sSize(1)),
                 height: px(sSize(1)),
-                borderRadius: px(sSize2.radius1),
+                borderRadius: px(gRadius.item),
                 backgroundColor: gGlassStyle.itemInBg.backgroundColor,
                 opacity: enabled ? "1" : "0.35",
                 pointerEvents: enabled ? "auto" : "none",
@@ -961,7 +1038,7 @@ export function imeCandidatePopup(op: ImeCandidateHandlers) {
                             gap: "6px",
                             alignItems: "baseline",
                             padding: `5px ${px(sSize2.paddingx)}`,
-                            borderRadius: px(sSize2.radius1),
+                            borderRadius: px(gRadius.item),
                             cursor: "pointer",
                             whiteSpace: "nowrap",
                             backgroundColor: active ? "#fff" : "transparent",
@@ -1059,7 +1136,7 @@ export function imeTrayPanel(op: ImeTrayActions, initial?: ImeTrayStatus) {
                 list.add(
                     view("x")
                         .style({
-                            borderRadius: px(sSize2.radius1),
+                            borderRadius: px(gRadius.item),
                             gap: px(sSize2.paddingx),
                             alignItems: "center",
                             cursor: "pointer",
@@ -1129,7 +1206,7 @@ export const ui = {
         const x = uPasswdInput();
         x.el.style({
             height: px(sSize(1)),
-            borderRadius: px(sSize2.radius1),
+            borderRadius: px(gRadius.item),
             padding: px(sSize2.paddingx),
             boxSizing: "border-box",
             ...gGlassStyle.justItem,
@@ -1139,5 +1216,5 @@ export const ui = {
     /** 在复杂背景下的容器 */
     bar: (els: ElType<HTMLElement>[]) => xView(els),
     /** 在复杂背景下的容器项目 */
-    barItem: () => view().style({ borderRadius: `${sSize2.radius1}px`, ...gGlassStyle.itemInBg, overflow: "hidden" }),
+    barItem: () => view().style({ borderRadius: `${gRadius.item}px`, ...gGlassStyle.itemInBg, overflow: "hidden" }),
 };
