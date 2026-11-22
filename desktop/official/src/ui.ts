@@ -177,6 +177,99 @@ export function aLineText() {
         });
 }
 
+/** 顶栏临时提示里的等级条：图标和轨道各是一个 L2，轨道内部是 L3 */
+export function uLevelRow(op: { icon: string; width?: number }) {
+    const iconEl = getIconXEl(op.icon, { size: 20, width: 24, height: 24 });
+    const iconBox = view()
+        .style({
+            width: px(sSize(1)),
+            height: px(sSize(1)),
+            borderRadius: px(gRadius.item),
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: "0",
+            ...gGlassStyle.itemInBg,
+        })
+        .add(iconEl);
+    const fill = view().style({
+        background: "#ffffff",
+        height: "100%",
+        width: "0%",
+        transition: "width 120ms",
+    });
+    const track = view()
+        .style({
+            flexGrow: "1",
+            height: px(sSize(1)),
+            borderRadius: px(gRadius.item),
+            overflow: "hidden",
+            ...gGlassStyle.itemInBg,
+        })
+        .add(fill);
+    const row = view("x")
+        .style({
+            width: px(op.width ?? sSize(5)),
+            height: px(sSize(1)),
+            alignItems: "center",
+            gap: px(sSize2.paddingx),
+            flexShrink: "0",
+        })
+        .add([iconBox, track]);
+    return {
+        el: row,
+        sv(value: number, muted = false) {
+            fill.style({
+                width: `${Math.min(1, Math.max(0, value)) * 100}%`,
+                background: muted ? gTextStyle.color.muted : "#ffffff",
+            });
+            iconEl.el.style.opacity = muted ? "0.5" : "1";
+        },
+    };
+}
+
+/** 顶栏临时提示里的文字消息：图标 + 标题 + 可选说明 */
+export function uStatusToast(op: { icon: string; title: string; detail?: string; width?: number }) {
+    const text = view("y").style({
+        flexGrow: "1",
+        minWidth: "0",
+        justifyContent: "center",
+        gap: "1px",
+    });
+    text.add(
+        aLineText()
+            .sv(op.title)
+            .style({
+                ...gTextStyle.strong,
+                color: gTextStyle.color.primary,
+            }),
+    );
+    if (op.detail) {
+        text.add(
+            aLineText()
+                .sv(op.detail)
+                .style({
+                    ...gTextStyle.caption,
+                    color: gTextStyle.color.secondary,
+                }),
+        );
+    }
+    return ui
+        .barItem()
+        .style({
+            width: px(op.width ?? sSize(5)),
+            height: px(sSize(1.5)),
+            display: "flex",
+            alignItems: "center",
+            gap: px(sSize2.paddingx),
+            padding: `0 ${px(sSize2.paddingx)}`,
+            boxSizing: "border-box",
+            overflow: "hidden",
+            flexShrink: "0",
+        })
+        .add([getIconXEl(op.icon, { size: 20, width: 24, height: 24 }), text]);
+}
+
 export function uPasswdInput() {
     const pd: { rm: () => void; k: string; el: ReturnType<typeof view> }[] = [];
     let uiAnimatePdSize = 0;
@@ -826,6 +919,42 @@ export function bButton(txt: string, onClick: () => void) {
         });
 }
 
+/** 通知条目的内容；下拉面板和临时提示共用同一套排版 */
+export function nNotiContent(op: { title: string; content: string; onClose?: () => void }) {
+    const titleRow = view("x").style({ alignItems: "center" });
+    titleRow.add(aLineText().sv(op.title).style(fontStyle.title));
+    if (op.onClose) {
+        titleRow.add([
+            spacer(),
+            button(getIconXEl("cross")).on("click", () => {
+                op.onClose?.();
+            }),
+        ]);
+    }
+    return view("y")
+        .style({
+            height: "100%",
+            justifyContent: "center",
+            gap: "2px",
+        })
+        .add([titleRow, aLineText().sv(op.content).style(fontStyle.low)]);
+}
+
+/** 顶栏临时提示里的通知卡片：L2 面板 + 与下拉列表相同的条目排版 */
+export function nNotiToast(op: { title: string; content: string; width?: number }) {
+    return ui
+        .barItem()
+        .style({
+            width: px(op.width ?? sSize(6)),
+            height: px(sSize(2)),
+            padding: px(sSize2.padding),
+            boxSizing: "border-box",
+            overflow: "hidden",
+            flexShrink: "0",
+        })
+        .add(nNotiContent(op));
+}
+
 export function nNotiList(op: { map: (k: string) => Promise<{ title: string; content: string; delete: () => void }> }) {
     let list: string[] = [];
     const nl = uScrollList<string>({
@@ -837,23 +966,13 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
         renderItem: (id) => {
             const el = iItem({ type: "h", size: 2 }).style({ padding: px(sSize2.padding), alignItems: "center" });
             op.map(id).then((n) => {
-                el.clear().add([
-                    view("y")
-                        .add([
-                            view("x").add([
-                                aLineText().sv(n.title).style(fontStyle.title),
-                                spacer(),
-                                button(getIconXEl("cross")).on("click", () => {
-                                    n.delete();
-                                }),
-                            ]),
-                            aLineText().sv(n.content).style(fontStyle.low),
-                        ])
-                        .style({
-                            height: "100%",
-                            justifyContent: "center",
-                        }),
-                ]);
+                el.clear().add(
+                    nNotiContent({
+                        title: n.title,
+                        content: n.content,
+                        onClose: n.delete,
+                    }),
+                );
             });
             return el;
         },

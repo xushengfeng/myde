@@ -17,6 +17,7 @@ import {
     imeTrayPanel,
     mMedia,
     nNotiList,
+    nNotiToast,
     nNumber,
     rRange,
     sourceTag,
@@ -28,8 +29,10 @@ import {
     uBrightnessSlider,
     uChoiceRow,
     ui,
+    uLevelRow,
     uScrollList,
     uSegmented,
+    uStatusToast,
     uSwitch,
     uSystemMenu,
     uToggleRow,
@@ -1004,6 +1007,48 @@ const trayPopup = popupPanel([
     ),
 ]);
 popupRow.add(popupColumn("托盘", trayPopup));
+
+// ── 工具栏临时提示 mock ──
+// 真实提示由 main.ts 的 Tools 提供外层 L1 玻璃、锚点、动画和自动消失，并且不同提示互斥；
+// 这里用一个 L1 容器加切换按钮，演示同一时刻只显示一个提示内容。
+const toastDemo = view("y").style({ marginTop: "30px", gap: "12px" }).addInto();
+toastDemo.add(
+    aLineText()
+        .sv("工具栏临时提示")
+        .style({ ...gTextStyle.display, color: gTextStyle.color.primary }),
+);
+
+const toastOutput = uLevelRow({ icon: "speaker" });
+toastOutput.sv(0.64);
+const toastInput = uLevelRow({ icon: "mic" });
+toastInput.sv(0.32);
+const toastBrightness = uLevelRow({ icon: "sun" });
+toastBrightness.sv(0.72);
+const toastSamples: { label: string; el: ElType<HTMLElement> }[] = [
+    { label: "音量", el: toastOutput.el },
+    { label: "麦克风", el: toastInput.el },
+    { label: "亮度", el: toastBrightness.el },
+    { label: "Wi-Fi", el: uStatusToast({ icon: "wifi", title: "Wi-Fi 已连接", detail: "Home-5G" }) },
+    { label: "蓝牙", el: uStatusToast({ icon: "blue", title: "蓝牙已断开", detail: "WH-1000XM5" }) },
+    { label: "互联", el: uStatusToast({ icon: "connect", title: "新互联设备", detail: "Laptop" }) },
+    {
+        label: "剪贴板",
+        el: uStatusToast({ icon: "clipboard", title: "hello world", detail: "firefox · 12:34" }),
+    },
+    { label: "充电", el: uStatusToast({ icon: "battery", title: "正在充电", detail: "64%" }) },
+    { label: "通知", el: nNotiToast({ title: "构建完成", content: "myde · 12:34 · dist/index.js" }) },
+];
+
+const toastButtons = view("x", "wrap").style({ gap: "6px" }).addInto(toastDemo);
+const toastHost = ui.bar([]).el.style({ width: "fit-content" });
+function showToastSample(index: number) {
+    toastHost.clear().add(toastSamples[index].el);
+}
+toastSamples.forEach((sample, index) => {
+    toastButtons.add(button(sample.label).on("click", () => showToastSample(index)));
+});
+showToastSample(0);
+toastDemo.add(toastHost);
 
 const range = rRange();
 const rangePel = view().addInto().style({ width: "300px", height: "20px" });

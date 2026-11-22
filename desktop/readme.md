@@ -810,6 +810,10 @@ server.notify("window.minimize", handle);
 或切到没有全屏窗口的虚拟屏时工具栏原样恢复。`Super+F` 切换当前聚焦窗口的全屏。总览 grid
 与顶部搜索栏按工具栏占位内缩，避免被顶部工具栏覆盖。
 
+官方桌面的顶栏工具还可以在下拉弹窗之外弹出自动消失的临时提示。提示与下拉弹窗共用毛玻璃
+材质、锚点和缩放淡入动画，二者互斥；提示自身不接收指针，显示时长由各工具决定。具体触发与
+内容见 `desktop/official/readme.md` 的“工具栏临时提示”。
+
 `window.focus` / `window.blur` 是**键盘焦点的唯一入口**——`wl_keyboard.enter/leave`、text-input 的
 enter/leave、剪贴板 selection 归属都跟它走。指针 hover **不**自动切键盘焦点，要不要 focus-follows-mouse
 完全由桌面自己决定（想跟随就在 hover 时调 `window.focus`）。重复 focus/blur 会被内部去重，

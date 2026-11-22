@@ -21,7 +21,7 @@ export interface ClipboardStationTool {
     containsPoint(x: number, y: number): boolean;
 }
 
-function previewOf(item: ClipboardItem): string {
+export function clipboardPreview(item: ClipboardItem): string {
     if (item.text) {
         const line = item.text.split("\n").find((l) => l.trim().length > 0) ?? "";
         return line.length > 90 ? `${line.slice(0, 90)}…` : line;
@@ -31,7 +31,7 @@ function previewOf(item: ClipboardItem): string {
     return item.mimes[0] ?? "[未知内容]";
 }
 
-function timeOf(t: number): string {
+export function clipboardTime(t: number): string {
     const d = new Date(t);
     return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
@@ -106,7 +106,7 @@ export function createClipboardStationTool(op: {
                         .addInto(head);
                 }
             }
-            aLineText().sv(previewOf(item)).addInto(head).style({ flexGrow: 1 });
+            aLineText().sv(clipboardPreview(item)).addInto(head).style({ flexGrow: 1 });
 
             const del = button(getIconXEl("cross", { size: 12, width: 16, height: 16 }))
                 .style({ width: px(20), height: px(20), flexShrink: 0 })
@@ -123,7 +123,7 @@ export function createClipboardStationTool(op: {
             }
             meta.add(
                 aLineText()
-                    .sv(`${item.appid || "未知应用"} · ${timeOf(item.time)}`)
+                    .sv(`${item.appid || "未知应用"} · ${clipboardTime(item.time)}`)
                     .style({ opacity: 0.55, fontSize: "0.8em" }),
             );
 
