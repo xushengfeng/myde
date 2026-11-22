@@ -48,16 +48,20 @@ import {
     gGlassStyle,
     gRadius,
     gShadowStyle,
+    gSurfaceStyle,
+    gTextStyle,
     iItem,
     mMedia,
     nNotiList,
     nNumber,
     px,
     rRange,
+    sourceTag,
     sSize,
     sSize2,
     tTrayMenu,
     ui,
+    uScrollList,
     vVolume,
 } from "./ui";
 
@@ -460,12 +464,19 @@ const GESTURE_AXIS_DEADZONE = 12;
 const OVERVIEW_SWIPE_DISTANCE = 0.25;
 /** 三指下拉展开启动器输入框的完整行程，按可用高度比例 */
 const LAUNCHER_SWIPE_DISTANCE = 0.2;
-/** 启动器输入框高度（CSS px） */
+/** 启动器输入 L2 高度（CSS px） */
 const LAUNCHER_HEIGHT = 52;
+/** 启动器 L1 外壳高度：输入 L2 + 上下 padding */
+const LAUNCHER_SHELL_HEIGHT = LAUNCHER_HEIGHT + sSize2.padding * 2;
+/** 搜索结果固定行高（4 × 12） */
+const SEARCH_RESULT_ITEM_HEIGHT = 48;
+/** 搜索结果面板固定 7 行：要么隐藏，要么 7 × 48 */
+const SEARCH_RESULT_ROWS = 7;
+const SEARCH_RESULT_PANEL_HEIGHT = SEARCH_RESULT_ITEM_HEIGHT * SEARCH_RESULT_ROWS;
 /** 全局预览时启动器距工作区顶部（CSS px） */
 const OVERVIEW_LAUNCHER_TOP = 12;
-/** 全局预览 grid 顶部为启动器预留的高度 */
-const OVERVIEW_TOP_INSET = OVERVIEW_LAUNCHER_TOP + LAUNCHER_HEIGHT + 24;
+/** 全局预览 grid 顶部为启动器留出的高度 */
+const OVERVIEW_TOP_INSET = OVERVIEW_LAUNCHER_TOP + LAUNCHER_SHELL_HEIGHT + 24;
 
 type LauncherState = "h" | "n" | "t";
 
@@ -2242,6 +2253,9 @@ function uiSized(px: number) {
 // 拖拽预览尺寸走样式表 !important：渲染层在客户端提交时会直接写 xdg surface 元素的 inline 宽高，
 // 普通 inline 样式会被它盖掉，加 !important 才能稳定显示桌面自己的预览，抬手后再摘掉属性
 addStyle({
+    "[data-launcher-input] input::placeholder": {
+        color: gTextStyle.color.muted,
+    },
     "[data-resize-preview]": {
         width: "var(--resize-preview-width) !important",
         height: "var(--resize-preview-height) !important",
@@ -7071,8 +7085,8 @@ function createLauncher(): LauncherController {
     let topInset = 0;
     const localStageHeight = () => stageHeight / scale;
     const localTopInset = () => topInset / scale;
-    const hiddenTop = -LAUNCHER_HEIGHT - 12;
-    const normalTop = () => localStageHeight() / 3 - LAUNCHER_HEIGHT / 2;
+    const hiddenTop = -LAUNCHER_SHELL_HEIGHT - 12;
+    const normalTop = () => localStageHeight() / 3 - LAUNCHER_SHELL_HEIGHT / 2;
     const topTop = () => OVERVIEW_LAUNCHER_TOP + localTopInset();
     const stateTop = (state: LauncherState) => (state === "h" ? hiddenTop : state === "n" ? normalTop() : topTop());
     const stateOpacity = (state: LauncherState) => (state === "h" ? 0 : 1);
@@ -7101,22 +7115,20 @@ function createLauncher(): LauncherController {
             zoom: "var(--desktop-ui-scale, 1)",
         })
         .addInto(windowElWarp);
+    // L1 外壳：唯一负责 padding / gap 和毛玻璃的层
     const shell = view("y")
         .style({
             position: "absolute",
             top: `${hiddenTop}px`,
             left: "50%",
             width: "min(560px, calc(80vw / var(--desktop-ui-scale, 1)))",
-            padding: "0",
+            padding: px(sSize2.padding),
             boxSizing: "border-box",
             alignItems: "stretch",
-            gap: "0",
+            gap: px(sSize2.padding),
             overflow: "hidden",
-            borderRadius: `${gRadius.container}px`,
-            background: "rgba(255,255,255,0.94)",
-            backdropFilter: "blur(20px)",
-            boxShadow: gShadowStyle.panel,
-            border: "1px solid #ffffff88",
+            borderRadius: px(gRadius.container),
+            ...gSurfaceStyle.backdrop,
             opacity: "0",
             transform: "translateX(-50%)",
             visibility: "hidden",
@@ -7125,9 +7137,12 @@ function createLauncher(): LauncherController {
         })
         .data({ "desktop-ui": "launcher", "launcher-input": "" })
         .addInto(layer);
-    const inputRow = view("x").style({
-        height: `${LAUNCHER_HEIGHT}px`,
-        padding: "0 18px",
+
+    // L2 输入面板：L1 只直接放 L2，输入框本身不带层间距
+    const inputPanel = ui.barItem().style({
+        display: "flex",
+        height: px(LAUNCHER_HEIGHT),
+        padding: "0 12px",
         boxSizing: "border-box",
         alignItems: "center",
         flexShrink: "0",
@@ -7140,21 +7155,39 @@ function createLauncher(): LauncherController {
             outline: "none",
             background: "transparent",
             padding: "0",
-            fontSize: "16px",
-            color: "#111",
+            ...gTextStyle.title,
+            fontWeight: "400",
+            color: gTextStyle.color.primary,
         })
         .attr({ placeholder: "搜索应用、窗口或虚拟屏" });
-    inputRow.add(field);
-    const resultsEl = view("y").style({
+    inputPanel.add(field);
+
+    // L2 结果面板：要么隐藏，要么固定 7 × 48；空提示由 uScrollList 居中显示
+    const resultsPanel = ui.barItem().style({
         display: "none",
-        maxHeight: "min(360px, 50vh)",
-        overflowY: "auto",
-        padding: "6px",
-        gap: "2px",
-        boxSizing: "border-box",
-        borderTop: "1px solid #0000000f",
+        flexShrink: "0",
     });
-    shell.add([inputRow, resultsEl]);
+    /** 列表当前顶部（单位：条），用于键盘选中时只滚最短距离 */
+    let resultListTop = 0;
+    const resultList = uScrollList<string>({
+        itemSize: SEARCH_RESULT_ITEM_HEIGHT,
+        containerSize: SEARCH_RESULT_PANEL_HEIGHT,
+        direction: "down",
+        crossSize: "100%",
+        // key 带渲染批次：同长度的新搜索结果不会复用旧行
+        keyExtractor: (key) => key,
+        renderItem: (key) => {
+            const entry = resultByKey.get(key);
+            if (!entry) return view();
+            return createResultEl(entry.result, key);
+        },
+        onScroll: (index, progress) => {
+            resultListTop = index + progress;
+        },
+        empty: "未找到匹配项",
+    });
+    resultsPanel.add(resultList.el);
+    shell.add([inputPanel, resultsPanel]);
     shell.on("click", () => field.el.focus());
 
     const gear = new AnimationGear({ value: 0 }, { transition: LAUNCHER_TRANSITION });
@@ -7281,82 +7314,114 @@ function createLauncher(): LauncherController {
 
     // ── 搜索结果 ──────────────────────────────────────────────────────────────────────────────
     let results: SearchResult[] = [];
-    let resultEls: ElType<HTMLElement>[] = [];
+    /** 稳定 key -> 当前结果和下标；key 不变，列表才能识别出「移动」 */
+    const resultByKey = new Map<string, { result: SearchResult; index: number }>();
+    const keyByIndex: string[] = [];
+    /** 已渲染的搜索结果行；按 key 保存，行可以跨重排复用 */
+    const resultRowEls = new Map<string, ElType<HTMLElement>>();
     let selectedIndex = 0;
-    /** 每次重绘递增；旧的图标异步加载回来时用它丢弃结果 */
-    let renderSeq = 0;
     let querySeq = 0;
     let aiSeq = 0;
     let queryTimer: number | undefined;
 
-    function setSelected(index: number) {
+    function resultKey(result: SearchResult) {
+        return `${result.badge ?? ""}:${result.id}`;
+    }
+
+    function setSelected(index: number, ensureVisible = false) {
         if (results.length === 0) return;
         selectedIndex = (index + results.length) % results.length;
-        for (let i = 0; i < resultEls.length; i++) {
-            resultEls[i].style({ background: i === selectedIndex ? "rgba(0,0,0,0.06)" : "transparent" });
+        const key = keyByIndex[selectedIndex];
+        for (const [rowKey, row] of resultRowEls) {
+            row.style({
+                background: rowKey === key ? gSurfaceStyle.solid.backgroundColor : "transparent",
+            });
         }
-        resultEls[selectedIndex]?.el.scrollIntoView({ block: "nearest" });
+        if (!ensureVisible) return;
+        // 不修改 scroll-list：用已有的 scrollTo 只滚到能看见选中项
+        const top = selectedIndex * SEARCH_RESULT_ITEM_HEIGHT;
+        const bottom = top + SEARCH_RESULT_ITEM_HEIGHT;
+        const viewTop = resultListTop * SEARCH_RESULT_ITEM_HEIGHT;
+        const viewBottom = viewTop + SEARCH_RESULT_PANEL_HEIGHT;
+        if (top < viewTop) resultList.scrollTo(top);
+        else if (bottom > viewBottom) resultList.scrollTo(bottom - SEARCH_RESULT_PANEL_HEIGHT);
     }
 
     function hideResults() {
-        renderSeq++;
-        resultsEl.clear();
-        resultsEl.style({ display: "none" });
-        resultEls = [];
+        results = [];
+        selectedIndex = 0;
+        resultByKey.clear();
+        keyByIndex.length = 0;
+        resultRowEls.clear();
+        resultList.setList([], true);
+        resultsPanel.style({ display: "none" });
     }
 
     function showNotice(text: string) {
         results = [];
         selectedIndex = 0;
-        renderSeq++;
-        resultEls = [];
-        resultsEl.clear().style({ display: "flex" });
-        view("x")
-            .style({ height: "44px", padding: "0 12px", alignItems: "center", fontSize: "13px", color: "#666" })
-            .add(txt(text))
-            .addInto(resultsEl);
+        resultByKey.clear();
+        keyByIndex.length = 0;
+        resultRowEls.clear();
+        resultList.setEmpty(text);
+        resultList.setList([], true);
+        resultsPanel.style({
+            display: "flex",
+            height: px(SEARCH_RESULT_PANEL_HEIGHT),
+        });
     }
 
-    function createResultEl(result: SearchResult, index: number, seq: number) {
+    function createResultEl(result: SearchResult, key: string) {
+        const selectedKey = keyByIndex[selectedIndex];
         const row = view("x").style({
-            height: "48px",
+            height: px(SEARCH_RESULT_ITEM_HEIGHT),
             padding: "0 12px",
-            borderRadius: "10px",
+            borderRadius: px(gRadius.item),
             boxSizing: "border-box",
             alignItems: "center",
             gap: "10px",
             cursor: "pointer",
             flexShrink: "0",
-            background: "transparent",
+            background: key === selectedKey ? gSurfaceStyle.solid.backgroundColor : "transparent",
         });
-        row.on("pointerenter", () => setSelected(index));
+        row.on("pointerenter", () => {
+            const entry = resultByKey.get(key);
+            if (entry) setSelected(entry.index);
+        });
         row.on("click", (e) => {
+            const entry = resultByKey.get(key);
+            if (!entry) return;
             e.stopPropagation();
-            activateResult(index);
+            activateResult(entry.index);
         });
 
         const iconBox = view().style({
             width: "30px",
             height: "30px",
-            borderRadius: "9px",
+            borderRadius: px(gRadius.icon),
             background: "#ffffff",
+            display: "flex",
             alignItems: "center",
             justifyContent: "center",
             overflow: "hidden",
             flexShrink: "0",
         });
         iconBox.add(
-            txt((result.title.trim()[0] || "?").toUpperCase()).style({
-                fontSize: "13px",
-                fontWeight: "600",
-                color: "#555",
-            }),
+            aLineText()
+                .sv((result.title.trim()[0] || "?").toUpperCase())
+                .style({
+                    ...gTextStyle.caption,
+                    fontWeight: "600",
+                    color: gTextStyle.color.secondary,
+                    width: "100%",
+                    textAlign: "center",
+                }),
         );
         const iconPromise = result.icon?.();
         if (iconPromise) {
             void iconPromise
                 .then((url) => {
-                    if (!url || seq !== renderSeq || !row.el.isConnected) return;
+                    if (!url || !row.el.isConnected) return;
                     iconBox
                         .clear()
                         .add(
@@ -7370,38 +7435,20 @@ function createLauncher(): LauncherController {
 
         const textCol = view("y").style({ flex: "1", minWidth: "0", gap: "1px" });
         textCol.add(
-            txt(result.title).style({
-                fontSize: "14px",
-                color: "#111",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-            }),
+            aLineText()
+                .sv(result.title)
+                .style({ ...gTextStyle.body, color: gTextStyle.color.primary }),
         );
         if (result.subtitle) {
             textCol.add(
-                txt(result.subtitle).style({
-                    fontSize: "11px",
-                    color: "#666",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                }),
+                aLineText()
+                    .sv(result.subtitle)
+                    .style({ ...gTextStyle.caption, color: gTextStyle.color.secondary }),
             );
         }
         row.add([iconBox, textCol]);
-        if (result.badge) {
-            row.add(
-                txt(result.badge).style({
-                    fontSize: "11px",
-                    color: "#666",
-                    background: "#0000000a",
-                    padding: "2px 6px",
-                    borderRadius: "6px",
-                    flexShrink: "0",
-                }),
-            );
-        }
+        if (result.badge) row.add(sourceTag(result.badge));
+        resultRowEls.set(key, row);
         return row;
     }
 
@@ -7410,21 +7457,33 @@ function createLauncher(): LauncherController {
             hideResults();
             return;
         }
-        const seq = ++renderSeq;
-        resultEls = [];
-        resultsEl.clear().style({ display: "flex" });
+        resultByKey.clear();
+        keyByIndex.length = 0;
+        const keys: string[] = [];
+        for (let index = 0; index < results.length; index++) {
+            const result = results[index];
+            let key = resultKey(result);
+            // 同一 provider 内 id 应唯一；真撞车时加下标兜底
+            if (resultByKey.has(key)) key = `${key}#${index}`;
+            resultByKey.set(key, { result, index });
+            keyByIndex[index] = key;
+            keys.push(key);
+        }
+        // 只保留当前结果对应的行；被移除的行让列表自己播放退场
+        for (const key of resultRowEls.keys()) {
+            if (!resultByKey.has(key)) resultRowEls.delete(key);
+        }
+        resultList.setEmpty("未找到匹配项");
+        resultsPanel.style({ display: "flex" });
         if (results.length === 0) {
-            view("x")
-                .style({ height: "44px", padding: "0 12px", alignItems: "center", fontSize: "13px", color: "#666" })
-                .add(txt("未找到匹配项"))
-                .addInto(resultsEl);
+            showNotice("未找到匹配项");
             return;
         }
-        for (let i = 0; i < results.length; i++) {
-            const row = createResultEl(results[i], i, seq);
-            resultEls.push(row);
-            resultsEl.add(row);
-        }
+        resultsPanel.style({ height: px(SEARCH_RESULT_PANEL_HEIGHT) });
+        // 稳定 key：保留的行由 dynamicScrollList 计算位移动画
+        resultList.setList(keys);
+        resultList.scrollTo(0);
+        resultListTop = 0;
         setSelected(Math.min(selectedIndex, results.length - 1));
     }
 
@@ -7456,8 +7515,9 @@ function createLauncher(): LauncherController {
     function activateResult(index: number) {
         const result = results[index];
         if (!result) return;
+        const key = keyByIndex[index];
         // 先量图标，closeSearch 会同步清空结果 DOM；启动动画从这一格开始
-        const iconBox = resultEls[index]?.el.firstElementChild as HTMLElement | undefined;
+        const iconBox = (key ? resultRowEls.get(key) : undefined)?.el.firstElementChild as HTMLElement | undefined;
         const rect = iconBox ? elementRect(iconBox) : undefined;
         pendingSearchLaunchSource = rect ? { rect, iconSrc: sourceIconSrc(iconBox) } : undefined;
         // 确认结果后先收起搜索栏；全局预览里由退出预览的流程恢复停靠位置
@@ -7542,7 +7602,7 @@ function createLauncher(): LauncherController {
             if (results.length === 0) return;
             e.preventDefault();
             e.stopPropagation();
-            setSelected(selectedIndex + (e.code === "ArrowDown" ? 1 : -1));
+            setSelected(selectedIndex + (e.code === "ArrowDown" ? 1 : -1), true);
             return;
         }
         if (e.code === "Enter") {

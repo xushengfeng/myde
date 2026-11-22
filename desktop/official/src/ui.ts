@@ -1,5 +1,5 @@
 import { button, type ElType, image, pack, spacer, trackPoint, txt, view } from "dkh-ui";
-import { AnimationGear, timingFunction } from "myde-ui";
+import { AnimationGear } from "myde-ui";
 import type { ImComposeState } from "../../../src/sys_api/input_method";
 import type { MenuItem } from "../../../src/sys_api/menu";
 import { throttle } from "../../../src/utils/throttle";
@@ -304,6 +304,85 @@ export function uToggleItem() {
     view().style({});
 }
 
+/** 来源标签：搜索结果右侧的「应用 / 窗口 / 虚拟屏」等小标签 */
+export function sourceTag(text: string) {
+    return aLineText()
+        .sv(text)
+        .style({
+            ...gTextStyle.micro,
+            color: gTextStyle.color.secondary,
+            background: "#0000000a",
+            padding: "2px 6px",
+            borderRadius: px(gRadius.item),
+            width: "fit-content",
+            flexShrink: "0",
+        });
+}
+
+/**
+ * 带空提示的滚动列表：空时提示水平 / 垂直居中，非空时隐藏。
+ * 其它方法直接转发给 dynamicScrollList。
+ */
+export function uScrollList<T>(op: {
+    itemSize: number;
+    containerSize: number;
+    direction: "up" | "down" | "left" | "right";
+    /** 垂直列表的宽度 / 水平列表的高度；缺省为 itemSize */
+    crossSize?: number | string;
+    renderItem: (item: T, index: number, list: T[]) => ReturnType<typeof view>;
+    keyExtractor: (item: T, index: number) => string;
+    snap?: boolean;
+    onScroll?: (index: number, progress: number) => void;
+    bufferSize?: number;
+    animationDuration?: number;
+    dragByMouse?: boolean;
+    /** 没有项时显示的单行提示 */
+    empty: string;
+}) {
+    const vertical = op.direction === "up" || op.direction === "down";
+    const crossSize = op.crossSize ?? op.itemSize;
+    const list = dynamicScrollList<T>(op);
+    list.el.style(vertical ? { width: "100%" } : { height: "100%" });
+
+    const emptyEl = view("x").style({
+        position: "absolute",
+        inset: "0",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        pointerEvents: "none",
+    });
+    const emptyText = aLineText()
+        .sv(op.empty)
+        .style({
+            ...gTextStyle.body,
+            color: gTextStyle.color.secondary,
+            width: "fit-content",
+            maxWidth: "90%",
+        });
+    emptyEl.add(emptyText);
+
+    const wrap = view().style({
+        position: "relative",
+        [vertical ? "width" : "height"]: typeof crossSize === "number" ? px(crossSize) : crossSize,
+        [vertical ? "height" : "width"]: px(op.containerSize),
+        overflow: "hidden",
+    });
+    wrap.add([list.el, emptyEl]);
+
+    const setList = (items: T[], disableAnimation?: boolean) => {
+        list.setList(items, disableAnimation);
+        emptyEl.style({ display: items.length === 0 ? "flex" : "none" });
+    };
+
+    return {
+        ...list,
+        el: wrap,
+        setList,
+        setEmpty: (text: string) => emptyText.sv(text),
+    };
+}
+
 export function xView(els: ElType<HTMLElement>[]) {
     const el = view("y").style({
         gap: `${sSize2.padding}px`,
@@ -329,10 +408,11 @@ export function bButton(txt: string, onClick: () => void) {
 
 export function nNotiList(op: { map: (k: string) => Promise<{ title: string; content: string; delete: () => void }> }) {
     let list: string[] = [];
-    const nl = dynamicScrollList<string>({
+    const nl = uScrollList<string>({
         itemSize: sSize(2),
         containerSize: sSize(2) * 4,
         direction: "down",
+        crossSize: sSize(10),
         keyExtractor: (k) => k,
         renderItem: (id) => {
             const el = iItem({ type: "h", size: 2 }).style({ padding: px(sSize2.padding), alignItems: "center" });
@@ -357,25 +437,8 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
             });
             return el;
         },
+        empty: "没有通知",
     });
-    const emptyMask = view("x")
-        .style({
-            width: px(sSize(10)),
-            height: px(sSize(2) * 4),
-            justifyContent: "center",
-            alignItems: "center",
-            pointerEvents: "none",
-        })
-        .add(
-            aLineText()
-                .sv("没有通知")
-                .style({ ...fontStyle.low }),
-        );
-    const showGear = new AnimationGear({ s: 0 }, { transition: { duration: 400, map: timingFunction.easeOut } });
-    showGear.setUpdateCallback((v) => {
-        emptyMask.style({ opacity: v.s });
-    });
-    showGear.moveTo({ s: 1 }, 0);
 
     const clearAll = view("x")
         .add(getIconXEl("cross"))
@@ -392,13 +455,7 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
     return {
         el: ui.bar([
             // todo 勿扰模式
-            ui
-                .barItem()
-                .style({ position: "relative" })
-                .add([
-                    nl.el.style({ width: px(sSize(10)) }),
-                    emptyMask.style({ position: "absolute", top: 0, left: 0 }),
-                ]),
+            ui.barItem().add(nl.el),
             ui
                 .barItem()
                 .style({ height: px(sSize(1)) })
@@ -409,12 +466,8 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
                 ),
         ]).el,
         setList: (l: string[]) => {
-            if (l.length === 0) {
-                showGear.moveTo({ s: 1 });
-            } else {
-                showGear.moveTo({ s: 0 });
-            }
-            nl.setList(l);
+            // 清空时直接收起列表，避免旧项退场动画和空提示重叠
+            nl.setList(l, l.length === 0);
             list = l;
         },
     };

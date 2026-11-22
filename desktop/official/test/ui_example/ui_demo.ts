@@ -14,9 +14,11 @@ import {
     nNotiList,
     nNumber,
     rRange,
+    sourceTag,
     sSize,
     sSize2,
     ui,
+    uScrollList,
     vVolume,
 } from "../../src/ui";
 
@@ -178,6 +180,29 @@ for (const [name, color] of Object.entries(gTextStyle.color)) {
             ]),
     );
 }
+
+// 来源标签
+tokenSection.add(
+    aLineText()
+        .sv("来源标签")
+        .style({ ...gTextStyle.title, color: gTextStyle.color.primary }),
+);
+
+const tagCard = view("x")
+    .style({
+        width: "440px",
+        height: "56px",
+        padding: "0 12px",
+        boxSizing: "border-box",
+        alignItems: "center",
+        gap: "8px",
+        borderRadius: px(gRadius.container),
+        background: "#fff",
+        boxShadow: gShadowStyle.panel,
+        flexShrink: "0",
+    })
+    .addInto(tokenSection);
+tagCard.add(["应用", "窗口", "虚拟屏", "设置"].map((label) => sourceTag(label)));
 
 // 阴影：窗口框架 / 工具弹窗与搜索框
 tokenSection.add(
@@ -647,6 +672,44 @@ hList.setList(
     Array.from({ length: 20 }, (_, i) => `卡片 ${i + 1}`),
     true,
 );
+
+// 带空提示的滚动列表
+const emptyListDemo = view("y").style({ marginTop: "20px", gap: "8px" }).addInto();
+emptyListDemo.add(
+    aLineText()
+        .sv("带空提示的滚动列表")
+        .style({ ...gTextStyle.title, color: gTextStyle.color.primary }),
+);
+const emptyList = uScrollList<string>({
+    itemSize: 40,
+    containerSize: 160,
+    direction: "down",
+    crossSize: "300px",
+    keyExtractor: (item) => item,
+    renderItem: (item) =>
+        view("x")
+            .style({
+                height: "40px",
+                alignItems: "center",
+                padding: "0 10px",
+                background: "#f5f5f5",
+                borderRadius: px(gRadius.item),
+            })
+            .add(aLineText().sv(item)),
+    empty: "没有内容",
+});
+emptyList.setList([]);
+emptyList.el.addInto(emptyListDemo);
+view("x")
+    .style({ gap: "8px" })
+    .addInto(emptyListDemo)
+    .add([
+        button("空列表").on("click", () => emptyList.setList([])),
+        button("2 项").on("click", () => emptyList.setList(["项目 1", "项目 2"])),
+        button("10 项").on("click", () =>
+            emptyList.setList(Array.from({ length: 10 }, (_, index) => `项目 ${index + 1}`)),
+        ),
+    ]);
 
 // Carousel测试（垂直，带指示器）
 const carouselDemo = view()
