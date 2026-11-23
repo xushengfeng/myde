@@ -5,7 +5,15 @@ import { getIconXEl } from "../../src/icon";
 import { type PanelPreeditMode, resolveImePreedit } from "../../src/ime/ime";
 import type { BindingSource } from "../../src/registry";
 import { carousel, dynamicScrollList } from "../../src/scroll-list";
-import { attachBatteryFx, attachOrbitFx, attachRippleFx } from "../../src/tool_fx";
+import {
+    tBatteryBar,
+    tBluePanel,
+    tConnectPanel,
+    tListPanel,
+    tPanel,
+    tPowerPanel,
+    tWifiPanel,
+} from "../../src/tool_panel";
 import {
     aLineText,
     gRadius,
@@ -36,7 +44,6 @@ import {
     uStatusToast,
     uSwitch,
     uSystemMenu,
-    uToggleRow,
     vVolume,
 } from "../../src/ui";
 
@@ -582,8 +589,8 @@ const dottedBgPopup = createPopupWithBackground(
 bgTestSection.add(dottedBgPopup);
 
 // ── 工具弹窗 mock ────────────────────────────────────────────────────────────────────────────────
-// 静态 mock：复用 uToggleRow / uChoiceRow / uSwitch / mMedia。
-// 第一个 L2 的状态动效直接复用 src/tool_fx.ts；真实弹窗依赖 registry 数据，不能直接 import；改列表行配置时要和 main.ts 同步。
+// 结构（L1 宽度、列表高度、开关行动效、网络/蓝牙/互联/电源的组装）全部来自 src/tool_panel.ts；
+// 这里只提供静态数据，main.ts 用同一套函数接 registry。mMedia / nNotiList / 剪贴板等组件本身也直接复用。
 const popupDemo = view("y").style({ marginTop: "30px", gap: "12px" }).addInto();
 popupDemo.add(
     aLineText()
@@ -752,158 +759,75 @@ const systemMenu = uSystemMenu({
 });
 popupRow.add(popupColumn("系统菜单", systemMenu.el));
 
-function popupPanel(els: ElType<HTMLElement>[]) {
-    const p = ui.bar(els);
-    p.el.style({ width: px(sSize(6)) });
-    return p.el;
-}
+const wifiPanel = tWifiPanel({
+    control: uSwitch(true, () => {}),
+    list: [
+        uChoiceRow({ label: "Home-5G", selected: true }).el,
+        uChoiceRow({ label: "Office" }).el,
+        uChoiceRow({ label: "访客网络" }).el,
+        uChoiceRow({ label: "Coffee Shop" }).el,
+    ],
+});
+wifiPanel.setActive(true);
+popupRow.add(popupColumn("Wi-Fi", wifiPanel.el));
 
-function listPanel(rows: ElType<HTMLElement>[], height: number) {
-    return ui
-        .barItem()
-        .style({ height: px(height) })
-        .add(rows);
-}
+const bluePanel = tBluePanel({
+    control: uSwitch(true, () => {}),
+    list: [
+        uChoiceRow({ label: "MX Master 3S", selected: true }).el,
+        uChoiceRow({ label: "AirPods Pro" }).el,
+        uChoiceRow({ label: "键盘", selected: true }).el,
+        uChoiceRow({ label: "旧音箱" }).el,
+    ],
+});
+bluePanel.setActive(true);
+popupRow.add(popupColumn("蓝牙", bluePanel.el));
 
-function toggleRow(label: string, on: boolean, icon?: string) {
-    return uToggleRow(
-        label,
-        uSwitch(on, () => {}),
-        { icon },
-    );
-}
-
-const wifiToggle = toggleRow("Wi-Fi", true, "wifi");
-const wifiFx = attachRippleFx(wifiToggle, { color: "rgba(34, 197, 94, 0.65)", from: "bottom" });
-wifiFx.setActive(true);
-const wifiPopup = popupPanel([
-    wifiToggle,
-    listPanel(
-        [
-            uChoiceRow({ label: "Home-5G", selected: true }).el,
-            uChoiceRow({ label: "Office" }).el,
-            uChoiceRow({ label: "访客网络" }).el,
-            uChoiceRow({ label: "Coffee Shop" }).el,
-        ],
-        sSize(1.5) * 4,
-    ),
-]);
-popupRow.add(popupColumn("Wi-Fi", wifiPopup));
-
-const blueToggle = toggleRow("蓝牙", true, "blue");
-const blueFx = attachRippleFx(blueToggle, { color: "rgba(0, 122, 255, 0.6)", from: "left" });
-blueFx.setActive(true);
-const bluePopup = popupPanel([
-    blueToggle,
-    listPanel(
-        [
-            uChoiceRow({ label: "MX Master 3S", selected: true }).el,
-            uChoiceRow({ label: "AirPods Pro" }).el,
-            uChoiceRow({ label: "键盘", selected: true }).el,
-            uChoiceRow({ label: "旧音箱" }).el,
-        ],
-        sSize(1.5) * 4,
-    ),
-]);
-popupRow.add(popupColumn("蓝牙", bluePopup));
-
-const connectToggle = toggleRow("互联", true, "connect");
-const connectFx = attachOrbitFx(connectToggle, { color: "rgba(139, 92, 246, 0.75)" });
-connectFx.setActive(true);
-const connectPopup = popupPanel([
-    connectToggle,
-    ui
-        .barItem()
-        .style({
-            height: px(sSize(1.5)),
-            display: "flex",
-            alignItems: "center",
-            gap: px(sSize2.paddingx),
-            padding: `0 ${px(sSize2.paddingx)}`,
-            boxSizing: "border-box",
-        })
-        .add([
-            aLineText()
-                .sv("本机 ID")
-                .style({
-                    ...gTextStyle.caption,
-                    color: gTextStyle.color.secondary,
-                    flexShrink: "0",
-                }),
-            aLineText()
-                .sv("7f3a-92c1")
-                .style({
-                    ...gTextStyle.caption,
-                    color: gTextStyle.color.secondary,
-                    fontFamily: gTextStyle.monoFamily,
-                    flexGrow: "1",
-                    minWidth: "0",
-                    textAlign: "right",
-                }),
-        ]),
-    listPanel(
-        [
-            uChoiceRow({ label: "工作室 Mac", detail: "已连接", selected: true }).el,
-            uChoiceRow({ label: "客厅主机", detail: "已记忆" }).el,
-            uChoiceRow({ label: "临时设备", detail: "临时" }).el,
-            uChoiceRow({ label: "备用设备", detail: "已记忆" }).el,
-        ],
-        sSize(1.5) * 4,
-    ),
-]);
-popupRow.add(popupColumn("互联", connectPopup));
+const connectPanel = tConnectPanel({
+    control: uSwitch(true, () => {}),
+    idValue: aLineText().sv("7f3a-92c1"),
+    list: [
+        uChoiceRow({ label: "工作室 Mac", detail: "已连接", selected: true }).el,
+        uChoiceRow({ label: "客厅主机", detail: "已记忆" }).el,
+        uChoiceRow({ label: "临时设备", detail: "临时" }).el,
+        uChoiceRow({ label: "备用设备", detail: "已记忆" }).el,
+    ],
+});
+connectPanel.setActive(true);
+popupRow.add(popupColumn("互联", connectPanel.el));
 
 function batteryBar(percentage: number, charging = false) {
-    const info = uBatteryInfo({ percentage, charging });
-    const bar = ui
-        .barItem()
-        .style({
-            height: px(sSize(1.5)),
-            display: "flex",
-            alignItems: "center",
-            padding: `0 ${px(sSize2.paddingx)}`,
-            boxSizing: "border-box",
-        })
-        .add(info.el);
-    const fx = attachBatteryFx(bar);
-    fx.setPercentage(percentage);
-    if (charging) fx.setCharging(true);
-    return { bar, fx };
+    const bar = tBatteryBar(uBatteryInfo({ percentage, charging }).el);
+    bar.fx.setPercentage(percentage);
+    if (charging) bar.fx.setCharging(true);
+    return bar;
 }
 
-const battery = batteryBar(70);
-const batteryPopup = popupPanel([
-    battery.bar,
-    ui
-        .barItem()
-        .style({ height: px(sSize(1)) })
-        .add(
-            uSegmented({
-                items: [
-                    { label: "静音", value: "power-saver" },
-                    { label: "平衡", value: "balanced" },
-                    { label: "性能", value: "performance" },
-                ],
-                value: "balanced",
-            }).el,
-        ),
-    listPanel(
-        [
-            uBatteryRow("鼠标", 64).el,
-            uBatteryRow("键盘", 92).el,
-            uBatteryRow("手柄", 30).el,
-            uBatteryRow("耳机", 55).el,
+const powerPanel = tPowerPanel({
+    info: uBatteryInfo({ percentage: 70, charging: false }).el,
+    profiles: uSegmented({
+        items: [
+            { label: "静音", value: "power-saver" },
+            { label: "平衡", value: "balanced" },
+            { label: "性能", value: "performance" },
         ],
-        sSize(1.5) * 4,
-    ),
-]);
-popupRow.add(popupColumn("电源", batteryPopup));
+        value: "balanced",
+    }).el,
+    devices: [
+        uBatteryRow("鼠标", 64).el,
+        uBatteryRow("键盘", 92).el,
+        uBatteryRow("手柄", 30).el,
+        uBatteryRow("耳机", 55).el,
+    ],
+});
+powerPanel.fx.setPercentage(70);
+popupRow.add(popupColumn("电源", powerPanel.el));
 
 // 电源各模式 × 电量：观察条纹配色、分界线与文字 / 图标位置
 function batteryStateColumn(label: string, percentage: number, op?: { charging?: boolean; profile?: string }) {
     const b = batteryBar(percentage, op?.charging ?? false);
     if (op?.profile) b.fx.setProfile(op.profile);
-    return popupColumn(label, popupPanel([b.bar]));
+    return popupColumn(label, tPanel([b.el]));
 }
 
 function batteryLevelRow(mode: string, levels: number[], op?: { charging?: boolean; profile?: string }) {
@@ -964,7 +888,7 @@ mediaColumn.add(
 );
 popupRow.add(mediaColumn);
 
-const trayPopup = popupPanel([
+const trayPopup = tPanel([
     ui
         .barItem()
         .style({ height: px(sSize(1)), display: "flex", alignItems: "center", justifyContent: "center" })
@@ -977,7 +901,7 @@ const trayPopup = popupPanel([
                     textAlign: "center",
                 }),
         ),
-    listPanel(
+    tListPanel(
         [
             uChoiceRow({
                 label: "显示歌词",

@@ -43,7 +43,7 @@ import { ScreenManager } from "./screen";
 import { dynamicScrollList } from "./scroll-list";
 import { type SearchAiHandler, SearchEngine, type SearchProvider, type SearchResult, scoreLatin } from "./search";
 import { createSettingsContent, type ImePanelPreeditMode } from "./settings";
-import { attachBatteryFx, attachOrbitFx, attachRippleFx } from "./tool_fx";
+import { tBluePanel, tConnectPanel, tPowerPanel, tWifiPanel } from "./tool_panel";
 import {
     aLineText,
     gGlassStyle,
@@ -72,7 +72,6 @@ import {
     uStatusToast,
     uSwitch,
     uSystemMenu,
-    uToggleRow,
     vVolume,
 } from "./ui";
 import {
@@ -8790,35 +8789,17 @@ tools.registerTool(
         const profiles = uipool["power.profiles"]();
         const deviceList = uipool["power.devices"]();
 
-        const infoBar = ui
-            .barItem()
-            .style({
-                height: px(sSize(1.5)),
-                display: "flex",
-                alignItems: "center",
-                padding: `0 ${px(sSize2.paddingx)}`,
-                boxSizing: "border-box",
-            })
-            .add(batteryInfo.el);
-        const batteryFx = attachBatteryFx(infoBar);
-        rawRegistry.get("power.battery").getAndSubscribe((v) => batteryFx.setPercentage(v));
-        rawRegistry.get("power.battery.charging").getAndSubscribe((v) => batteryFx.setCharging(v));
-        rawRegistry.get("power.profile").getAndSubscribe((v) => batteryFx.setProfile(v));
-        const profilesBar = ui
-            .barItem()
-            .style({ height: px(sSize(1)) })
-            .add(profiles.el);
-        const devicesBar = ui
-            .barItem()
-            .style({ height: px(sSize(1.5) * 4) })
-            .add(deviceList.el);
-        ui.bar([infoBar, profilesBar, devicesBar]).el.addInto(tipEl);
+        const panel = tPowerPanel({ info: batteryInfo.el, profiles: profiles.el, devices: deviceList.el });
+        panel.el.addInto(tipEl);
 
+        rawRegistry.get("power.battery").getAndSubscribe((v) => panel.fx.setPercentage(v));
+        rawRegistry.get("power.battery.charging").getAndSubscribe((v) => panel.fx.setCharging(v));
+        rawRegistry.get("power.profile").getAndSubscribe((v) => panel.fx.setProfile(v));
         rawRegistry.get("power.profiles").getAndSubscribe((ids) => {
-            profilesBar.style({ display: ids.length > 0 ? "" : "none" });
+            panel.setProfilesVisible(ids.length > 0);
         });
         rawRegistry.get("power.devices").getAndSubscribe((ids) => {
-            devicesBar.style({ display: ids.length > 0 ? "" : "none" });
+            panel.setDevicesVisible(ids.length > 0);
         });
 
         const notify = (title: string, detail: string) => {
@@ -8894,19 +8875,11 @@ tools.registerTool(
             .add(getIconXEl("wifi", { size: 20, width: 24, height: 24 }));
         const toggle = uipool["wifi.toggle"]();
         const apList = uipool["wifi.accessPoints"]();
-        const listBar = ui
-            .barItem()
-            .style({ height: px(sSize(1.5) * 4) })
-            .add(apList.el);
-        const wifiRow = uToggleRow("Wi-Fi", toggle, { icon: "wifi" });
-        const wifiFx = attachRippleFx(wifiRow, { color: "rgba(34, 197, 94, 0.65)", from: "bottom" });
-        rawRegistry.get("wifi.enabled").getAndSubscribe((v) => wifiFx.setActive(v));
-        const wifiBar = ui.bar([wifiRow, listBar]);
-        // 固定宽度，列表隐藏时也保持一致
-        wifiBar.el.style({ width: px(sSize(6)) });
-        wifiBar.el.addInto(tipEl);
+        const panel = tWifiPanel({ control: toggle, list: apList.el });
+        panel.el.addInto(tipEl);
+        rawRegistry.get("wifi.enabled").getAndSubscribe((v) => panel.setActive(v));
         rawRegistry.get("wifi.accessPoints").getAndSubscribe((ids) => {
-            listBar.style({ display: ids.length > 0 ? "" : "none" });
+            panel.setListVisible(ids.length > 0);
         });
 
         const notify = (title: string, detail: string) => {
@@ -8938,53 +8911,14 @@ tools.registerTool(
             .add(getIconXEl("connect", { size: 20, width: 24, height: 24 }).el);
         const toggle = uipool["connect.toggle"]();
         const deviceList = uipool["connect.devices"]();
-        const idValue = txt("").style({
-            ...gTextStyle.caption,
-            color: gTextStyle.color.secondary,
-            fontFamily: gTextStyle.monoFamily,
-            flexGrow: "1",
-            minWidth: "0",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            textAlign: "right",
-            userSelect: "text",
-        });
+        const idValue = txt("");
         rawRegistry.get("connect.id").getAndSubscribe((id) => idValue.sv(id));
-        const idRow = ui
-            .barItem()
-            .style({
-                height: px(sSize(1.5)),
-                display: "flex",
-                alignItems: "center",
-                gap: px(sSize2.paddingx),
-                padding: `0 ${px(sSize2.paddingx)}`,
-                boxSizing: "border-box",
-            })
-            .add([
-                aLineText()
-                    .sv("本机 ID")
-                    .style({
-                        ...gTextStyle.caption,
-                        color: gTextStyle.color.secondary,
-                        flexShrink: "0",
-                    }),
-                idValue,
-            ]);
-        const listBar = ui
-            .barItem()
-            .style({ height: px(sSize(1.5) * 4) })
-            .add(deviceList.el);
 
-        const connectRow = uToggleRow("互联", toggle, { icon: "connect" });
-        const connectFx = attachOrbitFx(connectRow, { color: "rgba(139, 92, 246, 0.75)" });
-        rawRegistry.get("connect.enabled").getAndSubscribe((v) => connectFx.setActive(v));
-        const connectBar = ui.bar([connectRow, idRow, listBar]);
-        // 固定宽度，本机 ID 只在自己的行里省略，不撑开整个弹窗
-        connectBar.el.style({ width: px(sSize(6)) });
-        connectBar.el.addInto(tipEl);
+        const panel = tConnectPanel({ control: toggle, idValue, list: deviceList.el });
+        panel.el.addInto(tipEl);
+        rawRegistry.get("connect.enabled").getAndSubscribe((v) => panel.setActive(v));
         rawRegistry.get("connect.devices").getAndSubscribe((ids) => {
-            listBar.style({ display: ids.length > 0 ? "" : "none" });
+            panel.setListVisible(ids.length > 0);
         });
 
         const notify = (title: string, detail: string) => {
@@ -9017,19 +8951,11 @@ tools.registerTool(
             .style({ alignItems: "center" });
         const toggle = uipool["blue.toggle"]();
         const deviceList = uipool["blue.devices"]();
-        const listBar = ui
-            .barItem()
-            .style({ height: px(sSize(1.5) * 4) })
-            .add(deviceList.el);
-        const blueRow = uToggleRow("蓝牙", toggle, { icon: "blue" });
-        const blueFx = attachRippleFx(blueRow, { color: "rgba(0, 122, 255, 0.6)", from: "left" });
-        rawRegistry.get("blue.power").getAndSubscribe((v) => blueFx.setActive(v));
-        const blueBar = ui.bar([blueRow, listBar]);
-        // 固定宽度，列表隐藏时也保持一致
-        blueBar.el.style({ width: px(sSize(6)) });
-        blueBar.el.addInto(tipEl);
+        const panel = tBluePanel({ control: toggle, list: deviceList.el });
+        panel.el.addInto(tipEl);
+        rawRegistry.get("blue.power").getAndSubscribe((v) => panel.setActive(v));
         rawRegistry.get("blue.devices").getAndSubscribe((ids) => {
-            listBar.style({ display: ids.length > 0 ? "" : "none" });
+            panel.setListVisible(ids.length > 0);
         });
 
         const notify = (title: string, detail: string) => {
