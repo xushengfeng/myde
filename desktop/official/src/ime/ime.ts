@@ -10,7 +10,15 @@ import type {
 import { imeCandidatePopup } from "../ui";
 import type { VkbComposeState } from "../virtual_keyboard/keyboard";
 import { keyEventToIme } from "./keysym";
-import { DEFAULT_IME_BINDINGS, type ImeBindings, matchBindings, normalizeBindings } from "./shortcut";
+import {
+    DEFAULT_IME_BINDINGS,
+    type ImeBindings,
+    type ImeModifier,
+    matchBindings,
+    matchModifierBinding,
+    modifierOfCode,
+    normalizeBindings,
+} from "./shortcut";
 
 /** 窗口元素在视口中的位置，以及 surface 局部坐标 → 视口坐标需要的缩放/几何偏移 */
 export interface ImeWindowFrame {
@@ -52,6 +60,9 @@ export interface ImeStatus {
 }
 
 type KeyKind = "ime" | "client" | "shortcut";
+
+/** 纯修饰键组合松开时执行的动作 */
+type ModifierChord = { action: "toggle" } | { action: "step"; dir: 1 | -1 };
 
 const EMPTY_TEXT_INPUT: TextInputState = { supported: false, enabled: false, cursorRect: null };
 
@@ -104,6 +115,10 @@ export class ImeController {
 
     /** 本次按下交给谁，抬起时按它决定吞掉还是转发 */
     private readonly pressKinds = new Map<string, KeyKind>();
+    /** 纯修饰键组合（如 Ctrl+Shift）：按住的修饰键和是否已被其他按键打断 */
+    private readonly heldModifiers = new Set<ImeModifier>();
+    private modifierChord: ModifierChord | undefined;
+    private modifierChordUsed = false;
     private lastPreedit = "";
     private caretSeq = 0;
     private queue: Promise<void> = Promise.resolve();
@@ -237,6 +252,7 @@ export class ImeController {
         this.clearPreedit();
         this.focusHandle = handle;
         this.pressKinds.clear();
+        this.resetModifierChord();
         this.candidate.hide();
         this.setCompose(undefined);
         this.invalidateTextInput();
@@ -254,6 +270,7 @@ export class ImeController {
         this.clearPreedit();
         this.focusHandle = undefined;
         this.pressKinds.clear();
+        this.resetModifierChord();
         this.candidate.hide();
         this.setCompose(undefined);
         this.invalidateTextInput();
@@ -307,6 +324,7 @@ export class ImeController {
         this.candidate.hide();
         this.setCompose(undefined);
         this.pressKinds.clear();
+        this.resetModifierChord();
         void this.ctx?.reset().catch(() => {});
     }
 
@@ -369,6 +387,8 @@ export class ImeController {
             return;
         }
 
+        this.trackModifierDown(e);
+
         const bindings = this.bindings;
         if (matchBindings(e, bindings.toggle)) {
             this.pressKinds.set(e.code, "shortcut");
@@ -420,6 +440,10 @@ export class ImeController {
         const kind = this.pressKinds.get(e.code);
         this.pressKinds.delete(e.code);
 
+        const chord = this.trackModifierUp(e);
+        if (chord?.action === "toggle") await this.toggle();
+        else if (chord) await this.stepIM(chord.dir);
+
         if (kind === "shortcut") return;
         if (kind === "ime") {
             const key = keyEventToIme(e);
@@ -437,6 +461,59 @@ export class ImeController {
         }
         // kind === "client" 或没有记录：抬起照旧转发
         this.forward(e, handle);
+    }
+
+    private resetModifierChord() {
+        this.heldModifiers.clear();
+        this.modifierChord = undefined;
+        this.modifierChordUsed = false;
+    }
+
+    /** 维护纯修饰键组合：按住的键正好匹配才算数，中途按了别的键就作废 */
+    private trackModifierDown(e: KeyboardEvent) {
+        const mod = modifierOfCode(e.code);
+        if (!mod) {
+            if (this.heldModifiers.size > 0) {
+                this.modifierChord = undefined;
+                this.modifierChordUsed = true;
+            }
+            return;
+        }
+        if (this.heldModifiers.size === 0) this.modifierChordUsed = false;
+        this.heldModifiers.add(mod);
+        if (this.modifierChordUsed) {
+            this.modifierChord = undefined;
+            return;
+        }
+        if (matchModifierBinding(this.heldModifiers, this.bindings.toggle)) {
+            this.modifierChord = { action: "toggle" };
+            return;
+        }
+        const next = matchModifierBinding(this.heldModifiers, this.bindings.nextIM);
+        const prev = next ? undefined : matchModifierBinding(this.heldModifiers, this.bindings.prevIM);
+        if (next || prev) {
+            this.modifierChord = { action: "step", dir: next ? 1 : -1 };
+            return;
+        }
+        // 多按了别的修饰键，这一轮不再触发
+        if (this.modifierChord) this.modifierChordUsed = true;
+        this.modifierChord = undefined;
+    }
+
+    private trackModifierUp(e: KeyboardEvent): ModifierChord | undefined {
+        const mod = modifierOfCode(e.code);
+        if (!mod) return undefined;
+        const chord = this.modifierChord;
+        this.heldModifiers.delete(mod);
+        let fired: ModifierChord | undefined;
+        if (chord && !this.modifierChordUsed) {
+            fired = chord;
+            this.modifierChord = undefined;
+            // 剩下那半个别再触发一次
+            this.modifierChordUsed = true;
+        }
+        if (this.heldModifiers.size === 0) this.resetModifierChord();
+        return fired;
     }
 
     private async feedKey(e: KeyboardEvent, handle: WinHandle) {
