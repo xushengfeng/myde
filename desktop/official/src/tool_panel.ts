@@ -1,5 +1,9 @@
 import type { ElType } from "dkh-ui";
+import { txt } from "dkh-ui";
+import type { Registry } from "./registry";
+import type { RegistrySchema } from "./registry_schema";
 import { attachBatteryFx, attachOrbitFx, attachRippleFx } from "./tool_fx";
+import { createToolPool, type ToolPoolOptions } from "./tool_pool";
 import { aLineText, gTextStyle, px, sSize, sSize2, ui, uToggleRow } from "./ui";
 
 /**
@@ -154,4 +158,49 @@ export function tPowerPanel(op: {
         setProfilesVisible: (visible: boolean) => profilesBar?.style({ display: visible ? "" : "none" }),
         setDevicesVisible: (visible: boolean) => devicesBar?.style({ display: visible ? "" : "none" }),
     };
+}
+
+/** Wi-Fi 弹窗 + registry 订阅：开关状态、接入点列表显隐 */
+export function createWifiPanel(registry: Registry<RegistrySchema>) {
+    const pool = createToolPool(registry);
+    const panel = tWifiPanel({ control: pool.wifiToggle(), list: pool.wifiAccessPoints().el });
+    registry.get("wifi.enabled").getAndSubscribe((v) => panel.setActive(v));
+    registry.get("wifi.accessPoints").getAndSubscribe((ids) => panel.setListVisible(ids.length > 0));
+    return panel;
+}
+
+/** 蓝牙弹窗 + registry 订阅：开关状态、设备列表显隐 */
+export function createBluePanel(registry: Registry<RegistrySchema>) {
+    const pool = createToolPool(registry);
+    const panel = tBluePanel({ control: pool.blueToggle(), list: pool.blueDevices().el });
+    registry.get("blue.power").getAndSubscribe((v) => panel.setActive(v));
+    registry.get("blue.devices").getAndSubscribe((ids) => panel.setListVisible(ids.length > 0));
+    return panel;
+}
+
+/** 互联弹窗 + registry 订阅：开关状态、本机 ID、设备列表显隐与点击连接 */
+export function createConnectPanel(registry: Registry<RegistrySchema>, op?: ToolPoolOptions) {
+    const pool = createToolPool(registry, op);
+    const idValue = txt("");
+    registry.get("connect.id").getAndSubscribe((id) => idValue.sv(id));
+    const panel = tConnectPanel({ control: pool.connectToggle(), idValue, list: pool.connectDevices().el });
+    registry.get("connect.enabled").getAndSubscribe((v) => panel.setActive(v));
+    registry.get("connect.devices").getAndSubscribe((ids) => panel.setListVisible(ids.length > 0));
+    return panel;
+}
+
+/** 电源弹窗 + registry 订阅：电量、充电、性能模式、设备列表 */
+export function createPowerPanel(registry: Registry<RegistrySchema>) {
+    const pool = createToolPool(registry);
+    const panel = tPowerPanel({
+        info: pool.powerBattery().el,
+        profiles: pool.powerProfiles().el,
+        devices: pool.powerDevices().el,
+    });
+    registry.get("power.battery").getAndSubscribe((v) => panel.fx.setPercentage(v));
+    registry.get("power.battery.charging").getAndSubscribe((v) => panel.fx.setCharging(v));
+    registry.get("power.profile").getAndSubscribe((v) => panel.fx.setProfile(v));
+    registry.get("power.profiles").getAndSubscribe((ids) => panel.setProfilesVisible(ids.length > 0));
+    registry.get("power.devices").getAndSubscribe((ids) => panel.setDevicesVisible(ids.length > 0));
+    return panel;
 }

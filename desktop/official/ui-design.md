@@ -254,9 +254,11 @@
   - `iItem`：L3 item
   - `ui.bar` / `ui.barItem`：L1 / L2
   - `AnimationGear`：优先使用的动效引擎
-- `test/ui_example/ui_demo.ts`：token、三层材质、选择标记和工具弹窗的可视化；弹窗结构来自 `src/tool_panel.ts`，这里只放静态数据。
+- `test/ui_example/ui_demo.ts`：token、三层材质、选择标记和工具弹窗的可视化；弹窗结构和 registry 订阅来自 `src/tool_panel.ts`，用假 `Registry` 驱动，按钮模拟系统写回。
 - `src/main.ts`：工具栏、启动器、开始菜单、窗口框架。
-- `src/tool_panel.ts`：工具弹窗的 L1 宽度、L2 列表 / 信息行，以及网络、蓝牙、互联、电源弹窗的组装。
+- `src/tool_panel.ts`：工具弹窗的 L1 宽度、L2 列表 / 信息行，以及网络、蓝牙、互联、电源弹窗的组装和 registry 绑定。
+- `src/tool_pool.ts`：由 registry 驱动的开关、列表行控件（`createToggle` / `createToolPool`）。
+- `src/registry_schema.ts`：registry 的键值类型定义。
 - `src/tool_fx.ts`：工具弹窗第一个 L2 的状态动效（水波、环绕圆点、电池进度条）。
 - `src/virtual_keyboard/`：虚拟键盘布局、表情/Unicode 数据、面板组件和触控板触屏映射。
 - `test/virtual_keyboard/demo.ts`：完整键盘的独立预览（可拖动、缩放、切换页面）。

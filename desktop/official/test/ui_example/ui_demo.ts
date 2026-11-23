@@ -3,16 +3,17 @@ import type { ClipboardItem, ClipboardStation } from "../../src/clipboard";
 import { createClipboardStationTool } from "../../src/clipboard_tool";
 import { getIconXEl } from "../../src/icon";
 import { type PanelPreeditMode, resolveImePreedit } from "../../src/ime/ime";
-import type { BindingSource } from "../../src/registry";
+import { type BindingSource, Registry } from "../../src/registry";
+import type { RegistrySchema } from "../../src/registry_schema";
 import { carousel, dynamicScrollList } from "../../src/scroll-list";
 import {
+    createBluePanel,
+    createConnectPanel,
+    createPowerPanel,
+    createWifiPanel,
     tBatteryBar,
-    tBluePanel,
-    tConnectPanel,
     tListPanel,
     tPanel,
-    tPowerPanel,
-    tWifiPanel,
 } from "../../src/tool_panel";
 import {
     aLineText,
@@ -33,16 +34,13 @@ import {
     sSize,
     sSize2,
     uBatteryInfo,
-    uBatteryRow,
     uBrightnessList,
     uBrightnessSlider,
     uChoiceRow,
     ui,
     uLevelRow,
     uScrollList,
-    uSegmented,
     uStatusToast,
-    uSwitch,
     uSystemMenu,
     vVolume,
 } from "../../src/ui";
@@ -589,8 +587,8 @@ const dottedBgPopup = createPopupWithBackground(
 bgTestSection.add(dottedBgPopup);
 
 // ── 工具弹窗 mock ────────────────────────────────────────────────────────────────────────────────
-// 结构（L1 宽度、列表高度、开关行动效、网络/蓝牙/互联/电源的组装）全部来自 src/tool_panel.ts；
-// 这里只提供静态数据，main.ts 用同一套函数接 registry。mMedia / nNotiList / 剪贴板等组件本身也直接复用。
+// 结构（L1 宽度、列表高度、开关行动效、网络/蓝牙/互联/电源的组装）和 registry 订阅都来自 src/tool_panel.ts；
+// 这里给一个假 Registry 当数据源，按钮模拟系统写回，点开关 / 列表 / 性能档位能看到真实响应。
 const popupDemo = view("y").style({ marginTop: "30px", gap: "12px" }).addInto();
 popupDemo.add(
     aLineText()
@@ -759,43 +757,203 @@ const systemMenu = uSystemMenu({
 });
 popupRow.add(popupColumn("系统菜单", systemMenu.el));
 
-const wifiPanel = tWifiPanel({
-    control: uSwitch(true, () => {}),
-    list: [
-        uChoiceRow({ label: "Home-5G", selected: true }).el,
-        uChoiceRow({ label: "Office" }).el,
-        uChoiceRow({ label: "访客网络" }).el,
-        uChoiceRow({ label: "Coffee Shop" }).el,
-    ],
-});
-wifiPanel.setActive(true);
-popupRow.add(popupColumn("Wi-Fi", wifiPanel.el));
+// ── 假 registry：模拟系统写回 ────────────────────────────────────────────────────────────────────
+const demoRegistry = new Registry<RegistrySchema>();
 
-const bluePanel = tBluePanel({
-    control: uSwitch(true, () => {}),
-    list: [
-        uChoiceRow({ label: "MX Master 3S", selected: true }).el,
-        uChoiceRow({ label: "AirPods Pro" }).el,
-        uChoiceRow({ label: "键盘", selected: true }).el,
-        uChoiceRow({ label: "旧音箱" }).el,
-    ],
-});
-bluePanel.setActive(true);
-popupRow.add(popupColumn("蓝牙", bluePanel.el));
+/**
+ * 写一条列表项并返回它的完整 key；registry 的列表里存的是这种完整 key，
+ * 与 main.ts 用 buildVarId 生成的一致。
+ */
+function mockItem<K extends keyof RegistrySchema & string>(template: K, id: string, value: RegistrySchema[K]) {
+    const key = demoRegistry.buildVarId(template, [id]);
+    demoRegistry.setData(key, value);
+    return key;
+}
 
-const connectPanel = tConnectPanel({
-    control: uSwitch(true, () => {}),
-    idValue: aLineText().sv("7f3a-92c1"),
-    list: [
-        uChoiceRow({ label: "工作室 Mac", detail: "已连接", selected: true }).el,
-        uChoiceRow({ label: "客厅主机", detail: "已记忆" }).el,
-        uChoiceRow({ label: "临时设备", detail: "临时" }).el,
-        uChoiceRow({ label: "备用设备", detail: "已记忆" }).el,
-    ],
-});
-connectPanel.setActive(true);
-popupRow.add(popupColumn("互联", connectPanel.el));
+function mockItemKey<K extends keyof RegistrySchema & string>(template: K, id: string) {
+    return demoRegistry.buildVarId(template, [id]) as K;
+}
 
+const wifiAccessPointKey = (id: string) => mockItemKey("wifi.accessPoints[]", id);
+const blueDeviceKey = (id: string) => mockItemKey("blue.devices[]", id);
+const connectDeviceKey = (id: string) => mockItemKey("connect.devices[]", id);
+const powerDeviceKey = (id: string) => mockItemKey("power.devices[]", id);
+let wifiAccessPointIds = [
+    mockItem("wifi.accessPoints[]", "home", { ssid: "Home-5G", connected: true }),
+    mockItem("wifi.accessPoints[]", "office", { ssid: "Office", connected: false }),
+    mockItem("wifi.accessPoints[]", "guest", { ssid: "访客网络", connected: false }),
+] as RegistrySchema["wifi.accessPoints"];
+demoRegistry.setData("wifi.enabled", true);
+demoRegistry.setData("wifi.accessPoints", wifiAccessPointIds);
+
+let blueDeviceIds = [
+    mockItem("blue.devices[]", "mx", { name: "MX Master 3S", connected: true }),
+    mockItem("blue.devices[]", "airpods", { name: "AirPods Pro", connected: false }),
+    mockItem("blue.devices[]", "keyboard", { name: "键盘", connected: true }),
+] as RegistrySchema["blue.devices"];
+demoRegistry.setData("blue.power", true);
+demoRegistry.setData("blue.devices", blueDeviceIds);
+
+let connectDeviceIds = [
+    mockItem("connect.devices[]", "mac", { id: "mac", name: "工作室 Mac", connected: true, remembered: true }),
+    mockItem("connect.devices[]", "pc", { id: "pc", name: "客厅主机", connected: false, remembered: true }),
+    mockItem("connect.devices[]", "temp", { id: "temp", name: "临时设备", connected: false, remembered: false }),
+] as RegistrySchema["connect.devices"];
+demoRegistry.setData("connect.enabled", true);
+demoRegistry.setData("connect.id", "7f3a-92c1");
+demoRegistry.setData("connect.devices", connectDeviceIds);
+
+let powerDeviceIds = [
+    mockItem("power.devices[]", "mouse", { name: "鼠标", percentage: 64, status: "Discharging" as const }),
+    mockItem("power.devices[]", "keyboard", { name: "键盘", percentage: 92, status: "Discharging" as const }),
+    mockItem("power.devices[]", "pad", { name: "手柄", percentage: 30, status: "Discharging" as const }),
+    mockItem("power.devices[]", "headset", { name: "耳机", percentage: 55, status: "Discharging" as const }),
+] as RegistrySchema["power.devices"];
+let batteryPercentage = 70;
+let batteryCharging = false;
+const powerProfiles = [
+    mockItem("power.profiles[]", "power-saver", { name: "power-saver", label: "静音" }),
+    mockItem("power.profiles[]", "balanced", { name: "balanced", label: "平衡" }),
+    mockItem("power.profiles[]", "performance", { name: "performance", label: "性能" }),
+] as RegistrySchema["power.profiles"];
+demoRegistry.setData("power.profiles", powerProfiles);
+demoRegistry.setData("power.profile", "balanced");
+demoRegistry.setData("power.battery", batteryPercentage);
+demoRegistry.setData("power.battery.charging", batteryCharging);
+demoRegistry.setData("power.devices", powerDeviceIds);
+
+// 开关写回：关掉时清空列表，打开时恢复，和真实系统里的表现一致
+demoRegistry.setSetCallback("wifi.enabled", async (enabled) => {
+    demoRegistry.setData("wifi.enabled", enabled);
+    demoRegistry.setData("wifi.accessPoints", enabled ? wifiAccessPointIds : []);
+});
+demoRegistry.setSetCallback("blue.power", async (enabled) => {
+    demoRegistry.setData("blue.power", enabled);
+    demoRegistry.setData("blue.devices", enabled ? blueDeviceIds : []);
+});
+demoRegistry.setSetCallback("connect.enabled", async (enabled) => {
+    demoRegistry.setData("connect.enabled", enabled);
+    demoRegistry.setData("connect.devices", enabled ? connectDeviceIds : []);
+});
+demoRegistry.setSetCallback("power.profile", async (profile) => {
+    demoRegistry.setData("power.profile", profile);
+});
+demoRegistry.setSetCallback("power.battery", async (percentage) => {
+    demoRegistry.setData("power.battery", percentage);
+});
+demoRegistry.setSetCallback("power.battery.charging", async (charging) => {
+    demoRegistry.setData("power.battery.charging", charging);
+});
+
+/** 带标题和下方控制按钮的弹窗列 */
+function mockColumn(title: string, el: ElType<HTMLElement>, controls: ElType<HTMLElement>[]) {
+    const column = popupColumn(title, el);
+    column.add(view("x", "wrap").style({ gap: "6px" }).add(controls));
+    return column;
+}
+
+// Wi-Fi：开关、接入点连接状态、列表增删
+const wifiPanel = createWifiPanel(demoRegistry);
+let wifiSeq = 0;
+popupRow.add(
+    mockColumn("Wi-Fi", wifiPanel.el, [
+        button("+ 接入点").on("click", () => {
+            const key = wifiAccessPointKey(`ap-${++wifiSeq}`);
+            demoRegistry.setData(key, { ssid: `Mock 网络 ${wifiSeq}`, connected: false });
+            wifiAccessPointIds = [...wifiAccessPointIds, key as RegistrySchema["wifi.accessPoints"][number]];
+            demoRegistry.setData("wifi.accessPoints", wifiAccessPointIds);
+        }),
+        button("切换连接").on("click", async () => {
+            const [first] = wifiAccessPointIds;
+            if (!first) return;
+            const point = await demoRegistry.get(first as "wifi.accessPoints[]").get();
+            const connect = !point.connected;
+            for (const key of wifiAccessPointIds) {
+                const item = key === first ? point : await demoRegistry.get(key as "wifi.accessPoints[]").get();
+                demoRegistry.setData(key as "wifi.accessPoints[]", { ...item, connected: connect && key === first });
+            }
+        }),
+    ]),
+);
+
+// 蓝牙：开关、设备列表增删
+const bluePanel = createBluePanel(demoRegistry);
+let blueSeq = 0;
+popupRow.add(
+    mockColumn("蓝牙", bluePanel.el, [
+        button("+ 设备").on("click", () => {
+            const key = blueDeviceKey(`blue-${++blueSeq}`);
+            demoRegistry.setData(key, { name: `蓝牙设备 ${blueSeq}`, connected: false });
+            blueDeviceIds = [...blueDeviceIds, key as RegistrySchema["blue.devices"][number]];
+            demoRegistry.setData("blue.devices", blueDeviceIds);
+        }),
+        button("切换连接").on("click", async () => {
+            const [first] = blueDeviceIds;
+            if (!first) return;
+            const device = await demoRegistry.get(first as "blue.devices[]").get();
+            demoRegistry.setData(first as "blue.devices[]", { ...device, connected: !device.connected });
+        }),
+    ]),
+);
+
+// 互联：开关、点击设备行连接 / 断开、设备列表增删
+const connectPanel = createConnectPanel(demoRegistry, {
+    toggleConnectDevice: async (device) => {
+        demoRegistry.setData(connectDeviceKey(device.id), {
+            ...device,
+            connected: !device.connected,
+            remembered: true,
+        });
+    },
+});
+let connectSeq = 0;
+popupRow.add(
+    mockColumn("互联", connectPanel.el, [
+        button("+ 设备").on("click", () => {
+            const key = connectDeviceKey(`connect-${++connectSeq}`);
+            demoRegistry.setData(key, {
+                id: `connect-${connectSeq}`,
+                name: `临时设备 ${connectSeq}`,
+                connected: false,
+                remembered: false,
+            });
+            connectDeviceIds = [...connectDeviceIds, key as RegistrySchema["connect.devices"][number]];
+            demoRegistry.setData("connect.devices", connectDeviceIds);
+        }),
+    ]),
+);
+
+// 电源：三档性能点选、电量 / 充电 / 设备列表
+const powerPanel = createPowerPanel(demoRegistry);
+let powerSeq = 0;
+popupRow.add(
+    mockColumn("电源", powerPanel.el, [
+        button("电量 -10").on("click", () => {
+            batteryPercentage = Math.max(0, batteryPercentage - 10);
+            demoRegistry.setData("power.battery", batteryPercentage);
+        }),
+        button("电量 +10").on("click", () => {
+            batteryPercentage = Math.min(100, batteryPercentage + 10);
+            demoRegistry.setData("power.battery", batteryPercentage);
+        }),
+        button("充电切换").on("click", () => {
+            batteryCharging = !batteryCharging;
+            demoRegistry.setData("power.battery.charging", batteryCharging);
+        }),
+        button("+ 设备").on("click", () => {
+            const key = powerDeviceKey(`device-${++powerSeq}`);
+            demoRegistry.setData(key, {
+                name: `设备 ${powerSeq}`,
+                percentage: 50,
+                status: "Discharging",
+            });
+            powerDeviceIds = [...powerDeviceIds, key as RegistrySchema["power.devices"][number]];
+            demoRegistry.setData("power.devices", powerDeviceIds);
+        }),
+    ]),
+);
+
+// 电源各模式 × 电量：观察条纹配色、分界线与文字 / 图标位置
 function batteryBar(percentage: number, charging = false) {
     const bar = tBatteryBar(uBatteryInfo({ percentage, charging }).el);
     bar.fx.setPercentage(percentage);
@@ -803,27 +961,6 @@ function batteryBar(percentage: number, charging = false) {
     return bar;
 }
 
-const powerPanel = tPowerPanel({
-    info: uBatteryInfo({ percentage: 70, charging: false }).el,
-    profiles: uSegmented({
-        items: [
-            { label: "静音", value: "power-saver" },
-            { label: "平衡", value: "balanced" },
-            { label: "性能", value: "performance" },
-        ],
-        value: "balanced",
-    }).el,
-    devices: [
-        uBatteryRow("鼠标", 64).el,
-        uBatteryRow("键盘", 92).el,
-        uBatteryRow("手柄", 30).el,
-        uBatteryRow("耳机", 55).el,
-    ],
-});
-powerPanel.fx.setPercentage(70);
-popupRow.add(popupColumn("电源", powerPanel.el));
-
-// 电源各模式 × 电量：观察条纹配色、分界线与文字 / 图标位置
 function batteryStateColumn(label: string, percentage: number, op?: { charging?: boolean; profile?: string }) {
     const b = batteryBar(percentage, op?.charging ?? false);
     if (op?.profile) b.fx.setProfile(op.profile);

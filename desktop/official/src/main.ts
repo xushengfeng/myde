@@ -11,7 +11,6 @@ import type {
 } from "../../../src/desktop-api";
 import { InputEventCodes } from "../../../src/input_codes/types";
 import type { blueDevice } from "../../../src/sys_api/blue";
-import type { MenuItem } from "../../../src/sys_api/menu";
 import type { wifiDevice } from "../../../src/sys_api/network";
 import type { NotificationData } from "../../../src/sys_api/notification";
 import type { powerDevice } from "../../../src/sys_api/power";
@@ -39,11 +38,11 @@ import {
 } from "./input_evdev";
 import { latinVariants } from "./latin";
 import { type BindingSource, Registry } from "./registry";
+import type { id, RegistrySchema } from "./registry_schema";
 import { ScreenManager } from "./screen";
-import { dynamicScrollList } from "./scroll-list";
 import { type SearchAiHandler, SearchEngine, type SearchProvider, type SearchResult, scoreLatin } from "./search";
 import { createSettingsContent, type ImePanelPreeditMode } from "./settings";
-import { tBluePanel, tConnectPanel, tPowerPanel, tWifiPanel } from "./tool_panel";
+import { createBluePanel, createConnectPanel, createPowerPanel, createWifiPanel } from "./tool_panel";
 import {
     aLineText,
     gGlassStyle,
@@ -60,17 +59,12 @@ import {
     sSize,
     sSize2,
     tTrayMenu,
-    uBatteryInfo,
-    uBatteryRow,
     uBrightnessList,
     uBrightnessSlider,
-    uChoiceRow,
     ui,
     uLevelRow,
     uScrollList,
-    uSegmented,
     uStatusToast,
-    uSwitch,
     uSystemMenu,
     vVolume,
 } from "./ui";
@@ -93,7 +87,7 @@ declare const scheduler: { yield(): Promise<void> };
 const debugGesture =
     (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.MYDE_DEBUG_GESTURE === "1";
 
-// ========== Registry 和 ControlNode ==========
+// ========== Registry ==========
 
 /** 剪贴板数据层（server 创建后 init，见 `initClipboard`）；焦点路径可能早于初始化，所以可空 */
 let clipboard: ClipboardStation | undefined;
@@ -108,132 +102,6 @@ let activeDrag: DragStartInfo | undefined;
 /** 中转站自动弹出可能正好盖住指针，要求指针在弹窗上停留一小段时间才算“要放这里” */
 let stationHoverAt = 0;
 let stationWasHover = false;
-
-// 特殊的id类型，表示可以用registry.get获取
-type id<T extends string = string> = string & { __brand: T };
-
-interface ControlNode {
-    id: string;
-    type: string;
-    el: ElType<HTMLElement>;
-    /** 供整行点击等场景切换，开关类控件提供 */
-    toggle?(): void;
-    unmount?(): void;
-}
-
-// RegistrySchema 定义所有键值对类型
-interface RegistrySchema {
-    "power.battery": number;
-    "power.battery.charging": boolean;
-    "power.lidClosed": boolean;
-    "power.devices": id<"power.devices[]">[];
-    "power.devices[]": {
-        name: string;
-        percentage: number;
-        status:
-            | "Charging"
-            | "Discharging"
-            | "Empty"
-            | "Fully charged"
-            | "Pending charge"
-            | "Pending discharge"
-            | "Unknown";
-    };
-    "power.profiles": id<"power.profiles[]">[];
-    "power.profiles[]": {
-        name: string;
-        label: string;
-    };
-    "power.profile": string;
-    "wifi.enabled": boolean;
-    "wifi.accessPoints": id<"wifi.accessPoints[]">[];
-    "wifi.accessPoints[]": {
-        ssid: string;
-        connected: boolean;
-    };
-    "connect.enabled": boolean;
-    "connect.id": string;
-    "connect.devices": id<"connect.devices[]">[];
-    "connect.devices[]": {
-        id: string;
-        name: string;
-        connected: boolean;
-        remembered: boolean;
-    };
-    "blue.power": boolean;
-    "blue.devices": id<"blue.devices[]">[];
-    "blue.devices[]": {
-        name: string;
-        connected: boolean;
-    };
-    "notification.list": id<"notification.list[]">[];
-    "notification.list[]": {
-        /** summary */
-        title: string;
-        /** body */
-        content: string;
-        id: number;
-        appName: string;
-        appIcon: string;
-        actions: string[];
-        hints: Record<string, unknown>;
-        expireTimeout: number;
-        replacesId: number;
-        closed: boolean;
-        /** 1 超时 / 2 用户关闭 / 3 CloseNotification；活动通知为 0 */
-        reason: number;
-    };
-    "notification.list[].delete": boolean;
-    "media.list": id<"media.list[]">[];
-    "media.list[]": {
-        title: string;
-        cover: string;
-        artist: string[];
-        duration: number;
-    };
-    "media.list[].play": boolean;
-    "media.list[].next": boolean;
-    "media.list[].previous": boolean;
-    "media.list[].currentTime": number;
-    "tray.list": id<"tray.list[]">[];
-    "tray.list[]": {
-        icon: string;
-        title: string;
-        itemIsMenu: boolean;
-    };
-    "tray.list[].active": boolean;
-    "tray.list[].menu": MenuItem[];
-    "volume.output.default.muted": boolean;
-    "volume.input.default.muted": boolean;
-    "volume.output.default.volume": number;
-    "volume.input.default.volume": number;
-    "brightness.displays": id<"brightness.displays[]">[];
-    "brightness.displays[]": {
-        name: string;
-        kind: "backlight" | "ddc";
-        writable: boolean;
-    };
-    "brightness.displays[].brightness": number;
-    "time.hour": number;
-    "time.minute": number;
-    "time.second": number;
-    "time.year": number;
-    "time.month": number;
-    "time.day": number;
-    "time.weekday": number;
-}
-
-type tmpRegistry = Registry<RegistrySchema>;
-
-// 具体的键类型
-type BooleanRegistryKeys = "wifi.enabled" | "blue.power" | "connect.enabled";
-
-function createToggle(registry: tmpRegistry, id: BooleanRegistryKeys): ControlNode {
-    const source = registry.get(id);
-    const sw = uSwitch(false, (value) => source.set?.(value));
-    const unsub = source.getAndSubscribe((v) => sw.setValue(v));
-    return { id, type: "toggle", el: sw.el, toggle: sw.toggle, unmount: unsub };
-}
 
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
 const fs = MSysApi.fs;
@@ -7143,100 +7011,6 @@ MSysApi.brightness
 
 // UI 对象池
 const uipool = {
-    "power.battery": () => {
-        const percentage = rawRegistry.get("power.battery");
-        const charging = rawRegistry.get("power.battery.charging");
-        const info = uBatteryInfo({ percentage: 0, charging: false });
-        let percentageValue = 0;
-        let chargingValue = false;
-        const unsubPercentage = percentage.getAndSubscribe((v) => {
-            percentageValue = v;
-            info.setValue(percentageValue, chargingValue);
-        });
-        const unsubCharging = charging.getAndSubscribe((v) => {
-            chargingValue = v;
-            info.setValue(percentageValue, chargingValue);
-        });
-        return {
-            id: "power.battery",
-            type: "indicator",
-            el: info.el,
-            unmount: () => {
-                unsubPercentage();
-                unsubCharging();
-            },
-        };
-    },
-    "power.devices": () => {
-        const source = rawRegistry.get("power.devices");
-        const us: (() => void)[] = [];
-        const container = dynamicScrollList<string>({
-            itemSize: sSize(1.5),
-            containerSize: sSize(1.5) * 4,
-            direction: "down",
-            keyExtractor: (x) => x,
-            renderItem: (k) => {
-                const row = uBatteryRow("", 0);
-                const s = rawRegistry.get(k as "power.devices[]").getAndSubscribe((v) => {
-                    row.setValue(v.name, v.percentage);
-                });
-                us.push(s);
-                return row.el;
-            },
-        });
-
-        const unsub = source.getAndSubscribe(async (ids) => {
-            container.setList(ids);
-        });
-        return {
-            id: "power.devices",
-            type: "dynamic-list",
-            el: container.el.style({ width: px(sSize(6)) }),
-            unmount: () => {
-                unsub();
-                for (const s of us) s();
-            },
-        };
-    },
-    "power.profiles": () => {
-        const source = rawRegistry.get("power.profiles");
-        const activeSource = rawRegistry.get("power.profile");
-        const segments = uSegmented<string>({
-            items: [],
-            onChange: (name) => rawRegistry.get("power.profile").set?.(name),
-        });
-        const unsubActive = activeSource.getAndSubscribe((v) => segments.setValue(v));
-        const unsubs: (() => void)[] = [];
-        const unsub = source.getAndSubscribe((ids) => {
-            for (const u of unsubs) u();
-            unsubs.length = 0;
-            const data = new Map<string, { name: string; label: string }>();
-            const refresh = () => {
-                const items = ids
-                    .map((id) => data.get(id))
-                    .filter((v): v is { name: string; label: string } => !!v)
-                    .map((v) => ({ label: v.label, value: v.name }));
-                segments.setItems(items);
-            };
-            for (const id of ids) {
-                const us = rawRegistry.get(id as "power.profiles[]").getAndSubscribe((v) => {
-                    data.set(id, { name: v.name, label: v.label });
-                    refresh();
-                });
-                unsubs.push(us);
-            }
-        });
-        return {
-            id: "power.profiles",
-            type: "dynamic-list",
-            el: segments.el,
-            unmount: () => {
-                unsub();
-                unsubActive();
-                for (const u of unsubs) u();
-            },
-        };
-    },
     "brightness.displays": () => {
         const source = rawRegistry.get("brightness.displays");
         const grid = uBrightnessList();
@@ -7286,130 +7060,6 @@ const uipool = {
                 unsub();
                 for (const unsubscribe of unsubscribes.values()) unsubscribe();
                 unsubscribes.clear();
-            },
-        };
-    },
-    "wifi.toggle": () => createToggle(rawRegistry, "wifi.enabled"),
-    "wifi.accessPoints": () => {
-        const source = rawRegistry.get("wifi.accessPoints");
-        const us: (() => void)[] = [];
-        const container = dynamicScrollList<string>({
-            itemSize: sSize(1.5),
-            containerSize: sSize(1.5) * 4,
-            direction: "down",
-            keyExtractor: (x) => x,
-            renderItem: (k) => {
-                const row = uChoiceRow({
-                    label: "",
-                });
-                const s = rawRegistry.get(k as "wifi.accessPoints[]").getAndSubscribe((v) => {
-                    row.setLabel(v.ssid);
-                    row.setSelected(v.connected);
-                });
-                us.push(s);
-                return row.el;
-            },
-        });
-
-        const unsub = source.getAndSubscribe(async (ids) => {
-            container.setList(ids);
-        });
-        return {
-            id: "wifi.devices",
-            type: "dynamic-list",
-            el: container.el.style({ width: px(sSize(6)) }),
-            unmount: () => {
-                unsub();
-                for (const s of us) s();
-            },
-        };
-    },
-    "connect.toggle": () => createToggle(rawRegistry, "connect.enabled"),
-    "connect.devices": () => {
-        const source = rawRegistry.get("connect.devices");
-        const us: (() => void)[] = [];
-        const container = dynamicScrollList<string>({
-            itemSize: sSize(1.5),
-            containerSize: sSize(1.5) * 4,
-            direction: "down",
-            keyExtractor: (x) => x,
-            renderItem: (k) => {
-                let canClick = false;
-                const row = uChoiceRow({
-                    label: "",
-                    detail: "",
-                    onClick: async () => {
-                        if (!canClick) return;
-                        const device = await rawRegistry.get(k as "connect.devices[]").get();
-                        if (!device || !getConnectEnabled()) return;
-                        try {
-                            if (device.connected) {
-                                await connect.disconnect(device.id);
-                            } else {
-                                await connect.connect(device.id);
-                            }
-                        } catch (error) {
-                            console.warn("connect: toggle device failed", device.id, error);
-                        }
-                    },
-                });
-                const s = rawRegistry.get(k as "connect.devices[]").getAndSubscribe((v) => {
-                    canClick = v.connected || getConnectEnabled();
-                    row.setLabel(v.name);
-                    row.setDetail(v.connected ? "已连接" : v.remembered ? "已记忆" : "临时");
-                    row.setSelected(v.connected);
-                    row.el.style({ cursor: canClick ? "pointer" : "default" });
-                });
-                us.push(s);
-                return row.el;
-            },
-        });
-
-        const unsub = source.getAndSubscribe(async (ids) => {
-            container.setList(ids);
-        });
-        return {
-            id: "connect.devices",
-            type: "dynamic-list",
-            el: container.el.style({ width: px(sSize(6)) }),
-            unmount: () => {
-                unsub();
-                for (const s of us) s();
-            },
-        };
-    },
-    "blue.toggle": () => createToggle(rawRegistry, "blue.power"),
-    "blue.devices": () => {
-        const source = rawRegistry.get("blue.devices");
-        const us: (() => void)[] = [];
-        const container = dynamicScrollList<string>({
-            itemSize: sSize(1.5),
-            containerSize: sSize(1.5) * 4,
-            direction: "down",
-            keyExtractor: (x) => x,
-            renderItem: (k) => {
-                const row = uChoiceRow({
-                    label: "",
-                });
-                const s = rawRegistry.get(k as "blue.devices[]").getAndSubscribe((v) => {
-                    row.setLabel(v.name);
-                    row.setSelected(v.connected);
-                });
-                us.push(s);
-                return row.el;
-            },
-        });
-
-        const unsub = source.getAndSubscribe(async (ids) => {
-            container.setList(ids);
-        });
-        return {
-            id: "blue.devices",
-            type: "dynamic-list",
-            el: container.el.style({ width: px(sSize(6)) }),
-            unmount: () => {
-                unsub();
-                for (const s of us) s();
             },
         };
     },
@@ -8785,22 +8435,8 @@ tools.registerTool(
         });
 
         // 弹出框显示详情
-        const batteryInfo = uipool["power.battery"]();
-        const profiles = uipool["power.profiles"]();
-        const deviceList = uipool["power.devices"]();
-
-        const panel = tPowerPanel({ info: batteryInfo.el, profiles: profiles.el, devices: deviceList.el });
+        const panel = createPowerPanel(rawRegistry);
         panel.el.addInto(tipEl);
-
-        rawRegistry.get("power.battery").getAndSubscribe((v) => panel.fx.setPercentage(v));
-        rawRegistry.get("power.battery.charging").getAndSubscribe((v) => panel.fx.setCharging(v));
-        rawRegistry.get("power.profile").getAndSubscribe((v) => panel.fx.setProfile(v));
-        rawRegistry.get("power.profiles").getAndSubscribe((ids) => {
-            panel.setProfilesVisible(ids.length > 0);
-        });
-        rawRegistry.get("power.devices").getAndSubscribe((ids) => {
-            panel.setDevicesVisible(ids.length > 0);
-        });
 
         const notify = (title: string, detail: string) => {
             toastEl.clear().add(uStatusToast({ icon: "battery", title, detail, width: TOAST_WIDTH }));
@@ -8873,14 +8509,8 @@ tools.registerTool(
         const el = view("x")
             .style({ alignItems: "center" })
             .add(getIconXEl("wifi", { size: 20, width: 24, height: 24 }));
-        const toggle = uipool["wifi.toggle"]();
-        const apList = uipool["wifi.accessPoints"]();
-        const panel = tWifiPanel({ control: toggle, list: apList.el });
+        const panel = createWifiPanel(rawRegistry);
         panel.el.addInto(tipEl);
-        rawRegistry.get("wifi.enabled").getAndSubscribe((v) => panel.setActive(v));
-        rawRegistry.get("wifi.accessPoints").getAndSubscribe((ids) => {
-            panel.setListVisible(ids.length > 0);
-        });
 
         const notify = (title: string, detail: string) => {
             toastEl.clear().add(uStatusToast({ icon: "wifi", title, detail, width: TOAST_WIDTH }));
@@ -8909,17 +8539,16 @@ tools.registerTool(
         const el = view("x")
             .style({ alignItems: "center" })
             .add(getIconXEl("connect", { size: 20, width: 24, height: 24 }).el);
-        const toggle = uipool["connect.toggle"]();
-        const deviceList = uipool["connect.devices"]();
-        const idValue = txt("");
-        rawRegistry.get("connect.id").getAndSubscribe((id) => idValue.sv(id));
-
-        const panel = tConnectPanel({ control: toggle, idValue, list: deviceList.el });
-        panel.el.addInto(tipEl);
-        rawRegistry.get("connect.enabled").getAndSubscribe((v) => panel.setActive(v));
-        rawRegistry.get("connect.devices").getAndSubscribe((ids) => {
-            panel.setListVisible(ids.length > 0);
+        const panel = createConnectPanel(rawRegistry, {
+            toggleConnectDevice: async (device) => {
+                if (device.connected) {
+                    await connect.disconnect(device.id);
+                } else {
+                    await connect.connect(device.id);
+                }
+            },
         });
+        panel.el.addInto(tipEl);
 
         const notify = (title: string, detail: string) => {
             toastEl.clear().add(uStatusToast({ icon: "connect", title, detail, width: TOAST_WIDTH }));
@@ -8949,14 +8578,8 @@ tools.registerTool(
         const el = view("x")
             .add(getIconXEl("blue", { size: 20, width: 24, height: 24 }).el)
             .style({ alignItems: "center" });
-        const toggle = uipool["blue.toggle"]();
-        const deviceList = uipool["blue.devices"]();
-        const panel = tBluePanel({ control: toggle, list: deviceList.el });
+        const panel = createBluePanel(rawRegistry);
         panel.el.addInto(tipEl);
-        rawRegistry.get("blue.power").getAndSubscribe((v) => panel.setActive(v));
-        rawRegistry.get("blue.devices").getAndSubscribe((ids) => {
-            panel.setListVisible(ids.length > 0);
-        });
 
         const notify = (title: string, detail: string) => {
             toastEl.clear().add(uStatusToast({ icon: "blue", title, detail, width: TOAST_WIDTH }));
