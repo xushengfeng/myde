@@ -185,9 +185,6 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
               lastScale: number;
               startCenterX: number;
               startCenterY: number;
-              /** 判定前暂存的滚动量（已按自然滚动取反） */
-              pendingScrollX: number;
-              pendingScrollY: number;
           }
         | undefined;
     /** 按住状态；active=false 表示计时中 */
@@ -324,7 +321,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 }
             }
 
-            // 双指分类器优先：判定前暂存滚动，避免先发滚动导致客户端忽略随后的 pinch
+            // 双指分类器优先：判定期间先不发滚动，避免先发滚动导致客户端忽略随后的 pinch
             const twoFingerHandled = this.updatePinch(contacts, count, dx, dy, actions);
 
             // 判定期间不移动光标：轻触的按下点要落在最初接触的位置，不能带上抖动位移。
@@ -425,10 +422,11 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     }
 
     /**
-     * 双指分类器：先判断是 pinch 还是滚动，判定前暂存滚动量。
+     * 双指分类器：先判断是 pinch 还是滚动。
      *
      * 不先发滚动再切 pinch：客户端一旦收到 axis 就可能进入滚动状态，后续 pinch 会被忽略。
      * 质心移动达到阈值且两指距离基本不变时判为滚动；距离变化达到 pinch 阈值时判为 pinch。
+     * 分类期间的位移直接丢弃，判定的那一帧只发本帧位移，避免手势开始时跳一下。
      * 返回 true 表示这两指已经由本函数处理，调用方不能再发 scroll。
      */
     private updatePinch(
@@ -453,8 +451,6 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 lastScale: 1,
                 startCenterX: pair.centerX,
                 startCenterY: pair.centerY,
-                pendingScrollX: 0,
-                pendingScrollY: 0,
             };
         }
         const pinch = this.pinch;
@@ -503,19 +499,16 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 return true;
             }
 
-            // 还没到 pinch 阈值：先把滚动攒着，等分类结果
-            pinch.pendingScrollX += dx === 0 ? 0 : -dx * SCROLL_GAIN;
-            pinch.pendingScrollY += dy === 0 ? 0 : -dy * SCROLL_GAIN;
+            // 分类没结果时本帧位移直接丢掉，不攒着补发
             // 质心移动大于两指距离变化才像滚动；两指相互张合更像 pinch，继续等阈值
             if (centerMove >= TWO_FINGER_SCROLL_START_MM && centerMove > distanceChange) {
                 pinch.scrollMode = true;
-                const pendingX = pinch.pendingScrollX;
-                const pendingY = pinch.pendingScrollY;
-                pinch.pendingScrollX = 0;
-                pinch.pendingScrollY = 0;
-                if (pendingX !== 0 || pendingY !== 0) {
+                // 判为滚动的那一帧只发本帧位移，不把分类期间攒下的补上，否则滚动会跳一下
+                const scrollX = dx === 0 ? 0 : -dx * SCROLL_GAIN;
+                const scrollY = dy === 0 ? 0 : -dy * SCROLL_GAIN;
+                if (scrollX !== 0 || scrollY !== 0) {
                     this.scrolling = true;
-                    actions.push({ type: "scroll", deltaX: pendingX, deltaY: pendingY });
+                    actions.push({ type: "scroll", deltaX: scrollX, deltaY: scrollY });
                 }
                 return true;
             }
@@ -541,7 +534,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     /**
      * 进入 pinch：以触发时的两指位置作为起点（scale=1、rotation=0），
      * 越过阈值之前的张合量不再补发，避免客户端一开始就跳一下。
-     * 分类期间攒下的滚动照常放出去。
+     * 分类期间的滚动位移同样丢弃，只把本帧位移照常放出，滚动不会跟着跳。
      */
     private beginPinch(distance: number, angle: number, dx: number, dy: number, actions: TouchpadAction[]): void {
         const pinch = this.pinch;
@@ -558,11 +551,9 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             this.phase = "moving";
         }
         this.endHold(true);
-        // pinch 不取消滚动：把分类期间攒下的滚动和本帧位移一起放出去
-        const scrollX = pinch.pendingScrollX + (dx === 0 ? 0 : -dx * SCROLL_GAIN);
-        const scrollY = pinch.pendingScrollY + (dy === 0 ? 0 : -dy * SCROLL_GAIN);
-        pinch.pendingScrollX = 0;
-        pinch.pendingScrollY = 0;
+        // pinch 不取消滚动：本帧位移照常发出去
+        const scrollX = dx === 0 ? 0 : -dx * SCROLL_GAIN;
+        const scrollY = dy === 0 ? 0 : -dy * SCROLL_GAIN;
         if (scrollX !== 0 || scrollY !== 0) {
             this.scrolling = true;
             actions.push({ type: "scroll", deltaX: scrollX, deltaY: scrollY });

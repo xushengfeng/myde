@@ -157,6 +157,54 @@ describe("TouchpadInput gestures", () => {
         expect(events.at(-1)?.[0]).toBe("scrollEnd");
     });
 
+    it("does not replay motion accumulated while deciding two-finger scroll", () => {
+        const { events, sync, contact, move, lift } = setup();
+        contact(0, 1, 1000, 2000);
+        contact(1, 2, 4000, 2000);
+        sync();
+        // 第一帧一起上移 1mm，还没到 1.5mm 的分类阈值：先不滚动
+        move(0, 1000, 1900);
+        move(1, 4000, 1900);
+        sync();
+        expect(events.some((e) => e[0] === "scroll")).toBe(false);
+        // 第二帧累计越过阈值：只发这一帧的位移，不能把上一帧攒下的补上，否则滚动会跳一下
+        move(0, 1000, 1800);
+        move(1, 4000, 1800);
+        sync();
+        const scrolls = events.filter((e) => e[0] === "scroll");
+        expect(scrolls).toHaveLength(1);
+        expect(scrolls[0][1]).toBe(0);
+        expect(scrolls[0][2]).toBeCloseTo(25);
+        lift(0);
+        lift(1);
+        sync();
+        expect(events.at(-1)?.[0]).toBe("scrollEnd");
+    });
+
+    it("does not replay motion accumulated before a pinch starts", () => {
+        const { events, sync, contact, move, lift } = setup();
+        contact(0, 1, 1000, 2000);
+        contact(1, 2, 3000, 2000);
+        sync();
+        // 两指慢慢分开、同时整体上移 1mm：还没到 pinch 阈值，既不滚动也不捏合
+        move(0, 900, 1950);
+        move(1, 3100, 1950);
+        sync();
+        expect(events.some((e) => e[0] === "pinchStart")).toBe(false);
+        expect(events.some((e) => e[0] === "scroll")).toBe(false);
+        // 越过阈值判为捏合：只发本帧的滚动位移，不补之前攒下的
+        move(0, 800, 1900);
+        move(1, 3200, 1900);
+        sync();
+        expect(events.some((e) => e[0] === "pinchStart")).toBe(true);
+        const scrolls = events.filter((e) => e[0] === "scroll");
+        expect(scrolls).toHaveLength(1);
+        expect(scrolls[0][2]).toBeCloseTo(12.5);
+        lift(0);
+        lift(1);
+        sync();
+    });
+
     it("continues single-finger movement after a two-finger gesture loses one finger", () => {
         const { events, sync, contact, move, lift } = setup();
         contact(0, 1, 1000, 2000);

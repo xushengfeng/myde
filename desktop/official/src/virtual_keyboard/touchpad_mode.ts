@@ -73,7 +73,6 @@ export class TouchpadMode {
     private startCentroid = { x: 0, y: 0 };
 
     private twoMode: "undecided" | "scroll" | "pinch" = "undecided";
-    private pendingScroll = { x: 0, y: 0 };
     private twoStartCentroid = { x: 0, y: 0 };
     private pinchStartDistance = 0;
     private pinchLastAngle = 0;
@@ -134,7 +133,6 @@ export class TouchpadMode {
         this.maxContacts = Math.max(this.maxContacts, this.contacts.size);
         this.recomputeCentroid();
         this.lastCentroid = { ...this.startCentroid };
-        this.pendingScroll = { x: 0, y: 0 };
 
         if (this.contacts.size === 2) {
             this.cancelHold();
@@ -247,7 +245,6 @@ export class TouchpadMode {
         this.syncPos();
         this.startCentroid = { x: e.x, y: e.y };
         this.lastCentroid = { x: e.x, y: e.y };
-        this.pendingScroll = { x: 0, y: 0 };
         this.pinchActive = false;
         this.twoMode = "undecided";
         this.gestureTarget = undefined;
@@ -292,22 +289,19 @@ export class TouchpadMode {
                 this.startCentroid.x - this.twoStartCentroid.x,
                 this.startCentroid.y - this.twoStartCentroid.y,
             );
-            // 两指距离明显变化且大于质心位移时判为捏合；否则先攒滚动量
+            // 两指距离明显变化且大于质心位移时判为捏合；否则等质心移动达到滚动阈值
             if (
                 this.pinchStartDistance > 1 &&
                 distanceChange >= PINCH_MIN_CHANGE &&
                 distanceChange > centerMove * 0.8
             ) {
                 this.beginPinch(pair.distance, pair.angle);
-            } else {
+            } else if (centerMove >= TWO_FINGER_DECIDE_MOVE) {
+                this.twoMode = "scroll";
+                // 分类期间的位移直接丢弃：判为滚动的那一帧只发本帧位移，不补发攒下的量，
+                // 否则开始滚动时会跳一下（与物理触摸板和轻触判定一致）
                 const sign = config.naturalScroll ? 1 : -1;
-                this.pendingScroll.x += -cdx * sign;
-                this.pendingScroll.y += -cdy * sign;
-                if (centerMove >= TWO_FINGER_DECIDE_MOVE) {
-                    this.twoMode = "scroll";
-                    this.emitScroll(this.pendingScroll.x * config.scrollGain, this.pendingScroll.y * config.scrollGain);
-                    this.pendingScroll = { x: 0, y: 0 };
-                }
+                this.emitScroll(-cdx * sign * config.scrollGain, -cdy * sign * config.scrollGain);
             }
             return;
         }
@@ -415,7 +409,6 @@ export class TouchpadMode {
         this.pinchActive = true;
         this.pinchStartDistance = distance;
         this.pinchLastAngle = angle;
-        this.pendingScroll = { x: 0, y: 0 };
         this.gestureKind = "pinch";
         this.gestureTarget = this.deps.gesture({ type: "pinch", phase: "begin", fingers: 2 }, this.pos.x, this.pos.y);
     }
