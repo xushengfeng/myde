@@ -43,6 +43,7 @@ import { ScreenManager } from "./screen";
 import { dynamicScrollList } from "./scroll-list";
 import { type SearchAiHandler, SearchEngine, type SearchProvider, type SearchResult, scoreLatin } from "./search";
 import { createSettingsContent, type ImePanelPreeditMode } from "./settings";
+import { attachBatteryFx, attachOrbitFx, attachRippleFx } from "./tool_fx";
 import {
     aLineText,
     gGlassStyle,
@@ -8252,6 +8253,10 @@ tools.registerTool(
                 boxSizing: "border-box",
             })
             .add(batteryInfo.el);
+        const batteryFx = attachBatteryFx(infoBar);
+        rawRegistry.get("power.battery").getAndSubscribe((v) => batteryFx.setPercentage(v));
+        rawRegistry.get("power.battery.charging").getAndSubscribe((v) => batteryFx.setCharging(v));
+        rawRegistry.get("power.profile").getAndSubscribe((v) => batteryFx.setProfile(v));
         const profilesBar = ui
             .barItem()
             .style({ height: px(sSize(1)) })
@@ -8346,7 +8351,10 @@ tools.registerTool(
             .barItem()
             .style({ height: px(sSize(1.5) * 4) })
             .add(apList.el);
-        const wifiBar = ui.bar([uToggleRow("Wi-Fi", toggle, { icon: "wifi" }), listBar]);
+        const wifiRow = uToggleRow("Wi-Fi", toggle, { icon: "wifi" });
+        const wifiFx = attachRippleFx(wifiRow, { color: "rgba(34, 197, 94, 0.65)", from: "bottom" });
+        rawRegistry.get("wifi.enabled").getAndSubscribe((v) => wifiFx.setActive(v));
+        const wifiBar = ui.bar([wifiRow, listBar]);
         // 固定宽度，列表隐藏时也保持一致
         wifiBar.el.style({ width: px(sSize(6)) });
         wifiBar.el.addInto(tipEl);
@@ -8421,7 +8429,10 @@ tools.registerTool(
             .style({ height: px(sSize(1.5) * 4) })
             .add(deviceList.el);
 
-        const connectBar = ui.bar([uToggleRow("互联", toggle, { icon: "connect" }), idRow, listBar]);
+        const connectRow = uToggleRow("互联", toggle, { icon: "connect" });
+        const connectFx = attachOrbitFx(connectRow, { color: "rgba(139, 92, 246, 0.75)" });
+        rawRegistry.get("connect.enabled").getAndSubscribe((v) => connectFx.setActive(v));
+        const connectBar = ui.bar([connectRow, idRow, listBar]);
         // 固定宽度，本机 ID 只在自己的行里省略，不撑开整个弹窗
         connectBar.el.style({ width: px(sSize(6)) });
         connectBar.el.addInto(tipEl);
@@ -8463,7 +8474,10 @@ tools.registerTool(
             .barItem()
             .style({ height: px(sSize(1.5) * 4) })
             .add(deviceList.el);
-        const blueBar = ui.bar([uToggleRow("蓝牙", toggle, { icon: "blue" }), listBar]);
+        const blueRow = uToggleRow("蓝牙", toggle, { icon: "blue" });
+        const blueFx = attachRippleFx(blueRow, { color: "rgba(0, 122, 255, 0.6)", from: "left" });
+        rawRegistry.get("blue.power").getAndSubscribe((v) => blueFx.setActive(v));
+        const blueBar = ui.bar([blueRow, listBar]);
         // 固定宽度，列表隐藏时也保持一致
         blueBar.el.style({ width: px(sSize(6)) });
         blueBar.el.addInto(tipEl);

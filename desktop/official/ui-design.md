@@ -155,6 +155,7 @@
 - 系统菜单用 `uSystemMenu`：锁屏，以及关机 / 重启 / 挂起。
 - 互联弹窗固定宽度；本机 ID 在行内单行省略，不参与撑宽弹窗。
 - Wi-Fi / 蓝牙 / 互联的开关行带对应图标，整行点击即可切换，不必只点开关。
+- 第一个 L2 承载状态氛围动效，画在内容下层：Wi-Fi / 蓝牙是水波，互联是环绕圆点，电源整行作为电池进度条；状态关闭或弹窗收起时不显示，动画也不运行。
 - 参考实现：音量、通知、剪贴板、电源、输入法、系统菜单。
 
 ### 10.2 输入法
@@ -241,8 +242,9 @@
   - `iItem`：L3 item
   - `ui.bar` / `ui.barItem`：L1 / L2
   - `AnimationGear`：优先使用的动效引擎
-- `test/ui_example/ui_demo.ts`：token、三层材质、选择标记和工具弹窗 mock 的可视化。
+- `test/ui_example/ui_demo.ts`：token、三层材质、选择标记和工具弹窗 mock（含第一个 L2 的状态动效）的可视化。
 - `src/main.ts`：工具栏、启动器、开始菜单、窗口框架。
+- `src/tool_fx.ts`：工具弹窗第一个 L2 的状态动效（水波、环绕圆点、电池进度条）。
 
 可视化页面：`npx vite desktop/official/test/ui_example`。
 

@@ -5,6 +5,7 @@ import { getIconXEl } from "../../src/icon";
 import { type PanelPreeditMode, resolveImePreedit } from "../../src/ime/ime";
 import type { BindingSource } from "../../src/registry";
 import { carousel, dynamicScrollList } from "../../src/scroll-list";
+import { attachBatteryFx, attachOrbitFx, attachRippleFx } from "../../src/tool_fx";
 import {
     aLineText,
     gRadius,
@@ -582,7 +583,7 @@ bgTestSection.add(dottedBgPopup);
 
 // ── 工具弹窗 mock ────────────────────────────────────────────────────────────────────────────────
 // 静态 mock：复用 uToggleRow / uChoiceRow / uSwitch / mMedia。
-// 真实弹窗依赖 registry 数据，不能直接 import；改列表行配置时要和 main.ts 同步。
+// 第一个 L2 的状态动效直接复用 src/tool_fx.ts；真实弹窗依赖 registry 数据，不能直接 import；改列表行配置时要和 main.ts 同步。
 const popupDemo = view("y").style({ marginTop: "30px", gap: "12px" }).addInto();
 popupDemo.add(
     aLineText()
@@ -772,8 +773,11 @@ function toggleRow(label: string, on: boolean, icon?: string) {
     );
 }
 
+const wifiToggle = toggleRow("Wi-Fi", true, "wifi");
+const wifiFx = attachRippleFx(wifiToggle, { color: "rgba(34, 197, 94, 0.65)", from: "bottom" });
+wifiFx.setActive(true);
 const wifiPopup = popupPanel([
-    toggleRow("Wi-Fi", true, "wifi"),
+    wifiToggle,
     listPanel(
         [
             uChoiceRow({ label: "Home-5G", selected: true }).el,
@@ -786,8 +790,11 @@ const wifiPopup = popupPanel([
 ]);
 popupRow.add(popupColumn("Wi-Fi", wifiPopup));
 
+const blueToggle = toggleRow("蓝牙", true, "blue");
+const blueFx = attachRippleFx(blueToggle, { color: "rgba(0, 122, 255, 0.6)", from: "left" });
+blueFx.setActive(true);
 const bluePopup = popupPanel([
-    toggleRow("蓝牙", true, "blue"),
+    blueToggle,
     listPanel(
         [
             uChoiceRow({ label: "MX Master 3S", selected: true }).el,
@@ -800,8 +807,11 @@ const bluePopup = popupPanel([
 ]);
 popupRow.add(popupColumn("蓝牙", bluePopup));
 
+const connectToggle = toggleRow("互联", true, "connect");
+const connectFx = attachOrbitFx(connectToggle, { color: "rgba(139, 92, 246, 0.75)" });
+connectFx.setActive(true);
 const connectPopup = popupPanel([
-    toggleRow("互联", true, "connect"),
+    connectToggle,
     ui
         .barItem()
         .style({
@@ -843,9 +853,9 @@ const connectPopup = popupPanel([
 ]);
 popupRow.add(popupColumn("互联", connectPopup));
 
-const batteryInfo = uBatteryInfo({ percentage: 86, charging: false });
-const batteryPopup = popupPanel([
-    ui
+function batteryBar(percentage: number, charging = false) {
+    const info = uBatteryInfo({ percentage, charging });
+    const bar = ui
         .barItem()
         .style({
             height: px(sSize(1.5)),
@@ -854,14 +864,23 @@ const batteryPopup = popupPanel([
             padding: `0 ${px(sSize2.paddingx)}`,
             boxSizing: "border-box",
         })
-        .add(batteryInfo.el),
+        .add(info.el);
+    const fx = attachBatteryFx(bar);
+    fx.setPercentage(percentage);
+    if (charging) fx.setCharging(true);
+    return { bar, fx };
+}
+
+const battery = batteryBar(86);
+const batteryPopup = popupPanel([
+    battery.bar,
     ui
         .barItem()
         .style({ height: px(sSize(1)) })
         .add(
             uSegmented({
                 items: [
-                    { label: "节能", value: "power-saver" },
+                    { label: "静音", value: "power-saver" },
                     { label: "平衡", value: "balanced" },
                     { label: "性能", value: "performance" },
                 ],
@@ -879,6 +898,21 @@ const batteryPopup = popupPanel([
     ),
 ]);
 popupRow.add(popupColumn("电源", batteryPopup));
+
+// 电源各状态：整行电量条与条纹配色对照
+const batteryStates = view("x", "wrap").style({ gap: "24px", alignItems: "flex-start" }).addInto(popupDemo);
+function batteryStateColumn(label: string, percentage: number, op?: { charging?: boolean; profile?: string }) {
+    const b = batteryBar(percentage, op?.charging ?? false);
+    if (op?.profile) b.fx.setProfile(op.profile);
+    return popupColumn(label, popupPanel([b.bar]));
+}
+batteryStates.add([
+    batteryStateColumn("静音 40%", 40, { profile: "power-saver" }),
+    batteryStateColumn("平衡 86%", 86),
+    batteryStateColumn("平衡 12%", 12),
+    batteryStateColumn("性能 70%", 70, { profile: "performance" }),
+    batteryStateColumn("充电 62%", 62, { charging: true }),
+]);
 
 function fakeBinding<T>(initial: T): BindingSource<T> {
     let value = initial;
