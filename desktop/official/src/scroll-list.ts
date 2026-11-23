@@ -1,5 +1,5 @@
 import { view } from "dkh-ui";
-import { AnimationGear, timingFunction } from "myde-ui";
+import { AnimationGear, type Time, timingFunction } from "myde-ui";
 
 type Direction = "up" | "down" | "left" | "right";
 
@@ -26,6 +26,8 @@ export function dynamicScrollList<T>(options: {
     bufferSize?: number;
     animationDuration?: number;
     dragByMouse?: boolean;
+    /** 注入时间源，便于测试时手动推进动画帧 */
+    time?: Time;
 }) {
     const {
         itemSize,
@@ -38,6 +40,7 @@ export function dynamicScrollList<T>(options: {
         bufferSize = 5,
         animationDuration = 300,
         dragByMouse: dragbymouse = false,
+        time,
     } = options;
 
     const vertical = isVertical(direction);
@@ -54,7 +57,10 @@ export function dynamicScrollList<T>(options: {
         position: "relative",
     });
 
-    const scrollGear = new AnimationGear({ scroll: 0 }, { transition: { duration: 0, map: timingFunction.linear } });
+    const scrollGear = new AnimationGear(
+        { scroll: 0 },
+        { transition: { duration: 0, map: timingFunction.linear }, time },
+    );
 
     function getVisibleRange() {
         const start = Math.floor(currentScroll / itemSize);
@@ -69,7 +75,7 @@ export function dynamicScrollList<T>(options: {
         const el = renderItem(data, index, structuredClone(items));
         const gear = new AnimationGear<{ show: number }>(
             { show: 0 },
-            { transition: { duration: animationDuration, map: timingFunction.easeOut } },
+            { transition: { duration: animationDuration, map: timingFunction.easeOut }, time },
         );
 
         el.style({
@@ -90,7 +96,7 @@ export function dynamicScrollList<T>(options: {
 
         const moveGear = new AnimationGear<{ pos: number }>(
             { pos: index * itemSize - currentScroll },
-            { transition: { duration: animationDuration, map: timingFunction.easeInOut } },
+            { transition: { duration: animationDuration, map: timingFunction.easeInOut }, time },
         );
 
         moveGear.setUpdateCallback((state) => {
@@ -119,9 +125,12 @@ export function dynamicScrollList<T>(options: {
         const currentPosition = parseFloat(item.el.el.style[vertical ? "top" : "left"]) || 0;
         const distance = targetPosition - currentPosition;
 
-        if (Math.abs(distance) < 1) return;
-
         item.index = newIndex;
+
+        if (Math.abs(distance) < 1) {
+            item.moveGear.moveTo({ pos: targetPosition }, 0);
+            return;
+        }
 
         const gear = item.gear;
         gear.moveTo({ show: 1 }, 0);
@@ -177,7 +186,8 @@ export function dynamicScrollList<T>(options: {
                     el,
                     () => {
                         el.el.remove();
-                        renderedEls.delete(k);
+                        // 退出动画期间同一 key 可能已被重新加入，此时不能删掉新元素
+                        if (renderedEls.get(k) === el) renderedEls.delete(k);
                     },
                     noAnimation,
                 );
@@ -192,8 +202,11 @@ export function dynamicScrollList<T>(options: {
                     if (rel) {
                         animateMove(rel, newV);
                     } else {
+                        // 之前不可见而未渲染，现在移入可见范围
                         const el = createAnimatedElement(oldItems[v], v);
-                        if (el) animateMove(el, newV);
+                        renderedEls.set(k, el);
+                        container.add(el.el);
+                        animateMove(el, newV);
                     }
                 }
             }
