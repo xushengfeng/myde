@@ -33,6 +33,7 @@ const l = [
     "notification",
     "speaker",
     "mic",
+    "keyboard",
     "sun",
     "settings",
     "number.0",

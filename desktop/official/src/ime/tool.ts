@@ -21,7 +21,9 @@ export function createImeTool(op: {
         whiteSpace: "nowrap",
         userSelect: "none",
     });
-    const el = view("x").style({ alignItems: "center", justifyContent: "center", minWidth: "24px" }).add(label);
+    const el = view("x")
+        .style({ alignItems: "center", justifyContent: "center", minWidth: "24px", flexShrink: "0" })
+        .add(label);
 
     const panel = imeTrayPanel({
         select: (uniqueName) => {

@@ -2375,6 +2375,67 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             ],
         };
     },
+    keyboard: (env) => {
+        const { size, center } = buildZb(256);
+        const w = 24;
+        const left = w / 2;
+        const right = size - w / 2;
+        const top = 58;
+        const bottom = size - top;
+        const rr = 36;
+        const dotSize = 18;
+        const dots: Icon["layout"][number]["shapes"] = [];
+        const gapX = 34;
+        for (let row = 0; row < 2; row++) {
+            const y = center.y - gapX + row * gapX;
+            for (let i = 0; i < 5; i++) {
+                dots.push({
+                    type: "dot",
+                    data: { p: { x: center.x - gapX * 2 + i * gapX, y }, sizeWidth: dotSize, color: env.color },
+                });
+            }
+        }
+        const lastY = center.y + gapX;
+
+        dots.push({
+            type: "zline",
+            data: {
+                ps: [
+                    { p: { x: center.x - 34, y: lastY }, ro: w / 2, ri: 0 },
+                    { p: { x: center.x + 34, y: lastY }, ro: w / 2, ri: 0 },
+                ],
+                width: w,
+                extendNode: "both",
+                color: env.color,
+            },
+        });
+
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: left, y: top }, ro: rr, ri: rr - w },
+                                    { p: { x: right, y: top }, ro: rr, ri: rr - w },
+                                    { p: { x: right, y: bottom }, ro: rr, ri: rr - w },
+                                    { p: { x: left, y: bottom }, ro: rr, ri: rr - w },
+                                ],
+                                close: true,
+                                width: w,
+                                color: env.color,
+                            },
+                        },
+                        ...dots,
+                    ],
+                },
+            ],
+        };
+    },
     "font.space": () => {
         const { center, size } = buildZb(256);
         return {

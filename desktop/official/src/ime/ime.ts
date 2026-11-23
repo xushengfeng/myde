@@ -8,6 +8,7 @@ import type {
     inputMethodContext,
 } from "../../../../src/sys_api/input_method";
 import { imeCandidatePopup } from "../ui";
+import type { VkbComposeState } from "../virtual_keyboard/keyboard";
 import { keyEventToIme } from "./keysym";
 import { DEFAULT_IME_BINDINGS, type ImeBindings, matchBindings, normalizeBindings } from "./shortcut";
 
@@ -81,6 +82,11 @@ export class ImeController {
     private readonly deps: ImeDeps;
     private readonly candidate: ReturnType<typeof imeCandidatePopup>;
     private readonly listeners = new Set<(status: ImeStatus) => void>();
+    private readonly composeListeners = new Set<(state: VkbComposeState | undefined) => void>();
+    /** 最近一次合成状态；候选栏和浮动候选窗共用 */
+    private lastCompose: ImComposeState | undefined;
+    /** 虚拟键盘显示候选栏时，浮动候选窗不再弹出 */
+    private candidatesInKeyboard = false;
 
     private readonly im: inputMethod | undefined;
     private ctx: inputMethodContext | undefined;
@@ -109,8 +115,8 @@ export class ImeController {
         this.im = deps.im;
         this.candidate = imeCandidatePopup({
             select: (i) => void this.selectCandidate(i),
-            nextPage: () => void this.page(true),
-            prevPage: () => void this.page(false),
+            nextPage: () => void this.pageCandidates(true),
+            prevPage: () => void this.pageCandidates(false),
         });
         deps.overlay.appendChild(this.candidate.el.el);
         this.readBindings();
@@ -167,6 +173,50 @@ export class ImeController {
         return () => this.listeners.delete(cb);
     }
 
+    /** 合成状态（预编辑 + 候选）；虚拟键盘的候选栏据此更新 */
+    onCompose(cb: (state: VkbComposeState | undefined) => void): () => void {
+        this.composeListeners.add(cb);
+        cb(this.snapshot());
+        return () => this.composeListeners.delete(cb);
+    }
+
+    /** 键盘里显示候选时隐藏浮动候选窗，关闭后再恢复 */
+    setCandidatesInKeyboard(on: boolean) {
+        if (this.candidatesInKeyboard === on) return;
+        this.candidatesInKeyboard = on;
+        if (on) {
+            this.candidate.hide();
+            return;
+        }
+        const state = this.lastCompose;
+        const handle = this.focusHandle;
+        if (!state || handle === undefined) return;
+        const { panel } = this.splitPreedit(state);
+        this.candidate.setAnchor(this.anchorFor(handle));
+        this.candidate.update({ ...state, preedit: panel });
+    }
+
+    private snapshot(): VkbComposeState | undefined {
+        const state = this.lastCompose;
+        if (!state) return undefined;
+        if (!state.preedit.trim() && state.candidates.length === 0 && !state.auxiliary.trim()) return undefined;
+        return {
+            preedit: state.preedit,
+            auxiliary: state.auxiliary,
+            candidates: state.candidates,
+            candidateLabels: state.candidateLabels,
+            candidateCursor: state.candidateCursor,
+            hasPrev: state.hasPrev,
+            hasNext: state.hasNext,
+        };
+    }
+
+    private setCompose(state: ImComposeState | undefined) {
+        this.lastCompose = state;
+        const snapshot = this.snapshot();
+        for (const cb of this.composeListeners) cb(snapshot);
+    }
+
     /** 外部（fcitx-remote、托盘）可能改过状态，打开弹层时同步一次 */
     async sync() {
         await this.refresh();
@@ -188,6 +238,7 @@ export class ImeController {
         this.focusHandle = handle;
         this.pressKinds.clear();
         this.candidate.hide();
+        this.setCompose(undefined);
         this.invalidateTextInput();
         try {
             await this.ctx?.reset();
@@ -204,6 +255,7 @@ export class ImeController {
         this.focusHandle = undefined;
         this.pressKinds.clear();
         this.candidate.hide();
+        this.setCompose(undefined);
         this.invalidateTextInput();
         try {
             await this.ctx?.reset();
@@ -234,11 +286,26 @@ export class ImeController {
         this.textInputAt = 0;
     }
 
+    /** 直接插入 emoji / unicode 前，把当前合成上屏，避免半截拼音留在客户端 */
+    async commitComposition() {
+        if (!this.available || !this.ctx) return;
+        try {
+            await this.ctx.commit();
+        } catch (e) {
+            this.setError(e);
+            return;
+        }
+        this.lastPreedit = "";
+        this.candidate.hide();
+        this.setCompose(undefined);
+    }
+
     /** 窗口里点了鼠标：光标位置和文本焦点都可能变了，下一次按键重新查询 */
     pointerDown() {
         this.clearPreedit();
         this.invalidateTextInput();
         this.candidate.hide();
+        this.setCompose(undefined);
         this.pressKinds.clear();
         void this.ctx?.reset().catch(() => {});
     }
@@ -402,22 +469,29 @@ export class ImeController {
         const handle = this.focusHandle;
         if (handle === undefined || !this.deps.isNormal()) {
             this.candidate.hide();
+            this.setCompose(undefined);
             return;
         }
 
         const composing = state.preedit.length > 0 || state.candidates.length > 0 || state.auxiliary.length > 0;
         if (!composing) {
             this.candidate.hide();
+            this.setCompose(undefined);
             this.sendPreedit(handle, "");
             return;
         }
 
         const { inline, panel } = this.splitPreedit(state);
         if (inline !== this.lastPreedit) this.sendPreedit(handle, inline);
+        this.setCompose(state);
 
         const seq = ++this.caretSeq;
-        this.candidate.setAnchor(this.anchorFor(handle));
-        this.candidate.update({ ...state, preedit: panel });
+        if (this.candidatesInKeyboard) {
+            this.candidate.hide();
+        } else {
+            this.candidate.setAnchor(this.anchorFor(handle));
+            this.candidate.update({ ...state, preedit: panel });
+        }
 
         // 光标可能刚移动，异步刷新后再校正一次位置；旧请求不覆盖新状态
         void this.queryTextInput(handle)
@@ -440,6 +514,7 @@ export class ImeController {
         const handle = this.focusHandle;
         if (handle === undefined) return;
         this.lastPreedit = "";
+        this.setCompose(undefined);
         this.deps.sendText(handle, text, false);
     }
 
@@ -465,7 +540,7 @@ export class ImeController {
         return { x: p.x, y: p.y, w: 0, h: 0 };
     }
 
-    private async selectCandidate(index: number) {
+    async selectCandidate(index: number) {
         try {
             const r = await this.ctx?.selectCandidate(index);
             if (r) this.applyState(r);
@@ -474,7 +549,7 @@ export class ImeController {
         }
     }
 
-    private async page(next: boolean) {
+    async pageCandidates(next: boolean) {
         try {
             const s = next ? await this.ctx?.nextPage() : await this.ctx?.prevPage();
             if (s) this.applyState(s);
@@ -487,6 +562,11 @@ export class ImeController {
         if (this.focusHandle === undefined) return;
         const { inline, panel } = this.splitPreedit(s);
         if (inline !== this.lastPreedit) this.sendPreedit(this.focusHandle, inline);
+        this.setCompose(s);
+        if (this.candidatesInKeyboard) {
+            this.candidate.hide();
+            return;
+        }
         this.candidate.setAnchor(this.anchorFor(this.focusHandle));
         if (panel || s.candidates.length > 0 || s.auxiliary) this.candidate.update({ ...s, preedit: panel });
         else this.candidate.hide();
@@ -499,6 +579,7 @@ export class ImeController {
         try {
             await this.im.toggle();
             this.candidate.hide();
+            this.setCompose(undefined);
             this.clearPreedit();
             await this.refresh();
         } catch (e) {
@@ -511,6 +592,7 @@ export class ImeController {
         try {
             await this.im.setCurrentIM(uniqueName);
             this.candidate.hide();
+            this.setCompose(undefined);
             this.clearPreedit();
             await this.refresh();
         } catch (e) {

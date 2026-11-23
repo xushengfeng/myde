@@ -75,6 +75,17 @@ import {
     uToggleRow,
     vVolume,
 } from "./ui";
+import {
+    createAsciiKeyboard,
+    createFullKeyboard,
+    type FullKeyboardHandle,
+    type VkbDispatcher,
+    type VkbImeAccess,
+    type VkbKeyPress,
+    type VkbSettings,
+    type VkbSettingsAccess,
+} from "./virtual_keyboard/keyboard";
+import { TouchpadMode } from "./virtual_keyboard/touchpad_mode";
 import { createWallpaperStore, type WallpaperSlot } from "./wallpaper";
 
 /** Chromium / Electron 的 Scheduler API；当前 TS lib 没有声明 */
@@ -639,6 +650,21 @@ function clampNumber(value: number, min: number, max: number) {
 
 /** 输入法控制层在下方创建；焦点回调可能早于此时，统一走可选链 */
 let ime: ImeController | undefined;
+/** 虚拟键盘在输入法之后创建；锁屏/解锁回调可能更早 */
+let vkb: FullKeyboardHandle | undefined;
+/** 触控板页激活时把触屏映射成触控板 */
+let keyboardTouchpad: TouchpadMode | undefined;
+/** 顶栏虚拟键盘按钮；打开状态需要同步高亮 */
+let vkbToolEl: ElType<HTMLElement> | undefined;
+
+function updateVirtualKeyboardTool() {
+    if (!vkbToolEl) return;
+    const open = vkb?.isOpen() ?? false;
+    vkbToolEl.style({
+        background: open ? "#ffffff" : "transparent",
+        boxShadow: open ? gShadowStyle.panel : "none",
+    });
+}
 
 class ViewData {
     /** 所有虚拟屏，从左到右；空桌面永远在最后（最右） */
@@ -2058,6 +2084,7 @@ const planteData: Plant[] = [
             { id: "volume" },
             { id: "brightness" },
             { id: "ime" },
+            { id: "virtualKeyboard" },
             { id: "login" },
             { id: "notifications" },
             { id: "clock" },
@@ -5040,6 +5067,51 @@ const desktopSetting = MSetting.init({
     },
 });
 
+const defaultKeyboardSettings: VkbSettings = {
+    x: -1,
+    y: -1,
+    width: 820,
+    height: 380,
+    page: "keys",
+    layout: "minimal",
+    fullVariant: "87",
+    splitLayout: "top",
+    touchpadKeyboard: "none",
+    collapsed: false,
+    recentEmoji: [],
+    recentUnicode: [],
+};
+
+const keyboardSetting = MSetting.init({
+    version: "0.0.1",
+    nameSpace: "keyboard",
+    defaultNsSetting: defaultKeyboardSettings,
+});
+
+const keyboardSettings: VkbSettingsAccess = {
+    get(): VkbSettings {
+        return {
+            x: keyboardSetting.nget("x"),
+            y: keyboardSetting.nget("y"),
+            width: keyboardSetting.nget("width"),
+            height: keyboardSetting.nget("height"),
+            page: keyboardSetting.nget("page"),
+            layout: keyboardSetting.nget("layout"),
+            fullVariant: keyboardSetting.nget("fullVariant"),
+            splitLayout: keyboardSetting.nget("splitLayout"),
+            touchpadKeyboard: keyboardSetting.nget("touchpadKeyboard"),
+            collapsed: keyboardSetting.nget("collapsed"),
+            recentEmoji: keyboardSetting.nget("recentEmoji"),
+            recentUnicode: keyboardSetting.nget("recentUnicode"),
+        };
+    },
+    patch(patch: Partial<VkbSettings>) {
+        for (const key of Object.keys(patch) as (keyof VkbSettings)[]) {
+            keyboardSetting.nset(key, patch[key] as never);
+        }
+    },
+};
+
 const DEFAULT_WINDOW_RADIUS = 18;
 function normalizeWindowRadius(value: unknown) {
     const n = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_WINDOW_RADIUS;
@@ -5612,25 +5684,27 @@ const toolsEl = view()
     );
 tools.setTipEl(toolsEl.el);
 
-const lockScreen = view().class(
-    addClass(
-        {
-            background: "white",
-            width: "100vw",
-            height: "100vh",
-            position: "fixed",
-            top: "0",
-            left: "0",
-            zIndex: "30",
-        },
-        {
-            "&>*": {
-                position: "absolute",
-                top: 0,
+const lockScreen = view()
+    .class(
+        addClass(
+            {
+                background: "white",
+                width: "100vw",
+                height: "100vh",
+                position: "fixed",
+                top: "0",
+                left: "0",
+                zIndex: "30",
             },
-        },
-    ),
-);
+            {
+                "&>*": {
+                    position: "absolute",
+                    top: 0,
+                },
+            },
+        ),
+    )
+    .data({ "lock-screen": "1" });
 
 const lockScreenView = view()
     .style({
@@ -5722,10 +5796,12 @@ lockScreenAnimate.setUpdateCallback((v) => {
 state.on("normal", () => {
     lockScreenAnimate.moveTo("normal(out)");
     void ime?.resume();
+    vkb?.setSuspended(false);
 });
 state.on("lock", () => {
     stateLock.setState("lock");
     void ime?.blur();
+    vkb?.setSuspended(true);
 });
 state.setState("normal");
 
@@ -5865,7 +5941,18 @@ const imeOverlay = view().style({
     zIndex: "20",
 });
 
-mainEl.add([bg, windowElWarp, toolsEl, imeOverlay, lockScreen, cursorEl, screenOffLayer]);
+/** 桌面内虚拟键盘层：在窗口和工具栏之上、候选窗/锁屏之下 */
+const vkbLayer = view().style({
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
+    pointerEvents: "none",
+    zIndex: "15",
+});
+
+mainEl.add([bg, windowElWarp, toolsEl, vkbLayer, imeOverlay, lockScreen, cursorEl, screenOffLayer]);
 
 const windowEl = view()
     .style({
@@ -5910,6 +5997,7 @@ const ob = new ResizeObserver((e) => {
             Math.max(1, rect.height - wino.t - wino.b),
         );
         viewData.setStageSize(rect.width, rect.height);
+        vkb?.relayout();
     }
 });
 
@@ -5965,6 +6053,292 @@ ime = new ImeController({
     }),
 });
 ime.setUiScale(uiScale);
+/** 虚拟键盘输出：DOM 输入框走 inputSim，Wayland 客户端走输入法/文本通道 */
+function vkbDomEditable(): HTMLElement | undefined {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement)) return undefined;
+    if (active.closest("[data-virtual-keyboard]")) return undefined;
+    const editable =
+        active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active.isContentEditable;
+    if (!editable) return undefined;
+    if (active instanceof HTMLInputElement) {
+        const type = active.type;
+        if (type === "checkbox" || type === "radio" || type === "button" || type === "submit") return undefined;
+        if (type === "range" || type === "color" || type === "file") return undefined;
+    }
+    // 焦点在 Wayland 窗口时，不要把按键送进残留焦点的内部页面输入框
+    if (viewData.getWaylandFocus() !== undefined && !isLauncherInputFocused()) {
+        const internal = viewData.focusHandle !== undefined && isInternalWindow(viewData.focusHandle);
+        if (!internal) return undefined;
+    }
+    return active;
+}
+
+function vkbInsertDomText(target: HTMLElement, text: string) {
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+        try {
+            const start = target.selectionStart ?? target.value.length;
+            const end = target.selectionEnd ?? target.value.length;
+            target.setRangeText(text, start, end, "end");
+            target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+        } catch {
+            // 部分 input 类型（number 等）不支持光标操作
+        }
+        return;
+    }
+    if (target.isContentEditable) {
+        target.focus();
+        document.execCommand("insertText", false, text);
+    }
+}
+
+function vkbSendDomKey(target: HTMLElement, press: VkbKeyPress) {
+    const modifiers: [string, string][] = [];
+    if (press.ctrl) modifiers.push(["ControlLeft", "Control"]);
+    if (press.alt) modifiers.push(["AltLeft", "Alt"]);
+    if (press.meta) modifiers.push(["MetaLeft", "Meta"]);
+    if (press.shift) modifiers.push(["ShiftLeft", "Shift"]);
+    const emit = (type: "down" | "up", code: string, key: string) => {
+        inputSim.emit({
+            kind: "key",
+            type,
+            code: MInputMap.mapKeyCode(code),
+            webCode: code,
+            key,
+            source: "evdev",
+            target,
+        });
+    };
+    for (const [code, key] of modifiers) emit("down", code, key);
+    emit("down", press.code, press.key);
+    emit("up", press.code, press.key);
+    for (const [code, key] of [...modifiers].reverse()) emit("up", code, key);
+    // 单行 input 的 Enter 交给页面自己处理；textarea 需要补换行
+    if (press.code === "Enter" && target instanceof HTMLTextAreaElement) {
+        vkbInsertDomText(target, "\n");
+    }
+}
+
+/** 把按键送给聚焦的 Wayland 客户端；输入法可用时先经过输入法 */
+function vkbSendImeKey(press: VkbKeyPress) {
+    const handle = viewData.getWaylandFocus();
+    if (handle === undefined) return;
+    const mods = {
+        shiftKey: press.shift,
+        ctrlKey: press.ctrl,
+        altKey: press.alt,
+        metaKey: press.meta,
+    };
+    const send = (type: "down" | "up", code: string, key: string, extra?: KeyboardEventInit) => {
+        const event = new KeyboardEvent(type === "down" ? "keydown" : "keyup", {
+            code,
+            key,
+            bubbles: true,
+            cancelable: true,
+            ...mods,
+            ...extra,
+        });
+        const handled = type === "down" ? ime?.handleKeyDown(event) : ime?.handleKeyUp(event);
+        if (!handled) {
+            server.server.notify(
+                "input.key",
+                handle,
+                MInputMap.mapKeyCode(code),
+                type === "down" ? "pressed" : "released",
+            );
+        }
+    };
+    const modifiers: [string, string, KeyboardEventInit][] = [];
+    if (press.ctrl) modifiers.push(["ControlLeft", "Control", { ctrlKey: true }]);
+    if (press.alt) modifiers.push(["AltLeft", "Alt", { altKey: true }]);
+    if (press.meta) modifiers.push(["MetaLeft", "Meta", { metaKey: true }]);
+    if (press.shift) modifiers.push(["ShiftLeft", "Shift", { shiftKey: true }]);
+    for (const [code, key, extra] of modifiers) send("down", code, key, extra);
+    send("down", press.code, press.key);
+    send("up", press.code, press.key);
+    for (const [code, key, extra] of [...modifiers].reverse()) send("up", code, key, extra);
+}
+
+/**
+ * 直接插入文字（emoji / unicode）。
+ * 客户端支持 text-input 时走 `input.text`；否则只有 ASCII 能退回按键。
+ */
+function vkbInsertText(text: string) {
+    const dom = vkbDomEditable();
+    if (dom) {
+        vkbInsertDomText(dom, text);
+        return;
+    }
+    const handle = viewData.getWaylandFocus();
+    if (handle === undefined) return;
+    void (async () => {
+        try {
+            await ime?.commitComposition();
+        } catch {
+            // 提交失败不影响后面的插入
+        }
+        let textInputEnabled = false;
+        try {
+            const state = await server.server.request("textInput.get", handle);
+            textInputEnabled = state.enabled;
+        } catch {
+            textInputEnabled = false;
+        }
+        if (viewData.getWaylandFocus() !== handle) return;
+        if (textInputEnabled) {
+            server.server.notify("input.text", handle, text, false);
+            return;
+        }
+        for (const press of asciiPresses(text)) vkbSendImeKey(press);
+    })();
+}
+
+/** 可打印 ASCII 的按键序列；无法映射的字符跳过 */
+function asciiPresses(text: string): VkbKeyPress[] {
+    const out: VkbKeyPress[] = [];
+    const push = (code: string, key: string, shift: boolean) =>
+        out.push({ code, key, shift, ctrl: false, alt: false, meta: false });
+    for (const ch of text) {
+        if (ch === "\n") {
+            push("Enter", "Enter", false);
+            continue;
+        }
+        if (ch === " ") {
+            push("Space", " ", false);
+            continue;
+        }
+        if (/^[a-z]$/.test(ch)) {
+            push(`Key${ch.toUpperCase()}`, ch, false);
+        } else if (/^[A-Z]$/.test(ch)) {
+            push(`Key${ch}`, ch, true);
+        } else if (/^[0-9]$/.test(ch)) {
+            push(`Digit${ch}`, ch, false);
+        } else {
+            const symbolMap: Record<string, [string, string, boolean]> = {
+                ")": ["Digit0", ")", true],
+                "!": ["Digit1", "!", true],
+                "@": ["Digit2", "@", true],
+                "#": ["Digit3", "#", true],
+                $: ["Digit4", "$", true],
+                "%": ["Digit5", "%", true],
+                "^": ["Digit6", "^", true],
+                "&": ["Digit7", "&", true],
+                "*": ["Digit8", "*", true],
+                "(": ["Digit9", "(", true],
+                "-": ["Minus", "-", false],
+                _: ["Minus", "_", true],
+                "=": ["Equal", "=", false],
+                "+": ["Equal", "+", true],
+                "[": ["BracketLeft", "[", false],
+                "{": ["BracketLeft", "{", true],
+                "]": ["BracketRight", "]", false],
+                "}": ["BracketRight", "}", true],
+                "\\": ["Backslash", "\\", false],
+                "|": ["Backslash", "|", true],
+                ";": ["Semicolon", ";", false],
+                ":": ["Semicolon", ":", true],
+                "'": ["Quote", "'", false],
+                '"': ["Quote", '"', true],
+                ",": ["Comma", ",", false],
+                "<": ["Comma", "<", true],
+                ".": ["Period", ".", false],
+                ">": ["Period", ">", true],
+                "/": ["Slash", "/", false],
+                "?": ["Slash", "?", true],
+                "`": ["Backquote", "`", false],
+                "~": ["Backquote", "~", true],
+            };
+            if (symbolMap[ch]) push(...symbolMap[ch]);
+        }
+    }
+    return out;
+}
+
+const vkbDispatcher: VkbDispatcher = {
+    key: (press) => {
+        const dom = vkbDomEditable();
+        if (dom) vkbSendDomKey(dom, press);
+        else vkbSendImeKey(press);
+    },
+    text: (text) => vkbInsertText(text),
+};
+
+const vkbIme: VkbImeAccess = {
+    onStatus(cb) {
+        if (!ime) {
+            cb({ available: false, label: "—", currentUniqueName: "", entries: [] });
+            return () => {};
+        }
+        return ime.onStatus((status) => {
+            const entries = (status.group?.inputMethods ?? [])
+                .map((entry) => ({
+                    uniqueName: entry.uniqueName,
+                    name: entry.name,
+                    label: entry.label ?? "",
+                    off: entry.uniqueName === "keyboard-us",
+                }))
+                .sort((a, b) => Number(!!b.off) - Number(!!a.off));
+            cb({
+                available: status.available,
+                label: status.label,
+                currentUniqueName: status.current?.uniqueName ?? "",
+                entries,
+                error: status.error,
+            });
+        });
+    },
+    select: (uniqueName) => {
+        void ime?.setCurrentIM(uniqueName);
+    },
+    sync: () => {
+        void ime?.sync();
+    },
+    onCompose: (cb) => ime?.onCompose(cb) ?? (() => {}),
+    selectCandidate: (index) => {
+        void ime?.selectCandidate(index);
+    },
+    pageCandidates: (next) => {
+        void ime?.pageCandidates(next);
+    },
+    setCandidatesInKeyboard: (on) => ime?.setCandidatesInKeyboard(on),
+};
+
+function createVirtualKeyboard() {
+    keyboardTouchpad = new TouchpadMode({
+        dispatch: (event) => dispatchInput(event),
+        isKeyboardUiAt: (x, y) => vkb?.isKeyboardUiAt(x, y) ?? false,
+        getPointer: () => mousePos,
+        getScrollConfig: () => ({ naturalScroll, scrollGain: touchpadScrollGain }),
+        startDesktopGesture: () => viewData.startGesture(),
+        moveDesktopGesture: (dx, dy) => viewData.moveGesture(dx, dy),
+        endDesktopGesture: () => viewData.endGesture(),
+        gesture: (event, x, y) => sendGestureEvent(event, x, y),
+        notifyGesture: (handle, event) => notifyGesture(handle, event),
+    });
+
+    vkb = createFullKeyboard({
+        layer: vkbLayer.el,
+        dispatcher: vkbDispatcher,
+        settings: keyboardSettings,
+        uiScale,
+        ime: vkbIme,
+        onOpenChange: (open) => {
+            if (!open) keyboardTouchpad?.setActive(false);
+            updateVirtualKeyboardTool();
+        },
+        onTouchpadActiveChange: (active) => keyboardTouchpad?.setActive(active),
+        onTouchpadClick: (button) => keyboardTouchpad?.clickButton(button),
+        onTouchpadScroll: (deltaY) => keyboardTouchpad?.scrollBy(deltaY),
+    });
+}
+
+/** 第一次点工具栏按钮时再创建键盘 DOM，避免未使用键盘的桌面承担表情网格等开销 */
+function ensureVirtualKeyboard(): FullKeyboardHandle {
+    if (!vkb) createVirtualKeyboard();
+    // createVirtualKeyboard 会同步赋值 vkb
+    return vkb as FullKeyboardHandle;
+}
+
 void ime.init();
 
 const initRect = windowEl.el.getBoundingClientRect();
@@ -8776,6 +9150,25 @@ tools.registerTool(
     { selfBackground: true },
 );
 
+tools.registerTool("virtualKeyboard", () => {
+    const el = view("x")
+        .style({
+            width: px(24),
+            height: px(28),
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: px(gRadius.item),
+            cursor: "pointer",
+            flexShrink: "0",
+        })
+        .add(getIconXEl("keyboard", { size: 20, width: 22, height: 22 }));
+    el.data({ "virtual-keyboard-tool": "1" });
+    el.on("click", () => ensureVirtualKeyboard().toggle());
+    vkbToolEl = el;
+    updateVirtualKeyboardTool();
+    return el;
+});
+
 tools.registerTool(
     "volume",
     ({ tipEl, toastEl, showTip, showToast }) => {
@@ -8954,9 +9347,26 @@ tools.registerTool(
         }
     }
 
+    let lockKeyboardOpen = true;
+    const keyboardBtn = view()
+        .add(getIconXEl("keyboard", { size: 16, width: sSize(1), height: sSize(1) }))
+        .style({
+            ...gGlassStyle.justItem,
+            width: px(sSize(1)),
+            height: px(sSize(1)),
+            borderRadius: px(sSize2.radius1),
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+        })
+        .data({ "lock-keyboard-toggle": "1" })
+        .on("click", () => setLockKeyboardOpen(!lockKeyboardOpen));
+
     lockScreenPassword.add(
         view("x")
             .add([
+                keyboardBtn,
                 inputEl.el,
                 view()
                     .add(getIconXEl("chevron.right", { size: 16, width: sSize(1), height: sSize(1) }))
@@ -8977,6 +9387,49 @@ tools.registerTool(
     inputEl.el.on("input", () => {
         stateLock.setState("passwd");
     });
+
+    // 锁屏使用独立 ASCII 键盘：直接写进密码框，不经过输入法
+    const asciiKeyboard = createAsciiKeyboard({
+        dispatcher: {
+            key: (press) => {
+                if (press.code === "Backspace" || press.code === "Enter") {
+                    inputEl.inputKey(press.code);
+                    stateLock.setState("passwd");
+                    return;
+                }
+                if ([...press.key].length === 1) {
+                    inputEl.inputKey(press.key);
+                    stateLock.setState("passwd");
+                }
+            },
+            text: (text) => {
+                for (const ch of text) inputEl.inputKey(ch);
+                stateLock.setState("passwd");
+            },
+        },
+    });
+    const lockKeyboardWrap = view()
+        .style({
+            position: "absolute",
+            bottom: px(28),
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: "calc(92vw / var(--desktop-ui-scale, 1))",
+            maxWidth: px(920),
+            height: px(270),
+            display: "block",
+        })
+        .add(asciiKeyboard.el);
+    lockScreenPassword.add(lockKeyboardWrap);
+
+    function setLockKeyboardOpen(open: boolean) {
+        lockKeyboardOpen = open;
+        lockKeyboardWrap.style({ display: open ? "block" : "none" });
+        keyboardBtn.style({
+            background: open ? "#ffffff" : gGlassStyle.itemInBg.backgroundColor,
+        });
+    }
+    setLockKeyboardOpen(true);
 })();
 
 // ── 输入聚合层 ────────────────────────────────────────────────────────────────────────────────────
@@ -9188,6 +9641,8 @@ function dispatchInput(e: UniInputEvent) {
     if (checkVolumeKey(e)) return;
     if (checkMediaKey(e)) return;
     if (checkContextMenuKey(e)) return;
+    // 触控板页激活时，触屏接触点先尝试交给触摸板变换器；落在键盘 UI 上的仍走普通触摸
+    if (keyboardTouchpad?.handle(e)) return;
     // 滚轮/触摸板：先按窗口几何命中转发给 Wayland 客户端，再模拟 DOM 事件给桌面 UI。
     // 源信息（触摸板连续滚动、高精度刻度）随统一事件带下来，不能等模拟成 DOM WheelEvent 再取。
     if (e.kind === "pointer" && e.type === "wheel") {
@@ -9682,6 +10137,7 @@ function applyUiScale(scale: number) {
     launcher.setUiScale(value);
     cursor.setScale(value);
     ime?.setUiScale(value);
+    vkb?.setUiScale(value);
     measureChromeInsets();
     // 标题栏高度跟着界面缩放走；内容尺寸由渲染层按新 scale 更新，frame 再从内容盒子同步
     for (const [handle, frame] of clientWindowFrames) {
