@@ -21,7 +21,7 @@ import { type ClipboardItem, type ClipboardStation, initClipboard } from "./clip
 import { clipboardPreview, clipboardTime, createClipboardStationTool } from "./clipboard_tool";
 import { Cursor } from "./cursor";
 import { createFileChooserContent, fileChooserHeaderIcon, fileChooserTitle } from "./file_chooser";
-import { getIconXEl } from "./icon";
+import { getIconX, getIconXEl } from "./icon";
 import { ImeController } from "./ime/ime";
 import { DEFAULT_IME_BINDINGS, type KeyBinding, matchBindings } from "./ime/shortcut";
 import { createImeTool } from "./ime/tool";
@@ -986,7 +986,7 @@ class ViewData {
 
     /** 搜索栏用：当前全部虚拟屏（含空桌面、启动台），按空间顺序 */
     listScreens() {
-        return this.screens.map((screen, index) => {
+        return this.screens.map((screen) => {
             let title = "空桌面";
             let kind: "empty" | "launchpad" | "window" = "empty";
             let appid = "";
@@ -1003,7 +1003,6 @@ class ViewData {
             return {
                 id: screen.id,
                 title,
-                subtitle: `虚拟屏 ${index + 1}`,
                 kind,
                 appid,
                 current: screen.id === this.currentId,
@@ -6979,6 +6978,13 @@ type DesktopApp = Awaited<ReturnType<typeof MSysApi.getDesktopEntries>>[number];
 
 /** 应用名/本地名的拉丁候选，按应用缓存；应用列表本身由 sys_api 缓存 */
 const searchAppVariants = new WeakMap<DesktopApp, string[]>();
+/** 搜索栏里的内置设置入口，和应用一起参与匹配 */
+const searchSettingsVariants = latinVariants("设置", "settings");
+/** 设置入口复用启动台同款图标：X 图标转成 img 可用的 data URL */
+const searchSettingsIcon = (() => {
+    const svg = getIconX("settings");
+    return svg ? `data:image/svg+xml,${encodeURIComponent(svg)}` : undefined;
+})();
 function appSearchVariants(app: DesktopApp) {
     let variants = searchAppVariants.get(app);
     if (!variants) {
@@ -7060,6 +7066,20 @@ function createAppSearchProvider(): SearchProvider {
                     },
                 });
             }
+            const settingsScore = scoreLatin(query, searchSettingsVariants);
+            if (settingsScore !== -Infinity) {
+                scored.push({
+                    score: settingsScore,
+                    result: {
+                        id: "app:settings",
+                        score: settingsScore,
+                        title: "设置",
+                        badge: "应用",
+                        icon: async () => searchSettingsIcon,
+                        run: () => openSettingsWindow(),
+                    },
+                });
+            }
             return finishSearch(scored, 8);
         },
     };
@@ -7094,23 +7114,21 @@ function createWindowSearchProvider(): SearchProvider {
     };
 }
 
-/** 内置处理器：切换虚拟屏（含空桌面和启动台） */
+/** 内置处理器：空桌面和启动台；普通虚拟屏由窗口处理器覆盖，不再单列 */
 function createScreenSearchProvider(): SearchProvider {
     return {
         id: "screens",
         order: 30,
-        limit: 5,
+        limit: 2,
         search(query) {
             const scored: ScoredSearchResult[] = [];
             for (const screen of viewData.listScreens()) {
-                if (screen.current) continue;
+                if (screen.current || screen.kind === "window") continue;
                 const aliases =
                     screen.kind === "launchpad"
                         ? latinVariants("launchpad", "app launcher")
-                        : screen.kind === "empty"
-                          ? latinVariants("empty desktop")
-                          : [];
-                const score = scoreLatin(query, [...latinVariants(screen.title, screen.subtitle), ...aliases]);
+                        : latinVariants("empty desktop");
+                const score = scoreLatin(query, [...latinVariants(screen.title), ...aliases]);
                 if (score === -Infinity) continue;
                 scored.push({
                     score,
@@ -7118,14 +7136,13 @@ function createScreenSearchProvider(): SearchProvider {
                         id: `screen:${screen.id}`,
                         score,
                         title: screen.title,
-                        subtitle: screen.subtitle,
-                        badge: screen.kind === "launchpad" ? "启动台" : "虚拟屏",
+                        badge: screen.kind === "launchpad" ? "启动台" : "空桌面",
                         icon: searchIconByAppid(screen.appid),
                         run: () => viewData.switchScreen(screen.id),
                     },
                 });
             }
-            return finishSearch(scored, 5);
+            return finishSearch(scored, 2);
         },
     };
 }
@@ -7271,7 +7288,7 @@ function createAppTileFactory(op: AppTileFactoryOptions) {
 
 /** 顶部搜索栏：默认藏在工作区上方，可跟手下拉/上推；结果由 SearchEngine 异步汇总 */
 function createLauncher(): LauncherController {
-    const LAUNCHER_TRANSITION = { duration: 260, map: timingFunction.easeOut };
+    const LAUNCHER_TRANSITION = { duration: 160, map: timingFunction.easeOut };
     let stageHeight = Math.max(1, windowEl.el.getBoundingClientRect().height || window.innerHeight);
     /** 桌面 UI 缩放；stageHeight/topInset 是视觉 px，位置计算改用局部 px */
     let scale = uiScale;
@@ -7353,7 +7370,7 @@ function createLauncher(): LauncherController {
             fontWeight: gTextStyle.weight.regular,
             color: gTextStyle.color.primary,
         })
-        .attr({ placeholder: "搜索应用、窗口或虚拟屏" });
+        .attr({ placeholder: "搜索应用或窗口" });
     inputPanel.add(field);
 
     // L2 结果面板：要么隐藏，要么固定 7 × 48；空提示由 uScrollList 居中显示
@@ -7368,6 +7385,7 @@ function createLauncher(): LauncherController {
         containerSize: SEARCH_RESULT_PANEL_HEIGHT,
         direction: "down",
         crossSize: "100%",
+        animationDuration: LAUNCHER_TRANSITION.duration,
         // key 带渲染批次：同长度的新搜索结果不会复用旧行
         keyExtractor: (key) => key,
         renderItem: (key) => {
