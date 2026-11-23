@@ -200,18 +200,28 @@ function fillStripeDuration(profile: string) {
 }
 
 function batteryPalette(profile: string, charging: boolean, percentage: number) {
-    const whiteStripe = "rgba(255, 255, 255, 0.85)";
-    if (charging) return { base: "rgba(74, 222, 128, 0.62)", stripe: whiteStripe, stripeWidth: 2 };
-    if (profile === "power-saver") return { base: "rgba(250, 204, 21, 0.62)", stripe: whiteStripe, stripeWidth: 2 };
-    if (profile === "performance") return { base: "rgba(96, 165, 250, 0.62)", stripe: whiteStripe, stripeWidth: 2 };
-    if (percentage < 20) return { base: "rgba(248, 113, 113, 0.62)", stripe: whiteStripe, stripeWidth: 2 };
-    return { base: "rgba(255, 255, 255, 0.92)", stripe: "rgba(34, 197, 94, 0.48)", stripeWidth: 1 };
+    const whiteBase = "rgba(255, 255, 255, 0.92)";
+    if (charging)
+        return {
+            base: "rgba(74, 222, 128, 0.62)",
+            stripe: "rgba(255, 255, 255, 0.85)",
+            stripeWidth: 2,
+            edge: "rgba(255, 255, 255, 0.95)",
+        };
+    if (profile === "power-saver")
+        return { base: whiteBase, stripe: "rgba(234, 179, 8, 0.7)", stripeWidth: 1, edge: "rgba(234, 179, 8, 0.85)" };
+    if (profile === "performance")
+        return { base: whiteBase, stripe: "rgba(59, 130, 246, 0.55)", stripeWidth: 1, edge: "rgba(59, 130, 246, 0.8)" };
+    if (percentage < 20)
+        return { base: whiteBase, stripe: "rgba(239, 68, 68, 0.55)", stripeWidth: 1, edge: "rgba(239, 68, 68, 0.8)" };
+    return { base: whiteBase, stripe: "rgba(34, 197, 94, 0.48)", stripeWidth: 1, edge: "rgba(34, 197, 94, 0.8)" };
 }
 
 /**
  * 电池进度条：L2 整行作为电量轨道，填充宽度跟随百分比。
- * 静音黄 / 平衡白 / 低电红 / 性能蓝，充电绿；条纹统一向左流动，
- * 速度按充电流入 > 性能 > 平衡 > 静音排列；充电时填充条纹仍按当前模式的速度。
+ * 静音黄线 / 平衡绿线 / 低电红线 / 性能蓝线，均为白底细条纹；充电为绿底白条纹。
+ * 条纹统一向左流动，速度按充电流入 > 性能 > 平衡 > 静音排列；充电时填充条纹仍按当前模式的速度。
+ * 填充区的消耗条纹集中在电量分界线附近，向左渐隐；分界线本身有一条固定细线。
  */
 export function attachBatteryFx(row: ElType<HTMLElement>) {
     const layer = createFxLayer(row);
@@ -235,9 +245,26 @@ export function attachBatteryFx(row: ElType<HTMLElement>) {
         bottom: "0",
         width: "0%",
         transition: "width 240ms ease",
+    });
+    // 消耗条纹只集中在电量分界线附近，向左淡出；底色仍铺满整个填充区
+    const fillStripes = view().style({
+        position: "absolute",
+        inset: "0",
+        maskImage: "linear-gradient(to right, transparent calc(100% - 90px), #000 100%)",
         ...STRIPES_LEFT,
     });
-    layer.add([tail, fill]);
+    fill.add(fillStripes);
+    // 分界线：固定细线一直标出已填充和未填充的边界
+    const edge = view().style({
+        position: "absolute",
+        top: "0",
+        bottom: "0",
+        left: "0",
+        width: "2px",
+        transform: "translateX(-100%)",
+        display: "none",
+    });
+    layer.add([tail, fill, edge]);
 
     let percentage = 0;
     let charging = false;
@@ -249,12 +276,19 @@ export function attachBatteryFx(row: ElType<HTMLElement>) {
         fill.style({
             width: `${value}%`,
             backgroundColor: palette.base,
+        });
+        fillStripes.style({
             backgroundImage: stripeGradient(palette.stripe, palette.stripeWidth),
             animationDuration: `${fillStripeDuration(profile)}s`,
         });
         tail.style({
             left: `${value}%`,
             display: charging ? "block" : "none",
+        });
+        edge.style({
+            left: `${value}%`,
+            backgroundColor: palette.edge,
+            display: value > 0 ? "block" : "none",
         });
     };
     render();

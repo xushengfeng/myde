@@ -871,7 +871,7 @@ function batteryBar(percentage: number, charging = false) {
     return { bar, fx };
 }
 
-const battery = batteryBar(86);
+const battery = batteryBar(70);
 const batteryPopup = popupPanel([
     battery.bar,
     ui
@@ -899,20 +899,22 @@ const batteryPopup = popupPanel([
 ]);
 popupRow.add(popupColumn("电源", batteryPopup));
 
-// 电源各状态：整行电量条与条纹配色对照
-const batteryStates = view("x", "wrap").style({ gap: "24px", alignItems: "flex-start" }).addInto(popupDemo);
+// 电源各模式 × 电量：观察条纹配色、分界线与文字 / 图标位置
 function batteryStateColumn(label: string, percentage: number, op?: { charging?: boolean; profile?: string }) {
     const b = batteryBar(percentage, op?.charging ?? false);
     if (op?.profile) b.fx.setProfile(op.profile);
     return popupColumn(label, popupPanel([b.bar]));
 }
-batteryStates.add([
-    batteryStateColumn("静音 40%", 40, { profile: "power-saver" }),
-    batteryStateColumn("平衡 86%", 86),
-    batteryStateColumn("平衡 12%", 12),
-    batteryStateColumn("性能 70%", 70, { profile: "performance" }),
-    batteryStateColumn("充电 62%", 62, { charging: true }),
-]);
+
+function batteryLevelRow(mode: string, levels: number[], op?: { charging?: boolean; profile?: string }) {
+    const row = view("x", "wrap").style({ gap: "24px", alignItems: "flex-start" }).addInto(popupDemo);
+    row.add(levels.map((percentage) => batteryStateColumn(`${mode} ${percentage}%`, percentage, op)));
+}
+
+batteryLevelRow("静音", [10, 30, 70], { profile: "power-saver" });
+batteryLevelRow("平衡", [10, 30, 70]);
+batteryLevelRow("性能", [10, 30, 70], { profile: "performance" });
+batteryLevelRow("充电", [10, 30, 70], { charging: true });
 
 function fakeBinding<T>(initial: T): BindingSource<T> {
     let value = initial;

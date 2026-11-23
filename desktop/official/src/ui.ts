@@ -724,10 +724,16 @@ export function uChoiceRow(op: {
 /** 电池信息行：电池图标 + 百分比 + 充电状态 */
 export function uBatteryInfo(initial: { percentage: number; charging: boolean }) {
     const battery = getIconXEl("battery", { size: 24, width: 28, height: 24 });
+    // 电量条动效从下方经过，图标和数字用背景模糊保持清晰
+    const batteryBox = view().style({ backdropFilter: "blur(3px)", borderRadius: "6px" }).add(battery);
     const valueText = aNumberText({
         fontSize: 20,
         lineHeight: 26,
         color: gTextStyle.color.primary,
+    });
+    valueText.el.style({
+        backdropFilter: "blur(3px)",
+        borderRadius: "4px",
     });
     const statusText = aLineText().style({
         ...gTextStyle.caption,
@@ -745,7 +751,7 @@ export function uBatteryInfo(initial: { percentage: number; charging: boolean })
     return {
         el: view("x")
             .style({ alignItems: "center", gap: px(sSize2.padding) })
-            .add([view().add(battery), view("y").style({ gap: "1px", minWidth: "0" }).add([valueText.el, statusText])]),
+            .add([batteryBox, view("y").style({ gap: "1px", minWidth: "0" }).add([valueText.el, statusText])]),
         setValue: (nextPercentage: number, nextCharging: boolean) => {
             percentage = nextPercentage;
             charging = nextCharging;
