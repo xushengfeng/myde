@@ -7156,6 +7156,8 @@ type AppTileFactoryOptions = {
     tileHeight: number;
     iconSize: number;
     labelSize: number;
+    /** 格子文字额外样式；启动台放在壁纸上时用白色 + 淡阴影 */
+    labelStyle?: Parameters<ReturnType<typeof view>["style"]>[0];
     /** 设置格子的白底容器尺寸，图标按容器减内边距 */
     settingsIconBox: number;
     onSettingsClick: () => void;
@@ -7233,6 +7235,7 @@ function createAppTileFactory(op: AppTileFactoryOptions) {
                 maxWidth: "92%",
                 overflow: "hidden",
                 textAlign: "center",
+                ...op.labelStyle,
             }),
         );
 
@@ -7277,6 +7280,7 @@ function createAppTileFactory(op: AppTileFactoryOptions) {
                 maxWidth: "92%",
                 overflow: "hidden",
                 textAlign: "center",
+                ...op.labelStyle,
             }),
         );
         appEl.on("click", () => op.onSettingsClick());
@@ -7892,7 +7896,14 @@ function createLaunchpadContent() {
         zoom: "var(--desktop-ui-scale, 1)",
     });
     root.add(grid);
-    const loadingEl = txt("正在加载应用…").style({ padding: "8px", opacity: "0.6" }).addInto(grid);
+    // 启动台直接铺在壁纸上，文字统一白色 + 淡阴影
+    const labelStyle = {
+        color: gTextStyle.color.inverse,
+        textShadow: "0 1px 2px rgba(0, 0, 0, 0.45), 0 0 8px rgba(0, 0, 0, 0.3)",
+    };
+    const loadingEl = txt("正在加载应用…")
+        .style({ padding: "8px", opacity: "0.6", ...labelStyle })
+        .addInto(grid);
     const tileFactory = createAppTileFactory({
         iconConfig: { theme: setting.get("icon.theme") },
         root: null,
@@ -7900,6 +7911,7 @@ function createLaunchpadContent() {
         tileHeight: 104,
         iconSize: 64,
         labelSize: 13,
+        labelStyle,
         settingsIconBox: 64,
         onSettingsClick: () => openSettingsWindow(),
     });
@@ -7910,7 +7922,9 @@ function createLaunchpadContent() {
             loadingEl.remove();
             grid.add(tileFactory.createSettingsTile());
             if (apps.length === 0) {
-                txt("未找到应用").style({ padding: "8px", opacity: "0.6" }).addInto(grid);
+                txt("未找到应用")
+                    .style({ padding: "8px", opacity: "0.6", ...labelStyle })
+                    .addInto(grid);
                 return;
             }
             const batchSize = 40;
