@@ -1,5 +1,7 @@
 # 透明窗口动画复现
 
+这是人工视觉复现，会打开真实窗口，不属于自动测试；自动化测试请用 `testRunnerApp` / `startDesktopRunner`，不要把它作为 vitest/CI 步骤。
+
 一个透明、无边框、GPU 合成的 Electron 窗口：多个元素用 `transform: translate3d`
 （合成器动画，走 dmabuf）、一个 Canvas 动画、半透明面板和光斑同时运动。
 如果 myde 合成时 damage 处理不对，会看到**拖尾、残影、旧内容叠在新内容上**。

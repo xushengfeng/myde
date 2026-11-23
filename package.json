@@ -14,6 +14,8 @@
         "input:access": "bash script/input_access.sh",
         "build:remote-connect": "cd src/remote_connect && pnpm build",
         "typecheck": "pnpm -r --filter \"./packages/*\" run build:ts && pnpm -r --filter \"./packages/*\" run typecheck && tsc --noEmit -p tsconfig.typecheck.json",
+        "test": "vitest run",
+        "test:host-services": "MYDE_TEST_HOST_SERVICES=1 vitest run src/sys_api/test",
         "biome": "biome check .",
         "biome:fix": "biome check --write .",
         "biome:format": "biome format --write .",

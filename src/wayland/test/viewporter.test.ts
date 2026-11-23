@@ -14,7 +14,7 @@ class FakeOffscreenCanvas {
         this.height = height;
     }
     getContext() {
-        return { drawImage: () => {} };
+        return { clearRect: () => {}, drawImage: () => {} };
     }
 }
 

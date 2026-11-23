@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { volumeControl } from "../volume";
+import { describeHost } from "./host_services";
 
-describe("volumeControl", () => {
+describeHost("volumeControl", () => {
     let volume: volumeControl | undefined;
 
     afterEach(() => {

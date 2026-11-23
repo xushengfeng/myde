@@ -2,6 +2,8 @@
 
 提供myde全局变量的mock实现，用于桌面开发者快速开发参考界面，无需真实dbus/系统服务。
 
+自动化 UI 检查用 `startDesktopRunner` 截图，或使用无头浏览器/无头工具；不要在测试流程里启动可见窗口，也不要直接连接宿主 `DISPLAY`/`WAYLAND_DISPLAY`。mock 页面仅用于开发时人工查看界面。
+
 ## 快速开始
 
 ```typescript

@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { WaylandServer } from "../wayland";
 import type { renderTools } from "../wayland/render_tools";
+import { startHeadlessDisplay } from "./headless_display";
+import { createTestEnv } from "./test_env";
 
 export function getProjectRoot() {
     let p = __dirname;
@@ -32,28 +34,35 @@ export function testRunnerRaw(js: string) {
     fs.writeFileSync(path.join(tmpPath, "package.json"), JSON.stringify(pkjson));
     fs.writeFileSync(path.join(tmpPath, "index.js"), js);
 
-    const env = process.env;
-    delete env.ELECTRON_RUN_AS_NODE;
-    delete env.ELECTRON_NO_ATTACH_CONSOLE;
+    // 测试实例不接宿主的显示服务：宿主可能同时在跑多个桌面实现，
+    // WAYLAND_DISPLAY/DISPLAY 指向哪一个都不确定，接上去就会在别人的桌面上开窗口。
+    // 优先用私有的 weston headless + Xwayland（能拿到 GPU），没有就用 headless ozone。
+    const display = startHeadlessDisplay();
+    const testEnv = createTestEnv({ desktop: tmpPath, display, extraEnv: { nodeModule: "on" } });
 
-    const testEnv: NodeJS.ProcessEnv = {
-        ...env,
-        desktop: tmpPath,
-        nodeModule: "on",
-        testMode: "on",
-    };
-    // 测试实例走 X11/软件渲染，避免和正在运行的 Wayland 桌面抢 GPU/显示连接
-    if (env.DISPLAY) {
-        testEnv.ELECTRON_OZONE_PLATFORM_HINT = "x11";
-        testEnv.XDG_SESSION_TYPE = "x11";
-        delete testEnv.WAYLAND_DISPLAY;
-    }
-
-    const runtime = child_process.spawn("npx", ["electron-vite", "--ignoreConfigWarning", "preview"], {
-        stdio: "pipe",
-        env: testEnv,
-        cwd: getProjectRoot(),
-    });
+    const runtime = child_process.spawn(
+        "npx",
+        [
+            "electron-vite",
+            "--ignoreConfigWarning",
+            "preview",
+            // electron-vite 会把 `--` 之后的参数通过 ELECTRON_CLI_ARGS 传给 Electron。
+            // headless ozone 默认屏幕只有 1x1，会让 window.innerWidth 等布局值失真。
+            "--",
+            ...(display
+                ? ["--ozone-platform=x11"]
+                : ["--ozone-platform=headless", "--ozone-override-screen-size=1920,1080"]),
+            // 测试桌面自身是隐藏窗口，不能让它被当成后台页限制定时器/输入投递
+            "--disable-background-timer-throttling",
+            "--disable-renderer-backgrounding",
+            "--disable-backgrounding-occluded-windows",
+        ],
+        {
+            stdio: "pipe",
+            env: testEnv,
+            cwd: getProjectRoot(),
+        },
+    );
     const out: unknown[] = [];
     runtime.stdout?.on("data", (data) => {
         const lineData = data.toString();
@@ -73,34 +82,48 @@ export function testRunnerRaw(js: string) {
         console.error(lineData);
     });
 
-    const killTimeout = setTimeout(() => {
+    let killed = false;
+    const kill = () => {
+        if (killed) return;
+        killed = true;
         runtime.kill();
-    }, 20000);
+        clearTimeout(killTimeout);
+    };
+    const killTimeout = setTimeout(kill, 20000);
+    let cleaned = false;
+    const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        clearTimeout(killTimeout);
+        // 提前退出（含超时/测试失败）也不能留下 weston
+        display?.stop();
+    };
+    runtime.on("exit", cleanup);
 
     return {
-        kill: () => {
-            runtime.kill();
-            clearTimeout(killTimeout);
-        },
+        kill,
         waitExit: () =>
             new Promise<unknown[]>((resolve) => {
+                let settled = false;
                 let exited = false;
                 let stdoutEnded = false;
                 let graceTimer: ReturnType<typeof setTimeout> | undefined;
-                const finish = () => {
-                    clearTimeout(killTimeout);
+                const resolveOnce = () => {
+                    if (settled) return;
+                    settled = true;
+                    cleanup();
                     if (graceTimer) clearTimeout(graceTimer);
                     resolve(out);
                 };
                 const maybeFinish = () => {
-                    if (exited && stdoutEnded) finish();
+                    if (exited && stdoutEnded) resolveOnce();
                 };
                 runtime.on("exit", () => {
                     exited = true;
                     maybeFinish();
                     // 进程退出事件可能早于 stdout 读完最后一条 JSON，
                     // 只监听 exit 会丢掉紧邻 kill 之前发送的数据
-                    graceTimer = setTimeout(finish, 500);
+                    graceTimer = setTimeout(resolveOnce, 500);
                 });
                 runtime.stdout?.on("end", () => {
                     stdoutEnded = true;

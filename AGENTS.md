@@ -50,15 +50,28 @@
 
 ## 测试工具
 
-可以自定义应用，实现针对性测试
+测试分两类，入口不同：
 
-`test/simple_app`下可以创建rust bin应用，适用于wayland api
+- 单窗口 / Wayland 协议 / 系统 API：`testRunnerApp`（`src/test_runner/test_runner.ts`）。加载测试桌面，测试脚本直接操作 `myde.MSysApi.server()` 返回的 `server`，针对单窗口注入输入、查状态、取 `server.windows.preview()` 像素。
+- 完整桌面（官方桌面或其他桌面实现）：`startDesktopRunner` / `testRunnerDesktop`（`src/test_runner/desktop_runner.ts`）。加载真实桌面包，用 CDP 操作 DOM、截图、输入、读日志。
 
-使用`test/electron_app`可以创建单脚本控制主进程和渲染进程的特殊应用，适用于wayland api和系统api相关
+完整说明与示例见[测试 runner](src/test_runner/readme.md)。
+
+任何自动化测试都不得直接使用宿主 `DISPLAY`/`WAYLAND_DISPLAY`，也不得在宿主桌面开窗口：
+
+- 必须通过 `testRunnerApp`（内部 `testRunnerRaw`）或 `startDesktopRunner` 启动；它们先起私有 weston headless + Xwayland，宿主显示变量不会传进测试进程。
+- 被测应用连测试桌面自己的 Wayland server，不碰 weston，也不碰宿主。
+- 没有 weston/Xwayland 时退回 Electron headless ozone；GPU 相关测试可能失败，会警告。
+- 仅做临时 UI 检查时，用 `startDesktopRunner` 截图，或其他浏览器的无头模式/无头工具；不要退回宿主显示。
+- 原生模式（`runAsDesktop` + `myde-wrap` DRM）不在自动测试范围内。
+
+系统 API 测试不要求统一的 dbus 隔离：可隔离的用 `DBusTestEnv` / 内部 portal 默认跑；真实宿主服务冒烟（`src/sys_api/test/host_services.ts` 的 `describeHost`，涉及 fcitx5、PipeWire、BlueZ、网络、电源、亮度、播放器等）默认跳过，非必要不跑；需要时 `pnpm test:host-services`。全量默认测试用 `pnpm test`。
+
+`test/simple_app`下可以创建rust bin应用，适用于wayland api。使用`test/electron_app`可以创建单脚本控制主进程和渲染进程的特殊应用，适用于wayland api和系统api相关；它们由 `testRunnerApp` 的 `runApp` 启动，不要直接 `node test/electron_app/start.js` 作为测试步骤。
 
 ### Mock
 
-`test/mock`提供myde全局变量的mock实现，用于桌面开发者快速开发参考界面，无需真实dbus/系统服务。
+`test/mock`提供myde全局变量的mock实现，用于桌面开发者快速开发参考界面，无需真实dbus/系统服务。自动化 UI 检查用 `startDesktopRunner` 或无头浏览器，不要启动可见窗口。
 
 详细用法见[test/mock/readme.md](test/mock/readme.md)
 
@@ -75,7 +88,7 @@
 
 由于最后窗口需要显示，所以有渲染器这个概念，比如`src/wayland/render_tools_el.ts`就把中间的窗口操作转成dom操作，桌面开发可引用，避免二次开发。当然，无头服务器或者其他可自定义渲染器
 
-默认不进行测试，如果开发者要求添加测试，仿照`src/wayland/test/dma-buf.test.ts`
+默认不进行测试，如果开发者要求添加测试，仿照`src/wayland/test/dma-buf.test.ts`，用`testRunnerApp`（无头，不直接开窗口）
 
 ### 系统api开发
 

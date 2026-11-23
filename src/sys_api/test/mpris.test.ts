@@ -1,6 +1,7 @@
 import { dbusIO } from "myde-dbus";
-import { describe, it } from "vitest";
+import { it } from "vitest";
 import { mpris } from "../mpris";
+import { describeHost } from "./host_services";
 
 const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
@@ -14,7 +15,7 @@ async function wait(s: number) {
     return new Promise((resolve) => setTimeout(resolve, s));
 }
 
-describe("临时保持测试", async () => {
+describeHost("临时保持测试", () => {
     it("list", async () => {
         const socket = newSocket();
         const dbus = new dbusIO({ socket });
@@ -73,7 +74,7 @@ describe("临时保持测试", async () => {
     });
 });
 
-describe("mpris", () => {
+describeHost("mpris", () => {
     it("init", async () => {
         const socket = newSocket();
         const dbus = new dbusIO({ socket });

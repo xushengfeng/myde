@@ -1,6 +1,7 @@
 import { dbusIO } from "myde-dbus";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { lid } from "../lid";
+import { describeHost } from "./host_services";
 
 const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
@@ -10,7 +11,7 @@ function newSocket() {
     return socket;
 }
 
-describe("lid", () => {
+describeHost("lid", () => {
     it("init", async () => {
         const socket = newSocket();
         const dbus = new dbusIO({ socket });

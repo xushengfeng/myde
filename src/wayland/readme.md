@@ -175,6 +175,8 @@ commit」的，被丢掉的提交不会有人再补画。所以像素链路分�
 
 `src/wayland/test/` 是端到端测试：起真 Electron 客户端（或真实应用）连本服务端，注入输入/命令，再从客户端回传的日志断言。
 
+自动化测试全部无头：`testRunnerApp` 先启动私有 weston headless + Xwayland，测试客户端连测试桌面自己的 Wayland server，不连宿主 `DISPLAY`/`WAYLAND_DISPLAY`，也不在宿主桌面开窗口。完整桌面（官方桌面等）用 `startDesktopRunner` 走 CDP，见[测试 runner](../test_runner/readme.md)。临时 UI 检查用无头浏览器/无头工具或 `startDesktopRunner` 截图，不要退回宿主显示。
+
 | 文件 | 覆盖 |
 | --- | --- |
 | `dma-buf.test.ts` | dmabuf 单帧渲染，`preview()` 像素采样 |
@@ -194,7 +196,9 @@ commit」的，被丢掉的提交不会有人再补画。所以像素链路分�
 npx vitest run src/wayland/test/pointer.test.ts
 ```
 
-### 手动测试背景模糊
+### 手动复现背景模糊（不属于自动测试）
+
+这一节是人工视觉检查，会打开真实窗口，不要把它作为 vitest/CI 用例。需要自动检查画布时，用 `testRunnerApp` 启动客户端并采样 `server.windows.preview()`；临时 UI 检查用 `startDesktopRunner` 截图或其他无头工具。
 
 `test/simple_app` 里的 `background_effect` 是真实 Wayland 客户端：半透明窗口、圆角、
 右下角一个 subtract 出来的透明洞（应看到清晰桌面）。在桌面里（`WAYLAND_DISPLAY` 已指向

@@ -1,6 +1,7 @@
 import { dbusIO } from "myde-dbus";
 import { describe, expect, it } from "vitest";
 import { brightness, parseDdcDetectOutput, parseVcpBrightness } from "../brightness";
+import { describeHost } from "./host_services";
 
 const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
@@ -34,7 +35,7 @@ Invalid display
     });
 });
 
-describe("brightness", () => {
+describeHost("brightness", () => {
     function createApi() {
         const socket = new mus.USocket();
         socket.connect("/var/run/dbus/system_bus_socket");

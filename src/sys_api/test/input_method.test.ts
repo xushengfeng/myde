@@ -1,7 +1,8 @@
 import { execSync } from "node:child_process";
 import { dbusIO } from "myde-dbus";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { type ImComposeState, inputMethod } from "../input_method";
+import { describeHost } from "./host_services";
 
 const mus = require("myde-unix-socket") as typeof import("myde-unix-socket");
 
@@ -19,7 +20,7 @@ function newSocket() {
     return socket;
 }
 
-describe("input_method", () => {
+describeHost("input_method", () => {
     let im: inputMethod;
     let connected = false;
     let prevIM = "";

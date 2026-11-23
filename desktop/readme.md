@@ -1096,6 +1096,38 @@ serverX.stopXwayland();
 
 `runApp()` 会读取应用的 stdout/stderr，写入 `$XDG_STATE_HOME/myde/logs/apps/<可执行名>-<pid>.log`，每行带时间和 `[out]`/`[err]` 来源。管道必须被读取：应用写满 64 KiB 后会阻塞在 `write()`，看起来像窗口画面卡死。日志文件超过 10 MiB 会轮转，最多保留最近 50 份。
 
+## 测试
+
+桌面实现有两类测试，入口不同：
+
+- 纯逻辑/组件单测：直接 `vitest`，不启动 Electron（例如 `desktop/official/test/registry`、`win_layout`、`scroll_list`）。
+- 完整桌面端到端：`startDesktopRunner` / `testRunnerDesktop`（`src/test_runner/desktop_runner.ts`）。加载真实桌面包，用 CDP 操作 DOM、截图、输入、读日志：
+
+```ts
+import { startDesktopRunner } from "../../src/test_runner/desktop_runner";
+
+const desktop = await startDesktopRunner({ desktop: "desktop/official" });
+try {
+    await desktop.waitFor("document.body.children.length > 2");
+    await desktop.click(40, 40);
+    const png = await desktop.screenshot();
+    const logs = desktop.logs();
+} finally {
+    await desktop.close();
+}
+```
+
+规则：
+
+- 自动化测试不得直接使用宿主 `DISPLAY`/`WAYLAND_DISPLAY`，不得在宿主桌面开窗口。`startDesktopRunner` 会启动私有 weston headless + Xwayland，窗口在 weston 里且隐藏；没有 weston/Xwayland 时退回 Electron headless ozone。
+- 临时 UI 检查用 `startDesktopRunner` 截图、无头浏览器或其他无头工具；不要用 `desktop:official`/`desktop:simpletest` 作为自动测试步骤。它们是开发预览脚本，会打开真实窗口。
+- `desktop` 参数指向桌面包；`desktop/official` 读 `dist/index.js`，测试前先 `pnpm build:desktop`。没有构建时示例测试会跳过。
+- 端到端测试只覆盖窗口模式（`displayType=window`）。原生模式（`runAsDesktop` + `myde-wrap` DRM）依赖真实 evdev/DRM，不在自动测试范围。
+- `startDesktopRunner` 默认使用私有 session bus，避免通知/托盘 watcher 注册到宿主会话；测试自己用 `DBusTestEnv` 时通过 `env` 覆盖。
+- 截屏/输入/日志的分层见[测试 runner](../src/test_runner/readme.md)。
+
+示例：`src/test_runner/desktop_runner.test.ts`、`desktop/official/test/desktop.e2e.test.ts`。
+
 ## 开发提示
 
 使用不了`require`，应该使用打包器打包成一个js文件。如果有复杂计算任务，使用 woker+wasm，如果需要其他系统 api，需要修改引擎，请提交 issuse 或 pr。

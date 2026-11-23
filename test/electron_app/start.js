@@ -3,6 +3,10 @@
 /**
  * Electron 启动器
  *
+ * 自动化测试不要直接运行本文件：由 `testRunnerApp` 的 `runApp` 启动，
+ * 它会把 WAYLAND_DISPLAY 指向测试桌面自己的 Wayland server，窗口只存在于
+ * 测试进程里。直接 `node start.js` 会连宿主显示，仅用于临时人工调试。
+ *
  * 用法: node start.js <script.js>
  *
  * script.js 导出一个函数，接收 context 对象:
