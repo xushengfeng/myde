@@ -111,7 +111,13 @@ export type {
     UniKeyEvent,
     UniPointerEvent,
 } from "./sys_api/input_sim";
-export type { NativeFsEntry, NativeFsFileKind, NativeFsListOptions, NativeFsListResult } from "./sys_api/nativefs";
+export type {
+    NativeFsEntry,
+    NativeFsFileKind,
+    NativeFsListOptions,
+    NativeFsListResult,
+    NativeFsReadImageOptions,
+} from "./sys_api/nativefs";
 export type {
     PolkitApi,
     PolkitAuthRequest,

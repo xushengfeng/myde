@@ -12,7 +12,7 @@
 
 `application.ts` 解析 .desktop：除 Name/Comment/Icon/Exec 外，还会从 `Exec=env A=1 cmd` 的前缀取出环境变量放进 `DesktopEntry.env`（`Exec` 同时还原成 `cmd`），交给 `runApp()`。
 
-`nativefs.ts` 提供原生文件系统的只读目录枚举（当前只有 `list`），路径支持绝对路径和 `~`；文件选择器用它列目录。它不提供读取文件内容的接口。
+`nativefs.ts` 提供原生文件系统的只读接口：`list` 枚举目录和元数据，`readImage` 只读取图片文件并返回 data URL（默认上限 32MB）；路径支持绝对路径和 `~`。文件选择器用它列目录，桌面壁纸等只需要图片内容的场景用 `readImage`，不提供读取其他文件内容的接口。
 
 `screenshot.ts` 截取桌面页面（整个输出或一块矩形），返回 PNG 字节并提供保存到图片目录的接口；主进程侧用 Electron `webContents.capturePage` 实现。portal 的 Screenshot 后端用它完成截图，沙箱应用通过 xdg-desktop-portal 请求。
 

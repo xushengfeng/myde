@@ -160,7 +160,7 @@ resize ↔ `move` / `all_scroll` / `all_resize` 过渡时优先用十字的一�
 - 打开中的设置窗口再次点开始菜单里的设置会跳回它所在的虚拟桌面
 
 设置项：
-- 外观：`icon.theme` 应用图标主题
+- 外观：`icon.theme` 应用图标主题、桌面绘制的窗口圆角、桌面壁纸和锁屏壁纸。壁纸分别用桌面自己的文件选择器选择本地图片（只列图片），默认居中填充；没有自定义时使用自带壁纸。设置里只保存图片路径（`wallpaper.desktop` / `wallpaper.lock`），启动和切换时用 `MSysApi.nativefs.readImage` 读取
 - 显示：Wayland 客户端缩放 `desktop.scale`（100% / 125% / 150% / 175% / 200%）。缩放后 surface 逻辑坐标不变，
   客户端 buffer 与窗口 DOM 尺寸按比例放大，桌面自绘 UI（工具栏、启动台、设置窗口、输入法候选、光标和窗口 resize 热区）也跟随同一个缩放。winit 后端和普通窗口模式跟随宿主桌面，myde 内部固定 1x。
   下方帧时间图表按需启动，实时采样桌面界面的 `requestAnimationFrame` 帧间隔，并按当前输出刷新率画出预算线

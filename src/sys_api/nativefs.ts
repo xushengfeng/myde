@@ -26,6 +26,11 @@ export interface NativeFsListOptions {
     showHidden?: boolean;
 }
 
+export interface NativeFsReadImageOptions {
+    /** 图片文件大小上限，默认 32MB */
+    maxBytes?: number;
+}
+
 export interface NativeFsListResult {
     /** 解析 `~` 后的绝对路径 */
     path: string;
@@ -36,13 +41,17 @@ function homeDir(): string {
     return os.homedir() || process.env.HOME || "/";
 }
 
+function resolvePath(input: string | undefined, fallback: string): string {
+    let p = input?.trim() || fallback;
+    if (p === "~") p = homeDir();
+    else if (p.startsWith("~/")) p = path.join(homeDir(), p.slice(2));
+    if (p.includes("\0")) throw new Error("路径包含 NUL");
+    if (!path.isAbsolute(p)) throw new Error(`需要绝对路径: ${p}`);
+    return path.normalize(p);
+}
+
 function resolveDir(input: string | undefined): string {
-    let dir = input?.trim() || "~";
-    if (dir === "~") dir = homeDir();
-    else if (dir.startsWith("~/")) dir = path.join(homeDir(), dir.slice(2));
-    if (dir.includes("\0")) throw new Error("路径包含 NUL");
-    if (!path.isAbsolute(dir)) throw new Error(`需要绝对路径: ${dir}`);
-    return path.normalize(dir);
+    return resolvePath(input, "~");
 }
 
 function kindOf(stats: { isSymbolicLink(): boolean; isDirectory(): boolean; isFile(): boolean }): NativeFsFileKind {
@@ -59,7 +68,8 @@ function effectiveKind(entry: NativeFsEntry): NativeFsFileKind {
 /**
  * 桌面可用的原生文件系统只读接口。
  *
- * 目前只有 `list`：列出目录项和元数据，不读取文件内容。路径支持绝对路径和 `~`。
+ * `list` 列出目录项和元数据；`readImage` 只读取图片文件并转成 data URL，
+ * 不提供读取其他文件内容的接口。路径支持绝对路径和 `~`。
  */
 export class nativefs {
     async list(dirPath?: string, opts?: NativeFsListOptions): Promise<NativeFsListResult> {
@@ -106,5 +116,23 @@ export class nativefs {
         });
 
         return { path: dir, entries };
+    }
+
+    /**
+     * 读取图片文件并返回 data URL，供桌面壁纸等只需要图片内容的场景使用。
+     * 只接受 `image/*`，且大小不超过 `maxBytes`（默认 32MB）。
+     */
+    async readImage(filePath: string, opts?: NativeFsReadImageOptions): Promise<string> {
+        const file = resolvePath(filePath, "");
+        const stats = await fsp.stat(file);
+        if (!stats.isFile()) throw new Error(`不是文件: ${file}`);
+        const maxBytes = opts?.maxBytes ?? 32 * 1024 * 1024;
+        if (stats.size > maxBytes) {
+            throw new Error(`图片超过 ${Math.round(maxBytes / 1024 / 1024)} MB`);
+        }
+        const mime = mimeOfPath(file, "file");
+        if (!mime.startsWith("image/")) throw new Error(`不是图片文件: ${file}`);
+        const data = await fsp.readFile(file);
+        return `data:${mime};base64,${data.toString("base64")}`;
     }
 }

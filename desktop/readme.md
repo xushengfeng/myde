@@ -87,7 +87,7 @@ const stat = await fs.stat("file.txt"); // { size, mtime, isFile, isDirectory }
 
 ### nativefs
 
-原生文件系统的只读枚举接口，目前只提供目录列表，不读取文件内容。支持绝对路径和 `~`，默认列主目录：
+原生文件系统的只读接口。`list` 列出目录和元数据，`readImage` 只读取图片文件并返回 data URL（默认上限 32MB），不提供读取其他文件内容的方法。支持绝对路径和 `~`，默认列主目录：
 
 ```typescript
 const listing = await MSysApi.nativefs.list("~/Documents", { showHidden: false });
@@ -95,6 +95,9 @@ const listing = await MSysApi.nativefs.list("~/Documents", { showHidden: false }
 // listing.entries: [{ name, path, kind, targetKind?, size, mtime, hidden, mime }]
 
 await MSysApi.nativefs.list("/", { showHidden: true });
+
+const imageDataUrl = await MSysApi.nativefs.readImage("~/Pictures/wallpaper.jpg");
+// data:image/jpeg;base64,...；只接受 image/*，可用 { maxBytes } 调整大小上限
 ```
 
 目录项按目录优先、名称自然排序。符号链接的 `kind` 为 `symlink`，指向目录时 `targetKind` 为 `directory`。文件选择器用它列出目录。

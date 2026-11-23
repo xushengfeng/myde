@@ -1,7 +1,8 @@
-import { button, dynamicSelect, type ElType, input, select, spacer, txt, view } from "dkh-ui";
+import { button, dynamicSelect, type ElType, image, input, select, spacer, txt, view } from "dkh-ui";
 import type { ConnectConnection, PairingSession } from "../../../src/desktop-api";
 import { createFrameChart } from "./frame_chart";
 import { aLineText, gGlassStyle, gTextStyle, px, sSize2 } from "./ui";
+import type { WallpaperSlot } from "./wallpaper";
 
 export type ImePanelPreeditMode = "auto" | "always" | "never";
 
@@ -9,6 +10,16 @@ export type ImePanelPreeditMode = "auto" | "always" | "never";
 export type SettingsContentOptions = {
     getIconTheme(): string;
     setIconTheme(theme: string): void;
+    /** 当前壁纸 data URL（没有自定义或读取失败时是桌面自带壁纸） */
+    getWallpaper(slot: WallpaperSlot): string;
+    isDefaultWallpaper(slot: WallpaperSlot): boolean;
+    /** 读取自定义壁纸失败的原因；设置里保留路径，方便文件恢复后再次加载 */
+    getWallpaperError(slot: WallpaperSlot): string | undefined;
+    /** 打开桌面自己的文件选择器选择图片 */
+    chooseWallpaper(slot: WallpaperSlot): void;
+    /** 恢复桌面自带壁纸 */
+    resetWallpaper(slot: WallpaperSlot): void;
+    subscribeWallpaper(callback: () => void): () => void;
     /** 桌面绘制的窗口圆角（视觉 px） */
     getWindowRadius(): number;
     setWindowRadius(radius: number): void;
@@ -218,6 +229,59 @@ function dialogButton(label: string, primary = false) {
     });
 }
 
+function createWallpaperControl(op: SettingsContentOptions, slot: WallpaperSlot) {
+    const status = txt("").style({
+        fontSize: "11px",
+        lineHeight: "14px",
+        minHeight: "14px",
+        color: "#c33",
+    });
+    const preview = image(op.getWallpaper(slot), "wallpaper").style({
+        width: "104px",
+        height: "59px",
+        objectFit: "cover",
+        objectPosition: "center",
+        borderRadius: "8px",
+        border: "1px solid #0000001f",
+        background: "#00000010",
+        flexShrink: "0",
+    });
+    const chooseBtn = dialogButton("选择图片").on("click", () => {
+        try {
+            op.chooseWallpaper(slot);
+        } catch (error) {
+            status.sv(error instanceof Error ? error.message : String(error));
+        }
+    });
+    const resetBtn = dialogButton("恢复默认").on("click", () => {
+        try {
+            op.resetWallpaper(slot);
+        } catch (error) {
+            status.sv(error instanceof Error ? error.message : String(error));
+        }
+    });
+
+    function render() {
+        preview.attr({ src: op.getWallpaper(slot) });
+        resetBtn.style({ display: op.isDefaultWallpaper(slot) ? "none" : "" });
+        status.sv(op.getWallpaperError(slot) ?? "");
+    }
+
+    const unsubscribe = op.subscribeWallpaper(render);
+    render();
+
+    const el = view("y")
+        .style({ gap: "4px", flexShrink: "0" })
+        .add([
+            view("x")
+                .style({ alignItems: "center", gap: "8px" })
+                .add([preview, view("y").style({ gap: "6px" }).add([chooseBtn, resetBtn])]),
+            status,
+        ]);
+
+    return { el, dispose: unsubscribe };
+}
+
 function openConnectDialog(op: SettingsContentOptions, onDone: () => void) {
     const overlay = view().style({
         position: "absolute",
@@ -388,6 +452,12 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
                     clearTimeout(saveTimer);
                     saveTimer = window.setTimeout(saveTheme, 400);
                 });
+                const desktopWallpaper = createWallpaperControl(op, "desktop");
+                const lockWallpaper = createWallpaperControl(op, "lock");
+                sectionCleanup = () => {
+                    desktopWallpaper.dispose();
+                    lockWallpaper.dispose();
+                };
                 return view("y")
                     .style({ gap: px(sSize2.padding + 8) })
                     .add([
@@ -402,7 +472,16 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
                                 op.setWindowRadius,
                             ),
                         ),
-                        settingRow("壁纸", "当前使用默认桌面自带壁纸。", txt("默认").style({ opacity: "0.6" })),
+                        settingRow(
+                            "桌面壁纸",
+                            "图片居中填充整个屏幕；没有选择时使用桌面自带壁纸。",
+                            desktopWallpaper.el,
+                        ),
+                        settingRow(
+                            "锁屏壁纸",
+                            "锁屏界面单独使用，图片居中填充整个屏幕；没有选择时使用桌面自带壁纸。",
+                            lockWallpaper.el,
+                        ),
                     ]);
             },
         },

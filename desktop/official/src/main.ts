@@ -75,6 +75,7 @@ import {
     uToggleRow,
     vVolume,
 } from "./ui";
+import { createWallpaperStore, type WallpaperSlot } from "./wallpaper";
 
 /** Chromium / Electron 的 Scheduler API；当前 TS lib 没有声明 */
 declare const scheduler: { yield(): Promise<void> };
@@ -3493,6 +3494,12 @@ function openSettingsWindow() {
             const settingsContent = createSettingsContent({
                 getIconTheme: () => setting.get("icon.theme") || "breeze",
                 setIconTheme: (theme) => setting.set("icon.theme", theme),
+                getWallpaper: (slot) => wallpaper.src(slot),
+                isDefaultWallpaper: (slot) => wallpaper.isDefault(slot),
+                getWallpaperError: (slot) => wallpaper.error(slot),
+                chooseWallpaper: (slot) => openWallpaperChooser(slot),
+                resetWallpaper: (slot) => wallpaper.reset(slot),
+                subscribeWallpaper: (callback) => wallpaper.subscribe(callback),
                 getWindowRadius: () => windowRadius,
                 setWindowRadius,
                 getImePanelPreedit: () => (imeSetting.nget("panelPreedit") ?? "auto") as ImePanelPreeditMode,
@@ -3606,6 +3613,54 @@ MSysApi.portal?.on("fileChooser.request", (request) => {
         void request.cancel();
     }
 });
+
+/** 设置窗口里的壁纸选择：复用桌面的文件选择器，只列出图片 */
+function openWallpaperChooser(slot: WallpaperSlot) {
+    const request: FileChooserRequest = {
+        id: `wallpaper:${slot}`,
+        appId: "myde.desktop",
+        parentWindow: "",
+        modal: true,
+        title: slot === "desktop" ? "选择桌面壁纸" : "选择锁屏壁纸",
+        mode: "open",
+        acceptLabel: "选择",
+        multiple: false,
+        directory: false,
+        filters: [{ name: "图片", rules: [{ kind: "mime", pattern: "image/*" }] }],
+        choices: [],
+        currentName: "",
+        files: [],
+        cancel: async () => {},
+        fail: async () => {},
+        onCancel: () => () => {},
+        accept: async (selection) => {
+            const path = selection.paths[0];
+            if (!path) return { ok: false, error: "没有选择图片" };
+            try {
+                await wallpaper.setPath(slot, path);
+                return { ok: true };
+            } catch (error) {
+                return { ok: false, error: error instanceof Error ? error.message : String(error) };
+            }
+        },
+    };
+    openInternalWindow({
+        id: `internal:wallpaper-chooser:${slot}`,
+        title: fileChooserTitle(request),
+        icon: fileChooserHeaderIcon(request),
+        width: 860,
+        height: 580,
+        parent: SETTINGS_WINDOW_ID,
+        modal: true,
+        onClose: () => {
+            void request.cancel();
+        },
+        build: ({ close }) => {
+            const content = createFileChooserContent({ request, close });
+            return { el: content.el, dispose: content.dispose };
+        },
+    });
+}
 
 type AppIconLaunchInfo = {
     name: string;
@@ -5424,10 +5479,18 @@ const mainEl = view()
     })
     .addInto();
 
-const bg = image(fs.readFileAsDataURLSync("/assets/wallpaper/1.svg"), "wallpaper").style({
+const defaultWallpaperSrc = fs.readFileAsDataURLSync("/assets/wallpaper/1.svg");
+const wallpaper = createWallpaperStore({
+    defaultSrc: defaultWallpaperSrc,
+    getStoredPath: (slot) => setting.get(slot === "desktop" ? "wallpaper.desktop" : "wallpaper.lock") || undefined,
+    setStoredPath: (slot, path) => setting.set(slot === "desktop" ? "wallpaper.desktop" : "wallpaper.lock", path),
+    readImage: (path) => MSysApi.nativefs.readImage(path),
+});
+const bg = wallpaper.bind("desktop", image(defaultWallpaperSrc, "wallpaper")).style({
     width: "100%",
     height: "100%",
     objectFit: "cover",
+    objectPosition: "center",
 });
 
 /** 顶部/底部/左右工具栏占用的空间；只用于“可用区”计算，不限制 windowElWarp 的 DOM 尺寸 */
@@ -8743,12 +8806,14 @@ tools.registerTool(
     rawRegistry.get("time.minute").getAndSubscribe((v) => {
         mm.clear().add(nNumber(v.toString().padStart(2, "0"), { fontSize: 120 }));
     });
+    const lockWallpaper = wallpaper.bind("lock", image(defaultWallpaperSrc, "wallpaper")).style({
+        width: "100%",
+        height: "100%",
+        objectFit: "cover",
+        objectPosition: "center",
+    });
     lockScreenView.style({ width: "100%", height: "100%" }).add([
-        image(fs.readFileAsDataURLSync("/assets/wallpaper/1.svg"), "wallpaper").style({
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-        }),
+        lockWallpaper,
         view("y")
             .style({ position: "absolute", ...xPosition(0.5, 0.4), alignItems: "center", gap: px(40) })
             .add([day, clockEl]),
