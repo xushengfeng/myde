@@ -144,6 +144,8 @@
 
 ## 10. 组件模式
 
+- 禁止使用 select input（file color），因为它们的弹窗无法渲染，title也是同理。内建用dom画出来的软件如设置、文件选择器也禁止使用 select input file等，自己画。
+
 ### 10.1 工具弹窗
 
 - L1：`ui.bar` 或默认工具外壳，毛玻璃，负责 padding / gap。
