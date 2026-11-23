@@ -1567,6 +1567,147 @@
       ]
     },
     {
+      "name": "wl_touch",
+      "version": 10,
+      "request": [
+        {
+          "name": "release",
+          "args": [],
+          "since": 3,
+          "isDestructor": true
+        }
+      ],
+      "event": [
+        {
+          "name": "down",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint",
+              "summary": "serial number of the touch down event"
+            },
+            {
+              "name": "time",
+              "type": "uint",
+              "summary": "timestamp with millisecond granularity"
+            },
+            {
+              "name": "surface",
+              "type": "object",
+              "interface": "wl_surface",
+              "summary": "surface touched"
+            },
+            {
+              "name": "id",
+              "type": "int",
+              "summary": "the unique ID of this touch point"
+            },
+            {
+              "name": "x",
+              "type": "fixed",
+              "summary": "surface-local x coordinate"
+            },
+            {
+              "name": "y",
+              "type": "fixed",
+              "summary": "surface-local y coordinate"
+            }
+          ]
+        },
+        {
+          "name": "up",
+          "args": [
+            {
+              "name": "serial",
+              "type": "uint",
+              "summary": "serial number of the touch up event"
+            },
+            {
+              "name": "time",
+              "type": "uint",
+              "summary": "timestamp with millisecond granularity"
+            },
+            {
+              "name": "id",
+              "type": "int",
+              "summary": "the unique ID of this touch point"
+            }
+          ]
+        },
+        {
+          "name": "motion",
+          "args": [
+            {
+              "name": "time",
+              "type": "uint",
+              "summary": "timestamp with millisecond granularity"
+            },
+            {
+              "name": "id",
+              "type": "int",
+              "summary": "the unique ID of this touch point"
+            },
+            {
+              "name": "x",
+              "type": "fixed",
+              "summary": "surface-local x coordinate"
+            },
+            {
+              "name": "y",
+              "type": "fixed",
+              "summary": "surface-local y coordinate"
+            }
+          ]
+        },
+        {
+          "name": "frame",
+          "args": []
+        },
+        {
+          "name": "cancel",
+          "args": []
+        },
+        {
+          "name": "shape",
+          "args": [
+            {
+              "name": "id",
+              "type": "int",
+              "summary": "the unique ID of this touch point"
+            },
+            {
+              "name": "major",
+              "type": "fixed",
+              "summary": "length of the major axis in surface-local coordinates"
+            },
+            {
+              "name": "minor",
+              "type": "fixed",
+              "summary": "length of the minor axis in surface-local coordinates"
+            }
+          ],
+          "since": 6
+        },
+        {
+          "name": "orientation",
+          "args": [
+            {
+              "name": "id",
+              "type": "int",
+              "summary": "the unique ID of this touch point"
+            },
+            {
+              "name": "orientation",
+              "type": "fixed",
+              "summary": "angle between major axis and positive surface y-axis in degrees"
+            }
+          ],
+          "since": 6
+        }
+      ],
+      "enum": []
+    },
+    {
       "name": "wl_output",
       "version": 4,
       "request": [

@@ -165,6 +165,7 @@ export type {
     ServerRequests,
     Size,
     TextInputState,
+    TouchCommand,
     WaylandWinId,
     WindowInfo,
     WindowStates,

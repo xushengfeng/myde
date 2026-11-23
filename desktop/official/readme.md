@@ -8,7 +8,7 @@
 
 - DOM 模式（window）：浏览器为触摸生成的 pointer 事件和其他指针一样进入聚合层，`pointerId`/`isPrimary` 原样保留；`html`/`body` 设置 `touch-action: none`，关闭浏览器自己的平移、缩放与双击放大手势
 - evdev 模式（desktop）：MT-B 用 `slot` + `ABS_MT_TRACKING_ID` 跟踪每根手指，绝对坐标按屏幕量程映射；没有 tracking id 的旧设备退回单指 `BTN_TOUCH` 路径
-- 桌面光标和窗口转发只跟随主指针，其余指针事件照常派发给 UI，供交互层实现长按、双指缩放等手势
+- 桌面光标只跟随主指针；落在客户端窗口上的每根手指都转发为 Wayland 触摸点（`input.touch` / `wl_touch`），落在桌面 UI 上的触摸仍走 pointer 事件供交互层实现长按、双指缩放等手势
 - 桌面与 UI 只监听 pointer 事件，不依赖 mouse 事件
 
 ### 触摸板

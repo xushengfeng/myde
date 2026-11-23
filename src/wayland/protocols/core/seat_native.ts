@@ -4,10 +4,10 @@ import { newFd } from "../../utils/fd";
 import { getEnumValue } from "../../utils/wayland-proto";
 
 /**
- * 原生输入事件出口：方法名和参数与 `wl_pointer` / `wl_keyboard` 事件一一对应。
+ * 原生输入事件出口：方法名和参数与 `wl_pointer` / `wl_keyboard` / `wl_touch` 事件一一对应。
  *
  * 这一层**不维护焦点**、不去重、不补事件；谁该 enter/leave、什么时候补 release
- * 由 `SeatStore` 上的状态机决定。所有 `wl_pointer.*` / `wl_keyboard.*` 事件都从这里发。
+ * 由 `SeatStore` 上的状态机决定。所有 `wl_pointer.*` / `wl_keyboard.*` / `wl_touch.*` 事件都从这里发。
  */
 
 export function pointerEnter(
@@ -116,6 +116,49 @@ export function pointerAxisRelativeDirection(
     direction: number,
 ): void {
     ctx.sendNow(pointer, "wl_pointer.axis_relative_direction", { axis, direction });
+}
+
+export function touchDown(
+    ctx: ModuleCtx,
+    touch: WaylandObjectId2<"wl_touch">,
+    serial: number,
+    time: number,
+    surface: SurfaceId,
+    id: number,
+    x: number,
+    y: number,
+    send: ModuleCtx["send"] = ctx.sendNow,
+): void {
+    send(touch, "wl_touch.down", { serial, time, surface, id, x, y });
+}
+
+export function touchUp(
+    ctx: ModuleCtx,
+    touch: WaylandObjectId2<"wl_touch">,
+    serial: number,
+    time: number,
+    id: number,
+): void {
+    ctx.sendNow(touch, "wl_touch.up", { serial, time, id });
+}
+
+export function touchMotion(
+    ctx: ModuleCtx,
+    touch: WaylandObjectId2<"wl_touch">,
+    time: number,
+    id: number,
+    x: number,
+    y: number,
+): void {
+    ctx.sendNow(touch, "wl_touch.motion", { time, id, x, y });
+}
+
+export function touchFrame(ctx: ModuleCtx, touch: WaylandObjectId2<"wl_touch">): void {
+    ctx.sendNow(touch, "wl_touch.frame", {});
+}
+
+export function touchCancel(ctx: ModuleCtx, touch: WaylandObjectId2<"wl_touch">): void {
+    ctx.sendNow(touch, "wl_touch.cancel", {});
 }
 
 export function keyboardKeymap(

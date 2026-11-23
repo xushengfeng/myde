@@ -273,6 +273,20 @@ export interface ScrollCommand {
 }
 
 /**
+ * 触摸点事件（wl_touch）。
+ *
+ * 一个触摸点从 `down` 开始，经若干 `move`，以 `up` 或 `cancel` 结束；`id` 在序列内唯一。
+ * 坐标与指针一样相对目标窗口的 xdg_surface 元素左上角，由 server 换算成 surface 局部坐标。
+ * 触摸序列按下时命中的窗口/客户端即整段序列的归属，后续 move/up 不会中途切给别的客户端。
+ */
+export type TouchCommand =
+    | { type: "down"; id: number; x: number; y: number }
+    | { type: "move"; id: number; x: number; y: number }
+    | { type: "up"; id: number }
+    /** 取消该 seat 上全部触摸点（wl_touch.cancel 没有 id，按客户端整体取消） */
+    | { type: "cancel" };
+
+/**
  * 触摸板语义手势（pointer-gestures-unstable-v1）。
  *
  * 序列由桌面保证：`begin` → 若干 `update` → `end`；`hold` 只有 `begin` / `end`。
@@ -358,6 +372,8 @@ export type ServerNotifyMap = {
     /** 内部：host 强制结束旧连接的指针 grab（补发 release）；桌面不需要调用。handle 参数未使用 */
     "input.pointerCancel": [handle: WinHandle, seat?: string];
     "input.scroll": [handle: WinHandle, ev: ScrollCommand, seat?: string];
+    /** 触摸屏（wl_touch）：发到按下时命中的窗口；多指各自按 `id` 独立成序列 */
+    "input.touch": [handle: WinHandle, ev: TouchCommand, seat?: string];
     /** 触摸板手势；发给 handle 对应窗口，`begin`/`end` 的 serial、surface 由 server 补 */
     "input.gesture": [handle: WinHandle, ev: GestureCommand, seat?: string];
     "input.key": [handle: WinHandle, key: number, state: "pressed" | "released", seat?: string];

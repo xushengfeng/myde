@@ -30,6 +30,7 @@ import type {
     ServerEvents,
     ServerNotifyMap,
     ServerRequests,
+    TouchCommand,
     WindowInfo,
     WinHandle,
 } from "../api";
@@ -157,7 +158,7 @@ class WaylandServer {
     private clipboardTokens = new Map<string, ClipboardState>();
     /** 跨客户端拖拽会话 */
     private dnd: DndHub;
-    /** 跨 client 的 pointer/keyboard 归属；协议细节仍由各连接的 core 状态机处理 */
+    /** 跨 client 的 pointer/keyboard/touch 归属；协议细节仍由各连接的 core 状态机处理 */
     private seatRouter = new SeatRouter((clientId) => this.seatClientActions(clientId));
 
     /**
@@ -362,6 +363,8 @@ class WaylandServer {
             pointerCancel: (seat) => client.runAction("input.pointerCancel", 0 as WaylandWinId, [seat]),
             scroll: (winId, ev, seat) => client.runAction("input.scroll", winId, [ev, seat]),
             gesture: (winId, ev, seat) => client.runAction("input.gesture", winId, [ev, seat]),
+            touch: (winId, ev, seat) => client.runAction("input.touch", winId, [ev, seat]),
+            touchCancel: (seat) => client.runAction("input.touch", 0 as WaylandWinId, [{ type: "cancel" }, seat]),
             key: (winId, key, state, seat) => client.runAction("input.key", winId, [key, state, seat]),
             focus: (winId) => client.runAction("window.focus", winId, []),
             blur: (winId) => client.runAction("window.blur", winId, []),
@@ -406,6 +409,7 @@ class WaylandServer {
             key === "input.pointer" ||
             key === "input.scroll" ||
             key === "input.gesture" ||
+            key === "input.touch" ||
             key === "input.key" ||
             key === "window.focus" ||
             key === "window.blur"
@@ -429,6 +433,10 @@ class WaylandServer {
                 const ev = args[1] as GestureCommand;
                 const seat = (args[2] as string | undefined) ?? "seat0";
                 this.seatRouter.gesture(owner, ev, seat);
+            } else if (key === "input.touch") {
+                const ev = args[1] as TouchCommand;
+                const seat = (args[2] as string | undefined) ?? "seat0";
+                this.seatRouter.touch(owner, ev, seat);
             } else if (key === "input.key") {
                 const state = args[2] as "pressed" | "released";
                 const seat = (args[3] as string | undefined) ?? "seat0";

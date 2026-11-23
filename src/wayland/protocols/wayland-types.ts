@@ -2,7 +2,7 @@
 import type { WaylandObjectId } from "../utils/wayland-binary";
 type WaylandObjectId2<T extends string> = WaylandObjectId & { __interface: T };
 
-export type WaylandInterfaces = "wl_display" | "wl_registry" | "wl_callback" | "wl_compositor" | "wl_shm_pool" | "wl_shm" | "wl_buffer" | "wl_surface" | "wl_seat" | "wl_pointer" | "wl_keyboard" | "wl_output" | "wl_region" | "wl_data_device" | "wl_data_device_manager" | "wl_data_offer" | "wl_data_source" | "wl_subcompositor" | "wl_subsurface" | "xdg_wm_base" | "xdg_surface" | "xdg_toplevel" | "xdg_popup" | "xdg_positioner" | "wp_viewporter" | "wp_viewport" | "wp_fractional_scale_manager_v1" | "wp_fractional_scale_v1" | "zxdg_output_manager_v1" | "zxdg_output_v1" | "wp_presentation" | "wp_presentation_feedback" | "ext_background_effect_manager_v1" | "ext_background_effect_surface_v1" | "zwp_linux_dmabuf_v1" | "zwp_linux_buffer_params_v1" | "zwp_linux_dmabuf_feedback_v1" | "zwp_text_input_v3" | "zwp_text_input_manager_v3" | "zwp_text_input_v1" | "zwp_text_input_manager_v1" | "wp_cursor_shape_manager_v1" | "wp_cursor_shape_device_v1" | "zxdg_decoration_manager_v1" | "zxdg_toplevel_decoration_v1" | "zwp_pointer_gestures_v1" | "zwp_pointer_gesture_swipe_v1" | "zwp_pointer_gesture_pinch_v1" | "zwp_pointer_gesture_hold_v1" | "xdg_wm_dialog_v1" | "xdg_dialog_v1" | "zxdg_exporter_v1" | "zxdg_exported_v1" | "zxdg_exporter_v2" | "zxdg_exported_v2";
+export type WaylandInterfaces = "wl_display" | "wl_registry" | "wl_callback" | "wl_compositor" | "wl_shm_pool" | "wl_shm" | "wl_buffer" | "wl_surface" | "wl_seat" | "wl_pointer" | "wl_keyboard" | "wl_touch" | "wl_output" | "wl_region" | "wl_data_device" | "wl_data_device_manager" | "wl_data_offer" | "wl_data_source" | "wl_subcompositor" | "wl_subsurface" | "xdg_wm_base" | "xdg_surface" | "xdg_toplevel" | "xdg_popup" | "xdg_positioner" | "wp_viewporter" | "wp_viewport" | "wp_fractional_scale_manager_v1" | "wp_fractional_scale_v1" | "zxdg_output_manager_v1" | "zxdg_output_v1" | "wp_presentation" | "wp_presentation_feedback" | "ext_background_effect_manager_v1" | "ext_background_effect_surface_v1" | "zwp_linux_dmabuf_v1" | "zwp_linux_buffer_params_v1" | "zwp_linux_dmabuf_feedback_v1" | "zwp_text_input_v3" | "zwp_text_input_manager_v3" | "zwp_text_input_v1" | "zwp_text_input_manager_v1" | "wp_cursor_shape_manager_v1" | "wp_cursor_shape_device_v1" | "zxdg_decoration_manager_v1" | "zxdg_toplevel_decoration_v1" | "zwp_pointer_gestures_v1" | "zwp_pointer_gesture_swipe_v1" | "zwp_pointer_gesture_pinch_v1" | "zwp_pointer_gesture_hold_v1" | "xdg_wm_dialog_v1" | "xdg_dialog_v1" | "zxdg_exporter_v1" | "zxdg_exported_v1" | "zxdg_exporter_v2" | "zxdg_exported_v2";
 
 export enum WaylandEventOpcode {
     wl_display__error = 0,
@@ -50,6 +50,13 @@ export enum WaylandEventOpcode {
     wl_keyboard__key = 3,
     wl_keyboard__modifiers = 4,
     wl_keyboard__repeat_info = 5,
+    wl_touch__down = 0,
+    wl_touch__up = 1,
+    wl_touch__motion = 2,
+    wl_touch__frame = 3,
+    wl_touch__cancel = 4,
+    wl_touch__shape = 5,
+    wl_touch__orientation = 6,
     wl_output__geometry = 0,
     wl_output__mode = 1,
     wl_output__done = 2,
@@ -356,6 +363,54 @@ export type WaylandEventObj = {
         rate: number;
         /** delay in milliseconds since key down until repeating starts*/
         delay: number;
+    };
+    "wl_touch.down": {
+        /** serial number of the touch down event*/
+        serial: number;
+        /** timestamp with millisecond granularity*/
+        time: number;
+        /** surface touched*/
+        surface: WaylandObjectId2<"wl_surface">;
+        /** the unique ID of this touch point*/
+        id: number;
+        /** surface-local x coordinate*/
+        x: number;
+        /** surface-local y coordinate*/
+        y: number;
+    };
+    "wl_touch.up": {
+        /** serial number of the touch up event*/
+        serial: number;
+        /** timestamp with millisecond granularity*/
+        time: number;
+        /** the unique ID of this touch point*/
+        id: number;
+    };
+    "wl_touch.motion": {
+        /** timestamp with millisecond granularity*/
+        time: number;
+        /** the unique ID of this touch point*/
+        id: number;
+        /** surface-local x coordinate*/
+        x: number;
+        /** surface-local y coordinate*/
+        y: number;
+    };
+    "wl_touch.frame": {};
+    "wl_touch.cancel": {};
+    "wl_touch.shape": {
+        /** the unique ID of this touch point*/
+        id: number;
+        /** length of the major axis in surface-local coordinates*/
+        major: number;
+        /** length of the minor axis in surface-local coordinates*/
+        minor: number;
+    };
+    "wl_touch.orientation": {
+        /** the unique ID of this touch point*/
+        id: number;
+        /** angle between major axis and positive surface y-axis in degrees*/
+        orientation: number;
     };
     "wl_output.geometry": {
         /** x position within the global compositor space*/
@@ -875,6 +930,7 @@ export type WaylandRequestObj = {
     };
     "wl_pointer.release": {};
     "wl_keyboard.release": {};
+    "wl_touch.release": {};
     "wl_output.release": {};
     "wl_region.destroy": {};
     "wl_region.add": {

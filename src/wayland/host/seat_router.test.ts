@@ -14,6 +14,8 @@ function setup() {
         pointerCancel: (seat) => calls.push(`${id}:cancel:${seat}`),
         scroll: (winId, ev) => calls.push(`${id}:scroll:${winId}:${ev.deltaY}`),
         gesture: (winId, ev) => calls.push(`${id}:gesture:${winId}:${ev.type}:${ev.phase}`),
+        touch: (winId, ev) => calls.push(`${id}:touch:${winId}:${ev.type}`),
+        touchCancel: (seat) => calls.push(`${id}:touchCancel:${seat}`),
         key: (winId, key, state) => calls.push(`${id}:key:${winId}:${key}:${state}`),
         focus: (winId) => calls.push(`${id}:focus:${winId}`),
         blur: (winId) => calls.push(`${id}:blur:${winId}`),
@@ -123,5 +125,21 @@ describe("SeatRouter", () => {
         router.pointer(owner("a", winA), down(0));
         router.gesture(owner("b", winB), { type: "swipe", phase: "begin", fingers: 3 });
         expect(calls).toEqual(["a:pointer:1:down", "a:gesture:1:swipe:begin"]);
+    });
+
+    it("触摸点按 id 跟随 down 时的 client，move/up 不切窗口", () => {
+        const { router, calls, owner } = setup();
+        router.touch(owner("a", winA), { type: "down", id: 1, x: 0, y: 0 });
+        router.touch(owner("b", winB), { type: "move", id: 1, x: 1, y: 1 });
+        router.touch(owner("b", winB), { type: "up", id: 1 });
+        expect(calls).toEqual(["a:touch:1:down", "a:touch:1:move", "a:touch:1:up"]);
+    });
+
+    it("多指可以同时按在不同 client；cancel 整体取消两者", () => {
+        const { router, calls, owner } = setup();
+        router.touch(owner("a", winA), { type: "down", id: 1, x: 0, y: 0 });
+        router.touch(owner("b", winB), { type: "down", id: 2, x: 0, y: 0 });
+        router.touch(owner("a", winA), { type: "cancel" });
+        expect(calls).toEqual(["a:touch:1:down", "b:touch:2:down", "a:touchCancel:seat0", "b:touchCancel:seat0"]);
     });
 });

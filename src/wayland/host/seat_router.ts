@@ -1,9 +1,9 @@
-import type { GestureCommand, PointerCommand, ScrollCommand, WinHandle } from "../api";
+import type { GestureCommand, PointerCommand, ScrollCommand, TouchCommand, WinHandle } from "../api";
 import type { WaylandWinId } from "../module";
 
 /**
- * 跨 client 的 seat 归属路由：只维护「哪个 client 当前拥有 pointer/keyboard」，
- * 协议细节（surface 级 enter/leave、grab、补 release）仍由各自的 SeatState 负责。
+ * 跨 client 的 seat 归属路由：只维护「哪个 client 当前拥有 pointer/keyboard/touch」，
+ * 协议细节（surface 级 enter/leave、grab、补 release、触摸点的 surface 绑定）仍由各自的 SeatState 负责。
  *
  * 它不维护 target 流，也不做时间对齐：只在下一个事件到达时，给旧 client 补 leave/cancel。
  */
@@ -14,6 +14,8 @@ export interface SeatClientActions {
     pointerCancel(seat: string): void;
     scroll(winId: WaylandWinId, ev: ScrollCommand, seat: string): void;
     gesture(winId: WaylandWinId, ev: GestureCommand, seat: string): void;
+    touch(winId: WaylandWinId, ev: TouchCommand, seat: string): void;
+    touchCancel(seat: string): void;
     key(winId: WaylandWinId, key: number, state: "pressed" | "released", seat: string): void;
     focus(winId: WaylandWinId, seat: string): void;
     blur(winId: WaylandWinId, seat: string): void;
@@ -34,6 +36,11 @@ interface SeatRoute {
     buttons: Set<number>;
     /** 当前 keyboard 归属 */
     keyboard?: RouteOwner;
+    /**
+     * 触摸点 id → 归属：down 时锁定，up 时解除。
+     * 同一 id 出现在别的窗口时先给旧客户端发 cancel（wl_touch.cancel 是整体取消，旧客户端的点一起清掉）。
+     */
+    touches: Map<number, RouteOwner>;
 }
 
 export class SeatRouter {
@@ -44,7 +51,7 @@ export class SeatRouter {
     #seat(name: string): SeatRoute {
         let route = this.#seats.get(name);
         if (route === undefined) {
-            route = { buttons: new Set() };
+            route = { buttons: new Set(), touches: new Map() };
             this.#seats.set(name, route);
         }
         return route;
@@ -141,6 +148,45 @@ export class SeatRouter {
         this.getClient(owner.clientId)?.gesture(owner.winId, ev, seat);
     }
 
+    /**
+     * 触摸点没有跨窗口的焦点切换：down 时绑定客户端，move/up 跟着 id 走。
+     * 客户端之间互不影响（不同手指可以同时按在各自窗口上）；只有同一个 id 撞车时才取消旧序列。
+     */
+    touch(owner: RouteOwner, ev: TouchCommand, seat = "seat0"): void {
+        const route = this.#seat(seat);
+        if (ev.type === "cancel") {
+            const clients = new Set<string>();
+            for (const target of route.touches.values()) clients.add(target.clientId);
+            route.touches.clear();
+            for (const clientId of clients) this.getClient(clientId)?.touchCancel(seat);
+            return;
+        }
+
+        if (ev.type === "down") {
+            const existing = route.touches.get(ev.id);
+            if (existing !== undefined) {
+                // 同一个触摸 id 重新按下：旧序列的坐标空间已不可信，整体取消旧客户端
+                this.#cancelTouches(existing.clientId, route, seat);
+            }
+            route.touches.set(ev.id, owner);
+            this.getClient(owner.clientId)?.touch(owner.winId, ev, seat);
+            return;
+        }
+
+        const target = route.touches.get(ev.id);
+        if (target === undefined) return;
+        if (ev.type === "up") route.touches.delete(ev.id);
+        this.getClient(target.clientId)?.touch(target.winId, ev, seat);
+    }
+
+    /** wl_touch.cancel 按客户端整体取消：清掉它在这把 seat 上的全部触摸点 */
+    #cancelTouches(clientId: string, route: SeatRoute, seat: string): void {
+        for (const [id, target] of route.touches) {
+            if (target.clientId === clientId) route.touches.delete(id);
+        }
+        this.getClient(clientId)?.touchCancel(seat);
+    }
+
     /** 当前 client pointer grab 的窗口；null 表示没有 grab */
     grab(seat = "seat0"): WinHandle | null {
         const route = this.#seats.get(seat);
@@ -192,6 +238,9 @@ export class SeatRouter {
                 route.buttons.clear();
             }
             if (route.keyboard?.handle === handle) route.keyboard = undefined;
+            for (const [id, target] of route.touches) {
+                if (target.handle === handle) route.touches.delete(id);
+            }
         }
     }
 
@@ -204,6 +253,9 @@ export class SeatRouter {
                 route.buttons.clear();
             }
             if (route.keyboard?.clientId === clientId) route.keyboard = undefined;
+            for (const [id, target] of route.touches) {
+                if (target.clientId === clientId) route.touches.delete(id);
+            }
         }
     }
 }

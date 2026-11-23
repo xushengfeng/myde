@@ -77,6 +77,7 @@ function makeCtx() {
             all: () => [seat][Symbol.iterator](),
             isUserActionSerial: () => true,
             isActivePointerGrab: () => true,
+            activeTouchSerial: () => undefined,
             beginPointerGrab: (_seat: unknown, _winId: number, _surface: number, button: number, serial: number) => {
                 seat.pointerGrab = { serial, surface: 10, winId: 20, buttons: new Set([button]) };
             },
@@ -85,6 +86,7 @@ function makeCtx() {
                 return seat.pointerGrab.buttons.size === 0;
             },
             noteKeyboardPress: () => {},
+            noteTouchPress: () => {},
             addModifier: () => {},
             removeModifier: () => {},
             modifierMask: () => 0,

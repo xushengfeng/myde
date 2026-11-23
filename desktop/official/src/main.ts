@@ -2091,8 +2091,21 @@ let pointerTarget: PointerHit | undefined;
 type PointerRoute = { kind: "client"; hit: PointerHit } | { kind: "desktop"; buttons: Set<number> };
 const pointerRoutes = new Map<string, PointerRoute>();
 
+/** 触摸点 pointerId → 按下时命中的客户端窗口；整段触摸序列固定在这个窗口上 */
+const touchRoutes = new Map<number, PointerHit>();
+
 function pointerKey(p: PointerEvent) {
     return `${p.pointerType || "mouse"}:${p.pointerId ?? 1}`;
+}
+
+/** 视口坐标 → 命中窗口的 surface-local 逻辑坐标；窗口已关闭时返回 undefined */
+function pointerLocal(hit: PointerHit, p: { x: number; y: number }) {
+    const info = server.server.windows.get(hit.handle);
+    const rect = info ? render.getXdgSurfaceEle(info.renderId)?.getBoundingClientRect() : undefined;
+    if (!info || !rect) return undefined;
+    // DOM 是桌面物理 px；Wayland 坐标是 surface-local 逻辑 px
+    const scale = info.scale || 1;
+    return { x: (p.x - rect.left) / scale, y: (p.y - rect.top) / scale };
 }
 
 /** 正在用鼠标拖拽缩放的窗口 id；期间指针事件不转发给 Wayland 客户端 */
@@ -4663,14 +4676,71 @@ function sendPointerTo(hit: PointerHit, type: "move" | "down" | "up", p: Pointer
     const ev = { type, x: nx, y: ny, button: p.button };
     server.server.notify("input.pointer", info.handle, ev);
     if (type === "down") {
-        viewData.focusWin(info.handle);
-        ime?.pointerDown();
-        for (const other of server.server.windows.list()) {
-            if (other.clientId === info.clientId && other.handle !== info.handle) {
-                server.server.notify("window.blur", other.handle);
-            }
+        focusClientWindow(info);
+    }
+}
+
+/**
+ * 触摸序列按 `pointerId` 独立路由：down 命中客户端窗口就整段发给它（`input.touch`），
+ * move/up 跟着同一个窗口走；落在桌面 UI 上的触摸不产生 Wayland 事件，由模拟的 pointer 事件处理。
+ */
+function sendTouchPointerEvent(type: "move" | "down" | "up", p: PointerEvent): PointerHit | undefined {
+    const id = p.pointerId ?? 1;
+    if (type === "down") {
+        if (touchRoutes.has(id)) return undefined;
+        const hit = pointerHits(p)[0];
+        if (!hit) return undefined;
+        const local = pointerLocal(hit, p);
+        if (!local) return undefined;
+        touchRoutes.set(id, hit);
+        server.server.notify("input.touch", hit.handle, { type: "down", id, x: local.x, y: local.y });
+        const info = server.server.windows.get(hit.handle);
+        if (info) focusClientWindow(info);
+        pointerTarget = hit;
+        return hit;
+    }
+    const hit = touchRoutes.get(id);
+    if (!hit) return undefined;
+    if (type === "move") {
+        const local = pointerLocal(hit, p);
+        if (!local) {
+            touchRoutes.delete(id);
+            return undefined;
+        }
+        server.server.notify("input.touch", hit.handle, { type: "move", id, x: local.x, y: local.y });
+        pointerTarget = hit;
+        return hit;
+    }
+    server.server.notify("input.touch", hit.handle, { type: "up", id });
+    touchRoutes.delete(id);
+    return hit;
+}
+
+/** 客户端窗口获得焦点：切走同 client 的其它窗口，并收起输入法指针态 */
+function focusClientWindow(info: WindowInfo) {
+    viewData.focusWin(info.handle);
+    ime?.pointerDown();
+    for (const other of server.server.windows.list()) {
+        if (other.clientId === info.clientId && other.handle !== info.handle) {
+            server.server.notify("window.blur", other.handle);
         }
     }
+}
+
+/** 触摸拖拽结束时补上触摸点的 up，客户端不会停在按住状态 */
+function endTouchRoute(id: number) {
+    const hit = touchRoutes.get(id);
+    if (!hit) return;
+    touchRoutes.delete(id);
+    server.server.notify("input.touch", hit.handle, { type: "up", id });
+}
+
+/** 取消某个触摸序列（设备移除、息屏等），`cancel` 语义由 server 落成 wl_touch.cancel */
+function cancelTouchRoute(id: number) {
+    const hit = touchRoutes.get(id);
+    if (!hit) return;
+    touchRoutes.delete(id);
+    server.server.notify("input.touch", hit.handle, { type: "cancel" });
 }
 
 type StationDrag = {
@@ -4768,6 +4838,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): Pointe
         const stationArmed = overStation && performance.now() - stationHoverAt >= 160;
         if (stationArmed) {
             if (type === "up") {
+                if (p.pointerType === "touch") endTouchRoute(p.pointerId ?? 1);
                 void dropDragToStation();
                 pointerRoutes.delete(key);
                 pointerTarget = undefined;
@@ -4780,6 +4851,7 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): Pointe
             server.server.notify("dnd.move", activeDrag.token, target ?? null);
         } else if (type === "up") {
             // 没有目标也走 drop(null)：让 GTK/Firefox 得到“窗口外释放”而不是取消
+            if (p.pointerType === "touch") endTouchRoute(p.pointerId ?? 1);
             server.server.notify("dnd.drop", activeDrag.token, target ?? null);
             activeDrag = undefined;
             clipboardStationTool?.setDragActive(false);
@@ -4788,6 +4860,9 @@ function sendPointerEvent(type: "move" | "down" | "up", p: PointerEvent): Pointe
         }
         return undefined;
     }
+
+    // 触摸屏：每个接触点走 wl_touch，不合成鼠标按键
+    if (p.pointerType === "touch") return sendTouchPointerEvent(type, p);
 
     if (type === "down") {
         let route = pointerRoutes.get(key);
@@ -5278,6 +5353,9 @@ server.server.on("window.closed", (wid) => {
         if (route.kind === "client" && route.hit.handle === wid) {
             pointerRoutes.set(key, { kind: "desktop", buttons: new Set() });
         }
+    }
+    for (const [id, hit] of touchRoutes) {
+        if (hit.handle === wid) touchRoutes.delete(id);
     }
 });
 
@@ -9100,6 +9178,7 @@ function dispatchInput(e: UniInputEvent) {
         // 用任意输入唤醒，唤醒这一下不交给应用；锁屏息屏时回到锁屏界面
         // 被吞掉的按下/抬起不会成对到达，清掉指针归属避免一直停在某个客户端上
         pointerRoutes.clear();
+        for (const id of [...touchRoutes.keys()]) cancelTouchRoute(id);
         pointerTarget = undefined;
         void setScreenOff(false);
         if (stateLock.getState() === "xipin") stateLock.setState("lock");
@@ -9460,7 +9539,11 @@ function isSecondaryTouch(e: PointerEvent) {
 }
 
 body.on("pointermove", (e) => {
-    if (isSecondaryTouch(e)) return;
+    if (isSecondaryTouch(e)) {
+        // 副手指也要进入 Wayland：它可能是双指缩放/平移的另一半
+        if (!e.isTrusted) sendPointerEvent("move", e);
+        return;
+    }
     mouseMove(e.x, e.y, e);
 });
 // 指针按下/抬起在 window capture 统一处理：路由层不再局限于窗口元素，
@@ -9468,7 +9551,7 @@ body.on("pointermove", (e) => {
 window.addEventListener(
     "pointerdown",
     (e) => {
-        if (e.isTrusted || isSecondaryTouch(e)) return;
+        if (e.isTrusted) return;
         sendPointerEvent("down", e);
     },
     true,
@@ -9476,7 +9559,7 @@ window.addEventListener(
 window.addEventListener(
     "pointerup",
     (e) => {
-        if (e.isTrusted || isSecondaryTouch(e)) return;
+        if (e.isTrusted) return;
         sendPointerEvent("up", e);
     },
     true,

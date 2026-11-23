@@ -11,9 +11,10 @@
     - wl_shm 部分
     - wl_buffer
     - wl_surface 部分
-    - wl_seat 还没有 touch；registry **一次广播两把**（`seat0`/`seat1`，见 `host/server.ts` 的 `initWaylandProtocols`）
+    - wl_seat（`pointer` / `keyboard` / `touch`；registry **一次广播两把** `seat0`/`seat1`，见 `host/server.ts` 的 `initWaylandProtocols`）
     - wl_pointer 部分
     - wl_keyboard 还没有 repeat
+    - wl_touch（down/move/up/frame/cancel；shape/orientation 未发送，release v3+）
     - wl_output 只是硬编码，还没有添加硬件处理
     - wl_region
     - wl_data_device 部分（selection + 同 client drag-and-drop）
@@ -159,7 +160,7 @@ commit」的，被丢掉的提交不会有人再补画。所以像素链路分�
   `lookupExport(handle)` 把 xdg-foreign 导出的句柄解析成窗口身份，portal 的 `parent_window` 用它）
 - **命令**：`server.notify("window.focus" | … | "input.pointer" | …, handle, …)`
   → `host/server.ts` 按 handle 反查 `(client, winId)` → 协议模块的 `actions` 表，组包在协议文件里。
-  `input.pointer|scroll|gesture|key|text` 末尾可带 `seat`（缺省 `"seat0"`，选择器语义、不广播）：
+  `input.pointer|scroll|gesture|touch|key|text` 末尾可带 `seat`（缺省 `"seat0"`，选择器语义、不广播）：
   桌面喂第二把光标（如远程协作者）时传 `"seat1"`。
 - **应答**：`server.respond("surfaceBounds.request", () => ({ width, height }))`
 - **输出**：`server.outputs.get()` / `server.outputs.set({ name, mode, scale, transform })`。

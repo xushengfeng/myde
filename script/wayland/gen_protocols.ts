@@ -26,6 +26,7 @@ const supportedProtocols: Array<{
             { name: "wl_seat", version: 10 },
             { name: "wl_pointer", version: 10 },
             { name: "wl_keyboard", version: 10 },
+            { name: "wl_touch", version: 10 },
             { name: "wl_output", version: 4 },
             { name: "wl_region", version: 1 },
             { name: "wl_data_device", version: 3 },

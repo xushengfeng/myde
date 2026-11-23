@@ -36,6 +36,7 @@ export type {
     ServerRequests,
     Size,
     TextInputState,
+    TouchCommand,
     WindowInfo,
     WindowStates,
     WinHandle,

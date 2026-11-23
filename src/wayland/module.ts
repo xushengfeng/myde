@@ -658,10 +658,17 @@ export interface SeatRecord {
     pointers: Set<WaylandObjectId2<"wl_pointer">>;
     /** 同上，`wl_keyboard` 资源可能不止一个 */
     keyboards: Set<WaylandObjectId2<"wl_keyboard">>;
+    /** 同上，`wl_touch` 资源可能不止一个 */
+    touches: Set<WaylandObjectId2<"wl_touch">>;
     /** 指针焦点：该 seat 的 `wl_pointer` 已 enter 的 surface（leave/enter 的比较基线） */
     pointerFocus: SurfaceId | null;
     /** 指针焦点内的最近坐标：后创建的 wl_pointer 补发 enter 时用 */
     pointerPos: { x: number; y: number };
+    /**
+     * 当前触摸点：id → 按下时命中的 surface、down serial 与最近一次 surface 局部坐标。
+     * `wl_touch.motion/up` 不带 surface，焦点由这里固定；move 也按这块 surface 换算坐标。
+     */
+    touchPoints: Map<number, { surface: SurfaceId; serial: number; x: number; y: number }>;
     /**
      * 键盘焦点：该 seat 的 `wl_keyboard` 已 enter 的 surface。
      * **由桌面 `window.focus`/`window.blur` 驱动**（hover 政策归桌面，wayland 内部不自作主张）；
@@ -676,6 +683,8 @@ export interface SeatRecord {
     pressedKeys: Set<number>;
     /** 最近几次键盘按下的 serial（release 不覆盖 press，move/grab 可能晚于松键到达） */
     keyboardPressSerials: number[];
+    /** 最近几次触摸按下/抬起的 serial（move/grab 可能晚于抬手到达） */
+    touchPressSerials: number[];
 }
 
 export interface SeatApi {
@@ -692,8 +701,12 @@ export interface SeatApi {
     isActivePointerGrab(seat: SeatRecord, serial: number): boolean;
     /** serial 是否来自当前/最近一次指针 grab，或最近几次键盘按下（move/grab 校验） */
     isUserActionSerial(seat: SeatRecord, serial: number): boolean;
+    /** serial 是否来自仍按住的触摸点；返回该点按下时所在的 surface（wl_data_device.start_drag 校验） */
+    activeTouchSerial(seat: SeatRecord, serial: number): { surface: SurfaceId; x: number; y: number } | undefined;
     /** 记录键盘按下的 serial（release 不记；键盘触发的 move/grab 用） */
     noteKeyboardPress(seat: SeatRecord, serial: number): void;
+    /** 记录触摸按下的 serial（move/grab 可能晚于抬手到达） */
+    noteTouchPress(seat: SeatRecord, serial: number): void;
     addModifier(seat: SeatRecord, bit: number): void;
     removeModifier(seat: SeatRecord, bit: number): void;
     modifierMask(seat: SeatRecord): number;

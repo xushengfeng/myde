@@ -1,5 +1,5 @@
 import { InputEventCodes } from "../../../input_codes/types";
-import type { ClipboardOffer, OutputInfo, PointerCommand, ScrollCommand } from "../../api";
+import type { ClipboardOffer, OutputInfo, PointerCommand, ScrollCommand, TouchCommand } from "../../api";
 import {
     type BindMsg,
     defineModule,
@@ -33,6 +33,11 @@ import {
     pointerFrame,
     pointerLeave,
     pointerMotion,
+    touchCancel,
+    touchDown,
+    touchFrame,
+    touchMotion,
+    touchUp,
 } from "./seat_native";
 
 const fs = require("node:fs") as typeof import("node:fs");
@@ -184,6 +189,8 @@ declare module "../../module" {
                 offerId?: WaylandObjectId2<"wl_data_offer">;
                 /** 桌面已通过 `dnd.move` 接管目标，本地同 client 目标不再处理指针 */
                 remoteDriven?: boolean;
+                /** 触摸点发起的拖拽：收尾时不能向 wl_pointer 补左键释放 */
+                touch?: boolean;
             };
             /** drop 后等目标 receive 取数据；超时或 receive 后补 dnd_finished */
             dragFinish?: { sourceId: WaylandObjectId2<"wl_data_source">; timer: NodeJS.Timeout };
@@ -468,7 +475,7 @@ const KEY_PRESS_SERIAL_KEEP = 16;
  * 是 `SeatRecord` 上的数据字段（读写像 `win.actived` 一样直接），因为多光标 = 多 seat，
  * 各人的焦点互不相干（Firefox 启动时会把所有 seat 都绑上）。
  *
- * 只放数据与原子操作；**协议动作（发 wl_pointer.enter/leave、wl_keyboard.*）在协议文件里**
+ * 只放数据与原子操作；**协议动作（发 wl_pointer.enter/leave、wl_keyboard.*、wl_touch.*）在协议文件里**
  * ——`protocols/core/wayland.ts` 的 `actions` / `core` initializer 经 `ctx.domain.seat`
  * 取这里的数据，组包与下发用 `ctx.sendNow`，store 不必注入一整套上下文。
  * 键盘焦点的单写入点是 `ctx.core.focusKeyboard`（同值去重后才发包）。
@@ -482,7 +489,7 @@ export class SeatStore {
 
     addSeat(id: WaylandObjectId2<"wl_seat">, name: string): void {
         // 同一把 seat 可能被客户端在不同 registry 上重复 bind（Firefox 会这么做）。
-        // 名字才是物理 seat 的身份：复用已有记录，资源（pointer/keyboard）才能都汇到一处。
+        // 名字才是物理 seat 的身份：复用已有记录，资源（pointer/keyboard/touch）才能都汇到一处。
         const existing = this.#byName.get(name);
         if (existing !== undefined) {
             this.#seats.set(id, existing);
@@ -492,12 +499,15 @@ export class SeatStore {
             name,
             pointers: new Set(),
             keyboards: new Set(),
+            touches: new Set(),
             pointerFocus: null,
             pointerPos: { x: 0, y: 0 },
+            touchPoints: new Map(),
             keyboardFocus: null,
             mods: new Set(),
             pressedKeys: new Set(),
             keyboardPressSerials: [],
+            touchPressSerials: [],
         };
         this.#seats.set(id, record);
         this.#byName.set(name, record);
@@ -543,7 +553,24 @@ export class SeatStore {
 
     /** 指针 grab 的 serial（含已结束的最近一次）或最近几次键盘按下的 serial */
     isUserActionSerial(seat: SeatRecord, serial: number): boolean {
-        return seat.pointerGrab?.serial === serial || seat.keyboardPressSerials.includes(serial);
+        return (
+            seat.pointerGrab?.serial === serial ||
+            seat.keyboardPressSerials.includes(serial) ||
+            seat.touchPressSerials.includes(serial)
+        );
+    }
+
+    /** 仍按住的触摸点的 down serial → 按下时的 surface/坐标（触摸拖拽的 start_drag 校验） */
+    activeTouchSerial(seat: SeatRecord, serial: number): { surface: SurfaceId; x: number; y: number } | undefined {
+        for (const point of seat.touchPoints.values()) {
+            if (point.serial === serial) return point;
+        }
+        return undefined;
+    }
+
+    noteTouchPress(seat: SeatRecord, serial: number): void {
+        seat.touchPressSerials.push(serial);
+        if (seat.touchPressSerials.length > KEY_PRESS_SERIAL_KEEP) seat.touchPressSerials.shift();
     }
 
     noteKeyboardPress(seat: SeatRecord, serial: number): void {
@@ -924,6 +951,20 @@ function activePointers(ctx: ModuleCtx, seat: SeatRecord): WaylandObjectId2<"wl_
 
 function activeKeyboards(ctx: ModuleCtx, seat: SeatRecord): WaylandObjectId2<"wl_keyboard">[] {
     return [...seat.keyboards].filter((id) => ctx.objects.has(id));
+}
+
+function activeTouches(ctx: ModuleCtx, seat: SeatRecord): WaylandObjectId2<"wl_touch">[] {
+    return [...seat.touches].filter((id) => ctx.objects.has(id));
+}
+
+/**
+ * 取消该连接在这把 seat 上的全部触摸点。`wl_touch.cancel` 没有 id、按对象整体取消，
+ * 所以不能只撤一个点：清空 touchPoints 后给每个 wl_touch 发一次 cancel。
+ */
+function cancelTouchPoints(ctx: ModuleCtx, seat: SeatRecord): void {
+    if (seat.touchPoints.size === 0) return;
+    seat.touchPoints.clear();
+    for (const touch of activeTouches(ctx, seat)) touchCancel(ctx, touch);
 }
 
 /**
@@ -1999,7 +2040,7 @@ export const waylandCoreModule = defineModule({
                 ctx.domain.seat.addSeat(id, seatName);
                 ctx.send(id, "wl_seat.name", { name: seatName });
                 ctx.send(id, "wl_seat.capabilities", {
-                    capabilities: getEnumValue("wl_seat.capability", ["pointer", "keyboard"]),
+                    capabilities: getEnumValue("wl_seat.capability", ["pointer", "keyboard", "touch"]),
                 });
             },
         },
@@ -2114,23 +2155,30 @@ export const waylandCoreModule = defineModule({
                 ctx.sendNow(sourceId, "wl_data_source.cancelled", {});
                 return;
             }
-            // 规范要求 serial 匹配发起拖拽的隐式 grab（按钮仍按住、origin 就是 grab surface）
+            // 规范要求 serial 匹配发起拖拽的隐式 grab（按钮仍按住、origin 就是 grab surface）；
+            // 触摸拖拽的 serial 来自仍按住的触摸点，origin 必须是该点按下的 surface。
             const grab = seat.pointerGrab;
-            if (
-                !ctx.domain.seat.isActivePointerGrab(seat, x.args.serial) ||
-                grab === undefined ||
-                grab.surface !== x.args.origin
-            ) {
+            const touch = ctx.domain.seat.activeTouchSerial(seat, x.args.serial);
+            const pointerDrag =
+                ctx.domain.seat.isActivePointerGrab(seat, x.args.serial) &&
+                grab !== undefined &&
+                grab.surface === x.args.origin;
+            const touchDrag = touch !== undefined && touch.surface === x.args.origin;
+            if (!pointerDrag && !touchDrag) {
                 ctx.sendNow(sourceId, "wl_data_source.cancelled", {});
                 return;
             }
-            const surface = grab.surface;
+            const surface = (pointerDrag && grab !== undefined ? grab.surface : touch?.surface) ?? x.args.origin;
             if (!ctx.objects.has(surface)) {
                 // 跨 client 拖拽暂不支持：取消，让客户端正常退出 drag 状态
                 ctx.sendNow(sourceId, "wl_data_source.cancelled", {});
                 return;
             }
-            const pointerPos = seat.pointerFocus === surface ? seat.pointerPos : { x: 0, y: 0 };
+            const pointerPos = pointerDrag
+                ? seat.pointerFocus === surface
+                    ? seat.pointerPos
+                    : { x: 0, y: 0 }
+                : { x: touch?.x ?? 0, y: touch?.y ?? 0 };
             const previousFinish = ctx.domain.dataDevice.dragFinish;
             if (previousFinish) finishDragSource(ctx, previousFinish.sourceId);
             const drag = {
@@ -2138,6 +2186,7 @@ export const waylandCoreModule = defineModule({
                 sourceId,
                 seatName,
                 surface,
+                touch: !pointerDrag,
                 offerId: undefined as WaylandObjectId2<"wl_data_offer"> | undefined,
             };
             ctx.domain.dataDevice.drag = drag;
@@ -2435,6 +2484,12 @@ export const waylandCoreModule = defineModule({
                     seat.keyboardFocus = null;
                     clearSelection(ctx, seat.name);
                 }
+                // 触摸序列固定在按下时的 surface 上：它没了就整体取消（cancel 没有 id）
+                for (const point of seat.touchPoints.values()) {
+                    if (point.surface !== surfaceId) continue;
+                    cancelTouchPoints(ctx, seat);
+                    break;
+                }
             }
             ctx.core.surface.destroyWlSurface(surfaceId);
             // todo 相关的如subsurface、xdgsurface等
@@ -2504,6 +2559,23 @@ export const waylandCoreModule = defineModule({
         },
         "wl_keyboard.release": (x, ctx) => {
             for (const seat of ctx.domain.seat.all()) seat.keyboards.delete(x.id);
+        },
+        /** 触摸对象不需要 enter/leave，按下事件自带 surface；这里只登记资源 */
+        "wl_seat.get_touch": (x, ctx) => {
+            const touchId = x.args.id;
+            const seat = ctx.domain.seat.get(x.id);
+            if (!seat) {
+                console.warn(`Seat ${x.id} not found for get_touch`);
+                return;
+            }
+            seat.touches.add(touchId);
+        },
+        "wl_touch.release": (x, ctx) => {
+            for (const seat of ctx.domain.seat.all()) {
+                seat.touches.delete(x.id);
+                // 最后一个 touch 对象没了，后续 move/up 也发不出去，直接清掉序列
+                if (activeTouches(ctx, seat).length === 0) seat.touchPoints.clear();
+            }
         },
         "wl_pointer.set_cursor": (x, ctx) => {
             // serial 必须是该 pointer 最近一次 enter 的 serial；不匹配时按协议忽略整个请求
@@ -2693,6 +2765,62 @@ export const waylandCoreModule = defineModule({
             focusKeyboard(ctx, surface, seat.name);
             sendKey(ctx, seat, key, state);
         },
+        /**
+         * 触摸入口：`down` 命中哪块 surface，整段序列（move/up）都留在那块 surface 上。
+         * `wl_touch.motion/up` 不带 surface，move 的窗口局部坐标按 down 时的 surface 再换算，
+         * 所以手指移出窗口后坐标仍落在同一个坐标空间里。
+         */
+        "input.touch": (msg, ctx) => {
+            const seat = resolveSeat(ctx, msg.args[1]);
+            if (seat === undefined) return;
+            const ev = msg.args[0] as TouchCommand;
+            if (ev.type === "cancel") {
+                cancelTouchPoints(ctx, seat);
+                return;
+            }
+            const touches = activeTouches(ctx, seat);
+            if (touches.length === 0) return;
+
+            if (ev.type === "down") {
+                if (seat.touchPoints.has(ev.id)) return;
+                const hit = ctx.domain.xdgSurface.hitTest(msg.winId, { x: ev.x, y: ev.y });
+                if (hit === undefined) return;
+                // 和指针按下一样：点在外面时先收回不再包含触摸点的 popup grab
+                ctx.domain.xdgSurface.dismissGrabsForPointer(hit, seat.name, ctx);
+                const serial = ctx.domain.serial.next();
+                ctx.domain.seat.noteTouchPress(seat, serial);
+                seat.touchPoints.set(ev.id, { surface: hit.surface, serial, x: hit.x, y: hit.y });
+                const time = Date.now();
+                for (const touch of touches) {
+                    touchDown(ctx, touch, serial, time, hit.surface, ev.id, hit.x, hit.y);
+                    touchFrame(ctx, touch);
+                }
+                return;
+            }
+
+            const point = seat.touchPoints.get(ev.id);
+            if (point === undefined) return;
+            if (ev.type === "up") {
+                seat.touchPoints.delete(ev.id);
+                const serial = ctx.domain.serial.next();
+                const time = Date.now();
+                for (const touch of touches) {
+                    touchUp(ctx, touch, serial, time, ev.id);
+                    touchFrame(ctx, touch);
+                }
+                return;
+            }
+
+            const hit = ctx.domain.xdgSurface.hitTest(msg.winId, { x: ev.x, y: ev.y }, point.surface);
+            if (hit === undefined) return;
+            point.x = hit.x;
+            point.y = hit.y;
+            const time = Date.now();
+            for (const touch of touches) {
+                touchMotion(ctx, touch, time, ev.id, hit.x, hit.y);
+                touchFrame(ctx, touch);
+            }
+        },
         /** 仲裁交给各 text_input 模块（core 不认识 zwp_* 事件） */
         "input.text": (msg, ctx) => {
             const seat = resolveSeat(ctx, msg.args[2]);
@@ -2723,7 +2851,7 @@ export const waylandCoreModule = defineModule({
                 const seat = ctx.domain.seat.byName(drag.seatName);
                 if (seat?.pointerGrab !== undefined && seat.pointerGrab.buttons.size > 0) {
                     forcePointerGrab(ctx, seat, "cancel");
-                } else if (seat !== undefined) {
+                } else if (seat !== undefined && !drag.touch) {
                     const pointers = activePointers(ctx, seat);
                     const time = Date.now();
                     for (const pointer of pointers) {
