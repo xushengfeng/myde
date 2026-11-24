@@ -32,11 +32,12 @@ const info = {
     errors: [],
 };
 
-function setup() {
+function setup(options: { now?: () => number; acceleration?: { enabled(): boolean; speed(): number } } = {}) {
     const dev = new EventEmitter();
     const input = new TouchpadInput(dev as never, info as never, {
         mapX: (_code, value) => value / 4,
         mapY: (_code, value) => value / 4,
+        ...options,
     });
     const events: unknown[][] = [];
     for (const name of [
@@ -378,5 +379,38 @@ describe("TouchpadInput gestures", () => {
         expect(events.some((e) => e[0] === "move")).toBe(false);
         lift(0);
         sync();
+    });
+
+    it("applies touchpad acceleration to single-finger movement", () => {
+        let now = 0;
+        const accelerated = setup({
+            now: () => now,
+            acceleration: { enabled: () => true, speed: () => 0 },
+        });
+        accelerated.contact(0, 1, 1000, 2000);
+        accelerated.sync();
+        // 每 10ms 移动 1.6mm，约 160mm/s：高于平台段，稳定后应有加速
+        for (let i = 1; i <= 4; i++) {
+            now = i * 10;
+            accelerated.move(0, 1000 + i * 160, 2000);
+            accelerated.sync();
+        }
+        const moves = accelerated.events.filter((e) => e[0] === "move");
+        expect(moves.at(-1)?.[1]).toBeGreaterThan(40);
+
+        now = 0;
+        const flat = setup({
+            now: () => now,
+            acceleration: { enabled: () => false, speed: () => 0 },
+        });
+        flat.contact(0, 1, 1000, 2000);
+        flat.sync();
+        for (let i = 1; i <= 4; i++) {
+            now = i * 10;
+            flat.move(0, 1000 + i * 160, 2000);
+            flat.sync();
+        }
+        const flatMoves = flat.events.filter((e) => e[0] === "move");
+        expect(flatMoves.at(-1)?.[1]).toBeCloseTo(40);
     });
 });

@@ -166,7 +166,7 @@ resize ↔ `move` / `all_scroll` / `all_resize` 过渡时优先用十字的一�
 - 显示：Wayland 客户端缩放 `desktop.scale`（100% / 125% / 150% / 175% / 200%）。缩放后 surface 逻辑坐标不变，
   客户端 buffer 与窗口 DOM 尺寸按比例放大，桌面自绘 UI（工具栏、启动台、设置窗口、输入法候选、光标和窗口 resize 热区）也跟随同一个缩放。winit 后端和普通窗口模式跟随宿主桌面，myde 内部固定 1x。
   下方帧时间图表按需启动，实时采样桌面界面的 `requestAnimationFrame` 帧间隔，并按当前输出刷新率画出预算线
-- 滚动：触摸板双指滚动速度 `desktop.touchpadScrollGain`、自然滚动 `desktop.naturalScroll`
+- 触摸板：单指指针速度 `desktop.touchpadSpeed`（libinput 速度设置 -1 ~ 1）、自适应加速度 `desktop.touchpadAcceleration`、双指滚动速度 `desktop.touchpadScrollGain`、自然滚动 `desktop.naturalScroll`
 - 手势：三指横滑切屏倍率 `desktop.switchGestureGain`（默认 4×）、切屏后重排延迟 `desktop.reorderDelay`（默认 3000ms）
 - 输入法：候选窗预编辑 `ime.panelPreedit`（`auto` / `always` / `never`）
 - 互联：启用开关、本机 ID、已配对设备列表和忘记设备；添加设备时显示本机配对 ID/PIN，输入对方配对 ID/PIN 和是否记住
@@ -222,7 +222,7 @@ UI 调试页在 `desktop/official/test/file_chooser`，直接复用真实的 `fi
 - 合成中的预编辑和候选直接来自输入法 API，显示在键帽上方的候选栏里：左侧合成文本，中间候选词（点击上屏），两侧翻页。候选栏高度固定，有没有候选键帽位置都不变；键盘打开时浮动候选窗不再弹出，关掉键盘后恢复
 - 英文输入经过 `ImeController`：能用输入法时按键先送给 fcitx5，合成结果按输入法正常通道上屏；没有 text-input 或输入法停用时按键原样转发。DOM 输入框（启动器搜索、设置、文件选择器等）改用 `inputSim` 合成按键，直接写入当前焦点
 - 表情页按分类列出常用 emoji，Unicode 页提供十六进制码位输入和常用字符分组；插入时优先走 `input.text`，客户端不支持 text-input 时只有可打印 ASCII 会退回按键
-- 触控板页由触控面板、左/中/右键和右侧一个可滚动的条形区域组成；单指移动指针、轻触左键，双指轻触右键、双指滚动和捏合，三指轻触中键、三指滑动走桌面切屏/预览手势，四指滑动作为 swipe 发给应用，和物理触摸板一致；滚动方向和速度沿用 `desktop.naturalScroll` / `desktop.touchpadScrollGain`
+- 触控板页由触控面板、左/中/右键和右侧一个可滚动的条形区域组成；单指移动指针、轻触左键，双指轻触右键、双指滚动和捏合，三指轻触中键、三指滑动走桌面切屏/预览手势，四指滑动作为 swipe 发给应用，和物理触摸板一致；滚动方向和速度沿用 `desktop.naturalScroll` / `desktop.touchpadScrollGain`，指针速度和加速度设置只作用于物理触摸板
 - 锁屏密码行左侧有独立的键盘开关按钮，因为工具栏在锁屏不显示；它显示/隐藏锁屏的 ASCII 键盘
 - 锁屏密码界面仍然使用独立的 ASCII 键盘，直接写进密码框；静态预览页同时展示常规键盘和这个密码键盘
 - 静态预览：`npx vite desktop/official/test/virtual_keyboard`

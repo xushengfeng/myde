@@ -46,6 +46,12 @@ export type SettingsContentOptions = {
     setRefreshRate(refreshRate: number): Promise<boolean>;
     /** wrap 是否支持切换屏幕模式（DRM） */
     screenModeAvailable(): boolean;
+    /** 触摸板单指移动的指针速度（libinput 速度设置，-1 ~ 1） */
+    getTouchpadSpeed(): number;
+    setTouchpadSpeed(speed: number): void;
+    /** 触摸板单指移动的自适应加速（libinput 曲线） */
+    getTouchpadAcceleration(): boolean;
+    setTouchpadAcceleration(enabled: boolean): void;
     /** 触摸板双指滚动速度倍率（1 = 1:1 跟随手指） */
     getTouchpadScrollGain(): number;
     setTouchpadScrollGain(gain: number): void;
@@ -606,14 +612,34 @@ export function createSettingsContent(op: SettingsContentOptions): SettingsConte
         },
         {
             id: "scroll",
-            name: "滚动",
+            name: "触摸板",
             build: () => {
                 return view("y")
                     .style({ gap: px(sSize2.padding + 8) })
                     .add([
-                        sectionTitle("滚动", "触摸板双指滚动的速度与方向。"),
+                        sectionTitle("触摸板", "物理触摸板的单指指针速度和双指滚动行为。"),
                         settingRow(
-                            "触摸板速度",
+                            "指针速度",
+                            "物理触摸板按 libinput 的速度曲线缩放单指移动；标准速度保持 1:1，数值越大同样手势移动越快。",
+                            createSegmented(
+                                [
+                                    { name: "很慢", value: -0.5 },
+                                    { name: "慢", value: -0.25 },
+                                    { name: "标准", value: 0 },
+                                    { name: "快", value: 0.25 },
+                                    { name: "很快", value: 0.5 },
+                                ],
+                                op.getTouchpadSpeed,
+                                op.setTouchpadSpeed,
+                            ),
+                        ),
+                        settingRow(
+                            "指针加速度",
+                            "开启后物理触摸板使用 libinput 的自适应曲线：慢速移动更精细，快速移动加速；关闭后按固定倍率移动。",
+                            createToggle(op.getTouchpadAcceleration, op.setTouchpadAcceleration),
+                        ),
+                        settingRow(
+                            "滚动速度",
                             "双指滚动默认按手指位移 1:1 滚动；应用窗口和桌面界面共用同一倍率。",
                             createSegmented(
                                 [

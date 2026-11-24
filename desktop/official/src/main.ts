@@ -14,6 +14,7 @@ import type { blueDevice } from "../../../src/sys_api/blue";
 import type { wifiDevice } from "../../../src/sys_api/network";
 import type { NotificationData } from "../../../src/sys_api/notification";
 import type { powerDevice } from "../../../src/sys_api/power";
+import { normalizePointerSpeed } from "../../../src/utils/pointer_accel";
 import { TouchpadInput } from "../../../src/utils/touchpad";
 import type { DragStartInfo, GestureCommand, WindowInfo } from "../../../src/wayland";
 import { type ClipboardItem, type ClipboardStation, initClipboard } from "./clipboard";
@@ -3438,6 +3439,16 @@ function openSettingsWindow() {
                 getRefreshRates: () => screenManager.getRefreshRates(),
                 setRefreshRate: (refreshRate) => screenManager.setRefreshRate(refreshRate),
                 screenModeAvailable: () => MSysApi.display.supports("screen-mode"),
+                getTouchpadSpeed: () => touchpadSpeed,
+                setTouchpadSpeed: (speed) => {
+                    touchpadSpeed = normalizePointerSpeed(speed);
+                    desktopSetting.nset("touchpadSpeed", touchpadSpeed);
+                },
+                getTouchpadAcceleration: () => touchpadAcceleration,
+                setTouchpadAcceleration: (enabled) => {
+                    touchpadAcceleration = enabled;
+                    desktopSetting.nset("touchpadAcceleration", enabled);
+                },
                 getTouchpadScrollGain: () => touchpadScrollGain,
                 setTouchpadScrollGain: (gain) => {
                     touchpadScrollGain = gain;
@@ -4934,6 +4945,10 @@ const desktopSetting = MSetting.init({
     defaultNsSetting: {
         centerWindows: true,
         scale: 1,
+        /** 触摸板单指移动的指针速度（libinput 速度设置，-1 ~ 1） */
+        touchpadSpeed: 0,
+        /** 触摸板单指移动的自适应加速（libinput 曲线） */
+        touchpadAcceleration: true,
         /** 触摸板双指滚动的速度倍率 */
         touchpadScrollGain: 1,
         /** 触摸板自然滚动（内容跟随手指） */
@@ -5000,8 +5015,10 @@ function normalizeWindowRadius(value: unknown) {
 let windowRadius = normalizeWindowRadius(desktopSetting.nget("windowRadius"));
 document.documentElement.style.setProperty("--window-radius", `${windowRadius}px`);
 
-// 滚轮在每帧回调里都会读到，缓存设置避免每次同步读配置文件
+// 输入回调里都会读到，缓存设置避免每次同步读配置文件
 let touchpadScrollGain = desktopSetting.nget("touchpadScrollGain") ?? 1;
+let touchpadAcceleration = desktopSetting.nget("touchpadAcceleration") ?? true;
+let touchpadSpeed = normalizePointerSpeed(desktopSetting.nget("touchpadSpeed"));
 let naturalScroll = desktopSetting.nget("naturalScroll") ?? true;
 /** 桌面自绘 UI 的缩放，跟随屏幕/客户端缩放；窗口模式和 winit 下由宿主 DPR 负责 */
 let uiScale = 1;
@@ -9909,6 +9926,10 @@ function useEvdevDevice(
                       return ratio === undefined ? undefined : ratioToView(ratio, window.innerHeight);
                   },
                   ignoreAbs: companionActive,
+                  acceleration: {
+                      enabled: () => touchpadAcceleration,
+                      speed: () => touchpadSpeed,
+                  },
                   debugGesture: debugGesture ? (g) => console.log("[touchpad] two-finger", g) : undefined,
               })
             : undefined;
