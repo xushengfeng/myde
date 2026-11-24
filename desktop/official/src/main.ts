@@ -410,7 +410,8 @@ type ViewTransform = {
 
 type ViewScreen = {
     readonly id: string;
-    winId?: MWinId;
+    /** 顶层窗口，按底到顶的顺序；子窗口不在这里 */
+    winIds: MWinId[];
     empty: boolean;
     /** 启动台：固定在最右的应用图标屏，和空桌面一样不参与全局预览 */
     launchpad: boolean;
@@ -423,6 +424,10 @@ type ViewScreen = {
     /** 手势进入预览时这张卡片的接力方式：跟手线性 / 定时去 grid / 打断后回线性 */
     pullMode: "tracked" | "grid" | "linear";
 };
+
+function topWin(screen: ViewScreen | undefined): MWinId | undefined {
+    return screen?.winIds[screen.winIds.length - 1];
+}
 
 type OverviewLayout = {
     cards: ViewScreen[];
@@ -680,9 +685,13 @@ class ViewData {
         return this.win2Screen.get(winid)?.id === this.currentId;
     }
 
-    /** 当前虚拟屏的窗口；空桌面/启动台没有窗口 */
+    screenOf(winid: MWinId) {
+        return this.win2Screen.get(winid);
+    }
+
+    /** 当前虚拟屏最上层的窗口；空桌面/启动台没有窗口 */
     currentWinId() {
-        return this.currentScreen()?.winId;
+        return topWin(this.currentScreen());
     }
 
     /** 视图状态（当前屏/总览）变化后回调，用来同步全屏时工具栏的避让 */
@@ -723,6 +732,7 @@ class ViewData {
         const gear = new AnimationGear<ViewTransform>(start, { transition: SCREEN_TRANSITION });
         const screen: ViewScreen = {
             id,
+            winIds: [],
             empty: kind === "empty",
             launchpad: kind === "launchpad",
             used: 0,
@@ -737,6 +747,7 @@ class ViewData {
             applyScreenTransform(el, value);
             this.syncFocusPanelFrame(screen);
         });
+        el.on("pointerdown", (e) => this.beginOverviewCardDrag(e, screen));
         return screen;
     }
 
@@ -777,7 +788,7 @@ class ViewData {
     attachWindowToScreen(winid: MWinId, screen: ViewScreen) {
         this.cancelGesture();
         screen.empty = false;
-        screen.winId = winid;
+        if (!screen.winIds.includes(winid)) screen.winIds.push(winid);
         screen.used = ++this.usedSeq;
         this.win2Screen.set(winid, screen);
         this.currentId = screen.id;
@@ -789,8 +800,8 @@ class ViewData {
 
     /** 托盘面板关闭时回收没有窗口的应用屏 */
     discardPendingScreen(screen: ViewScreen) {
-        if (screen.winId !== undefined) return;
-        this.removeOwnScreen(screen);
+        if (screen.winIds.length > 0) return;
+        this.removeScreen(screen);
     }
 
     /**
@@ -811,7 +822,7 @@ class ViewData {
         let empty = this.screens.find((s) => s.empty);
         if (!empty) empty = this.createEmptyScreen();
         empty.empty = false;
-        empty.winId = winid;
+        if (!empty.winIds.includes(winid)) empty.winIds.push(winid);
         empty.used = ++this.usedSeq;
         this.win2Screen.set(winid, empty);
         this.createEmptyScreen();
@@ -820,6 +831,166 @@ class ViewData {
         this.scheduleReorder();
         this.render(true);
         return empty;
+    }
+
+    /** 在空桌面左边插一张新的应用屏 */
+    private createAppScreen() {
+        const screen = this.createScreen("app");
+        const emptyIndex = this.screens.findIndex((s) => s.empty);
+        this.screens.splice(emptyIndex >= 0 ? emptyIndex : this.screens.length, 0, screen);
+        screen.used = ++this.usedSeq;
+        return screen;
+    }
+
+    /**
+     * 把窗口移到另一张虚拟屏。目标屏放不下（覆盖超限）时返回 false，窗口留在原屏。
+     * 目标屏是空桌面时，它会变成应用屏，并在右边补一个新的空桌面。
+     */
+    moveWindowToScreen(winid: MWinId, target: ViewScreen): boolean {
+        const source = this.win2Screen.get(winid);
+        if (!source || source === target || target.launchpad) return false;
+        const el = windowElement(winid);
+        const width = el?.offsetWidth ?? 0;
+        const height = el?.offsetHeight ?? 0;
+        const oldLeft = el?.offsetLeft ?? 0;
+        const oldTop = el?.offsetTop ?? 0;
+        const stageWidth = windowEl.el.offsetWidth;
+        const stageHeight = windowEl.el.offsetHeight;
+        const spot = this.findFreeSpot(target, winid, {
+            x: Math.max(0, Math.min(oldLeft, Math.max(0, stageWidth - width))),
+            y: Math.max(0, Math.min(oldTop, Math.max(0, stageHeight - height))),
+            w: width,
+            h: height,
+        });
+        if (!spot) return false;
+
+        const wasEmpty = target.empty;
+        if (wasEmpty) target.empty = false;
+
+        const index = source.winIds.indexOf(winid);
+        if (index >= 0) source.winIds.splice(index, 1);
+        this.win2Screen.set(winid, target);
+        if (!target.winIds.includes(winid)) target.winIds.push(winid);
+        target.used = ++this.usedSeq;
+        this.moveWindowStackToScreen(winid, target);
+        const moved = windowElement(winid);
+        if (moved) {
+            moved.style.left = `${Math.round(spot.x)}px`;
+            moved.style.top = `${Math.round(spot.y)}px`;
+            moveChildWindows(winid, Math.round(spot.x) - oldLeft, Math.round(spot.y) - oldTop);
+        }
+        if (wasEmpty) this.createEmptyScreen();
+        if (source.winIds.length === 0 && !source.empty && !source.launchpad) {
+            this.removeScreen(source, target);
+        }
+        this.currentId = target.id;
+        if (this.overview) {
+            this.overviewFocusId = target.id;
+            this.focusPanelId = target.id;
+        }
+        this.focusWin(winid);
+        this.scheduleReorder();
+        this.render(true);
+        return true;
+    }
+
+    /** 源屏还有其它窗口时，把窗口挪到一张新的应用屏；已经独占一屏时返回 undefined */
+    moveWindowToNewScreen(winid: MWinId): ViewScreen | undefined {
+        const source = this.win2Screen.get(winid);
+        if (!source || source.winIds.length <= 1) return undefined;
+        const target = this.createAppScreen();
+        if (!this.moveWindowToScreen(winid, target)) {
+            this.removeScreen(target);
+            return undefined;
+        }
+        return target;
+    }
+
+    private moveWindowStackToScreen(winid: MWinId, target: ViewScreen) {
+        const el = windowElement(winid);
+        if (el) target.el.add(el);
+        for (const [child, parent] of windowParents) {
+            if (parent !== winid) continue;
+            this.win2Screen.set(child, target);
+            this.moveWindowStackToScreen(child, target);
+        }
+    }
+
+    private findFreeSpot(screen: ViewScreen, winid: MWinId, rect: ScreenRect): ScreenRect | undefined {
+        const stageWidth = windowEl.el.offsetWidth;
+        const stageHeight = windowEl.el.offsetHeight;
+        const fits = (x: number, y: number) =>
+            x >= 0 &&
+            y >= 0 &&
+            x + rect.w <= stageWidth &&
+            y + rect.h <= stageHeight &&
+            !rectOverlapsTooMuch(screen, winid, { x, y, w: rect.w, h: rect.h });
+        if (fits(rect.x, rect.y)) return rect;
+        const cx = Math.round((stageWidth - rect.w) / 2);
+        const cy = Math.round((stageHeight - rect.h) / 2);
+        if (fits(cx, cy)) return { x: cx, y: cy, w: rect.w, h: rect.h };
+        const step = 48;
+        for (let y = 0; y <= stageHeight - rect.h; y += step) {
+            for (let x = 0; x <= stageWidth - rect.w; x += step) {
+                if (fits(x, y)) return { x, y, w: rect.w, h: rect.h };
+            }
+        }
+        return undefined;
+    }
+
+    private suppressOverviewClickUntil = 0;
+
+    /** 全局预览里拖动卡片：把这张屏最上层的窗口拖到指针下的另一张屏 */
+    private beginOverviewCardDrag(e: PointerEvent, source: ViewScreen) {
+        if (!this.overview || e.button !== 0 || source.launchpad || source.winIds.length === 0) return;
+        if ((e.target as HTMLElement | null)?.closest("[data-desktop-ui='window-close']")) return;
+        const startX = e.clientX;
+        const startY = e.clientY;
+        let moved = false;
+        let target: ViewScreen | undefined;
+        const clearHighlight = () => {
+            for (const screen of this.screens) screen.el.el.removeAttribute("data-drop-target");
+        };
+        const onMove = (ev: PointerEvent) => {
+            if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
+            moved = true;
+            target = this.screenAtPoint(ev.clientX, ev.clientY, source);
+            for (const screen of this.screens) {
+                screen.el.el.toggleAttribute("data-drop-target", screen === target);
+            }
+        };
+        const cleanup = () => {
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", onUp);
+            window.removeEventListener("pointercancel", onUp);
+        };
+        const onUp = () => {
+            cleanup();
+            clearHighlight();
+            if (!moved) return;
+            this.suppressOverviewClickUntil = performance.now() + 250;
+            const winid = topWin(source);
+            if (target && winid) this.moveWindowToScreen(winid, target);
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
+    }
+
+    private screenAtPoint(x: number, y: number, exclude?: ViewScreen) {
+        let best: ViewScreen | undefined;
+        let bestZ = Number.NEGATIVE_INFINITY;
+        for (const screen of this.screens) {
+            if (screen === exclude || screen.launchpad) continue;
+            const rect = screen.el.el.getBoundingClientRect();
+            if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
+            const z = Number(screen.el.el.style.zIndex) || 0;
+            if (z > bestZ) {
+                bestZ = z;
+                best = screen;
+            }
+        }
+        return best;
     }
 
     /**
@@ -831,19 +1002,34 @@ class ViewData {
         const screen = this.win2Screen.get(winid);
         const parentScreen = parent === undefined ? undefined : this.win2Screen.get(parent);
         if (parentScreen !== undefined) {
-            if (screen !== undefined && screen.winId === winid) this.removeOwnScreen(screen, parentScreen);
+            if (screen !== undefined && screen !== parentScreen) {
+                this.detachFromScreen(winid, screen, parentScreen);
+            }
             this.win2Screen.set(winid, parentScreen);
             return parentScreen;
         }
-        if (screen !== undefined && screen.winId === winid) return screen;
+        if (screen?.winIds.includes(winid)) return screen;
         return this.addWindowScreen(winid);
     }
 
-    /** 撤掉窗口独占的虚拟屏（窗口改挂到父窗口上时）；当前屏落到 fallback */
-    private removeOwnScreen(screen: ViewScreen, fallback?: ViewScreen) {
+    /** 把顶层窗口从屏里摘掉；屏空了就回收。子窗口的映射由调用方维护。 */
+    private detachFromScreen(winid: MWinId, screen: ViewScreen, fallback?: ViewScreen) {
+        const index = screen.winIds.indexOf(winid);
+        if (index >= 0) screen.winIds.splice(index, 1);
+        this.win2Screen.delete(winid);
+        if (screen.winIds.length === 0 && !screen.empty && !screen.launchpad) {
+            this.removeScreen(screen, fallback);
+        }
+    }
+
+    /** 撤掉一张虚拟屏；当前屏落到 fallback */
+    private removeScreen(screen: ViewScreen, fallback?: ViewScreen) {
         this.cancelGesture();
         const index = this.screens.indexOf(screen);
         if (index < 0) return;
+        for (const [other, mapped] of this.win2Screen) {
+            if (mapped === screen) this.win2Screen.delete(other);
+        }
         const wasCurrent = screen.id === this.currentId;
         screen.gear.moveTo(screen.visual, 0);
         screen.el.remove();
@@ -854,7 +1040,8 @@ class ViewData {
             const next = fallback ?? this.screens[Math.min(index, this.screens.length - 1)] ?? this.screens[0];
             if (next) {
                 this.currentId = next.id;
-                if (next.winId) this.focusWin(next.winId);
+                const top = topWin(next);
+                if (top) this.focusWin(top);
                 else this.blurAll();
             }
         }
@@ -871,7 +1058,8 @@ class ViewData {
         if (!screen) return;
         this.cancelGesture();
         this.currentId = screen.id;
-        if (screen.winId) this.focusWin(screen.winId);
+        const top = topWin(screen);
+        if (top) this.focusWin(top);
         else this.blurAll();
         this.scheduleReorder();
         this.render(animate);
@@ -901,12 +1089,14 @@ class ViewData {
             if (screen.launchpad) {
                 title = "启动台";
                 kind = "launchpad";
-            } else if (screen.winId) {
+            } else if (screen.winIds.length > 0) {
                 kind = "window";
-                title = this.windowTitle(screen.winId);
-                appid = internalWindows.has(screen.winId)
-                    ? "桌面窗口"
-                    : server.server.windows.get(screen.winId)?.appid || "";
+                const top = screen.winIds[screen.winIds.length - 1];
+                title =
+                    screen.winIds.length > 1
+                        ? `${this.windowTitle(top)} +${screen.winIds.length - 1}`
+                        : this.windowTitle(top);
+                appid = internalWindows.has(top) ? "桌面窗口" : server.server.windows.get(top)?.appid || "";
             }
             return {
                 id: screen.id,
@@ -928,17 +1118,17 @@ class ViewData {
             current: boolean;
         }[] = [];
         for (const screen of this.screens) {
-            const handle = screen.winId;
-            if (!handle) continue;
-            const internal = internalWindows.get(handle);
-            const info = internal ? undefined : server.server.windows.get(handle);
-            out.push({
-                handle,
-                title: internal ? internal.title : info?.title || info?.appid || "窗口",
-                appid: internal ? "桌面窗口" : info?.appid || "",
-                screenId: screen.id,
-                current: screen.id === this.currentId,
-            });
+            for (const handle of screen.winIds) {
+                const internal = internalWindows.get(handle);
+                const info = internal ? undefined : server.server.windows.get(handle);
+                out.push({
+                    handle,
+                    title: internal ? internal.title : info?.title || info?.appid || "窗口",
+                    appid: internal ? "桌面窗口" : info?.appid || "",
+                    screenId: screen.id,
+                    current: screen.id === this.currentId,
+                });
+            }
         }
         return out;
     }
@@ -970,7 +1160,7 @@ class ViewData {
         const screen = this.win2Screen.get(winid);
         if (!screen) return undefined;
         // 子窗口只从父窗口的屏里摘掉自己：父窗口和虚拟屏都还在，焦点回到父窗口
-        if (screen.winId !== winid) {
+        if (!screen.winIds.includes(winid)) {
             this.win2Screen.delete(winid);
             if (this.focusHandle === winid) {
                 const parent = windowParents.get(winid);
@@ -981,6 +1171,28 @@ class ViewData {
         }
         this.cancelGesture();
         this.win2Screen.delete(winid);
+        const winIndex = screen.winIds.indexOf(winid);
+        screen.winIds.splice(winIndex, 1);
+        // 随窗口一起消失的子窗口映射（只摘这棵子树，不影响同屏其它窗口）
+        const removeChildren = (parent: MWinId) => {
+            for (const [child, mappedParent] of windowParents) {
+                if (mappedParent !== parent) continue;
+                this.win2Screen.delete(child);
+                removeChildren(child);
+            }
+        };
+        removeChildren(winid);
+        // 屏里还有别的窗口：只换焦点，不回收屏
+        if (screen.winIds.length > 0) {
+            if (this.focusHandle === winid) {
+                const top = topWin(screen);
+                if (top) this.focusWin(top);
+                else this.blurAll();
+            }
+            this.render(this.overview);
+            return undefined;
+        }
+
         const index = this.screens.indexOf(screen);
         const wasCurrent = screen.id === this.currentId;
         screen.gear.moveTo(screen.visual, 0);
@@ -988,10 +1200,6 @@ class ViewData {
         this.screens.splice(index, 1);
         if (this.overviewFocusId === screen.id) this.overviewFocusId = undefined;
         if (this.focusPanelId === screen.id) this.focusPanelId = undefined;
-        // 随屏一起消失的还有仍挂在这个屏上的子窗口映射（父窗口先关、客户端整体退出）
-        for (const [other, mapped] of this.win2Screen) {
-            if (mapped === screen) this.win2Screen.delete(other);
-        }
 
         let next: ViewScreen | undefined;
         if (wasCurrent) {
@@ -999,7 +1207,8 @@ class ViewData {
             next = this.screens[Math.min(index - 1, this.screens.length - 1)] ?? this.screens[0];
             if (next) {
                 this.currentId = next.id;
-                if (next.winId) this.focusWin(next.winId);
+                const top = topWin(next);
+                if (top) this.focusWin(top);
                 else this.blurAll();
                 this.scheduleReorder();
             }
@@ -1059,6 +1268,7 @@ class ViewData {
     }
 
     private selectFromOverview(id: string) {
+        if (performance.now() < this.suppressOverviewClickUntil) return;
         const screen = this.screens.find((s) => s.id === id);
         if (!screen) return;
         // 点击的卡片就是退出时要跟随的焦点屏
@@ -1306,7 +1516,8 @@ class ViewData {
             if (!target) return;
             if (target.id !== this.currentId) {
                 this.currentId = target.id;
-                if (target.winId) this.focusWin(target.winId);
+                const top = topWin(target);
+                if (top) this.focusWin(top);
                 else this.blurAll();
             }
             // 面板跟着窗口自己的吸附动画走，目标就是实际选中的窗口
@@ -1508,7 +1719,8 @@ class ViewData {
         this.overviewFocusId = screen.id;
         this.focusPanelId = screen.id;
         this.currentId = screen.id;
-        if (screen.winId) this.focusWin(screen.winId);
+        const top = topWin(screen);
+        if (top) this.focusWin(top);
         else this.blurAll();
         this.syncScreenZOrder();
     }
@@ -1744,6 +1956,7 @@ class ViewData {
             return;
         }
         this.focusHandle = winid;
+        this.raiseWindow(winid);
         for (const [id, win] of internalWindows) {
             win.setActive(id === winid);
         }
@@ -1759,6 +1972,29 @@ class ViewData {
         }
         if (internal) void ime?.blur();
         else void ime?.focus(winid);
+    }
+
+    /** 把窗口所在栈提到屏内最上层；子窗口跟随父窗口一起提升 */
+    private raiseWindow(winid: MWinId) {
+        const root = rootWindow(winid);
+        const screen = this.win2Screen.get(root);
+        if (!screen) return;
+        const raise = (id: MWinId) => {
+            const index = screen.winIds.indexOf(id);
+            if (index >= 0) {
+                if (index !== screen.winIds.length - 1) {
+                    screen.winIds.splice(index, 1);
+                    screen.winIds.push(id);
+                }
+                const el = windowElement(id);
+                // 启动动画期间窗口还在面板里，别把它抢回屏
+                if (el && el.parentElement === screen.el.el) screen.el.add(el);
+            }
+            for (const [child, parent] of windowParents) {
+                if (parent === id) raise(child);
+            }
+        };
+        raise(root);
     }
 
     /** 沿模态子窗口链往下找：焦点落在最内层的模态对话框上 */
@@ -1850,6 +2086,7 @@ class WindowCenterManager {
     private windowElements = new Map<string, HTMLElement>();
     private pausedWindows = new Set<string>();
     private resizeObserver: ResizeObserver | null = null;
+    private shouldCenter?: (windowId: string) => boolean;
 
     constructor() {
         this.initResizeObserver();
@@ -1929,7 +2166,12 @@ class WindowCenterManager {
         };
     }
 
+    setShouldCenter(fn: (windowId: string) => boolean) {
+        this.shouldCenter = fn;
+    }
+
     centerWindow(windowId: string) {
+        if (this.shouldCenter && !this.shouldCenter(windowId)) return;
         const element = this.windowElements.get(windowId);
         if (!element) return;
         const position = this.centeredPosition(element.offsetWidth, element.offsetHeight);
@@ -2338,6 +2580,11 @@ addStyle({
     "[data-overview] [data-view-id] > *": {
         pointerEvents: "none",
     },
+    // 拖到另一张卡片上时高亮目标屏
+    "[data-view-id][data-drop-target]": {
+        outline: "2px solid #00aaff",
+        outlineOffset: "-2px",
+    },
     // 卡片关闭按钮只在全局预览里出现，且要抢在内容禁指针之上
     "[data-desktop-ui='window-close']": {
         opacity: "var(--overview-close-opacity, 0)",
@@ -2519,6 +2766,8 @@ function beginWindowResize(
     let rafId = 0;
     let pendingSize: { width: number; height: number } | undefined;
     let resized = false;
+    let resizeBlockedByOverlap = false;
+    let desired: { left: number; top: number; width: number; height: number } | undefined;
 
     function flushSize() {
         if (rafId) {
@@ -2565,6 +2814,38 @@ function beginWindowResize(
             if (edge.includes("n")) top = start.top + start.height - minHeight;
             height = minHeight;
         }
+
+        // 不越出虚拟屏
+        const stageWidth = windowEl.el.offsetWidth;
+        const stageHeight = windowEl.el.offsetHeight;
+        if (left < 0) {
+            width += left;
+            left = 0;
+        }
+        if (top < 0) {
+            height += top;
+            top = 0;
+        }
+        width = Math.min(width, stageWidth - left);
+        height = Math.min(height, stageHeight - top);
+
+        // 缩放不能压到同屏其它窗口；压到就停在最后一个合法尺寸
+        const overlapFrame = wayland ? clientWindowFrames.get(windowId) : undefined;
+        const outerHeight = height + (overlapFrame ? decoratedTitlebarPx(overlapFrame) : 0);
+        if (
+            !windowParents.has(windowId) &&
+            rectOverlapsTooMuch(viewData.screenOf(windowId), windowId, {
+                x: left,
+                y: top,
+                w: width,
+                h: outerHeight,
+            })
+        ) {
+            resizeBlockedByOverlap = true;
+            desired = { left, top, width, height };
+            return;
+        }
+        resizeBlockedByOverlap = false;
 
         if (wayland) {
             const logicalWidth = Math.max(1, Math.round(width / scale));
@@ -2640,6 +2921,37 @@ function beginWindowResize(
                     }
                 }, 250);
                 resizeSettleTimers.set(windowId, timer);
+            }
+        }
+        // 缩放被同屏窗口挡住，又确实想变大：挪到新虚拟屏后再按目标尺寸下发
+        if (
+            !windowParents.has(windowId) &&
+            resizeBlockedByOverlap &&
+            desired &&
+            (viewData.screenOf(windowId)?.winIds.length ?? 0) > 1
+        ) {
+            const moved = viewData.moveWindowToNewScreen(windowId);
+            if (moved) {
+                const stageWidth = windowEl.el.offsetWidth;
+                const stageHeight = windowEl.el.offsetHeight;
+                const width = Math.min(desired.width, stageWidth);
+                const height = Math.min(desired.height, stageHeight);
+                const left = Math.max(0, Math.min(desired.left, stageWidth - width));
+                const top = Math.max(0, Math.min(desired.top, stageHeight - height));
+                if (wayland) {
+                    server.server.notify("window.setSize", windowId, {
+                        width: Math.max(1, Math.round(width / scale)),
+                        height: Math.max(1, Math.round(height / scale)),
+                    });
+                } else {
+                    el.style.width = `${Math.round(width)}px`;
+                    el.style.height = `${Math.round(height)}px`;
+                    el.style.left = `${Math.round(left)}px`;
+                    el.style.top = `${Math.round(top)}px`;
+                }
+                const frame = clientWindowFrames.get(windowId);
+                if (frame) setClientFramePosition(frame, left, top);
+                resized = true;
             }
         }
         resizingWindowId = undefined;
@@ -2737,11 +3049,19 @@ function windowDepth(winid: MWinId): number {
 }
 
 /**
- * 窗口按层叠顺序排列：子窗口在父窗口之上。
+ * 窗口按层叠顺序排列：同一屏内按 winIds 的顶到底，子窗口再排在父窗口之上。
  * 指针/滚动命中必须按这个顺序第一个命中者先得，否则同客户端的父窗口会吃掉对话框的事件。
  */
 function windowsTopFirst() {
-    return server.server.windows.list().toSorted((a, b) => windowDepth(b.handle) - windowDepth(a.handle));
+    return server.server.windows.list().toSorted((a, b) => {
+        const screen = viewData.screenOf(a.handle);
+        if (screen && screen === viewData.screenOf(b.handle)) {
+            const ai = screen.winIds.indexOf(a.handle);
+            const bi = screen.winIds.indexOf(b.handle);
+            if (ai >= 0 && bi >= 0 && ai !== bi) return bi - ai;
+        }
+        return windowDepth(b.handle) - windowDepth(a.handle);
+    });
 }
 
 /** 客户端窗口与内部窗口共用的 DOM 取得方式 */
@@ -2756,6 +3076,36 @@ function setWindowPosition(winid: MWinId, left: number, top: number): void {
         return;
     }
     internalWindows.get(winid)?.el.style({ left: `${Math.round(left)}px`, top: `${Math.round(top)}px` });
+}
+
+/** 覆盖阈值：交集面积 ÷ 较小窗口面积 */
+const OVERLAP_LIMIT = 0.12;
+
+type ScreenRect = { x: number; y: number; w: number; h: number };
+
+function windowLocalRect(winid: MWinId): ScreenRect | undefined {
+    const el = windowElement(winid);
+    if (!el) return undefined;
+    return { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight };
+}
+
+function overlapRatio(a: ScreenRect, b: ScreenRect): number {
+    const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+    const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+    const inter = ix * iy;
+    if (inter <= 0) return 0;
+    return inter / Math.max(1, Math.min(a.w * a.h, b.w * b.h));
+}
+
+/** 这块矩形放进 screen 后，是否和屏里其它顶层窗口重叠过多 */
+function rectOverlapsTooMuch(screen: ViewScreen | undefined, winid: MWinId, rect: ScreenRect): boolean {
+    if (!screen) return false;
+    for (const other of screen.winIds) {
+        if (other === winid) continue;
+        const r = windowLocalRect(other);
+        if (r && overlapRatio(rect, r) > OVERLAP_LIMIT) return true;
+    }
+    return false;
 }
 
 /**
@@ -3015,8 +3365,18 @@ function beginClientFrameMove(frame: ClientWindowFrame, handle: WinHandle, e: Po
     let lastTop = Math.round(origTop);
 
     function onPointerMove(ev: PointerEvent) {
-        const left = Math.round(ev.clientX - startX + origLeft);
-        const top = Math.round(ev.clientY - startY + origTop);
+        const stageWidth = windowEl.el.offsetWidth;
+        const stageHeight = windowEl.el.offsetHeight;
+        const width = frame.el.el.offsetWidth;
+        const height = frame.el.el.offsetHeight;
+        const left = Math.min(Math.max(0, Math.round(ev.clientX - startX + origLeft)), Math.max(0, stageWidth - width));
+        const top = Math.min(Math.max(0, Math.round(ev.clientY - startY + origTop)), Math.max(0, stageHeight - height));
+        if (
+            !windowParents.has(handle) &&
+            rectOverlapsTooMuch(viewData.screenOf(handle), handle, { x: left, y: top, w: width, h: height })
+        ) {
+            return;
+        }
         frame.el.style({ left: `${left}px`, top: `${top}px` });
         moveChildWindows(handle, left - lastLeft, top - lastTop);
         lastLeft = left;
@@ -5348,8 +5708,24 @@ server.server.on("window.startMove", (wid) => {
     let lastTop = Math.round(origTop);
 
     function onPointerMove() {
-        const newLeft = Math.round(mousePos.x - startX + origLeft);
-        const newTop = Math.round(mousePos.y - startY + origTop);
+        const stageWidth = windowEl.el.offsetWidth;
+        const stageHeight = windowEl.el.offsetHeight;
+        const width = movingFrame.el.el.offsetWidth;
+        const height = movingFrame.el.el.offsetHeight;
+        const newLeft = Math.min(
+            Math.max(0, Math.round(mousePos.x - startX + origLeft)),
+            Math.max(0, stageWidth - width),
+        );
+        const newTop = Math.min(
+            Math.max(0, Math.round(mousePos.y - startY + origTop)),
+            Math.max(0, stageHeight - height),
+        );
+        if (
+            !windowParents.has(wid) &&
+            rectOverlapsTooMuch(viewData.screenOf(wid), wid, { x: newLeft, y: newTop, w: width, h: height })
+        ) {
+            return;
+        }
         setClientFramePosition(movingFrame, newLeft, newTop);
         moveChildWindows(wid, newLeft - lastLeft, newTop - lastTop);
         lastLeft = newLeft;
@@ -5400,6 +5776,8 @@ server.server.on("window.changed", (info) => {
     if (applied.fullscreen !== info.states.fullscreen) {
         applied.fullscreen = info.states.fullscreen;
         if (info.states.fullscreen) {
+            // 本屏还有其它窗口：先挪到新屏再全屏
+            viewData.moveWindowToNewScreen(info.handle);
             // 最大化与全屏互斥；进入全屏时把本地最大化快照一起收敛，避免走恢复分支
             applied.maximized = info.states.maximized;
             pauseCenteringForFullscreen(info.handle);
@@ -5471,6 +5849,8 @@ server.server.on("window.changed", (info) => {
         if (info.states.fullscreen) return;
         if (!frame) return;
         if (info.states.maximized) {
+            // 本屏还有其它窗口：先挪到新屏再最大化
+            viewData.moveWindowToNewScreen(info.handle);
             const available = availableStageSize();
             const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
             setClientFrameLayout(frame, available.width, contentHeight);
@@ -5879,6 +6259,8 @@ const windowEl = view()
     .addInto(windowElWarp);
 
 viewData = new ViewData();
+// 一屏多窗口时不再自动居中，否则 ResizeObserver 会把它们叠到一起
+windowCenterManager.setShouldCenter((id) => (viewData.screenOf(id)?.winIds.length ?? 0) <= 1);
 const launcher = createLauncher();
 viewData.setLauncher(launcher);
 launcher.setUiScale(uiScale);
