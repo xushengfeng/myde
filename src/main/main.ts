@@ -301,9 +301,29 @@ mainLog("info", `internal portal: ${useInternalPortal ? "on" : "off"}`);
 
 if (isTestMode) {
     dev = false;
-    // 测试实例与正在运行的 myde 隔离；ozone 平台由 test_runner 在启动前用环境变量选择
-    app.setPath("userData", path.join(os.tmpdir(), `myde-test-${process.pid}`));
+    // 测试实例与正在运行的 myde 隔离；ozone 平台由 test_runner 在启动前用环境变量选择。
+    // runner 会传自己的 userData 目录，方便异常退出后由测试清理。
+    const testUserData = process.env.MYDE_TEST_USER_DATA_DIR || path.join(os.tmpdir(), `myde-test-${process.pid}`);
+    delete process.env.MYDE_TEST_USER_DATA_DIR;
+    app.setPath("userData", testUserData);
     app.commandLine.appendSwitch("allow-file-access-from-files");
+    let cleanupScheduled = false;
+    const scheduleUserDataCleanup = () => {
+        if (cleanupScheduled) return;
+        cleanupScheduled = true;
+        // Chromium 在 will-quit 之后还会写 Cache/Local State。用 detached 的
+        // Node 进程等主进程退出后再删，避免刚删掉又被子进程重建。
+        const script = `setTimeout(() => { try { require("node:fs").rmSync(${JSON.stringify(testUserData)}, { recursive: true, force: true }); } catch {} }, 600);`;
+        try {
+            const child = childProcess.spawn(process.execPath, ["-e", script], {
+                detached: true,
+                stdio: "ignore",
+                env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+            });
+            child.unref();
+        } catch {}
+    };
+    app.on("will-quit", scheduleUserDataCleanup);
 }
 
 const runAsDesktop = Boolean(process.env.runAsDesktop);

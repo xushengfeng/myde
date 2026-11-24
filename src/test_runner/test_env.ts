@@ -13,6 +13,8 @@ export type TestEnvOptions = {
     display: HeadlessDisplay | undefined;
     /** 私有 session bus；测试自己设置了总线时不使用 */
     bus?: PrivateBus;
+    /** 测试实例的 userData 目录；由 runner 创建并负责删除 */
+    userDataDir?: string;
     /** 调用方额外的环境变量，最后合并，优先级最高 */
     extraEnv?: NodeJS.ProcessEnv;
 };
@@ -44,6 +46,8 @@ export function createTestEnv(op: TestEnvOptions): NodeJS.ProcessEnv {
     }
     delete testEnv.ELECTRON_OZONE_PLATFORM_HINT;
     delete testEnv.ELECTRON_CLI_ARGS;
+    if (op.userDataDir) testEnv.MYDE_TEST_USER_DATA_DIR = op.userDataDir;
+    else delete testEnv.MYDE_TEST_USER_DATA_DIR;
 
     // 从正在运行的桌面继承来的环境变量会把测试实例接到别人的会话上：
     // MYDE_INTERNAL_BUS_ADDRESS 指向那个桌面私有的 dbus（桌面重启后常常已失效）。

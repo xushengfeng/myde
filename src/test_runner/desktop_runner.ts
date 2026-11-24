@@ -1,12 +1,30 @@
 import * as child_process from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
+import * as os from "node:os";
 import * as path from "node:path";
 import { type HeadlessDisplay, startHeadlessDisplay } from "./headless_display";
 import { type PrivateBus, startPrivateBus } from "./private_bus";
 import { sleep } from "./process_utils";
 import { createTestEnv } from "./test_env";
 import { getProjectRoot } from "./test_runner";
+
+/** 进程退出时兜底删除测试 userData，避免 Electron 异常退出后残留 Cache/Crashpad。 */
+const activeUserDataDirs = new Set<string>();
+process.once("exit", () => {
+    for (const dir of [...activeUserDataDirs]) {
+        try {
+            fs.rmSync(dir, { recursive: true, force: true });
+        } catch {}
+    }
+});
+
+function removeUserDataDir(dir: string) {
+    activeUserDataDirs.delete(dir);
+    try {
+        fs.rmSync(dir, { recursive: true, force: true });
+    } catch {}
+}
 
 async function getFreePort(): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -290,6 +308,7 @@ class DesktopRunnerImpl implements DesktopRunner {
         private readonly runtime: child_process.ChildProcess,
         private readonly display: HeadlessDisplay | undefined,
         private readonly bus: PrivateBus | undefined,
+        private readonly userDataDir: string,
     ) {
         runtime.stdout?.on("data", (data: Buffer) => this.collectOutput(data));
         runtime.stderr?.on("data", (data: Buffer) => this.collectOutput(data));
@@ -297,6 +316,7 @@ class DesktopRunnerImpl implements DesktopRunner {
             this.exitMessage = `electron-vite 退出：code=${code} signal=${signal}`;
             this.display?.stop();
             this.bus?.stop();
+            removeUserDataDir(this.userDataDir);
         });
 
         cdp.on("Runtime.consoleAPICalled", (params) => {
@@ -460,6 +480,7 @@ class DesktopRunnerImpl implements DesktopRunner {
         await killProcessTree(this.runtime);
         this.display?.stop();
         this.bus?.stop();
+        removeUserDataDir(this.userDataDir);
         if (this.exitMessage) this.processOutput.push(this.exitMessage);
     }
 }
@@ -494,7 +515,9 @@ export async function startDesktopRunner(opts: DesktopRunnerOptions = {}): Promi
     const display = startHeadlessDisplay();
     const bus = startPrivateBus();
     const port = await getFreePort();
-    const env = createTestEnv({ desktop, display, bus, extraEnv: opts.env });
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "myde-test-userdata-"));
+    activeUserDataDirs.add(userDataDir);
+    const env = createTestEnv({ desktop, display, bus, userDataDir, extraEnv: opts.env });
 
     const runtime = child_process.spawn(
         "npx",
@@ -543,7 +566,7 @@ export async function startDesktopRunner(opts: DesktopRunnerOptions = {}): Promi
         await cdp.send("Page.enable");
         await cdp.send("Runtime.enable");
         await cdp.send("Log.enable");
-        const runner = new DesktopRunnerImpl(cdp, runtime, display, bus);
+        const runner = new DesktopRunnerImpl(cdp, runtime, display, bus, userDataDir);
         if (opts.ready !== undefined) {
             await runner.waitFor(opts.ready, opts.timeout ?? 30000);
         } else {
@@ -554,6 +577,7 @@ export async function startDesktopRunner(opts: DesktopRunnerOptions = {}): Promi
         await killProcessTree(runtime);
         display?.stop();
         bus?.stop();
+        removeUserDataDir(userDataDir);
         const tail = output.slice(-40).join("\n");
         throw new Error(`启动桌面失败：${String(e)}${tail ? `\n--- electron 输出 ---\n${tail}` : ""}`);
     }

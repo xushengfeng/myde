@@ -9,6 +9,12 @@ export type PrivateBus = {
     stop: () => void;
 };
 
+/** 进程退出时兜底清理，避免 worker 直接退出留下 dbus-daemon。 */
+const activeStops = new Set<() => void>();
+process.once("exit", () => {
+    for (const stop of [...activeStops]) stop();
+});
+
 /**
  * 每个测试实例一条私有 session bus。
  *
@@ -44,19 +50,20 @@ export function startPrivateBus(): PrivateBus | undefined {
     const stop = () => {
         if (stopped) return;
         stopped = true;
+        activeStops.delete(stop);
         try {
             proc.kill("SIGTERM");
         } catch {}
-        const killTimer = setTimeout(() => {
-            try {
-                proc.kill("SIGKILL");
-            } catch {}
-        }, 1000);
-        killTimer.unref?.();
-        const cleanTimer = setTimeout(() => fs.rmSync(dir, { recursive: true, force: true }), 1500);
-        cleanTimer.unref?.();
+        // 同步收尾：worker 退出时 unref 定时器不会执行
+        sleepSync(60);
+        try {
+            proc.kill("SIGKILL");
+        } catch {}
+        fs.rmSync(dir, { recursive: true, force: true });
     };
+    activeStops.add(stop);
     proc.on("exit", () => {
+        activeStops.delete(stop);
         if (!stopped) {
             stopped = true;
             fs.rmSync(dir, { recursive: true, force: true });

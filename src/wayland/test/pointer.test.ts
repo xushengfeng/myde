@@ -106,7 +106,7 @@ if (typeof document !== "undefined") {
             const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
             /** 注入计划（外层断言的唯一来源）：坐标是**几何坐标**，y 要留出 CSD 高度 */
             const plan: Plan = {
-                settle: 300,
+                settle: 500,
                 moves: [
                     { x: 60, y: 120 },
                     { x: 320, y: 140 },
@@ -138,35 +138,35 @@ if (typeof document !== "undefined") {
 
                         for (const m of plan.moves) {
                             move(m.x, m.y);
-                            await sleep(80);
+                            await sleep(150);
                         }
                         for (const c of plan.clicks) {
                             move(c.x, c.y);
-                            await sleep(80);
+                            await sleep(150);
                             server.notify("input.pointer", info.handle, {
                                 type: "down",
                                 x: c.x,
                                 y: c.y,
                                 button: c.button,
                             });
-                            await sleep(80);
+                            await sleep(150);
                             server.notify("input.pointer", info.handle, {
                                 type: "up",
                                 x: c.x,
                                 y: c.y,
                                 button: c.button,
                             });
-                            await sleep(80);
+                            await sleep(150);
                         }
                         for (const w of plan.wheels) {
                             move(w.x, w.y);
-                            await sleep(80);
+                            await sleep(150);
                             server.notify("input.scroll", info.handle, {
                                 deltaX: w.deltaX,
                                 deltaY: w.deltaY,
                                 deltaZ: 0,
                             });
-                            await sleep(80);
+                            await sleep(150);
                         }
                         // 光标是客户端对 wl_pointer.enter 的回应（wp_cursor_shape / set_cursor）
                         await sleep(200);

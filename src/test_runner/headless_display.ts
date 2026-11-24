@@ -10,6 +10,12 @@ export type HeadlessDisplay = {
     stop: () => void;
 };
 
+/** 进程退出时也要兜底清理：测试失败/worker 被回收时不一定走 runner 的 cleanup。 */
+const activeStops = new Set<() => void>();
+process.once("exit", () => {
+    for (const stop of [...activeStops]) stop();
+});
+
 let fallbackWarned = false;
 
 function warnFallback(reason: string) {
@@ -66,20 +72,22 @@ mode=1920x1080
     const stop = () => {
         if (stopped) return;
         stopped = true;
+        activeStops.delete(stop);
         try {
             proc.kill("SIGTERM");
         } catch {}
-        // weston 正常收到 SIGTERM 会自己清理 Xwayland socket；超时再强杀
-        const killTimer = setTimeout(() => {
-            try {
-                proc.kill("SIGKILL");
-            } catch {}
-        }, 2000);
-        killTimer.unref?.();
-        const cleanTimer = setTimeout(() => fs.rmSync(dir, { recursive: true, force: true }), 2500);
-        cleanTimer.unref?.();
+        // weston 正常收到 SIGTERM 会自己清理 Xwayland socket。这里必须同步等：
+        // vitest worker 可能在 cleanup 之后立刻退出，unref 的定时器不会执行，
+        // weston 就会以 PPID 1 残留。
+        sleepSync(120);
+        try {
+            proc.kill("SIGKILL");
+        } catch {}
+        fs.rmSync(dir, { recursive: true, force: true });
     };
+    activeStops.add(stop);
     proc.on("exit", () => {
+        activeStops.delete(stop);
         if (!stopped) {
             stopped = true;
             fs.rmSync(dir, { recursive: true, force: true });

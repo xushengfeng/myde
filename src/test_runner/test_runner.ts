@@ -7,6 +7,12 @@ import type { renderTools } from "../wayland/render_tools";
 import { startHeadlessDisplay } from "./headless_display";
 import { createTestEnv } from "./test_env";
 
+/** 进程退出时兜底清理临时测试桌面（worker 可能不走 testRunner 的 cleanup）。 */
+const activeTmpPaths = new Set<string>();
+process.once("exit", () => {
+    for (const tmpPath of [...activeTmpPaths]) fs.rmSync(tmpPath, { recursive: true, force: true });
+});
+
 export function getProjectRoot() {
     let p = __dirname;
     for (let i = 0; i < 10; i++) {
@@ -29,7 +35,10 @@ function getFunctionRawCode(fn: (...args: any[]) => any) {
 
 export function testRunnerRaw(js: string) {
     const tmpPath = path.join(os.tmpdir(), `myde-test-${Date.now()}`);
+    activeTmpPaths.add(tmpPath);
     fs.mkdirSync(tmpPath, { recursive: true });
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "myde-test-userdata-"));
+    activeTmpPaths.add(userDataDir);
     const pkjson = { main: "index.js", type: "module" };
     fs.writeFileSync(path.join(tmpPath, "package.json"), JSON.stringify(pkjson));
     fs.writeFileSync(path.join(tmpPath, "index.js"), js);
@@ -38,7 +47,12 @@ export function testRunnerRaw(js: string) {
     // WAYLAND_DISPLAY/DISPLAY 指向哪一个都不确定，接上去就会在别人的桌面上开窗口。
     // 优先用私有的 weston headless + Xwayland（能拿到 GPU），没有就用 headless ozone。
     const display = startHeadlessDisplay();
-    const testEnv = createTestEnv({ desktop: tmpPath, display, extraEnv: { nodeModule: "on" } });
+    const testEnv = createTestEnv({
+        desktop: tmpPath,
+        display,
+        userDataDir,
+        extraEnv: { nodeModule: "on" },
+    });
 
     const runtime = child_process.spawn(
         "npx",
@@ -88,6 +102,10 @@ export function testRunnerRaw(js: string) {
         killed = true;
         runtime.kill();
         clearTimeout(killTimeout);
+        // 部分测试（tray/notification）不等待 waitExit，npx 的 stdout 可能被
+        // Electron 子进程一直持有；测试数据已经发完，这里直接收掉 weston，
+        // 不依赖 runtime 的 exit 事件，否则 worker 退出后 weston 会成为孤儿。
+        display?.stop();
     };
     const killTimeout = setTimeout(kill, 20000);
     let cleaned = false;
@@ -95,8 +113,12 @@ export function testRunnerRaw(js: string) {
         if (cleaned) return;
         cleaned = true;
         clearTimeout(killTimeout);
-        // 提前退出（含超时/测试失败）也不能留下 weston
+        // 提前退出（含超时/测试失败）也不能留下 weston / 临时桌面 / userData
         display?.stop();
+        for (const dir of [tmpPath, userDataDir]) {
+            activeTmpPaths.delete(dir);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     };
     runtime.on("exit", cleanup);
 
@@ -186,7 +208,7 @@ export function testRunnerApp(
     // baseTeamplate 是函数体原文，末尾没有分号；若直接拼接下一行以 `(` 开头的脚本调用，
     // JS 会按 ASI 规则把两行合并成一条调用链（p.stdout.on(...)(fn)）→ TypeError 中止整个模块，
     // 导致后面的测试脚本永远执行不到。补分号强制语句结束。
-    const app = `const appPath="${appPath}"\n${baseTeamplate};\n${runnerCode}\n(${script.toString()})({ server, serverX, render, runner })`;
+    const app = `const appPath="${appPath}"\n${baseTeamplate};\n${runnerCode}\nPromise.resolve((${script.toString()})({ server, serverX, render, runner })).catch((error) => {\n    ipcRenderer.send("test", { type: "applog", data: "TEST_CALLBACK_ERROR " + String(error?.stack ?? error) });\n    ipcRenderer.send("test", { type: "kill" });\n})`;
     const r = testRunnerRaw(app);
     return r;
 }
