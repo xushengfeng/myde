@@ -61,6 +61,36 @@ export function pruneAppLogs(keep = 50) {
     }
 }
 
+/** 把应用输出按行加时间戳和来源写入日志；分不清 stdout/stderr 时很难定位问题 */
+export class AppOutputLog {
+    private pending = "";
+    constructor(
+        private readonly file: RotatingLogFile,
+        private readonly tag: "out" | "err",
+    ) {}
+
+    push(chunk: Buffer) {
+        const text = this.pending + chunk.toString("utf8");
+        const lines = text.split("\n");
+        this.pending = lines.pop() ?? "";
+        for (const line of lines) this.writeLine(line);
+        // 没有换行的超长输出（如进度条）不能无限攒在内存里
+        if (this.pending.length > 64 * 1024) {
+            this.writeLine(this.pending);
+            this.pending = "";
+        }
+    }
+
+    flush() {
+        if (this.pending) this.writeLine(this.pending);
+        this.pending = "";
+    }
+
+    private writeLine(line: string) {
+        this.file.write(`${formatLogTime()} [${this.tag}] ${line.replace(/\r$/, "")}\n`);
+    }
+}
+
 /**
  * 追加写日志文件，超过上限就轮转：`name` → `name.1` → `name.2` …
  * 所有失败都吞掉：日志问题不能反过来影响桌面。

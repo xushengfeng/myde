@@ -6,9 +6,9 @@
 
 `brightness.ts` 控制屏幕亮度：内置屏读 `/sys/class/backlight/*`，写入优先直接写 sysfs、没有权限时走 logind 的 `org.freedesktop.login1.Session.SetBrightness`（目标取席位的当前前台会话 `Seat.ActiveSession`，切 VT 后自动跟随；logind 只放行前台会话，其他会话会返回 `NotYourDevice`）；外接屏调用 `ddcutil`（DDC/CI，VCP 0x10），需要 i2c 权限（udev `uaccess` 规则或 i2c 组），`ddcutil` 不可用时只影响外接屏。内置屏用 `fs.watch` 监听 sysfs，Fn 键或其他程序修改亮度也会发出 `changed`；外接屏不轮询，热插拔后调用 `refresh()`。
 
-`polkit.ts` 是 polkit 的认证前端 agent：在系统总线注册 logind session，接收 polkitd 的认证请求并通过事件交给桌面；PAM 由 polkit-agent-helper-1 完成。
+`polkit.ts` 是 polkit 的认证前端 agent：在系统总线注册 logind session，接收 polkitd 的认证请求并通过事件交给桌面；PAM 由 polkit-agent-helper-1 完成。桌面模式下的 agent 跑在主进程最早启动的 `session_helper` 里（它在 Chromium 搬 cgroup 之前 fork，留在登录会话里），helper 同时代 `runApp` 启动应用，应用及其子进程因此属于该会话，polkit 的会话级 agent 才能接住它们的认证。
 
-`run.ts` 负责启动应用。`runApp()` 必须读取应用的 stdout/stderr（否则写满 64 KiB 后应用阻塞），输出写到 `$XDG_STATE_HOME/myde/logs/apps/`。`runApp(exec, { env })` 可以把应用自带的环境变量合并进子进程环境（最后合并，优先级最高）。子进程会拿到 `USER`/`LOGNAME`/`HOME`；启动身份取桌面进程自身，不依赖启动环境里的 `USER`（应用内再启动的桌面可能没有这个变量，按 `USER` 兜底会变成 root 并 `spawn EPERM`）。
+`run.ts` 负责启动应用。桌面模式下 `runApp()` 优先让 session helper 代启动（应用留在登录会话里，polkit 会话级 agent 才能接住它派生的 systemctl 等），helper 不可用时本地 spawn。应用输出必须被读取（否则写满 64 KiB 后应用阻塞），写到 `$XDG_STATE_HOME/myde/logs/apps/`；helper 代启动时由 helper 写。`runApp(exec, { env })` 可以把应用自带的环境变量合并进子进程环境（最后合并，优先级最高）。子进程会拿到 `USER`/`LOGNAME`/`HOME`；启动身份取桌面进程自身，不依赖启动环境里的 `USER`（应用内再启动的桌面可能没有这个变量，按 `USER` 兜底会变成 root 并 `spawn EPERM`）。
 
 `application.ts` 解析 .desktop：除 Name/Comment/Icon/Exec 外，还会从 `Exec=env A=1 cmd` 的前缀取出环境变量放进 `DesktopEntry.env`（`Exec` 同时还原成 `cmd`），交给 `runApp()`。
 

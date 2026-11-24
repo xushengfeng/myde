@@ -390,6 +390,9 @@ export class polkit extends EventEmitter<PolkitEvents> {
     private destroyed = false;
     private registered = false;
     private unwatch?: () => void | Promise<void>;
+    /** 会话级 agent 注册重试（被旧进程占着时） */
+    private sessionRetry?: ReturnType<typeof setTimeout>;
+    private sessionRetryLeft = 12;
 
     private readonly messageHandler = (message: dbusMessage) => {
         this.handleMessage(message);
@@ -472,6 +475,11 @@ export class polkit extends EventEmitter<PolkitEvents> {
         }
         this.appProcesses.clear();
 
+        if (this.sessionRetry) {
+            clearTimeout(this.sessionRetry);
+            this.sessionRetry = undefined;
+        }
+
         this.io.removeMessageHandler(this.messageHandler);
 
         if (this.options.busName) {
@@ -542,6 +550,11 @@ export class polkit extends EventEmitter<PolkitEvents> {
             this.appProcesses.set(pid, subject);
             return true;
         } catch (error) {
+            // 同一 pid 已经注册过（例如桌面自己也上报过）不算失败
+            if (/already exists/i.test(errorText(error))) {
+                this.appProcesses.set(pid, subject);
+                return true;
+            }
             console.warn(`[polkit] 为进程 ${pid} 注册认证 agent 失败:`, errorText(error));
             return false;
         }
@@ -565,7 +578,10 @@ export class polkit extends EventEmitter<PolkitEvents> {
         this.registeredSubjects.length = 0;
 
         let lastError: unknown;
-        const tryRegister = async (subject: DBusType<"(sa{sv})">): Promise<boolean> => {
+        const tryRegister = async (
+            subject: DBusType<"(sa{sv})">,
+            onError?: (text: string) => void,
+        ): Promise<boolean> => {
             try {
                 await authority
                     .call("RegisterAuthenticationAgent", "(sa{sv})ss", subject, this.locale, this.objectPath)
@@ -573,15 +589,17 @@ export class polkit extends EventEmitter<PolkitEvents> {
                 return true;
             } catch (error) {
                 if (allowAlreadyExists && /already exists|AlreadyExists/i.test(errorText(error))) return true;
+                onError?.(errorText(error));
                 lastError = error;
                 return false;
             }
         };
 
         const registeredSessions: string[] = [];
+        const sessionErrors: string[] = [];
         for (const sessionId of sessionIds) {
             const subject = this.sessionSubject(sessionId);
-            if (await tryRegister(subject)) {
+            if (await tryRegister(subject, (text) => sessionErrors.push(`session ${sessionId}: ${text}`))) {
                 this.registeredSubjects.push(subject);
                 registeredSessions.push(sessionId);
             }
@@ -599,10 +617,25 @@ export class polkit extends EventEmitter<PolkitEvents> {
         if (registeredSessions.length > 0) {
             console.log(`[polkit] 已注册会话级认证 agent（session ${registeredSessions.join(",")}）`);
         } else if (processRegistered) {
-            console.warn(
-                "[polkit] 登录会话不可用（运行在 app-*.scope），已按进程注册认证 agent；桌面启动的应用会按 pid 补注册",
-            );
+            // 会话级注册失败通常两种情况：本进程不在会话里（polkitd 查不到会话），
+            // 或者会话已经被别的 agent 占着（例如上一次 myde 的 helper 还没退出）。
+            const detail = sessionErrors.length ? `（${sessionErrors.join("；")}）` : "";
+            console.warn(`[polkit] 没有注册会话级 agent${detail}；已按进程注册，应用会按 pid 补注册`);
+            if (sessionErrors.some((text) => /already exists/i.test(text))) this.scheduleSessionRetry();
         }
+    }
+
+    /** 会话级 agent 被旧进程占着时，隔几秒再试；对方退出后就能接过来 */
+    private scheduleSessionRetry() {
+        if (this.destroyed || this.sessionRetry || this.sessionRetryLeft <= 0) return;
+        this.sessionRetryLeft--;
+        this.sessionRetry = setTimeout(() => {
+            this.sessionRetry = undefined;
+            if (this.destroyed) return;
+            void this.registerWithAuthority(true).catch((error) => {
+                console.warn("[polkit] 重新注册会话级 agent 失败:", errorText(error));
+            });
+        }, 5000);
     }
 
     private async unregisterSubject(subject: DBusType<"(sa{sv})">) {
@@ -699,7 +732,11 @@ export class polkit extends EventEmitter<PolkitEvents> {
             ];
             void this.beginAuthentication(actionId, text, iconName, details, cookie, identities)
                 .then(() => this.sendReturn(sender, serial))
-                .catch((error) => this.sendError(sender, serial, error));
+                .catch((error) => {
+                    // 失败原因只回给 polkitd 的话日志里看不到，排查时无从下手
+                    console.warn(`[polkit] 认证 ${actionId} 失败:`, errorText(error));
+                    return this.sendError(sender, serial, error);
+                });
             return;
         }
 
@@ -1166,7 +1203,7 @@ export class polkit extends EventEmitter<PolkitEvents> {
 /**
  * 桌面侧可用的 polkit agent 接口。
  *
- * 本地 agent（helper 里）和主进程代理（polkitRemote）都实现这些成员；
+ * 本地 agent（session helper 里）和主进程代理（sessionRemote）都实现这些成员；
  * 桌面只依赖这部分，不关心 agent 实际跑在哪个进程。
  */
 export type PolkitApi = Pick<polkit, "on" | "off" | "once" | "getRequest" | "watchProcess" | "unwatchProcess">;

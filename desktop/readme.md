@@ -259,7 +259,7 @@ portal.on("access.request", async (req) => {
 
 ### polkit
 
-polkit 认证前端 agent。主进程启动最早阶段会拉起一个 helper 进程（在 Electron 把主进程搬进 `app-*.scope` 之前），helper 留在登录会话里注册会话级 agent；需要用户认证时 polkitd 调用 agent，事件经主进程转到桌面，密码等输入再回传。PAM 由 `polkit-agent-helper-1`（socket 激活或 setuid helper）完成，API 不包含 UI。`MYDE_POLKIT_HELPER=0` 可关闭 helper。
+polkit 认证前端 agent。主进程启动最早阶段会拉起一个 session helper 进程（在 Electron 把主进程搬进 `app-*.scope` 之前），helper 留在登录会话里注册会话级 agent；需要用户认证时 polkitd 调用 agent，事件经主进程转到桌面，密码等输入再回传。PAM 由 `polkit-agent-helper-1`（socket 激活或 setuid helper）完成，API 不包含 UI。`MYDE_SESSION_HELPER=0` 可关闭 helper。
 
 ```typescript
 const polkit = MSysApi.polkit;
@@ -289,9 +289,10 @@ polkit.on("auth-end", (req, { success, cancelled }) => closeDialog(req));
 - `req.id` 是进程内唯一编号（不是 polkit cookie），用于日志和自建状态表；`auth-end` 可能来自没发出过 `auth-request` 的排队请求，按 `id` 忽略即可
 - `req` 只在 `auth-request` 之后可用；`submitPassword` 应在 `auth-prompt` 回调里调用，且每次 prompt 只调用一次（helper 的 stdin 会缓存，提前或重复发送会被后续 PAM 问题消费）；`cancel` / `selectIdentity` 可在 `auth-request` 到 `auth-end` 之间调用；`auth-end` 之后所有操作静默无效
 - helper 注册会话级 agent，覆盖会话内所有进程（包括应用派生的子进程）；helper 不在会话里（例如从没有 logind 会话的环境启动）时，会话按 polkitd 的方式查找（PID → 用户 display session → `XDG_SESSION_ID`），失败则退化为按进程（`unix-process`）注册，`runApp` 启动的应用会再按应用 pid 补注册
+- 桌面模式的应用由 helper 代 `runApp` 启动（`MSysApi.session.spawnApp`），因此应用和终端里再派生的命令都在会话里；helper 不可用时回退到本地 spawn
 - 只有桌面模式（`runAsDesktop`）启动 helper；窗口模式的认证交给宿主桌面，避免抢占宿主 agent
 - 认证依赖 `polkit-agent-helper-1`（`/run/polkit/agent-helper.socket` 或带 setuid 的 helper）
-- 初始化失败（无 system bus、无 logind、无可用 helper）时只告警，`MSysApi.polkit` 保持 `undefined`；polkitd 重启后会自动重新注册
+- 无 system bus / 无 logind 时只告警，退化为按进程注册；helper 起不来时 `MSysApi.session.available` 为 `false`，应用走本地 spawn。polkitd 重启后会自动重新注册
 
 ### verifyUserPassword
 
@@ -1094,7 +1095,7 @@ serverX.stopXwayland();
 
 `startXwayland()` 会找一个空闲的 `:N`，启动 `xwayland-satellite :N`，等待 `/tmp/.X11-unix/XN` 出现；可用 `MYDE_XWAYLAND_SATELLITE` 指定 binary 路径。
 
-`runApp()` 会读取应用的 stdout/stderr，写入 `$XDG_STATE_HOME/myde/logs/apps/<可执行名>-<pid>.log`，每行带时间和 `[out]`/`[err]` 来源。管道必须被读取：应用写满 64 KiB 后会阻塞在 `write()`，看起来像窗口画面卡死。日志文件超过 10 MiB 会轮转，最多保留最近 50 份。
+`runApp()` 会读取应用的 stdout/stderr，写入 `$XDG_STATE_HOME/myde/logs/apps/<可执行名>-<pid>.log`，每行带时间和 `[out]`/`[err]` 来源。管道必须被读取：应用写满 64 KiB 后会阻塞在 `write()`，看起来像窗口画面卡死。日志文件超过 10 MiB 会轮转，最多保留最近 50 份。桌面模式下应用由 session helper 代启动（输出由 helper 写日志），返回的 `AppProcess` 只有 `pid`/`kill`/`exit`/`error`，没有 `stdout`/`stderr` 管道。
 
 ## 测试
 

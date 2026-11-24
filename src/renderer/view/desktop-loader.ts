@@ -21,9 +21,9 @@ import { mpris } from "../../sys_api/mpris";
 import { nativefs } from "../../sys_api/nativefs";
 import { network } from "../../sys_api/network";
 import { notification } from "../../sys_api/notification";
-import { polkitRemote } from "../../sys_api/polkit_remote";
 import { power, powerProfiles } from "../../sys_api/power";
 import { screenshot } from "../../sys_api/screenshot";
+import { sessionRemote } from "../../sys_api/session_remote";
 import { volumeControl } from "../../sys_api/volume";
 import { xdgDesktopPortal } from "../../sys_api/xdg_desktop_portal/xdg_desktop_portal";
 
@@ -121,8 +121,9 @@ async function loadDesktop(p: string) {
     myde.MSysApi.network = new network(await newDBusIO(true));
     myde.MSysApi.volume = new volumeControl();
     // polkit 认证前端。只有桌面模式需要；窗口模式交给宿主桌面
-    if (polkitRemoteAgent) {
-        myde.MSysApi.polkit = polkitRemoteAgent;
+    if (sessionRemoteAgent) {
+        myde.MSysApi.polkit = sessionRemoteAgent;
+        myde.MSysApi.session = sessionRemoteAgent;
     }
     // xdg-desktop-portal 后端。窗口模式下只是占一个唯一的 impl 名字，
     // 不会抢占宿主的 org.freedesktop.portal.Desktop。
@@ -256,7 +257,7 @@ global.myde = _myde;
 
 const urlParams = new URLSearchParams(window.location.search);
 // 桌面模式才接 polkit；尽早建立 IPC 监听，主进程可能在 did-finish-load 时就转发事件
-const polkitRemoteAgent = urlParams.get("displayType") === "desktop" ? new polkitRemote() : undefined;
+const sessionRemoteAgent = urlParams.get("displayType") === "desktop" ? new sessionRemote() : undefined;
 const nodeModule = urlParams.get("nodeModule");
 if (!nodeModule) {
     // @ts-expect-error

@@ -8,7 +8,7 @@ export default defineConfig({
                 input: {
                     main: path.resolve(__dirname, "src/main/main.ts"),
                     // 必须在 Chromium 搬动主进程 cgroup 之前启动，单独作为入口
-                    polkit_helper: path.resolve(__dirname, "src/main/polkit_helper.ts"),
+                    session_helper: path.resolve(__dirname, "src/main/session_helper.ts"),
                 },
             },
         },

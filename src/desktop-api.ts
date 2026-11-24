@@ -24,6 +24,7 @@ import type { PolkitApi } from "./sys_api/polkit";
 import type { power, powerProfiles } from "./sys_api/power";
 import { server } from "./sys_api/run";
 import type { screenshot } from "./sys_api/screenshot";
+import type { SessionApi } from "./sys_api/session_remote";
 import type { volumeControl } from "./sys_api/volume";
 import type { xdgDesktopPortal } from "./sys_api/xdg_desktop_portal/xdg_desktop_portal";
 import { throttle } from "./utils/throttle";
@@ -52,6 +53,7 @@ export const _myde = {
         brightness: undefined as unknown as brightness,
         network: undefined as unknown as network,
         polkit: undefined as unknown as PolkitApi,
+        session: undefined as unknown as SessionApi,
         display: undefined as unknown as display,
         input: undefined as unknown as InputManager,
         inputSim: undefined as unknown as inputSim,
@@ -82,6 +84,7 @@ export type DesktopApi = typeof _myde;
 export type { ConnectConnection, ConnectEvents, PairingSession } from "./connect/connect";
 export type { DesktopIconConfig } from "./sys_api/application";
 export type { BrightnessDisplay, BrightnessEvents, BrightnessKind } from "./sys_api/brightness";
+export type { SessionApi } from "./sys_api/session_remote";
 
 declare global {
     var myde: DesktopApi;

@@ -61,12 +61,12 @@ function runApp(execPath: string, args: string[] = []) {
 
     const logData: string[] = [];
 
-    subprocess.stdout.on("data", (data) => {
+    subprocess.stdout?.on("data", (data) => {
         console.log(`Subprocess ${execPath} stdout:\n${data.toString("utf8")}`);
         logData.push(data.toString("utf8"));
     });
 
-    subprocess.stderr.on("data", (data) => {
+    subprocess.stderr?.on("data", (data) => {
         const dataStr = data.toString("utf8");
         const m = dataStr.match(/\{Default Queue\}(.+?)#/)?.[1];
         if (m) {

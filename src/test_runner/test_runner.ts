@@ -195,10 +195,10 @@ export function testRunnerApp(
         });
 
         const p = serverX.runApp(`${__dirname.replace("/out/renderer", "")}/${appPath}`);
-        p.stdout.on("data", (data) => {
+        p.stdout?.on("data", (data) => {
             ipcRenderer.send("test", { type: "applog", data: data.toString() });
         });
-        p.stderr.on("data", (data) => {
+        p.stderr?.on("data", (data) => {
             ipcRenderer.send("test", { type: "applog", data: data.toString() });
         });
     });

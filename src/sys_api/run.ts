@@ -3,9 +3,10 @@ const fs = require("node:fs") as typeof import("node:fs");
 const os = require("node:os") as typeof import("node:os");
 const path = require("node:path") as typeof import("node:path");
 
-import { formatLogTime, getAppLogPath, pruneAppLogs, RotatingLogFile } from "../utils/log";
+import { AppOutputLog, formatLogTime, getAppLogPath, pruneAppLogs, RotatingLogFile } from "../utils/log";
 import type { renderTools } from "../wayland";
 import { createServer } from "../wayland";
+import { AppProcess } from "./app_process";
 import { getEnv } from "./env";
 
 function findExecutable(name: string, pathEnv: string | undefined): string | undefined {
@@ -71,7 +72,7 @@ function resolveIdentity(env: Record<string, string>): Identity {
     return self;
 }
 
-async function waitForXSocket(display: number, child: import("node:child_process").ChildProcess, timeout: number) {
+async function waitForXSocket(display: number, child: AppProcess, timeout: number) {
     const socketPath = `/tmp/.X11-unix/X${display}`;
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
@@ -91,7 +92,7 @@ export function server(op: { dev?: boolean; render: renderTools }) {
     const gid = identity.gid;
 
     let xwaylandDisplay: number | undefined;
-    let xwaylandChild: import("node:child_process").ChildProcess | undefined;
+    let xwaylandChild: AppProcess | undefined;
     let xwaylandTask: Promise<number | undefined> | undefined;
     let xwaylandWarned = false;
 
@@ -116,6 +117,7 @@ export function server(op: { dev?: boolean; render: renderTools }) {
         xServerNum?: number,
         deEnvOverride: typeof deEnv = deEnv,
         extraEnv?: Record<string, string>,
+        local = false,
     ) => {
         return runApp(execPath, {
             args,
@@ -124,6 +126,7 @@ export function server(op: { dev?: boolean; render: renderTools }) {
             xServerNum,
             env: extraEnv,
             user: { uid, gid },
+            local,
         });
     };
 
@@ -163,7 +166,14 @@ export function server(op: { dev?: boolean; render: renderTools }) {
                     }
                     if (display === -1) break;
 
-                    const child = spawnAppParts(satellite, [`:${display}`], undefined, { ...deEnv, WAYLAND_DEBUG: "" });
+                    const child = spawnAppParts(
+                        satellite,
+                        [`:${display}`],
+                        undefined,
+                        { ...deEnv, WAYLAND_DEBUG: "" },
+                        undefined,
+                        true,
+                    );
                     xwaylandChild = child;
                     child.stdout?.on("data", (data) => console.log("[xwayland-satellite]", data.toString().trim()));
                     child.stderr?.on("data", (data) => console.warn("[xwayland-satellite]", data.toString().trim()));
@@ -219,36 +229,6 @@ export function server(op: { dev?: boolean; render: renderTools }) {
     };
 }
 
-/** 把应用输出按行加时间戳和来源写入日志；分不清 stdout/stderr 时很难定位问题 */
-class AppOutputLog {
-    private pending = "";
-    constructor(
-        private readonly file: RotatingLogFile,
-        private readonly tag: "out" | "err",
-    ) {}
-
-    push(chunk: Buffer) {
-        const text = this.pending + chunk.toString("utf8");
-        const lines = text.split("\n");
-        this.pending = lines.pop() ?? "";
-        for (const line of lines) this.writeLine(line);
-        // 没有换行的超长输出（如进度条）不能无限攒在内存里
-        if (this.pending.length > 64 * 1024) {
-            this.writeLine(this.pending);
-            this.pending = "";
-        }
-    }
-
-    flush() {
-        if (this.pending) this.writeLine(this.pending);
-        this.pending = "";
-    }
-
-    private writeLine(line: string) {
-        this.file.write(`${formatLogTime()} [${this.tag}] ${line.replace(/\r$/, "")}\n`);
-    }
-}
-
 /** runApp 的额外参数 */
 export type RunAppOptions = {
     /** 直接指定 X display 编号；不传则用正在运行的 xwayland */
@@ -257,64 +237,102 @@ export type RunAppOptions = {
     env?: Record<string, string>;
 };
 
+/** 桌面继承给应用的身份/语言等环境变量 */
+export type RunAppDeEnv = {
+    HOME: string;
+    USER?: string;
+    LOGNAME?: string;
+    LANG?: string;
+    LANGUAGE?: string;
+    WAYLAND_DEBUG?: string;
+    PATH?: string;
+    DBUS_SESSION_BUS_ADDRESS?: string;
+    XDG_SESSION_ID?: string;
+    XDG_CURRENT_DESKTOP?: string;
+};
+
+/** 桌面自己的 Wayland server 地址 */
+export type RunAppServer = {
+    socketDir: string;
+    socketName: string;
+};
+
+/** 把应用环境变量拼好；本地 spawn 和 helper 代启动共用 */
+function appEnv(op: {
+    deEnv: RunAppDeEnv;
+    server: RunAppServer;
+    xServerNum?: number;
+    env?: Record<string, string>;
+}): Record<string, string> {
+    const lang = op.deEnv.LANG || "en_US.UTF-8";
+    const language = op.deEnv.LANGUAGE || languageFromLang(lang);
+    return {
+        HOME: op.deEnv.HOME,
+        PATH: op.deEnv.PATH || "/usr/local/bin:/usr/bin:/bin",
+        ...(op.deEnv.USER ? { USER: op.deEnv.USER } : {}),
+        ...(op.deEnv.LOGNAME ? { LOGNAME: op.deEnv.LOGNAME } : {}),
+        LANG: lang,
+        ...(language ? { LANGUAGE: language } : {}),
+        XDG_SESSION_TYPE: "wayland",
+        ...(op.deEnv.XDG_SESSION_ID ? { XDG_SESSION_ID: op.deEnv.XDG_SESSION_ID } : {}),
+        XDG_RUNTIME_DIR: op.server.socketDir,
+        XDG_CURRENT_DESKTOP: op.deEnv.XDG_CURRENT_DESKTOP || "MyDE",
+        XDG_SESSION_DESKTOP: "MyDE",
+        DBUS_SESSION_BUS_ADDRESS: op.deEnv.DBUS_SESSION_BUS_ADDRESS || `unix:path=${op.server.socketDir}/bus`,
+        WAYLAND_DISPLAY: op.server.socketName,
+        WAYLAND_DEBUG: op.deEnv.WAYLAND_DEBUG || "",
+        ...(hasDisplayNumber(op.xServerNum) ? { DISPLAY: `:${op.xServerNum}` } : {}),
+        // 应用自带的环境变量（.desktop 里声明的）放最后，可以覆盖上面的默认值
+        ...op.env,
+    };
+}
+
 export function runApp(
     execPath: string,
     op: {
         args: string[];
-        deEnv: {
-            HOME: string;
-            USER?: string;
-            LOGNAME?: string;
-            LANG?: string;
-            LANGUAGE?: string;
-            WAYLAND_DEBUG?: string;
-            PATH?: string;
-            DBUS_SESSION_BUS_ADDRESS?: string;
-            XDG_SESSION_ID?: string;
-            XDG_CURRENT_DESKTOP?: string;
-        };
-        server: {
-            socketDir: string;
-            socketName: string;
-        };
+        deEnv: RunAppDeEnv;
+        server: RunAppServer;
         xServerNum?: number;
         /** 应用自带的环境变量，最后合并，优先级最高 */
         env?: Record<string, string>;
         user?: { uid?: number; gid?: number };
+        /** 不经过 session helper，直接本地 spawn（内部辅助进程用） */
+        local?: boolean;
     },
-) {
-    const startedAt = Date.now();
-    const lang = op.deEnv.LANG || "en_US.UTF-8";
-    const language = op.deEnv.LANGUAGE || languageFromLang(lang);
+): AppProcess {
+    const env = appEnv(op);
 
+    // 桌面模式下经 session helper 启动：应用进入登录会话的 cgroup，polkit 的会话级
+    // agent 才能接住它（以及终端里再派生的 systemctl 之类）的认证。helper 不可用
+    // （窗口模式、测试、被关闭）时回退到本地 spawn。
+    const sessionApi = globalThis.myde?.MSysApi?.session;
+    if (!op.local && sessionApi?.available) {
+        return sessionApi.spawnApp({
+            exec: execPath,
+            args: op.args,
+            env,
+            cwd: op.deEnv.HOME,
+            uid: op.user?.uid,
+            gid: op.user?.gid,
+        });
+    }
+
+    const startedAt = Date.now();
     const subprocess = child_process.spawn(execPath, op.args, {
         stdio: ["ignore", "pipe", "pipe"],
-        env: {
-            HOME: op.deEnv.HOME,
-            PATH: op.deEnv.PATH || "/usr/local/bin:/usr/bin:/bin",
-            ...(op.deEnv.USER ? { USER: op.deEnv.USER } : {}),
-            ...(op.deEnv.LOGNAME ? { LOGNAME: op.deEnv.LOGNAME } : {}),
-            LANG: lang,
-            ...(language ? { LANGUAGE: language } : {}),
-            XDG_SESSION_TYPE: "wayland",
-            ...(op.deEnv.XDG_SESSION_ID ? { XDG_SESSION_ID: op.deEnv.XDG_SESSION_ID } : {}),
-            XDG_RUNTIME_DIR: op.server.socketDir,
-            XDG_CURRENT_DESKTOP: op.deEnv.XDG_CURRENT_DESKTOP || "MyDE",
-            XDG_SESSION_DESKTOP: "MyDE",
-            DBUS_SESSION_BUS_ADDRESS: op.deEnv.DBUS_SESSION_BUS_ADDRESS || `unix:path=${op.server.socketDir}/bus`,
-            WAYLAND_DISPLAY: op.server.socketName,
-            WAYLAND_DEBUG: op.deEnv.WAYLAND_DEBUG || "",
-            ...(hasDisplayNumber(op.xServerNum) ? { DISPLAY: `:${op.xServerNum}` } : {}),
-            // 应用自带的环境变量（.desktop 里声明的）放最后，可以覆盖上面的默认值
-            ...op.env,
-        },
+        env,
         cwd: op.deEnv.HOME,
         uid: op.user?.uid,
         gid: op.user?.gid,
     });
 
-    // 会话级 polkit agent 由主进程提前启动的 helper 注册；这里再给应用补一个
-    // 进程级 agent，helper 不在登录会话里（退化成进程注册）时仍能弹认证
+    const app = new AppProcess(subprocess.pid, (signal) => subprocess.kill(signal));
+    app.stdout = subprocess.stdout ?? undefined;
+    app.stderr = subprocess.stderr ?? undefined;
+
+    // 会话级 polkit agent 由主进程最早启动的 session helper 注册；这里再给应用补一个
+    // 进程级 agent，helper 不可用或应用不在会话里时仍能弹认证
     const appPid = subprocess.pid;
     if (appPid) void globalThis.myde?.MSysApi?.polkit?.watchProcess(appPid);
 
@@ -338,15 +356,28 @@ export function runApp(
         appLog.write(`${formatLogTime()} [myde] ${summary}\n`);
         appLog.close();
     };
-    subprocess.on("close", (code, signal) => {
+    let exited = false;
+    subprocess.on("exit", (code, signal) => {
+        exited = true;
         if (appPid) void globalThis.myde?.MSysApi?.polkit?.unwatchProcess(appPid);
+        app.exitCode = code;
+        app.emit("exit", code, signal);
+    });
+    subprocess.on("close", (code, signal) => {
         finish(`exited: code=${code} signal=${signal} duration=${Date.now() - startedAt}ms`);
+        // 启动失败时没有 exit 事件，用 close 兜底
+        if (!exited) {
+            if (appPid) void globalThis.myde?.MSysApi?.polkit?.unwatchProcess(appPid);
+            app.exitCode = code;
+            app.emit("exit", code, signal);
+        }
     });
     subprocess.on("error", (e) => {
         finish(`spawn error: ${String((e as Error)?.stack ?? e)}`);
+        app.emit("error", e instanceof Error ? e : new Error(String(e)));
     });
 
     console.log(`Running application: ${execPath} (pid ${subprocess.pid}, logs: ${appLog.filePath})`);
 
-    return subprocess;
+    return app;
 }

@@ -8,7 +8,7 @@ import { app, BrowserWindow, globalShortcut, ipcMain, nativeTheme, sharedTexture
 import { uniqueSocketPath } from "../socket-name";
 import { formatLogTime, getLogDir, RotatingLogFile } from "../utils/log";
 import { startInternalPortal, stopInternalPortal } from "./internal_portal";
-import type { PolkitHelperCommand, PolkitHelperEvent } from "./polkit_ipc";
+import type { SessionAppEvent, SessionHelperCommand, SessionHelperEvent } from "./session_ipc";
 
 const run_path = path.join(path.resolve(__dirname, ""), "../../");
 
@@ -86,48 +86,74 @@ const wrapControl = (() => {
     return { socketPath, token };
 })();
 
-// polkit agent 的 helper 必须在 Chromium 把主进程搬进 app-*.scope 之前启动：
-// 它继承当前 cgroup，会留在登录会话里，从而能注册会话级 agent（覆盖应用子进程）。
+// 会话内的 helper 必须在 Chromium 把主进程搬进 app-*.scope 之前启动：它继承当前
+// cgroup，会留在登录会话里。它负责两件事：
+// - 注册 polkit 会话级 agent，接住会话内进程的认证；
+// - 代桌面启动应用，让应用（以及终端里再派生的 systemctl 等）也留在同一个会话。
 // 放到 app.whenReady 里就太晚了。
-const polkitHelperPath = path.join(__dirname, "polkit_helper.js");
-let polkitHelper: import("node:child_process").ChildProcess | undefined;
+const sessionHelperPath = path.join(__dirname, "session_helper.js");
+let sessionHelper: import("node:child_process").ChildProcess | undefined;
 let polkitBridgeReady = false;
-const polkitPending: PolkitHelperEvent[] = [];
+const polkitPending: SessionHelperEvent[] = [];
 
-function startPolkitHelper() {
+/** helper 的应用事件转成 renderer 的消息 */
+function toAppEvent(event: SessionHelperEvent): SessionAppEvent | undefined {
+    switch (event.type) {
+        case "app-started":
+            return { type: "started", id: event.id, pid: event.pid };
+        case "app-error":
+            return { type: "error", id: event.id, message: event.message };
+        case "app-exit":
+            return { type: "exit", id: event.id, code: event.code, signal: event.signal };
+        default:
+            return undefined;
+    }
+}
+
+function startSessionHelper() {
     // 窗口模式下认证由宿主桌面处理，注册我们自己的 agent 反而会把宿主的弹窗抢过来
     if (!process.env.runAsDesktop) return;
     if (process.env.testMode === "on") return;
-    if (process.env.MYDE_POLKIT_HELPER === "0") return;
-    if (!existsSync(polkitHelperPath)) {
-        mainLog("warn", `[polkit-helper] 找不到 ${polkitHelperPath}，跳过`);
+    if (process.env.MYDE_SESSION_HELPER === "0") return;
+    if (!existsSync(sessionHelperPath)) {
+        mainLog("warn", `[session-helper] 找不到 ${sessionHelperPath}，跳过`);
         return;
     }
     try {
-        polkitHelper = childProcess.spawn(process.execPath, [polkitHelperPath], {
+        sessionHelper = childProcess.spawn(process.execPath, [sessionHelperPath], {
             env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
             stdio: ["ignore", "pipe", "pipe", "ipc"],
         });
     } catch (error) {
-        mainLog("warn", `[polkit-helper] 启动失败: ${String(error)}`);
+        mainLog("warn", `[session-helper] 启动失败: ${String(error)}`);
         return;
     }
-    polkitHelper.stdout?.on("data", (data: Buffer) => mainLog("info", `[polkit-helper] ${data.toString().trimEnd()}`));
-    polkitHelper.stderr?.on("data", (data: Buffer) => mainLog("warn", `[polkit-helper] ${data.toString().trimEnd()}`));
-    polkitHelper.on("message", (message: PolkitHelperEvent) => {
+    sessionHelper.stdout?.on("data", (data: Buffer) =>
+        mainLog("info", `[session-helper] ${data.toString().trimEnd()}`),
+    );
+    sessionHelper.stderr?.on("data", (data: Buffer) =>
+        mainLog("warn", `[session-helper] ${data.toString().trimEnd()}`),
+    );
+    sessionHelper.on("message", (message: SessionHelperEvent) => {
+        const appEvent = toAppEvent(message);
+        if (appEvent) {
+            if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send("app:event", appEvent);
+            return;
+        }
         if (polkitBridgeReady && mainWin && !mainWin.isDestroyed()) {
             mainWin.webContents.send("polkit:event", message);
         } else {
             polkitPending.push(message);
         }
     });
-    polkitHelper.on("error", (error) => mainLog("warn", `[polkit-helper] 错误: ${String(error)}`));
-    polkitHelper.once("exit", (code, signal) => {
-        mainLog("warn", `[polkit-helper] 退出 code=${code} signal=${signal}`);
-        polkitHelper = undefined;
+    sessionHelper.on("error", (error) => mainLog("warn", `[session-helper] 错误: ${String(error)}`));
+    sessionHelper.once("exit", (code, signal) => {
+        mainLog("warn", `[session-helper] 退出 code=${code} signal=${signal}`);
+        sessionHelper = undefined;
+        if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send("app:helper-exit");
     });
 }
-startPolkitHelper();
+startSessionHelper();
 
 let the_icon = path.join(run_path, "assets/logo/1024x1024.png");
 if (process.platform === "win32") {
@@ -347,8 +373,8 @@ app.whenReady().then(async () => {
 
 app.on("will-quit", () => {
     stopInternalPortal();
-    polkitHelper?.kill();
-    polkitHelper = undefined;
+    sessionHelper?.kill();
+    sessionHelper = undefined;
     // Unregister all shortcuts.
     globalShortcut.unregisterAll();
 });
@@ -523,9 +549,30 @@ server.on("connection", (socket) => {
     socket.on("end", closeFds);
 });
 
-ipcMain.on("polkit:action", (_event, action: PolkitHelperCommand) => {
+ipcMain.on("polkit:action", (_event, action: SessionHelperCommand) => {
     try {
-        polkitHelper?.send(action);
+        sessionHelper?.send(action);
+    } catch {
+        // helper 正在退出，IPC 通道已关闭
+    }
+});
+
+/** 应用启动/结束都交给 session helper，进程留在登录会话里 */
+ipcMain.on("app:spawn-available", (event) => {
+    event.returnValue = Boolean(sessionHelper);
+});
+
+ipcMain.on("app:spawn", (_event, command: Extract<SessionHelperCommand, { type: "spawn" }>) => {
+    try {
+        sessionHelper?.send(command);
+    } catch {
+        // helper 正在退出，IPC 通道已关闭
+    }
+});
+
+ipcMain.on("app:kill", (_event, command: Extract<SessionHelperCommand, { type: "kill" }>) => {
+    try {
+        sessionHelper?.send(command);
     } catch {
         // helper 正在退出，IPC 通道已关闭
     }

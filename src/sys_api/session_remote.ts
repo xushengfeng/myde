@@ -1,5 +1,6 @@
 import { EventEmitter } from "../event-emitter/event-emitter";
-import type { PolkitHelperEvent, PolkitWireRequest } from "../main/polkit_ipc";
+import type { PolkitWireRequest, SessionAppEvent, SessionHelperEvent, SpawnAppRequest } from "../main/session_ipc";
+import { AppProcess } from "./app_process";
 import type { PolkitAuthRequest, PolkitAuthResult, PolkitEvents, PolkitIdentity } from "./polkit";
 
 const { ipcRenderer } = require("electron") as typeof import("electron");
@@ -91,26 +92,77 @@ class RemotePolkitRequest implements PolkitAuthRequest {
 }
 
 /**
- * 桌面侧的 polkit agent 代理。
+ * 桌面侧对 session helper 的代理。
  *
- * 真正的 agent 在主进程启动的 helper 里：helper 在 Chromium 把主进程搬进
- * `app-*.scope` 之前启动，留在登录会话里，因此可以注册会话级 agent，覆盖
- * 会话内所有进程（包括应用派生的子进程）。这里只把认证事件转给桌面并回传
- * 用户输入。
+ * helper 在 Chromium 把主进程搬进 `app-*.scope` 之前启动，留在登录会话里，因此
+ * 可以注册会话级 polkit agent，并且用它启动的应用（以及应用派生的子进程）都在
+ * 同一个会话里。这里把认证事件转给桌面、回传用户输入，并把应用启动请求转给
+ * helper。
  */
-export class polkitRemote extends EventEmitter<PolkitEvents> {
-    private current?: RemotePolkitRequest;
+export class sessionRemote extends EventEmitter<PolkitEvents> {
+    /** helper 可用时，应用从这里启动；不可用时 runApp 回退到本地 spawn */
+    available: boolean;
 
-    private readonly handleEvent = (_event: Electron.IpcRendererEvent, event: PolkitHelperEvent) => {
+    private current?: RemotePolkitRequest;
+    private readonly apps = new Map<number, AppProcess>();
+    private nextAppId = 1;
+
+    private readonly handleEvent = (_event: Electron.IpcRendererEvent, event: SessionHelperEvent) => {
         this.handleMessage(event);
+    };
+
+    private readonly handleHelperExit = () => {
+        this.available = false;
+        for (const [id, app] of this.apps) {
+            this.apps.delete(id);
+            app.emit("error", new Error("session helper 已退出"));
+        }
+    };
+
+    private readonly handleAppEvent = (_event: Electron.IpcRendererEvent, event: SessionAppEvent) => {
+        const app = this.apps.get(event.id);
+        if (!app) return;
+        switch (event.type) {
+            case "started":
+                app.pid = event.pid;
+                return;
+            case "error":
+                app.emit("error", new Error(event.message));
+                return;
+            case "exit":
+                this.apps.delete(event.id);
+                app.exitCode = event.code;
+                app.emit("exit", event.code, event.signal);
+                return;
+        }
     };
 
     constructor() {
         super();
+        this.available = ipcRenderer.sendSync("app:spawn-available") === true;
         ipcRenderer.on("polkit:event", this.handleEvent);
+        ipcRenderer.on("app:event", this.handleAppEvent);
+        ipcRenderer.on("app:helper-exit", this.handleHelperExit);
         // helper 如果没法注册会话级 agent，会退化成按进程注册；把桌面进程
         // 自己补上，至少桌面发起的认证能弹出来
         ipcRenderer.send("polkit:action", { type: "watch", pid: process.pid });
+    }
+
+    /** 请求 helper 启动应用；进程在 helper 所在的 cgroup（登录会话）里 */
+    spawnApp(req: SpawnAppRequest): AppProcess {
+        if (!this.available) {
+            const failed = new AppProcess();
+            queueMicrotask(() => failed.emit("error", new Error("session helper 不可用")));
+            return failed;
+        }
+        const id = this.nextAppId++;
+        const app = new AppProcess(undefined, (signal) => {
+            ipcRenderer.send("app:kill", { id, signal });
+            return true;
+        });
+        this.apps.set(id, app);
+        ipcRenderer.send("app:spawn", { type: "spawn", id, ...req });
+        return app;
     }
 
     getRequest(): PolkitAuthRequest | undefined {
@@ -128,14 +180,17 @@ export class polkitRemote extends EventEmitter<PolkitEvents> {
 
     destroy(): void {
         ipcRenderer.off("polkit:event", this.handleEvent);
+        ipcRenderer.off("app:event", this.handleAppEvent);
+        ipcRenderer.off("app:helper-exit", this.handleHelperExit);
         this.current = undefined;
+        this.apps.clear();
     }
 
     private match(id: number): RemotePolkitRequest | undefined {
         return this.current?.id === id ? this.current : undefined;
     }
 
-    private handleMessage(event: PolkitHelperEvent): void {
+    private handleMessage(event: SessionHelperEvent): void {
         switch (event.type) {
             case "request": {
                 const request = new RemotePolkitRequest(event.request);
@@ -181,3 +236,6 @@ export class polkitRemote extends EventEmitter<PolkitEvents> {
         }
     }
 }
+
+/** 桌面实现用到的部分：应用是否经 session helper 启动 */
+export type SessionApi = Pick<sessionRemote, "available" | "spawnApp">;
