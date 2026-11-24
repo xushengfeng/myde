@@ -27,6 +27,8 @@ desktop（evdev）模式下触摸板事件由仓库的 `src/utils/touchpad.ts` �
 - window 模式下没有 evdev，宿主（KDE 等）把触摸板 pinch 合成成 `Ctrl+wheel`；桌面在物理 Ctrl 没按下时把它还原成 `input.gesture` 的 pinch（scale 按 `exp(-deltaY/100)` 累积），锁住目标窗口后转发；物理 Ctrl+wheel 仍按普通滚轮处理
 - 同一轮接触里按过物理按键就不再合成轻触，物理按下会取代待判定的轻触或并入已按下的左键
 - MT-B 设备用 `slot` + `ABS_MT_TRACKING_ID` 跟踪每根手指；没有 tracking id 的旧设备用 `BTN_TOOL_*` 手指数；完全没有接触信号的设备只保留光标移动
+- 多指位移按全部活动接触点平均（不是只平均这一帧有位移的指），避免某一根手指偶尔没上报时质心突然偏移；单帧位移超过 20mm 或相邻帧位移突然增大按 libinput 的跳变检测丢弃，设备报有 fuzz 时按 fuzz 做坐标迟滞
+- 双指滚动带方向锁：起手按累计方向向量锁定主方向，另一轴的轻微抖动不产生滚动；持续滑动或明确斜向移动后按 libinput 的规则放开两轴
 
 ## 虚拟桌面
 

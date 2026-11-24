@@ -381,6 +381,64 @@ describe("TouchpadInput gestures", () => {
         sync();
     });
 
+    it("averages multi-finger movement over all contacts, not only moving ones", () => {
+        const { events, sync, contact, move, lift } = setup();
+        contact(0, 1, 1000, 2000);
+        contact(1, 2, 2000, 2000);
+        contact(2, 3, 3000, 2000);
+        sync();
+        expect(events[0]).toEqual(["multiStart", 3]);
+        // 只有一根手指移动 16 单位（视口 4px），质心应移动 4/3px
+        move(0, 1016, 2000);
+        sync();
+        const multiMove = events.find((e) => e[0] === "multiMove");
+        expect(multiMove?.[2]).toBeCloseTo(4 / 3);
+        expect(multiMove?.[3]).toBe(0);
+        lift(0);
+        lift(1);
+        lift(2);
+        sync();
+    });
+
+    it("suppresses perpendicular jitter while two-finger scrolling", () => {
+        const { events, sync, contact, move, lift } = setup();
+        contact(0, 1, 1000, 2000);
+        contact(1, 2, 3000, 2000);
+        sync();
+        // 一起上移超过 1.5mm 判定阈值，主方向是纵向
+        move(0, 1000, 1840);
+        move(1, 3000, 1840);
+        sync();
+        expect(events.some((e) => e[0] === "scroll")).toBe(true);
+        const before = events.filter((e) => e[0] === "scroll").length;
+        // 继续上移 1mm，同时横向抖动 0.2mm：横向不应产生滚动
+        move(0, 1020, 1740);
+        move(1, 3020, 1740);
+        sync();
+        const scrolls = events.filter((e) => e[0] === "scroll").slice(before);
+        expect(scrolls.length).toBeGreaterThan(0);
+        for (const scroll of scrolls) expect(scroll[1]).toBe(0);
+        lift(0);
+        lift(1);
+        sync();
+    });
+
+    it("discards a single-frame touch jump and resumes on the next frame", () => {
+        const { events, sync, contact, move, lift } = setup();
+        contact(0, 1, 1000, 2000);
+        sync();
+        // 一帧内跳 30mm：本帧位移丢弃
+        move(0, 4000, 2000);
+        sync();
+        expect(events.some((e) => e[0] === "move")).toBe(false);
+        // 从新位置继续正常移动
+        move(0, 4032, 2000);
+        sync();
+        expect(events.some((e) => e[0] === "move")).toBe(true);
+        lift(0);
+        sync();
+    });
+
     it("applies touchpad acceleration to single-finger movement", () => {
         let now = 0;
         const accelerated = setup({

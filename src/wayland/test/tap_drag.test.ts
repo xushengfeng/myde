@@ -56,9 +56,10 @@ function tapDragSequence() {
     down(1);
     move(1012);
     up();
-    // 第二下：先 1mm 内抖动（低于 1.3mm 阈值，不应移动），再拖到 page x=200
+    // 第二下：先 1mm 内抖动（低于 1.3mm 阈值，不应移动），再分帧拖到 page x=200
     down(2);
     move(1010);
+    for (let x = 1150; x < 2000; x += 150) move(x);
     move(2000);
     up();
 

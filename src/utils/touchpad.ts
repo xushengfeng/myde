@@ -7,6 +7,7 @@ import { EventEmitter } from "../event-emitter/event-emitter";
 import { InputEventCodes } from "../input_codes/types";
 import { absRange } from "../input_map/abs";
 import { TouchpadAccelerator } from "./pointer_accel";
+import { ScrollAxisLock } from "./scroll_axis";
 
 // 与 libinput 的触摸板轻触/拖拽一致（COSMIC、KWin 都直接交给 libinput）：
 // 接触后 180ms 内抬起且位移不超过 1.3mm 才算轻触；轻触在抬起时只发按下，
@@ -35,6 +36,16 @@ export const TWO_FINGER_SCROLL_START_MM = 1.5;
 export const HOLD_TIMEOUT = 300;
 /** hold 允许的最大位移（毫米），超过后转成滚动/滑动并取消 hold */
 export const HOLD_MOVE_MM = 2;
+/** 单帧位移超过这个距离视为触摸点跳变（毫米），本帧丢弃；同 libinput 的 20mm */
+export const TOUCH_JUMP_MM = 20;
+/** 相邻帧位移增加超过这个值视为跳变（毫米，按 12ms 归一）；同 libinput */
+export const TOUCH_JUMP_INCREASE_MM = 7;
+/** 跳变判断的参考帧间隔（毫秒） */
+const JUMP_REFERENCE_MS = 12;
+/** 帧间隔超过这个值时不比较前后帧的位移增量 */
+const JUMP_MAX_INTERVAL_MS = 30;
+/** 帧间隔太短时速度估算不可靠，也不做增量比较 */
+const JUMP_MIN_INTERVAL_MS = 8;
 
 /** 把角度归一化到 [-180, 180)，用于捏合旋转。 */
 function normalizeAngle(deg: number): number {
@@ -119,6 +130,12 @@ interface TouchContact {
     /** 上一帧原始值，用于按毫米估算指针速度 */
     prevRawX?: number;
     prevRawY?: number;
+    /** 跳变检测：最近一次有效移动的时间和按 12ms 归一的位移 */
+    lastMoveTime?: number;
+    lastMoveDistanceMm?: number;
+    /** 原始坐标的迟滞中心，用于过滤硬件 fuzz */
+    hysteresisRawX?: number;
+    hysteresisRawY?: number;
     startRawX?: number;
     startRawY?: number;
     /** 本帧抬起，sync 后删除 */
@@ -157,8 +174,14 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
     /** 设备原始单位 / 毫米，没有分辨率时用 libinput 的默认 DPI */
     private readonly unitsPerMmX: number;
     private readonly unitsPerMmY: number;
+    /** 硬件 fuzz 对应的坐标迟滞；为 0 时不做迟滞 */
+    private readonly hysteresisMarginX: number;
+    private readonly hysteresisMarginY: number;
     /** 单指移动的指针加速；未配置时不改变位移 */
     private readonly accelerator: TouchpadAccelerator | undefined;
+    /** 双指滚动的方向约束 */
+    private readonly scrollAxis = new ScrollAxisLock();
+    private scrollAxisActive = false;
 
     private slot = 0;
     private btnTouch = false;
@@ -234,6 +257,11 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             resX > 0 ? resX : rangeX && rangeX.max > rangeX.min ? (rangeX.max - rangeX.min) / 69 : DEFAULT_UNITS_PER_MM;
         this.unitsPerMmY =
             resY > 0 ? resY : rangeY && rangeY.max > rangeY.min ? (rangeY.max - rangeY.min) / 50 : DEFAULT_UNITS_PER_MM;
+        // 内核给出的 fuzz 表示这一轴会抖动的范围，libinput 只在有 fuzz 时启用运动迟滞
+        const fuzzX = rangeX?.fuzz ?? absRange(info, InputEventCodes.ABS_X)?.fuzz ?? 0;
+        const fuzzY = rangeY?.fuzz ?? absRange(info, InputEventCodes.ABS_Y)?.fuzz ?? 0;
+        this.hysteresisMarginX = fuzzX > 0 ? fuzzX : 0;
+        this.hysteresisMarginY = fuzzY > 0 ? fuzzY : 0;
         this.accelerator = options.acceleration ? new TouchpadAccelerator() : undefined;
         dev.on("absolute", (code, value) => this.absolute(code, value));
         dev.on("key", (code, value) => this.key(code, value));
@@ -259,6 +287,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             this.scrolling = false;
             this.emit("scrollEnd");
         }
+        this.resetScrollAxis();
         if (this.multiFingers > 0) {
             const fingers = this.multiFingers;
             this.multiFingers = 0;
@@ -292,6 +321,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         // 抬起的那一帧也可能带着最后一小段位移，位移要用包含已抬起的全部接触点算
         const { active: contacts, all } = this.activeContacts();
         const count = this.fingerCount(contacts);
+        const now = this.now();
 
         if (!this.roundActive && count > 0) this.startRound(count);
         if (this.roundActive) this.roundMaxFingers = Math.max(this.roundMaxFingers, count);
@@ -301,6 +331,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         // 双指滚动在手指数量变化（抬手、加入第三根）时结束
         if (this.scrolling && count !== 2) {
             this.scrolling = false;
+            this.resetScrollAxis();
             actions.push({ type: "scrollEnd" });
         }
 
@@ -319,7 +350,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             this.phase = "moving";
         }
 
-        const move = this.consumeMove(all);
+        const move = this.consumeMove(all, now);
         let { dx, dy } = move;
         const ignoreAbs = this.options.ignoreAbs?.() ?? false;
         const movedBeyondTap = this.exceedsTapMove(all);
@@ -336,7 +367,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             }
 
             // 双指分类器优先：判定期间先不发滚动，避免先发滚动导致客户端忽略随后的 pinch
-            const twoFingerHandled = this.updatePinch(contacts, count, dx, dy, actions);
+            const twoFingerHandled = this.updatePinch(contacts, count, dx, dy, move.rawDx, move.rawDy, now, actions);
 
             // 判定期间不移动光标：轻触的按下点要落在最初接触的位置，不能带上抖动位移。
             // 这段位移直接丢弃而不是攒着补发，否则确认是移动/拖拽时会把攒下的位移
@@ -357,7 +388,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                             const factor = this.accelerator.factor(
                                 move.rawDx / this.unitsPerMmX,
                                 move.rawDy / this.unitsPerMmY,
-                                this.now(),
+                                now,
                                 this.options.acceleration.enabled(),
                                 this.options.acceleration.speed(),
                             );
@@ -367,13 +398,8 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                         actions.push({ type: "move", dx, dy });
                     }
                 } else if (count === 2 && !twoFingerHandled) {
-                    // 自然滚动：内容跟随手指，手指上移对应内容向下滚
-                    this.scrolling = true;
-                    actions.push({
-                        type: "scroll",
-                        deltaX: dx === 0 ? 0 : -dx * SCROLL_GAIN,
-                        deltaY: dy === 0 ? 0 : -dy * SCROLL_GAIN,
-                    });
+                    // 自然滚动：内容跟随手指，手指上移对应内容向下滚；先按主方向过滤抖动
+                    this.pushScroll(actions, dx, dy, move.rawDx, move.rawDy, now);
                 }
             }
 
@@ -461,6 +487,9 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         count: number,
         dx: number,
         dy: number,
+        rawDx: number,
+        rawDy: number,
+        time: number,
         actions: TouchpadAction[],
     ): boolean {
         // 多指手势之后残留的两指不再判 pinch/滚动
@@ -506,12 +535,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
 
         // 一旦判为滚动，本轮接触就不再改判 pinch，避免滚动中两指轻微张合误触。
         if (pinch.scrollMode) {
-            const scrollX = dx === 0 ? 0 : -dx * SCROLL_GAIN;
-            const scrollY = dy === 0 ? 0 : -dy * SCROLL_GAIN;
-            if (scrollX !== 0 || scrollY !== 0) {
-                this.scrolling = true;
-                actions.push({ type: "scroll", deltaX: scrollX, deltaY: scrollY });
-            }
+            this.pushScroll(actions, dx, dy, rawDx, rawDy, time);
             return true;
         }
 
@@ -522,7 +546,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 return false;
             }
             if (shouldPinch) {
-                this.beginPinch(pair.distance, pair.angle, dx, dy, actions);
+                this.beginPinch(pair.distance, pair.angle, dx, dy, rawDx, rawDy, time, actions);
                 return true;
             }
 
@@ -531,12 +555,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
             if (centerMove >= TWO_FINGER_SCROLL_START_MM && centerMove > distanceChange) {
                 pinch.scrollMode = true;
                 // 判为滚动的那一帧只发本帧位移，不把分类期间攒下的补上，否则滚动会跳一下
-                const scrollX = dx === 0 ? 0 : -dx * SCROLL_GAIN;
-                const scrollY = dy === 0 ? 0 : -dy * SCROLL_GAIN;
-                if (scrollX !== 0 || scrollY !== 0) {
-                    this.scrolling = true;
-                    actions.push({ type: "scroll", deltaX: scrollX, deltaY: scrollY });
-                }
+                this.pushScroll(actions, dx, dy, rawDx, rawDy, time);
                 return true;
             }
             // 分类中：本帧不发滚动
@@ -544,12 +563,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         }
 
         // pinch 期间保留滚动：质心移动照样发 scroll，双方互不取消
-        const scrollX = dx === 0 ? 0 : -dx * SCROLL_GAIN;
-        const scrollY = dy === 0 ? 0 : -dy * SCROLL_GAIN;
-        if (scrollX !== 0 || scrollY !== 0) {
-            this.scrolling = true;
-            actions.push({ type: "scroll", deltaX: scrollX, deltaY: scrollY });
-        }
+        this.pushScroll(actions, dx, dy, rawDx, rawDy, time);
         const rotation = normalizeAngle(pair.angle - pinch.lastAngle);
         const changed = dx !== 0 || dy !== 0 || Math.abs(scale - pinch.lastScale) > 0.001 || Math.abs(rotation) > 0.001;
         pinch.lastAngle = pair.angle;
@@ -563,7 +577,16 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
      * 越过阈值之前的张合量不再补发，避免客户端一开始就跳一下。
      * 分类期间的滚动位移同样丢弃，只把本帧位移照常放出，滚动不会跟着跳。
      */
-    private beginPinch(distance: number, angle: number, dx: number, dy: number, actions: TouchpadAction[]): void {
+    private beginPinch(
+        distance: number,
+        angle: number,
+        dx: number,
+        dy: number,
+        rawDx: number,
+        rawDy: number,
+        time: number,
+        actions: TouchpadAction[],
+    ): void {
         const pinch = this.pinch;
         if (!pinch) return;
         pinch.active = true;
@@ -579,12 +602,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         }
         this.endHold(true);
         // pinch 不取消滚动：本帧位移照常发出去
-        const scrollX = dx === 0 ? 0 : -dx * SCROLL_GAIN;
-        const scrollY = dy === 0 ? 0 : -dy * SCROLL_GAIN;
-        if (scrollX !== 0 || scrollY !== 0) {
-            this.scrolling = true;
-            actions.push({ type: "scroll", deltaX: scrollX, deltaY: scrollY });
-        }
+        this.pushScroll(actions, dx, dy, rawDx, rawDy, time);
         actions.push({ type: "pinchStart", fingers: 2 });
     }
 
@@ -798,33 +816,54 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         this.fallback.rawY = rawY;
         this.fallback.prevRawX = rawX;
         this.fallback.prevRawY = rawY;
+        this.fallback.hysteresisRawX = rawX;
+        this.fallback.hysteresisRawY = rawY;
         this.fallback.startRawX = rawX;
         this.fallback.startRawY = rawY;
     }
 
     private setPos(contact: TouchContact, isX: boolean, code: number, value: number): void {
-        const pos = isX ? this.options.mapX(code, value) : this.options.mapY(code, value);
+        const raw = this.applyHysteresis(contact, isX, value);
+        const pos = isX ? this.options.mapX(code, raw) : this.options.mapY(code, raw);
         if (pos === undefined) return;
         if (isX) {
             contact.x = pos;
-            contact.rawX = value;
+            contact.rawX = raw;
             if (!contact.hasX) {
                 contact.hasX = true;
-                contact.startRawX = value;
-                contact.prevRawX = value;
+                contact.startRawX = raw;
+                contact.prevRawX = raw;
                 // 第一个坐标不作为位移，避免从 0 跳到真实位置
                 contact.prevX = pos;
             }
         } else {
             contact.y = pos;
-            contact.rawY = value;
+            contact.rawY = raw;
             if (!contact.hasY) {
                 contact.hasY = true;
-                contact.startRawY = value;
-                contact.prevRawY = value;
+                contact.startRawY = raw;
+                contact.prevRawY = raw;
                 contact.prevY = pos;
             }
         }
+    }
+
+    /** 按硬件 fuzz 做迟滞：fuzz 范围内保持在上一个中心，超出后只跟随到边缘 */
+    private applyHysteresis(contact: TouchContact, isX: boolean, value: number): number {
+        const margin = isX ? this.hysteresisMarginX : this.hysteresisMarginY;
+        if (margin <= 0) return value;
+        const center = isX ? contact.hysteresisRawX : contact.hysteresisRawY;
+        if (center === undefined) {
+            if (isX) contact.hysteresisRawX = value;
+            else contact.hysteresisRawY = value;
+            return value;
+        }
+        const delta = value - center;
+        if (Math.abs(delta) < margin) return center;
+        const filtered = value - Math.sign(delta) * margin;
+        if (isX) contact.hysteresisRawX = filtered;
+        else contact.hysteresisRawY = filtered;
+        return filtered;
     }
 
     /** 任一接触点从按下处移动超过 1.3mm（按设备分辨率折算） */
@@ -839,13 +878,16 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         return false;
     }
 
-    /** 所有接触点相对上一帧的位移之和；返回平均到每个接触点的位移 */
-    private consumeMove(contacts: TouchContact[]): { dx: number; dy: number; rawDx: number; rawDy: number } {
+    /** 所有接触点相对上一帧的位移；返回平均到每个接触点的位移（毫米跳变会丢弃本帧） */
+    private consumeMove(
+        contacts: TouchContact[],
+        time: number,
+    ): { dx: number; dy: number; rawDx: number; rawDy: number } {
         let dx = 0;
         let dy = 0;
         let rawDx = 0;
         let rawDy = 0;
-        let n = 0;
+        let moved = false;
         for (const c of contacts) {
             if (c.prevX === undefined || c.prevY === undefined) {
                 // 两轴分帧到达时先记住已到的那一轴，避免下一帧补另一轴时算成大位移
@@ -859,27 +901,93 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
                 }
                 continue;
             }
-            const ddx = c.x - c.prevX;
-            const ddy = c.y - c.prevY;
+            let ddx = c.x - c.prevX;
+            let ddy = c.y - c.prevY;
+            let frameRawX = 0;
+            let frameRawY = 0;
+            if (c.rawX !== undefined && c.rawY !== undefined && c.prevRawX !== undefined && c.prevRawY !== undefined) {
+                frameRawX = c.rawX - c.prevRawX;
+                frameRawY = c.rawY - c.prevRawY;
+                const distanceMm = Math.hypot(frameRawX / this.unitsPerMmX, frameRawY / this.unitsPerMmY);
+                if (this.isTouchJump(c, distanceMm, time)) {
+                    // 触摸点跳变（固件/传感器偶发大跳）：本帧整指位移丢弃，下一帧从新位置继续
+                    ddx = 0;
+                    ddy = 0;
+                    frameRawX = 0;
+                    frameRawY = 0;
+                }
+            }
             if (ddx !== 0 || ddy !== 0) {
                 dx += ddx;
                 dy += ddy;
-                n++;
+                moved = true;
             }
+            rawDx += frameRawX;
+            rawDy += frameRawY;
             c.prevX = c.x;
             c.prevY = c.y;
-            if (c.rawX !== undefined) {
-                if (c.prevRawX !== undefined) rawDx += c.rawX - c.prevRawX;
-                c.prevRawX = c.rawX;
-            }
-            if (c.rawY !== undefined) {
-                if (c.prevRawY !== undefined) rawDy += c.rawY - c.prevRawY;
-                c.prevRawY = c.rawY;
+            if (c.rawX !== undefined) c.prevRawX = c.rawX;
+            if (c.rawY !== undefined) c.prevRawY = c.rawY;
+        }
+        if (!moved) return { dx: 0, dy: 0, rawDx: 0, rawDy: 0 };
+        // 多指时按全部接触点平均，包含这一帧没动的指（libinput 同样除以全部活动接触点）。
+        // 只除以上一帧有位移的指会让质心随手指数跳动，表现为滚动/手势抖动。
+        const divisor = Math.max(1, contacts.length);
+        return { dx: dx / divisor, dy: dy / divisor, rawDx: rawDx / divisor, rawDy: rawDy / divisor };
+    }
+
+    /** 单指一帧内的位移是否像触摸点跳变 */
+    private isTouchJump(contact: TouchContact, distanceMm: number, time: number): boolean {
+        if (distanceMm > TOUCH_JUMP_MM) {
+            contact.lastMoveTime = time;
+            contact.lastMoveDistanceMm = distanceMm;
+            return true;
+        }
+        if (contact.lastMoveTime !== undefined && contact.lastMoveDistanceMm !== undefined) {
+            const tdelta = time - contact.lastMoveTime;
+            if (tdelta >= JUMP_MIN_INTERVAL_MS && tdelta <= JUMP_MAX_INTERVAL_MS) {
+                // 按 12ms 参考帧归一，位移突然增大很多视为跳变
+                const normalized = (distanceMm * JUMP_REFERENCE_MS) / tdelta;
+                if (normalized - contact.lastMoveDistanceMm > TOUCH_JUMP_INCREASE_MM) {
+                    contact.lastMoveTime = time;
+                    contact.lastMoveDistanceMm = normalized;
+                    return true;
+                }
+                contact.lastMoveDistanceMm = normalized;
             }
         }
-        if (n === 0) return { dx: 0, dy: 0, rawDx: 0, rawDy: 0 };
-        // 多指时用质心位移（各指平均），单指时就是它自己的位移
-        return { dx: dx / n, dy: dy / n, rawDx, rawDy };
+        if (distanceMm > 0) contact.lastMoveTime = time;
+        return false;
+    }
+
+    private resetScrollAxis(): void {
+        this.scrollAxisActive = false;
+        this.scrollAxis.reset();
+    }
+
+    /** 双指滚动：按主方向过滤抖动后发出，并标记本轮正在滚动 */
+    private pushScroll(
+        actions: TouchpadAction[],
+        dx: number,
+        dy: number,
+        rawDx: number,
+        rawDy: number,
+        time: number,
+    ): void {
+        if (!this.scrollAxisActive) {
+            this.scrollAxis.reset();
+            this.scrollAxisActive = true;
+        }
+        const allow = this.scrollAxis.constrain(rawDx / this.unitsPerMmX, rawDy / this.unitsPerMmY, time);
+        const sx = allow.x ? dx : 0;
+        const sy = allow.y ? dy : 0;
+        if (sx === 0 && sy === 0) return;
+        this.scrolling = true;
+        actions.push({
+            type: "scroll",
+            deltaX: sx === 0 ? 0 : -sx * SCROLL_GAIN,
+            deltaY: sy === 0 ? 0 : -sy * SCROLL_GAIN,
+        });
     }
 
     private now(): number {
@@ -893,6 +1001,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         this.holdBlocked = false;
         this.multiRound = false;
         this.accelerator?.reset(this.now());
+        this.resetScrollAxis();
         switch (this.phase) {
             case "tapped":
                 // 轻触后的第二下：按下保持，忽略这一下的 down，等移动/超时决定拖拽或双击
@@ -956,6 +1065,7 @@ export class TouchpadInput extends EventEmitter<TouchpadEvents> {
         this.multiFingers = 0;
         this.multiRound = false;
         this.scrolling = false;
+        this.resetScrollAxis();
         this.pinch = undefined;
         this.endHold(false);
         this.holdBlocked = false;
