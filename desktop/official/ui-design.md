@@ -264,8 +264,9 @@
 - `src/tool_fx.ts`：工具弹窗第一个 L2 的状态动效（水波、环绕圆点、电池进度条）。
 - `src/virtual_keyboard/`：虚拟键盘布局、表情/Unicode 数据、面板组件和触控板触屏映射。
 - `test/virtual_keyboard/demo.ts`：完整键盘的独立预览（可拖动、缩放、切换页面）。
+- `test/polkit_dialog/main.ts`：polkit 认证对话框的独立预览，假事件驱动普通请求、长内容、PAM 信息、密码错误重试、成功和等待状态。
 
-可视化页面：`npx vite desktop/official/test/ui_example`；虚拟键盘预览：`npx vite desktop/official/test/virtual_keyboard`。
+可视化页面：`npx vite desktop/official/test/ui_example`；虚拟键盘预览：`npx vite desktop/official/test/virtual_keyboard`；polkit 对话框预览：`npx vite desktop/official/test/polkit_dialog`（或 `pnpm test:polkit-dialog`）。
 
 ## 12. 新界面检查清单
 

@@ -56,6 +56,40 @@ async function main() {
     /** helper 代启动的应用，按请求 id 索引 */
     const apps = new Map<number, ChildProcess>();
 
+    /**
+     * 桌面装好认证 UI 之前不注册 agent：否则会话里的认证会被抢过来，
+     * 桌面却没有对话框可以应答，pkexec/systemctl 会直接失败。
+     */
+    let armed = false;
+    /** 就绪前收到的 watch 请求，arm 后补注册 */
+    const pendingWatches = new Set<number>();
+    const watchProcess = (pid: number | undefined) => {
+        if (pid === undefined || pid <= 0) return;
+        if (!armed) {
+            pendingWatches.add(pid);
+            return;
+        }
+        void agent.watchProcess(pid);
+    };
+
+    const arm = async () => {
+        if (armed) return;
+        armed = true;
+        try {
+            await agent.start();
+        } catch (error) {
+            console.error("[session-helper] 注册认证 agent 失败:", error);
+        }
+        const pids = new Set(pendingWatches);
+        pendingWatches.clear();
+        // 主进程被 Chromium 搬进了 app-*.scope，会话级 agent 覆盖不到它的认证
+        if (process.ppid > 1) pids.add(process.ppid);
+        for (const child of apps.values()) {
+            if (child.pid !== undefined) pids.add(child.pid);
+        }
+        for (const pid of pids) void agent.watchProcess(pid);
+    };
+
     const current = (id: number): PolkitAuthRequest | undefined => {
         const request = agent.getRequest();
         return request && request.id === id ? request : undefined;
@@ -72,6 +106,9 @@ async function main() {
     const pending: SessionHelperCommand[] = [];
     const handleCommand = (message: SessionHelperCommand) => {
         switch (message.type) {
+            case "arm":
+                void arm();
+                break;
             case "submit":
                 current(message.id)?.submitPassword(message.value);
                 break;
@@ -82,9 +119,10 @@ async function main() {
                 current(message.id)?.selectIdentity(message.identityId);
                 break;
             case "watch":
-                void agent.watchProcess(message.pid);
+                watchProcess(message.pid);
                 break;
             case "unwatch":
+                pendingWatches.delete(message.pid);
                 void agent.unwatchProcess(message.pid);
                 break;
             case "spawn": {
@@ -101,7 +139,7 @@ async function main() {
                         started: (pid) => {
                             if (pid === undefined) return;
                             // 会话级 agent 不可用时，至少这个应用的认证能转到桌面
-                            void agent.watchProcess(pid);
+                            watchProcess(pid);
                             send({ type: "app-started", id: message.id, pid });
                         },
                         error: (text) => send({ type: "app-error", id: message.id, message: text }),
@@ -127,11 +165,10 @@ async function main() {
         else handleCommand(message);
     });
 
-    // polkit 起不来不影响代启动应用：spawning 和 agent 是两件事，应用照常要能启动
+    // polkit 起不来不影响代启动应用：spawning 和 agent 是两件事，应用照常要能启动。
+    // 这里只连接总线，注册等桌面发来 arm（UI 已就绪）。
     try {
-        await agent.init();
-        // 主进程被 Chromium 搬进了 app-*.scope，会话级 agent 覆盖不到它的认证，单独补一个进程级
-        if (process.ppid > 1) void agent.watchProcess(process.ppid);
+        await agent.init({ register: false });
     } catch (error) {
         console.error("[session-helper] polkit 初始化失败:", error);
     }

@@ -83,20 +83,41 @@ describe("polkit", () => {
         await env.stop();
     });
 
+    it("UI 就绪前不注册 agent", { timeout: 20000 }, async () => {
+        const before = registrations.length;
+        const io = await env.createConnection();
+        const lazy = new polkit(io, {
+            objectPath: `${AGENT_PATH}/lazy`,
+            sessionId: "test-session",
+            locale: "C",
+            helperPath: path.join(helperDir, "fake-polkit-helper.sh"),
+            helperSocketPath: path.join(helperDir, "missing.socket"),
+            requireSetuidHelper: false,
+        });
+        await lazy.init({ register: false });
+        expect(registrations.length).toBe(before);
+
+        lazy.ready();
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect(registrations.length).toBeGreaterThan(before);
+        await lazy.destroy();
+    });
+
     it("注册到 polkitd 并完成密码认证", { timeout: 20000 }, async () => {
-        expect(registrations.length).toBeGreaterThanOrEqual(2);
-        for (const registration of registrations) {
+        // 上一个用例的 agent 也注册过，这里只看主 agent
+        const own = registrations.filter((registration) => registration.objectPath === AGENT_PATH);
+        expect(own.length).toBeGreaterThanOrEqual(2);
+        for (const registration of own) {
             expect(registration.locale).toBe("C");
-            expect(registration.objectPath).toBe(AGENT_PATH);
         }
-        const sessionRegistration = registrations.find(
+        const sessionRegistration = own.find(
             (registration) => (registration.subject as [string])[0] === "unix-session",
         );
         expect(sessionRegistration?.subject).toEqual([
             "unix-session",
             [["session-id", { signature: "s", value: ["test-session"] }]],
         ]);
-        const processRegistration = registrations.find(
+        const processRegistration = own.find(
             (registration) => (registration.subject as [string])[0] === "unix-process",
         );
         expect(processRegistration).toBeDefined();

@@ -38,6 +38,7 @@ import {
     WHEEL_STEP,
 } from "./input_evdev";
 import { latinVariants } from "./latin";
+import { createPolkitDialog } from "./polkit_dialog";
 import { type BindingSource, Registry } from "./registry";
 import type { id, RegistrySchema } from "./registry_schema";
 import { ScreenManager } from "./screen";
@@ -5849,7 +5850,20 @@ const vkbLayer = view().style({
     zIndex: "15",
 });
 
-mainEl.add([bg, windowElWarp, toolsEl, vkbLayer, imeOverlay, lockScreen, cursorEl, screenOffLayer]);
+/** polkit 认证对话框；装好监听后才会通知 session helper 注册 agent */
+const polkitDialog = MSysApi.polkit ? createPolkitDialog(MSysApi.polkit) : undefined;
+
+mainEl.add([
+    bg,
+    windowElWarp,
+    toolsEl,
+    vkbLayer,
+    imeOverlay,
+    ...(polkitDialog ? [polkitDialog.el] : []),
+    lockScreen,
+    cursorEl,
+    screenOffLayer,
+]);
 
 const windowEl = view()
     .style({
@@ -9678,6 +9692,11 @@ function isLauncherInputFocused() {
 }
 
 body.on("keydown", (e) => {
+    // 认证对话框是模态的：字符由输入框自己处理，其余按键不再触发桌面快捷键或转给客户端
+    if (polkitDialog?.isOpen()) {
+        e.preventDefault();
+        return;
+    }
     if (state.getState() !== "normal") return;
     if (!e.repeat && matchBindings(e, LOCK_BINDINGS)) {
         e.preventDefault();
@@ -9732,6 +9751,10 @@ body.on("keydown", (e) => {
     server.server.notify("input.key", handle, MInputMap.mapKeyCode(e.code), "pressed");
 });
 body.on("keyup", (e) => {
+    if (polkitDialog?.isOpen()) {
+        e.preventDefault();
+        return;
+    }
     if (state.getState() !== "normal") return;
     if (
         matchBindings(e, DESKTOP_BINDINGS) ||

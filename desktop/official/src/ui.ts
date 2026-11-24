@@ -102,6 +102,7 @@ export const gTextStyle = {
         secondary: "#666666",
         muted: "#999999",
         inverse: "#ffffff",
+        error: "#c0392b",
     },
 } as const;
 
@@ -272,7 +273,6 @@ export function uStatusToast(op: { icon: string; title: string; detail?: string;
 
 export function uPasswdInput() {
     const pd: { rm: () => void; k: string; el: ReturnType<typeof view> }[] = [];
-    let uiAnimatePdSize = 0;
     let placeholderText = "";
     const placeholderEl = view().style({ color: gTextStyle.color.muted, pointerEvents: "none" });
     const textEl = view("x")
@@ -300,7 +300,7 @@ export function uPasswdInput() {
     wrapEl.add(textEl);
 
     function updatePlaceholder() {
-        if (uiAnimatePdSize === 0 && placeholderText) {
+        if (pd.length === 0 && placeholderText) {
             placeholderEl.el.style.display = "";
             placeholderEl.clear().add(placeholderText);
         } else {
@@ -343,6 +343,7 @@ export function uPasswdInput() {
                     lastPd.rm();
                 }
                 updateAlignment();
+                updatePlaceholder();
             }
             return;
         }
@@ -351,14 +352,14 @@ export function uPasswdInput() {
 
         const kEl = view();
         const isFirst = pd.length === 0;
-        uiAnimatePdSize++;
         const g = new AnimationGear({ v: 0 });
         g.addState("init", { v: 0 }, ["x"]);
         g.addState("x", { v: 1 }, ["init"]);
         g.setUpdateCallback((v) => {
             if (v.v === 0) {
-                uiAnimatePdSize--;
                 kEl.remove();
+                // clear() 之后动画才结束：此时补上被隐藏的占位文本（如“认证中…”）
+                updatePlaceholder();
             } else if (0 < v.v && v.v <= 1) {
                 if (kEl.el.innerText === "") {
                     contentEl.add(kEl);
@@ -368,7 +369,6 @@ export function uPasswdInput() {
                 if (v.v === 1) {
                     updateAlignment();
                 }
-                uiAnimatePdSize++;
             }
         });
         g.moveTo("init", 0);
@@ -383,6 +383,7 @@ export function uPasswdInput() {
 
     return {
         el: wrapEl.bindGet(() => pd.map((i) => i.k).join("")),
+        focus: () => textEl.el.focus(),
         disable: (d: boolean) => {
             if (d) {
                 textEl.el.removeAttribute("tabIndex");
@@ -402,6 +403,7 @@ export function uPasswdInput() {
             }
             pd.length = 0;
             updateAlignment();
+            updatePlaceholder();
         },
         inputKey: (k: string) => {
             textEl.el.dispatchEvent(new KeyboardEvent("keydown", { key: k }));

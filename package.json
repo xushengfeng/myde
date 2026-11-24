@@ -25,7 +25,8 @@
         "desktop:remote": "cd desktop/remote && npm run build && cd ../.. && export desktop='desktop/remote' && electron-vite --ignoreConfigWarning preview",
         "desktop:example": "cd desktop/example && npm run build && cd ../.. && export desktop='desktop/example' && electron-vite --ignoreConfigWarning preview",
         "test:frametime": "vite desktop/official/test/frametime",
-        "test:file-chooser": "vite desktop/official/test/file_chooser"
+        "test:file-chooser": "vite desktop/official/test/file_chooser",
+        "test:polkit-dialog": "vite desktop/official/test/polkit_dialog"
     },
     "author": {
         "name": "xsf",

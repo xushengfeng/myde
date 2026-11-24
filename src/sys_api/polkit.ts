@@ -389,6 +389,8 @@ export class polkit extends EventEmitter<PolkitEvents> {
     private queue: ActiveAuth[] = [];
     private destroyed = false;
     private registered = false;
+    /** 是否已经开始接收认证请求（注册了 agent）；桌面 UI 就绪前保持 false */
+    private started = false;
     private unwatch?: () => void | Promise<void>;
     /** 会话级 agent 注册重试（被旧进程占着时） */
     private sessionRetry?: ReturnType<typeof setTimeout>;
@@ -408,7 +410,11 @@ export class polkit extends EventEmitter<PolkitEvents> {
         this.helperSocketPath = options.helperSocketPath ?? DEFAULT_HELPER_SOCKET;
     }
 
-    async init(): Promise<void> {
+    /**
+     * @param op.register 是否立即注册 agent。桌面侧 UI 还没装好时传 false，
+     * 等桌面报告就绪后再调用 `start()`，避免把认证抢过来却没有人应答。
+     */
+    async init(op: { register?: boolean } = {}): Promise<void> {
         try {
             await this.io.connect();
 
@@ -426,7 +432,7 @@ export class polkit extends EventEmitter<PolkitEvents> {
             try {
                 const meta = await this.client.getMetaInterface();
                 this.unwatch = await meta.onNameOwnerChanged((name, _oldOwner, newOwner) => {
-                    if (name !== AUTHORITY_BUS || !newOwner) return;
+                    if (name !== AUTHORITY_BUS || !newOwner || !this.started) return;
                     void this.registerWithAuthority(true).catch((error) => {
                         console.warn("[polkit] polkitd 重启后重新注册失败:", error);
                     });
@@ -435,11 +441,25 @@ export class polkit extends EventEmitter<PolkitEvents> {
                 console.warn("[polkit] 监听 polkitd 重启失败，重启后将无法收到认证请求:", error);
             }
 
-            await this.registerWithAuthority();
+            if (op.register !== false) await this.start();
         } catch (error) {
             await this.destroy().catch(() => undefined);
             throw error;
         }
+    }
+
+    /** 开始接收认证请求：注册会话/进程级 agent。重复调用无副作用 */
+    async start(): Promise<void> {
+        if (this.destroyed || this.started) return;
+        this.started = true;
+        await this.registerWithAuthority();
+    }
+
+    /** 桌面 UI 就绪后调用；本地 agent 用它统一触发 `start()` */
+    ready(): void {
+        void this.start().catch((error) => {
+            console.warn("[polkit] 注册认证 agent 失败:", errorText(error));
+        });
     }
 
     async destroy(): Promise<void> {
@@ -538,7 +558,7 @@ export class polkit extends EventEmitter<PolkitEvents> {
      * 自己发起、或系统服务代它们发起的认证也能转到桌面。
      */
     async watchProcess(pid: number): Promise<boolean> {
-        if (this.destroyed || pid <= 0 || this.appProcesses.has(pid)) return false;
+        if (this.destroyed || !this.started || pid <= 0 || this.appProcesses.has(pid)) return false;
         const uid = processUid(pid);
         if (uid === undefined) return false;
         const subject = this.processSubjectFor(pid, uid);
@@ -1206,4 +1226,7 @@ export class polkit extends EventEmitter<PolkitEvents> {
  * 本地 agent（session helper 里）和主进程代理（sessionRemote）都实现这些成员；
  * 桌面只依赖这部分，不关心 agent 实际跑在哪个进程。
  */
-export type PolkitApi = Pick<polkit, "on" | "off" | "once" | "getRequest" | "watchProcess" | "unwatchProcess">;
+export type PolkitApi = Pick<
+    polkit,
+    "on" | "off" | "once" | "getRequest" | "watchProcess" | "unwatchProcess" | "ready"
+>;

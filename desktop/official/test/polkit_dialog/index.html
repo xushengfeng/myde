@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>polkit 对话框预览</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: sans-serif;
+            background: #1e2430;
+        }
+
+        body {
+            background-image: linear-gradient(120deg, #20344d, #4b3a52 55%, #2d4a3e);
+        }
+
+        /* 假桌面背景：用来看对话框毛玻璃和遮罩 */
+        .fake-window {
+            position: absolute;
+            left: 14%;
+            top: 16%;
+            width: 46%;
+            height: 56%;
+            border-radius: 12px;
+            background: #f5f5f5;
+            box-shadow: 0 12px 40px #00000055;
+        }
+
+        .panel {
+            position: absolute;
+            left: 24px;
+            top: 24px;
+            width: 320px;
+            padding: 16px;
+            border-radius: 14px;
+            background: rgba(245, 245, 245, 0.94);
+            backdrop-filter: blur(12px);
+            box-shadow: 0 2px 12px #0000001f;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            z-index: 1;
+        }
+
+        .panel h1 {
+            margin: 0;
+            font-size: 15px;
+            font-weight: 600;
+            line-height: 1.4;
+        }
+
+        .panel p {
+            margin: 0;
+            font-size: 12px;
+            line-height: 1.5;
+            color: #666;
+        }
+
+        .actions {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        label {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 12px;
+            color: #444;
+        }
+
+        select {
+            font: 12px/1.4 sans-serif;
+            color: #111;
+            background: #fff;
+            border: 1px solid #00000024;
+            border-radius: 7px;
+            padding: 4px 8px;
+        }
+
+        .panel button {
+            font: 13px/1.4 sans-serif;
+            color: #111;
+            background: #fff;
+            border: 1px solid #00000024;
+            border-radius: 9px;
+            padding: 7px 10px;
+            cursor: pointer;
+        }
+
+        .panel button:active {
+            background: #eef6ff;
+        }
+
+        .status {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 11px;
+            color: #444;
+            word-break: break-all;
+            min-height: 1.4em;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="fake-window"></div>
+    <div class="panel">
+        <h1>polkit 认证对话框</h1>
+        <p>按钮模拟 polkitd 的事件，输入、Enter、Esc 均为真实行为。</p>
+        <div class="actions">
+            <label>场景
+                <select id="scenario">
+                    <option value="normal" selected>普通</option>
+                    <option value="long">长内容</option>
+                    <option value="info">PAM 信息</option>
+                </select>
+            </label>
+            <label>提交后
+                <select id="outcome">
+                    <option value="retry" selected>密码错误重试</option>
+                    <option value="success">认证成功</option>
+                    <option value="pending">一直等待</option>
+                </select>
+            </label>
+            <button id="open" type="button">打开对话框</button>
+        </div>
+        <p class="status" id="status">最近回调：无</p>
+    </div>
+    <script type="module" src="./main.ts"></script>
+</body>
+
+</html>

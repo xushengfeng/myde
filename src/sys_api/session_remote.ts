@@ -106,6 +106,8 @@ export class sessionRemote extends EventEmitter<PolkitEvents> {
     private current?: RemotePolkitRequest;
     private readonly apps = new Map<number, AppProcess>();
     private nextAppId = 1;
+    /** 已经通知 helper 可以注册 agent（桌面 UI 就绪） */
+    private armed = false;
 
     private readonly handleEvent = (_event: Electron.IpcRendererEvent, event: SessionHelperEvent) => {
         this.handleMessage(event);
@@ -113,6 +115,7 @@ export class sessionRemote extends EventEmitter<PolkitEvents> {
 
     private readonly handleHelperExit = () => {
         this.available = false;
+        this.armed = false;
         for (const [id, app] of this.apps) {
             this.apps.delete(id);
             app.emit("error", new Error("session helper 已退出"));
@@ -143,8 +146,17 @@ export class sessionRemote extends EventEmitter<PolkitEvents> {
         ipcRenderer.on("polkit:event", this.handleEvent);
         ipcRenderer.on("app:event", this.handleAppEvent);
         ipcRenderer.on("app:helper-exit", this.handleHelperExit);
-        // helper 如果没法注册会话级 agent，会退化成按进程注册；把桌面进程
-        // 自己补上，至少桌面发起的认证能弹出来
+    }
+
+    /**
+     * 桌面装好 `auth-request` 等监听后调用；helper 收到后才注册 agent。
+     * 在这之前注册会把会话里的认证抢过来，而桌面还没有对话框可以应答。
+     */
+    ready(): void {
+        if (this.armed || !this.available) return;
+        this.armed = true;
+        ipcRenderer.send("polkit:action", { type: "arm" });
+        // 会话级 agent 不可用时，桌面自己发起的认证也要能转过来
         ipcRenderer.send("polkit:action", { type: "watch", pid: process.pid });
     }
 

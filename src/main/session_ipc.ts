@@ -42,6 +42,8 @@ export type SessionHelperEvent =
 
 /** 主进程 → helper */
 export type SessionHelperCommand =
+    /** 桌面已经装好认证 UI，可以注册 agent 接收认证了 */
+    | { type: "arm" }
     | { type: "submit"; id: number; value: string }
     | { type: "cancel"; id: number }
     | { type: "select"; id: number; identityId: string }

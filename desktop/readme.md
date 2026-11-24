@@ -259,7 +259,7 @@ portal.on("access.request", async (req) => {
 
 ### polkit
 
-polkit 认证前端 agent。主进程启动最早阶段会拉起一个 session helper 进程（在 Electron 把主进程搬进 `app-*.scope` 之前），helper 留在登录会话里注册会话级 agent；需要用户认证时 polkitd 调用 agent，事件经主进程转到桌面，密码等输入再回传。PAM 由 `polkit-agent-helper-1`（socket 激活或 setuid helper）完成，API 不包含 UI。`MYDE_SESSION_HELPER=0` 可关闭 helper。
+polkit 认证前端 agent。主进程启动最早阶段会拉起一个 session helper 进程（在 Electron 把主进程搬进 `app-*.scope` 之前），helper 留在登录会话里、等桌面报告 UI 就绪后注册会话级 agent；需要用户认证时 polkitd 调用 agent，事件经主进程转到桌面，密码等输入再回传。PAM 由 `polkit-agent-helper-1`（socket 激活或 setuid helper）完成，API 不包含 UI。`MYDE_SESSION_HELPER=0` 可关闭 helper。
 
 ```typescript
 const polkit = MSysApi.polkit;
@@ -282,13 +282,17 @@ polkit.on("auth-info", (req, message) => updateInfo(req, message));
 polkit.on("auth-error", (req, message) => updateError(req, message));
 polkit.on("auth-identity-changed", (req, identity) => updateIdentity(req, identity));
 polkit.on("auth-end", (req, { success, cancelled }) => closeDialog(req));
+
+// 监听都装好后再告诉 helper 可以接收认证；提前注册会把会话里的认证抢过来却没人应答
+polkit.ready();
 ```
 
 - 只处理 `unix-user` 身份；默认选中当前用户，`selectIdentity` 会重启 PAM 会话
 - 同一时间只处理一个请求，后续请求排队；当前请求结束后才会为下一个发出 `auth-request`
 - `req.id` 是进程内唯一编号（不是 polkit cookie），用于日志和自建状态表；`auth-end` 可能来自没发出过 `auth-request` 的排队请求，按 `id` 忽略即可
 - `req` 只在 `auth-request` 之后可用；`submitPassword` 应在 `auth-prompt` 回调里调用，且每次 prompt 只调用一次（helper 的 stdin 会缓存，提前或重复发送会被后续 PAM 问题消费）；`cancel` / `selectIdentity` 可在 `auth-request` 到 `auth-end` 之间调用；`auth-end` 之后所有操作静默无效
-- helper 注册会话级 agent，覆盖会话内所有进程（包括应用派生的子进程）；helper 不在会话里（例如从没有 logind 会话的环境启动）时，会话按 polkitd 的方式查找（PID → 用户 display session → `XDG_SESSION_ID`），失败则退化为按进程（`unix-process`）注册，`runApp` 启动的应用会再按应用 pid 补注册
+- helper 收到 `polkit.ready()`（经 IPC 转成 helper 的 `arm`）之后才注册 agent；在此之前会话里的认证仍由应用自己的终端 agent/宿主 agent 处理，不会因为 myde 没有对话框而失败
+- 注册后覆盖会话内所有进程（包括应用派生的子进程）；helper 不在会话里（例如从没有 logind 会话的环境启动）时，会话按 polkitd 的方式查找（PID → 用户 display session → `XDG_SESSION_ID`），失败则退化为按进程（`unix-process`）注册，`runApp` 启动的应用会再按应用 pid 补注册
 - 桌面模式的应用由 helper 代 `runApp` 启动（`MSysApi.session.spawnApp`），因此应用和终端里再派生的命令都在会话里；helper 不可用时回退到本地 spawn
 - 只有桌面模式（`runAsDesktop`）启动 helper；窗口模式的认证交给宿主桌面，避免抢占宿主 agent
 - 认证依赖 `polkit-agent-helper-1`（`/run/polkit/agent-helper.socket` 或带 setuid 的 helper）
