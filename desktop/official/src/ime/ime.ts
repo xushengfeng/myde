@@ -66,6 +66,9 @@ type ModifierChord = { action: "toggle" } | { action: "step"; dir: 1 | -1 };
 
 const EMPTY_TEXT_INPUT: TextInputState = { supported: false, enabled: false, cursorRect: null };
 
+/** 按键热路径上缓存状态的最长使用时间；超过后先从 fcitx 同步一次 */
+const STATE_SYNC_INTERVAL = 1000;
+
 /**
  * 决定预编辑显示在哪：
  * - `inline` 只有在 fcitx 确实发了客户端预编辑时才下发；
@@ -122,6 +125,8 @@ export class ImeController {
     private lastPreedit = "";
     private caretSeq = 0;
     private queue: Promise<void> = Promise.resolve();
+    /** 最近一次从 fcitx 同步 state/current 的时间；缓存可能被外部改掉 */
+    private stateSyncedAt = 0;
 
     private bindings: ImeBindings = DEFAULT_IME_BINDINGS;
 
@@ -148,10 +153,7 @@ export class ImeController {
             return false;
         }
         try {
-            this.ctx = await this.im.createContext("myde-desktop");
-            this.ctx.on("update", (s) => this.onUpdate(s));
-            this.ctx.on("commit", (text) => this.onCommit(text));
-            this.ctx.on("im", () => void this.refresh());
+            await this.openContext();
             this.available = true;
             await this.refresh();
             this.emitStatus();
@@ -163,6 +165,49 @@ export class ImeController {
             this.error = e instanceof Error ? e.message : String(e);
             this.available = false;
             this.emitStatus();
+            return false;
+        }
+    }
+
+    /** 新建一个 fcitx 输入上下文（初始化、以及输入法重启后重建时使用） */
+    private async openContext(): Promise<inputMethodContext> {
+        if (!this.im) throw new Error("input_method: 未初始化或 fcitx5 不可用");
+        const ctx = await this.im.createContext("myde-desktop");
+        ctx.on("update", (s) => this.onUpdate(s));
+        ctx.on("commit", (text) => this.onCommit(text));
+        ctx.on("im", () => void this.refresh());
+        this.ctx = ctx;
+        return ctx;
+    }
+
+    /**
+     * 重建上下文：fcitx5 重启/退出后旧 InputContext 会失效，所有调用都报 UnknownObject。
+     * 重启输入法时也重新探测一次服务，避免继续用旧的服务名绑定。
+     */
+    private async recreateContext(): Promise<boolean> {
+        const old = this.ctx;
+        this.ctx = undefined;
+        try {
+            await old?.destroy();
+        } catch {
+            // 旧对象可能已经随 fcitx 一起没了
+        }
+        try {
+            await this.im?.init();
+            const ctx = await this.openContext();
+            const handle = this.focusHandle ?? this.deps.getFocus();
+            if (handle !== undefined) {
+                this.focusHandle = handle;
+                await ctx.focus();
+            }
+            this.available = true;
+            this.invalidateTextInput();
+            await this.refresh();
+            this.emitStatus();
+            return true;
+        } catch (e) {
+            this.available = false;
+            this.setError(e);
             return false;
         }
     }
@@ -246,7 +291,9 @@ export class ImeController {
             return;
         }
         if (this.focusHandle === handle && this.ctx) {
-            await this.refresh();
+            // 同一窗口再次聚焦也可能已经被别的输入法客户端/配置重载抢走焦点：
+            // 不重置合成，只重新声明一次焦点并同步状态，否则会一直发不出合成
+            await this.reassertFocus();
             return;
         }
         this.clearPreedit();
@@ -260,10 +307,32 @@ export class ImeController {
             await this.ctx?.reset();
             await this.ctx?.focus();
         } catch (e) {
-            this.setError(e);
+            if (!(await this.recreateContext())) this.setError(e);
+            else await this.queryTextInput(handle);
+            await this.refresh();
+            return;
         }
         await this.queryTextInput(handle);
         await this.refresh();
+    }
+
+    /**
+     * 把 fcitx 焦点重新拿回来并同步状态。
+     *
+     * fcitx 只能让一个上下文成为“最近聚焦”，其他程序（X11 应用的输入法模块、
+     * fcitx 自己的托盘/快捷键、rime 重新部署）都可能把焦点或输入法状态改走；
+     * 这里失败时重建上下文，成功返回 true。
+     */
+    private async reassertFocus(): Promise<boolean> {
+        try {
+            await this.ctx?.focus();
+        } catch (e) {
+            if (await this.recreateContext()) return true;
+            this.setError(e);
+            return false;
+        }
+        await this.refresh();
+        return true;
     }
 
     async blur() {
@@ -292,7 +361,7 @@ export class ImeController {
         try {
             await this.ctx?.focus();
         } catch (e) {
-            this.setError(e);
+            if (!(await this.recreateContext())) this.setError(e);
         }
         await this.refresh();
     }
@@ -407,7 +476,14 @@ export class ImeController {
         }
 
         // keyboard-us / 停用状态：直接走客户端，不经过 fcitx，行为与 KDE 的键盘布局一致
-        if (!ti.enabled || this.state !== 2 || this.current?.uniqueName === "keyboard-us") {
+        if (!ti.enabled) {
+            this.pressKinds.set(e.code, "client");
+            this.forward(e, handle);
+            return;
+        }
+        // 缓存的状态可能被外部改掉（fcitx 托盘/快捷键、别的程序、rime 重新部署），
+        // 停下一段时间后的第一个按键先同步一次，避免一直按旧状态转发
+        if (!(await this.composingActive())) {
             this.pressKinds.set(e.code, "client");
             this.forward(e, handle);
             return;
@@ -421,19 +497,59 @@ export class ImeController {
         }
 
         this.pressKinds.set(e.code, "ime");
+        const opt = { state: key.state, keycode: key.keycode, settleMs: 0 };
         try {
-            const r = await this.ctx?.keyEvent(key.keysym, {
-                state: key.state,
-                keycode: key.keycode,
-                settleMs: 0,
-            });
+            let r = await this.ctx?.keyEvent(key.keysym, opt);
+            // fcitx 什么都没做、但缓存说应该在合成：多半是焦点/状态被外部改掉了。
+            // 重新聚焦并刷新状态，确认仍在合成后重送一次（上一次没被消费，不会重复输入）
+            if (!r?.handled && !r?.committed && !r?.preedit && (r?.candidates.length ?? 0) === 0) {
+                if ((await this.reassertFocus()) && (await this.composingActive())) {
+                    const retry = await this.ctx?.keyEvent(key.keysym, opt);
+                    if (retry) r = retry;
+                }
+            }
             if (!r?.handled) this.pressKinds.set(e.code, "client");
             if (!r?.handled) this.forward(e, handle);
         } catch (err) {
-            this.setError(err);
+            // 输入法进程重启后旧上下文失效：重建后重送一次
+            if (isContextGone(err) && (await this.recreateContext())) {
+                try {
+                    const retry = await this.ctx?.keyEvent(key.keysym, opt);
+                    if (retry?.handled) return;
+                } catch (again) {
+                    this.setError(again);
+                }
+            } else {
+                this.setError(err);
+            }
             this.pressKinds.set(e.code, "client");
             this.forward(e, handle);
         }
+    }
+
+    /** 缓存的输入法状态是否表示“正在合成”；过期时先从 fcitx 同步 */
+    private async composingActive(): Promise<boolean> {
+        if (performance.now() - this.stateSyncedAt > STATE_SYNC_INTERVAL) await this.syncActiveState();
+        return this.state === 2 && this.current?.uniqueName !== "keyboard-us";
+    }
+
+    /** 只同步决定按键去向的状态（比 refresh 少一次组信息查询），用于按键热路径 */
+    private async syncActiveState() {
+        const im = this.im;
+        if (!im) return;
+        try {
+            this.state = await im.getState();
+        } catch (e) {
+            this.setError(e);
+            return;
+        }
+        try {
+            this.current = await im.getCurrentIM();
+        } catch {
+            // 没有聚焦上下文时可能取不到，保留上一次
+        }
+        this.stateSyncedAt = performance.now();
+        this.emitStatus();
     }
 
     private async onKeyUp(e: KeyboardEvent, handle: WinHandle) {
@@ -705,6 +821,7 @@ export class ImeController {
         } catch {
             // 组信息失败不影响输入
         }
+        this.stateSyncedAt = performance.now();
         this.emitStatus();
     }
 
@@ -761,4 +878,10 @@ function isEditableTarget(target: EventTarget | null): boolean {
     const el = target as HTMLElement | null;
     if (!el || typeof el.closest !== "function") return false;
     return !!el.closest("input, textarea, select, [contenteditable='true']");
+}
+
+/** fcitx 重启后旧 InputContext 对象的调用错误；这类错误靠重建上下文恢复 */
+function isContextGone(e: unknown): boolean {
+    const message = e instanceof Error ? e.message : String(e);
+    return /UnknownObject|UnknownMethod|UnknownInterface|ServiceUnknown|NoReply|不存在|未初始化|已销毁/.test(message);
 }
