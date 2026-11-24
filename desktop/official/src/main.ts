@@ -6860,6 +6860,8 @@ MSysApi.media
         const media = MSysApi.media;
         const registry = rawRegistry;
 
+        registry.setData("media.list", Array.from(mediaControl.keys()) as id<"media.list[]">[]);
+
         media.on("new-player", async (p) => {
             const serverName = p.getServerName();
             const oldTimer = mediaTimers.get(serverName);

@@ -1108,7 +1108,7 @@ export function mMedia(op: {
 
     const tabsBar = ui
         .barItem()
-        .style({ height: px(sSize(1)) })
+        .style({ height: px(sSize(1)), display: "none" })
         .add(tabList.el);
 
     const s = carousel<string>({
@@ -1309,7 +1309,7 @@ export function mMedia(op: {
         .style({
             position: "absolute",
             inset: "0",
-            display: "none",
+            display: "flex",
             alignItems: "center",
             justifyContent: "center",
             pointerEvents: "none",
