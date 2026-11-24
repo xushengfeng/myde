@@ -395,6 +395,8 @@ export class polkit extends EventEmitter<PolkitEvents> {
     /** 会话级 agent 注册重试（被旧进程占着时） */
     private sessionRetry?: ReturnType<typeof setTimeout>;
     private sessionRetryLeft = 12;
+    /** 已经提示过会话被占用，避免每 5 秒重复刷日志 */
+    private sessionOccupiedWarned = false;
 
     private readonly messageHandler = (message: dbusMessage) => {
         this.handleMessage(message);
@@ -433,7 +435,7 @@ export class polkit extends EventEmitter<PolkitEvents> {
                 const meta = await this.client.getMetaInterface();
                 this.unwatch = await meta.onNameOwnerChanged((name, _oldOwner, newOwner) => {
                     if (name !== AUTHORITY_BUS || !newOwner || !this.started) return;
-                    void this.registerWithAuthority(true).catch((error) => {
+                    void this.registerWithAuthority().catch((error) => {
                         console.warn("[polkit] polkitd 重启后重新注册失败:", error);
                     });
                 });
@@ -592,7 +594,7 @@ export class polkit extends EventEmitter<PolkitEvents> {
         }
     }
 
-    private async registerWithAuthority(allowAlreadyExists = false) {
+    private async registerWithAuthority() {
         const authority = await this.getAuthority();
         const sessionIds = this.options.sessionId ? [this.options.sessionId] : await this.resolveSessionIds();
         this.registeredSubjects.length = 0;
@@ -608,7 +610,6 @@ export class polkit extends EventEmitter<PolkitEvents> {
                     .await();
                 return true;
             } catch (error) {
-                if (allowAlreadyExists && /already exists|AlreadyExists/i.test(errorText(error))) return true;
                 onError?.(errorText(error));
                 lastError = error;
                 return false;
@@ -635,13 +636,24 @@ export class polkit extends EventEmitter<PolkitEvents> {
         this.registered = true;
 
         if (registeredSessions.length > 0) {
+            this.sessionOccupiedWarned = false;
             console.log(`[polkit] 已注册会话级认证 agent（session ${registeredSessions.join(",")}）`);
         } else if (processRegistered) {
             // 会话级注册失败通常两种情况：本进程不在会话里（polkitd 查不到会话），
-            // 或者会话已经被别的 agent 占着（例如上一次 myde 的 helper 还没退出）。
+            // 或者会话已经被别的连接占着（上一次 myde 的 helper 没清理干净）。
             const detail = sessionErrors.length ? `（${sessionErrors.join("；")}）` : "";
-            console.warn(`[polkit] 没有注册会话级 agent${detail}；已按进程注册，应用会按 pid 补注册`);
-            if (sessionErrors.some((text) => /already exists/i.test(text))) this.scheduleSessionRetry();
+            const occupied = sessionErrors.some((text) => /already exists/i.test(text));
+            if (occupied) {
+                if (!this.sessionOccupiedWarned) {
+                    this.sessionOccupiedWarned = true;
+                    console.warn(
+                        `[polkit] 会话级 agent 被其他连接占用${detail}；已按进程注册，应用会按 pid 补注册。占用者不退出时需要重启 polkit 才能接管`,
+                    );
+                }
+                this.scheduleSessionRetry();
+            } else {
+                console.warn(`[polkit] 没有注册会话级 agent${detail}；已按进程注册，应用会按 pid 补注册`);
+            }
         }
     }
 
@@ -652,7 +664,7 @@ export class polkit extends EventEmitter<PolkitEvents> {
         this.sessionRetry = setTimeout(() => {
             this.sessionRetry = undefined;
             if (this.destroyed) return;
-            void this.registerWithAuthority(true).catch((error) => {
+            void this.registerWithAuthority().catch((error) => {
                 console.warn("[polkit] 重新注册会话级 agent 失败:", errorText(error));
             });
         }, 5000);
