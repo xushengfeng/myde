@@ -23,6 +23,10 @@ export function createToggle(registry: Registry<RegistrySchema>, id: BooleanRegi
 export interface ToolPoolOptions {
     /** 点击互联设备行的动作；main.ts 接真实 connect，预览里改成修改 mock 数据 */
     toggleConnectDevice?: (device: RegistrySchema["connect.devices[]"]) => Promise<void>;
+    /** 点击 Wi-Fi 接入点行的动作：已连接时断开，否则连接该 SSID */
+    toggleWifiAccessPoint?: (ap: RegistrySchema["wifi.accessPoints[]"]) => Promise<void>;
+    /** 点击蓝牙设备行的动作：已连接时断开，否则连接 */
+    toggleBlueDevice?: (device: RegistrySchema["blue.devices[]"]) => Promise<void>;
 }
 
 /**
@@ -129,18 +133,37 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
         wifiAccessPoints: () => {
             const source = registry.get("wifi.accessPoints");
             const us: (() => void)[] = [];
+            let wifiEnabled = false;
+            const unsubEnabled = registry.get("wifi.enabled").getAndSubscribe((v) => {
+                wifiEnabled = v;
+            });
             const container = dynamicScrollList<string>({
                 itemSize: sSize(1.5),
                 containerSize: sSize(1.5) * 4,
                 direction: "down",
                 keyExtractor: (x) => x,
                 renderItem: (k) => {
+                    let canClick = false;
                     const row = uChoiceRow({
                         label: "",
+                        detail: "",
+                        onClick: async () => {
+                            if (!canClick) return;
+                            const ap = await registry.get(k as "wifi.accessPoints[]").get();
+                            if (!ap || !(await registry.get("wifi.enabled").get())) return;
+                            try {
+                                await op?.toggleWifiAccessPoint?.(ap);
+                            } catch (error) {
+                                console.warn("wifi: toggle access point failed", ap.ssid, error);
+                            }
+                        },
                     });
                     const s = registry.get(k as "wifi.accessPoints[]").getAndSubscribe((v) => {
+                        canClick = v.connected || wifiEnabled;
                         row.setLabel(v.ssid);
+                        row.setDetail(v.connected ? "已连接" : "");
                         row.setSelected(v.connected);
+                        row.el.style({ cursor: canClick ? "pointer" : "default" });
                     });
                     us.push(s);
                     return row.el;
@@ -156,6 +179,7 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
                 el: container.el.style({ width: px(sSize(6)) }),
                 unmount: () => {
                     unsub();
+                    unsubEnabled();
                     for (const s of us) s();
                 },
             };
@@ -219,18 +243,37 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
         blueDevices: () => {
             const source = registry.get("blue.devices");
             const us: (() => void)[] = [];
+            let powered = false;
+            const unsubPowered = registry.get("blue.power").getAndSubscribe((v) => {
+                powered = v;
+            });
             const container = dynamicScrollList<string>({
                 itemSize: sSize(1.5),
                 containerSize: sSize(1.5) * 4,
                 direction: "down",
                 keyExtractor: (x) => x,
                 renderItem: (k) => {
+                    let canClick = false;
                     const row = uChoiceRow({
                         label: "",
+                        detail: "",
+                        onClick: async () => {
+                            if (!canClick) return;
+                            const device = await registry.get(k as "blue.devices[]").get();
+                            if (!device || !(await registry.get("blue.power").get())) return;
+                            try {
+                                await op?.toggleBlueDevice?.(device);
+                            } catch (error) {
+                                console.warn("blue: toggle device failed", device.address, error);
+                            }
+                        },
                     });
                     const s = registry.get(k as "blue.devices[]").getAndSubscribe((v) => {
+                        canClick = v.connected || powered;
                         row.setLabel(v.name);
+                        row.setDetail(v.connected ? "已连接" : "");
                         row.setSelected(v.connected);
+                        row.el.style({ cursor: canClick ? "pointer" : "default" });
                     });
                     us.push(s);
                     return row.el;
@@ -246,6 +289,7 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
                 el: container.el.style({ width: px(sSize(6)) }),
                 unmount: () => {
                     unsub();
+                    unsubPowered();
                     for (const s of us) s();
                 },
             };

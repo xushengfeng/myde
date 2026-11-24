@@ -6320,6 +6320,11 @@ function subscribeConnect(callback: () => void) {
     };
 }
 
+/** myde-dbus 的 PropertiesChanged 值仍是变体内容数组（如 [false]），兼容直接给标量的实现 */
+function changedBool(value: unknown) {
+    return (Array.isArray(value) ? value[0] : value) === true;
+}
+
 /**
  * 跟踪一组带 connected 状态的设备，只为状态翻转发通知。
  * 列表第一次到达时只记录当前状态，避免启动时把已有设备当成新连接。
@@ -6586,6 +6591,20 @@ MSysApi.network
         const network = MSysApi.network;
         const registry = rawRegistry;
 
+        /** 已保存的 SSID；读不到时返回 null，列表就不按记忆过滤 */
+        let savedSsids: Set<string> | null = null;
+        let savedSsidsAt = 0;
+        const getSavedSsids = async (wifiDevice: wifiDevice) => {
+            if (savedSsids && Date.now() - savedSsidsAt < 5000) return savedSsids;
+            try {
+                savedSsids = new Set((await wifiDevice.getSavedConnections()).map((conn) => conn.ssid));
+                savedSsidsAt = Date.now();
+            } catch (error) {
+                console.warn("wifi: read saved connections failed", error);
+            }
+            return savedSsids;
+        };
+
         const updateAccessPoints = async () => {
             const wifiDevice = network.getWifiDevices()[0];
             if (!wifiDevice) {
@@ -6593,7 +6612,11 @@ MSysApi.network
                 return;
             }
 
-            const [aps, active] = await Promise.all([wifiDevice.getAccessPoints(), network.getActiveWifiConnection()]);
+            const [aps, active, saved] = await Promise.all([
+                wifiDevice.getAccessPoints(),
+                network.getActiveWifiConnection(),
+                getSavedSsids(wifiDevice),
+            ]);
             const connectedSsid = active?.id;
             const ids: string[] = [];
             const seen = new Set<string>();
@@ -6601,6 +6624,8 @@ MSysApi.network
             for (const ap of aps) {
                 const ssid = await ap.getSsid();
                 if (!ssid || seen.has(ssid)) continue;
+                // 只列能直接连上的已保存网络，不做密码输入
+                if (saved && !saved.has(ssid)) continue;
                 seen.add(ssid);
                 ids.push(ssid);
                 registry.setData(`wifi.accessPoints.${ssid}` as "wifi.accessPoints[]", {
@@ -6641,7 +6666,7 @@ MSysApi.network
 
         network.on("changed", (changed) => {
             if ("WirelessEnabled" in changed) {
-                registry.setData("wifi.enabled", Boolean(changed.WirelessEnabled));
+                registry.setData("wifi.enabled", changedBool(changed.WirelessEnabled));
             }
             void updateAccessPoints();
         });
@@ -6679,6 +6704,7 @@ MSysApi.blue
         const updateDevice = async (device: blueDevice) => {
             const address = await device.getAddress();
             registry.setData(`blue.devices.${address}` as "blue.devices[]", {
+                address,
                 name: await device.getName(),
                 connected: await device.isConnected(),
             });
@@ -6689,7 +6715,8 @@ MSysApi.blue
             const other: string[] = [];
             for (const device of blue.getDevices()) {
                 await updateDevice(device);
-                if (!(await device.isTrusted())) continue;
+                // 列表只放已配对（bonded）的设备，和点击时能直接连接的保持一致
+                if (!(await device.isPaired()) && !(await device.isBonded())) continue;
                 const address = await device.getAddress();
                 if (await device.isConnected()) connected.push(address);
                 else other.push(address);
@@ -6711,7 +6738,7 @@ MSysApi.blue
 
         blue.on("adapter-changed", (changed) => {
             if ("Powered" in changed) {
-                registry.setData("blue.power", Boolean(changed.Powered));
+                registry.setData("blue.power", changedBool(changed.Powered));
             }
         });
         blue.on("device-added", (device) => {
@@ -8523,14 +8550,21 @@ tools.registerTool(
         const el = view("x")
             .style({ alignItems: "center" })
             .add(getIconXEl("wifi", { size: 20, width: 24, height: 24 }));
-        const panel = createWifiPanel(rawRegistry);
-        panel.el.addInto(tipEl);
-        onTipVisibleChange(panel.setVisible);
-
         const notify = (title: string, detail: string) => {
             toastEl.clear().add(uStatusToast({ icon: "wifi", title, detail, width: TOAST_WIDTH }));
             showToast({ duration: 3200 });
         };
+        const panel = createWifiPanel(rawRegistry, {
+            toggleWifiAccessPoint: async (ap) => {
+                const device = MSysApi.network.getWifiDevices()[0];
+                if (!device) return;
+                if (ap.connected) await device.disconnect();
+                else await device.connect(ap.ssid);
+            },
+        });
+        panel.el.addInto(tipEl);
+        onTipVisibleChange(panel.setVisible);
+
         watchConnectedItems({
             list: rawRegistry.get("wifi.accessPoints"),
             item: (key) => rawRegistry.get(key as "wifi.accessPoints[]"),
@@ -8594,14 +8628,32 @@ tools.registerTool(
         const el = view("x")
             .add(getIconXEl("blue", { size: 20, width: 24, height: 24 }).el)
             .style({ alignItems: "center" });
-        const panel = createBluePanel(rawRegistry);
-        panel.el.addInto(tipEl);
-        onTipVisibleChange(panel.setVisible);
-
         const notify = (title: string, detail: string) => {
             toastEl.clear().add(uStatusToast({ icon: "blue", title, detail, width: TOAST_WIDTH }));
             showToast({ duration: 3200 });
         };
+        const panel = createBluePanel(rawRegistry, {
+            toggleBlueDevice: async (device) => {
+                let target: blueDevice | undefined;
+                for (const candidate of MSysApi.blue.getDevices()) {
+                    if ((await candidate.getAddress()) === device.address) {
+                        target = candidate;
+                        break;
+                    }
+                }
+                if (!target) return;
+                if (device.connected) {
+                    await target.disconnect();
+                    return;
+                }
+                // 未配对的设备直接 Connect 会以 D-Bus 错误失败，这里只连已配对（bonded）的设备
+                if (!(await target.isPaired()) && !(await target.isBonded())) return;
+                await target.connect();
+            },
+        });
+        panel.el.addInto(tipEl);
+        onTipVisibleChange(panel.setVisible);
+
         watchConnectedItems({
             list: rawRegistry.get("blue.devices"),
             item: (key) => rawRegistry.get(key as "blue.devices[]"),

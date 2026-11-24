@@ -45,6 +45,7 @@ export interface RegistrySchema {
     "blue.power": boolean;
     "blue.devices": id<"blue.devices[]">[];
     "blue.devices[]": {
+        address: string;
         name: string;
         connected: boolean;
     };

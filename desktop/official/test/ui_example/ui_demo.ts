@@ -787,9 +787,9 @@ demoRegistry.setData("wifi.enabled", true);
 demoRegistry.setData("wifi.accessPoints", wifiAccessPointIds);
 
 let blueDeviceIds = [
-    mockItem("blue.devices[]", "mx", { name: "MX Master 3S", connected: true }),
-    mockItem("blue.devices[]", "airpods", { name: "AirPods Pro", connected: false }),
-    mockItem("blue.devices[]", "keyboard", { name: "键盘", connected: true }),
+    mockItem("blue.devices[]", "mx", { address: "AA:BB:CC:00:00:01", name: "MX Master 3S", connected: true }),
+    mockItem("blue.devices[]", "airpods", { address: "AA:BB:CC:00:00:02", name: "AirPods Pro", connected: false }),
+    mockItem("blue.devices[]", "keyboard", { address: "AA:BB:CC:00:00:03", name: "键盘", connected: true }),
 ] as RegistrySchema["blue.devices"];
 demoRegistry.setData("blue.power", true);
 demoRegistry.setData("blue.devices", blueDeviceIds);
@@ -845,6 +845,24 @@ demoRegistry.setSetCallback("power.battery.charging", async (charging) => {
     demoRegistry.setData("power.battery.charging", charging);
 });
 
+/** 模拟点击接入点：连接时只保留一个，点已连接的就断开 */
+async function mockToggleWifi(ap: RegistrySchema["wifi.accessPoints[]"]) {
+    const connect = !ap.connected;
+    for (const key of wifiAccessPointIds) {
+        const item = await demoRegistry.get(key as "wifi.accessPoints[]").get();
+        demoRegistry.setData(key as "wifi.accessPoints[]", { ...item, connected: connect && item.ssid === ap.ssid });
+    }
+}
+
+/** 模拟点击蓝牙设备：切换它自己的连接状态 */
+async function mockToggleBlue(device: RegistrySchema["blue.devices[]"]) {
+    for (const key of blueDeviceIds) {
+        const item = await demoRegistry.get(key as "blue.devices[]").get();
+        const connected = item.address === device.address ? !item.connected : item.connected;
+        demoRegistry.setData(key as "blue.devices[]", { ...item, connected });
+    }
+}
+
 /** 带标题和下方控制按钮的弹窗列 */
 function mockColumn(title: string, el: ElType<HTMLElement>, controls: ElType<HTMLElement>[]) {
     const column = popupColumn(title, el);
@@ -853,7 +871,7 @@ function mockColumn(title: string, el: ElType<HTMLElement>, controls: ElType<HTM
 }
 
 // Wi-Fi：开关、接入点连接状态、列表增删
-const wifiPanel = createWifiPanel(demoRegistry);
+const wifiPanel = createWifiPanel(demoRegistry, { toggleWifiAccessPoint: mockToggleWifi });
 wifiPanel.setVisible(true);
 let wifiSeq = 0;
 popupRow.add(
@@ -878,14 +896,18 @@ popupRow.add(
 );
 
 // 蓝牙：开关、设备列表增删
-const bluePanel = createBluePanel(demoRegistry);
+const bluePanel = createBluePanel(demoRegistry, { toggleBlueDevice: mockToggleBlue });
 bluePanel.setVisible(true);
 let blueSeq = 0;
 popupRow.add(
     mockColumn("蓝牙", bluePanel.el, [
         button("+ 设备").on("click", () => {
             const key = blueDeviceKey(`blue-${++blueSeq}`);
-            demoRegistry.setData(key, { name: `蓝牙设备 ${blueSeq}`, connected: false });
+            demoRegistry.setData(key, {
+                address: `AA:BB:CC:00:01:${String(blueSeq).padStart(2, "0")}`,
+                name: `蓝牙设备 ${blueSeq}`,
+                connected: false,
+            });
             blueDeviceIds = [...blueDeviceIds, key as RegistrySchema["blue.devices"][number]];
             demoRegistry.setData("blue.devices", blueDeviceIds);
         }),

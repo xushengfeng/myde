@@ -162,18 +162,18 @@ export function tPowerPanel(op: {
     };
 }
 
-/** Wi-Fi 弹窗 + registry 订阅：开关状态、接入点列表显隐 */
-export function createWifiPanel(registry: Registry<RegistrySchema>) {
-    const pool = createToolPool(registry);
+/** Wi-Fi 弹窗 + registry 订阅：开关状态、接入点列表显隐与点击连接 */
+export function createWifiPanel(registry: Registry<RegistrySchema>, op?: ToolPoolOptions) {
+    const pool = createToolPool(registry, op);
     const panel = tWifiPanel({ control: pool.wifiToggle(), list: pool.wifiAccessPoints().el });
     registry.get("wifi.enabled").getAndSubscribe((v) => panel.setActive(v));
     registry.get("wifi.accessPoints").getAndSubscribe((ids) => panel.setListVisible(ids.length > 0));
     return panel;
 }
 
-/** 蓝牙弹窗 + registry 订阅：开关状态、设备列表显隐 */
-export function createBluePanel(registry: Registry<RegistrySchema>) {
-    const pool = createToolPool(registry);
+/** 蓝牙弹窗 + registry 订阅：开关状态、设备列表显隐与点击连接 */
+export function createBluePanel(registry: Registry<RegistrySchema>, op?: ToolPoolOptions) {
+    const pool = createToolPool(registry, op);
     const panel = tBluePanel({ control: pool.blueToggle(), list: pool.blueDevices().el });
     registry.get("blue.power").getAndSubscribe((v) => panel.setActive(v));
     registry.get("blue.devices").getAndSubscribe((ids) => panel.setListVisible(ids.length > 0));

@@ -377,7 +377,13 @@ export class wifiDevice extends EventEmitter<WifiDeviceEvents> {
         const nmIface = await nmObj.getInterface("org.freedesktop.NetworkManager");
 
         const accessPoints = await this.getAccessPoints();
-        const targetAp = accessPoints.find(async (ap) => (await ap.getSsid()) === ssid);
+        let targetAp: accessPoint | undefined;
+        for (const ap of accessPoints) {
+            if ((await ap.getSsid()) === ssid) {
+                targetAp = ap;
+                break;
+            }
+        }
 
         if (!targetAp) {
             throw new Error(`Access point not found for SSID: ${ssid}`);

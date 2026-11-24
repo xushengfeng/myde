@@ -159,6 +159,16 @@ export class blueDevice extends EventEmitter<BlueDeviceEvents> {
         return trusted;
     }
 
+    async isPaired() {
+        const [paired] = await this.infc.get<"b">("Paired");
+        return paired;
+    }
+
+    async isBonded() {
+        const [bonded] = await this.infc.get<"b">("Bonded");
+        return bonded;
+    }
+
     async connect() {
         await this.infc.call("Connect").await();
     }
