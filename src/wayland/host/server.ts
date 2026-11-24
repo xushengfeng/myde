@@ -695,6 +695,21 @@ class WaylandServer {
             this.clearClipboard(seat, "cleared");
             return;
         }
+        const prev = this.clipboard.get(seat);
+        if (
+            prev?.kind === "client" &&
+            prev.clientId === clientId &&
+            prev.sourceId === sourceId &&
+            prev.mimes.every((mime) => mimes.includes(mime))
+        ) {
+            // 同一个 data source 再次 set_selection 不是新的复制：GTK/Firefox 在 claim 后会补
+            // offer("SAVE_TARGETS")，然后拿同一个 source 再 set 一次。沿用 token（桌面可能正在
+            // clipboard.read），只更新 mime 并重发 offer，不重发 clipboard.changed，否则历史会
+            // 多出一条相同内容。mime 不是旧集合的超集时按真正的重新复制处理。
+            prev.mimes = [...mimes];
+            this.broadcastClipboard({ token: prev.token, mimes: prev.mimes }, seat);
+            return;
+        }
         this.replaceSelection(seat, { clientId, sourceId });
         const token = `cb-${crypto.randomUUID()}`;
         const state: ClipboardState = {
