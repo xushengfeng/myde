@@ -96,6 +96,7 @@ function createTogglePanel(op: {
     return {
         el: tPanel([row, ...(op.extra ?? []), listBar]),
         setActive: (active: boolean) => fx.setActive(active),
+        setVisible: (visible: boolean) => fx.setVisible(visible),
         setListVisible: (visible: boolean) => listBar.style({ display: visible ? "" : "none" }),
     };
 }
@@ -155,6 +156,7 @@ export function tPowerPanel(op: {
     return {
         el: tPanel([battery.el, ...(profilesBar ? [profilesBar] : []), ...(devicesBar ? [devicesBar] : [])]),
         fx: battery.fx,
+        setVisible: (visible: boolean) => battery.fx.setVisible(visible),
         setProfilesVisible: (visible: boolean) => profilesBar?.style({ display: visible ? "" : "none" }),
         setDevicesVisible: (visible: boolean) => devicesBar?.style({ display: visible ? "" : "none" }),
     };

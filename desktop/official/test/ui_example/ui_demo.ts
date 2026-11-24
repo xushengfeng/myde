@@ -854,6 +854,7 @@ function mockColumn(title: string, el: ElType<HTMLElement>, controls: ElType<HTM
 
 // Wi-Fi：开关、接入点连接状态、列表增删
 const wifiPanel = createWifiPanel(demoRegistry);
+wifiPanel.setVisible(true);
 let wifiSeq = 0;
 popupRow.add(
     mockColumn("Wi-Fi", wifiPanel.el, [
@@ -878,6 +879,7 @@ popupRow.add(
 
 // 蓝牙：开关、设备列表增删
 const bluePanel = createBluePanel(demoRegistry);
+bluePanel.setVisible(true);
 let blueSeq = 0;
 popupRow.add(
     mockColumn("蓝牙", bluePanel.el, [
@@ -906,6 +908,7 @@ const connectPanel = createConnectPanel(demoRegistry, {
         });
     },
 });
+connectPanel.setVisible(true);
 let connectSeq = 0;
 popupRow.add(
     mockColumn("互联", connectPanel.el, [
@@ -925,6 +928,7 @@ popupRow.add(
 
 // 电源：三档性能点选、电量 / 充电 / 设备列表
 const powerPanel = createPowerPanel(demoRegistry);
+powerPanel.setVisible(true);
 let powerSeq = 0;
 popupRow.add(
     mockColumn("电源", powerPanel.el, [
@@ -956,6 +960,7 @@ popupRow.add(
 // 电源各模式 × 电量：观察条纹配色、分界线与文字 / 图标位置
 function batteryBar(percentage: number, charging = false) {
     const bar = tBatteryBar(uBatteryInfo({ percentage, charging }).el);
+    bar.fx.setVisible(true);
     bar.fx.setPercentage(percentage);
     if (charging) bar.fx.setCharging(true);
     return bar;

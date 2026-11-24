@@ -143,6 +143,8 @@ type ToolsItem = {
         /** 自动消失的临时提示；下拉弹窗展开时不会显示 */
         showToast: ShowToast;
         hideToast: () => void;
+        /** 订阅下拉弹窗显隐；返回取消订阅函数 */
+        onTipVisibleChange: (cb: (visible: boolean) => void) => () => void;
         showA: "left" | "right" | "top" | "bottom";
     }) => ElType<HTMLElement>;
     sizeLimit: {
@@ -272,6 +274,16 @@ class Tools {
         });
         gear.moveTo("hide", 0);
 
+        const tipVisibleListeners = new Set<(visible: boolean) => void>();
+        let tipVisible = false;
+        const setTipVisible = (visible: boolean) => {
+            if (tipVisible === visible) return;
+            tipVisible = visible;
+            tipel.sv(visible ? "show" : "hide");
+            gear.moveTo(visible ? "show" : "hide");
+            for (const cb of tipVisibleListeners) cb(visible);
+        };
+
         // 临时提示和下拉弹窗用同样的玻璃面板、锚点和缩放动画，但自身不接收指针
         const toastel = view("y")
             .style({
@@ -341,8 +353,7 @@ class Tools {
                 const target = e.target as HTMLElement;
                 if (tipel.gv === true && !tipel.el.contains(target)) {
                     if (launchEl?.contains(target)) e.stopImmediatePropagation();
-                    tipel.sv("hide");
-                    gear.moveTo("hide");
+                    setTipVisible(false);
                     if (this.openTip === tipToken) this.openTip = undefined;
                 }
             },
@@ -360,11 +371,9 @@ class Tools {
                         if (next) {
                             this.hideActiveToastNow();
                             this.openTip = tipToken;
-                            tipel.sv("show");
-                            gear.moveTo("show");
+                            setTipVisible(true);
                         } else {
-                            tipel.sv("hide");
-                            gear.moveTo("hide");
+                            setTipVisible(false);
                             if (this.openTip === tipToken) this.openTip = undefined;
                         }
                         const anchorEl = s?.anchorEl ? pack(s.anchorEl).el : el;
@@ -372,6 +381,10 @@ class Tools {
                     },
                     showToast,
                     hideToast,
+                    onTipVisibleChange: (cb) => {
+                        tipVisibleListeners.add(cb);
+                        return () => tipVisibleListeners.delete(cb);
+                    },
                     showA,
                 });
                 launchEl = el.el;
@@ -8421,7 +8434,7 @@ tools.registerTool(
 
 tools.registerTool(
     "power",
-    ({ tipEl, toastEl, showTip, showToast }) => {
+    ({ tipEl, toastEl, showTip, showToast, onTipVisibleChange }) => {
         const el = view("x").style({ alignItems: "center" });
 
         // 顶部显示电池状态
@@ -8437,6 +8450,7 @@ tools.registerTool(
         // 弹出框显示详情
         const panel = createPowerPanel(rawRegistry);
         panel.el.addInto(tipEl);
+        onTipVisibleChange(panel.setVisible);
 
         const notify = (title: string, detail: string) => {
             toastEl.clear().add(uStatusToast({ icon: "battery", title, detail, width: TOAST_WIDTH }));
@@ -8505,12 +8519,13 @@ tools.registerTool(
 
 tools.registerTool(
     "network",
-    ({ tipEl, toastEl, showTip, showToast }) => {
+    ({ tipEl, toastEl, showTip, showToast, onTipVisibleChange }) => {
         const el = view("x")
             .style({ alignItems: "center" })
             .add(getIconXEl("wifi", { size: 20, width: 24, height: 24 }));
         const panel = createWifiPanel(rawRegistry);
         panel.el.addInto(tipEl);
+        onTipVisibleChange(panel.setVisible);
 
         const notify = (title: string, detail: string) => {
             toastEl.clear().add(uStatusToast({ icon: "wifi", title, detail, width: TOAST_WIDTH }));
@@ -8535,7 +8550,7 @@ tools.registerTool(
 
 tools.registerTool(
     "connect",
-    ({ tipEl, toastEl, showTip, showToast }) => {
+    ({ tipEl, toastEl, showTip, showToast, onTipVisibleChange }) => {
         const el = view("x")
             .style({ alignItems: "center" })
             .add(getIconXEl("connect", { size: 20, width: 24, height: 24 }).el);
@@ -8549,6 +8564,7 @@ tools.registerTool(
             },
         });
         panel.el.addInto(tipEl);
+        onTipVisibleChange(panel.setVisible);
 
         const notify = (title: string, detail: string) => {
             toastEl.clear().add(uStatusToast({ icon: "connect", title, detail, width: TOAST_WIDTH }));
@@ -8574,12 +8590,13 @@ tools.registerTool(
 
 tools.registerTool(
     "blue",
-    ({ tipEl, toastEl, showTip, showToast }) => {
+    ({ tipEl, toastEl, showTip, showToast, onTipVisibleChange }) => {
         const el = view("x")
             .add(getIconXEl("blue", { size: 20, width: 24, height: 24 }).el)
             .style({ alignItems: "center" });
         const panel = createBluePanel(rawRegistry);
         panel.el.addInto(tipEl);
+        onTipVisibleChange(panel.setVisible);
 
         const notify = (title: string, detail: string) => {
             toastEl.clear().add(uStatusToast({ icon: "blue", title, detail, width: TOAST_WIDTH }));
