@@ -4,7 +4,7 @@
 
 `lid.ts` 通过 logind 读取并监听笔记本合盖状态（`LidClosed`）。
 
-`brightness.ts` 控制屏幕亮度：内置屏读 `/sys/class/backlight/*`，写入优先直接写 sysfs、没有权限时走 logind 的 `org.freedesktop.login1.Session.SetBrightness`（活动会话默认放行）；外接屏调用 `ddcutil`（DDC/CI，VCP 0x10），需要 i2c 权限（udev `uaccess` 规则或 i2c 组），`ddcutil` 不可用时只影响外接屏。内置屏用 `fs.watch` 监听 sysfs，Fn 键或其他程序修改亮度也会发出 `changed`；外接屏不轮询，热插拔后调用 `refresh()`。
+`brightness.ts` 控制屏幕亮度：内置屏读 `/sys/class/backlight/*`，写入优先直接写 sysfs、没有权限时走 logind 的 `org.freedesktop.login1.Session.SetBrightness`（目标取席位的当前前台会话 `Seat.ActiveSession`，切 VT 后自动跟随；logind 只放行前台会话，其他会话会返回 `NotYourDevice`）；外接屏调用 `ddcutil`（DDC/CI，VCP 0x10），需要 i2c 权限（udev `uaccess` 规则或 i2c 组），`ddcutil` 不可用时只影响外接屏。内置屏用 `fs.watch` 监听 sysfs，Fn 键或其他程序修改亮度也会发出 `changed`；外接屏不轮询，热插拔后调用 `refresh()`。
 
 `polkit.ts` 是 polkit 的认证前端 agent：在系统总线注册 logind session，接收 polkitd 的认证请求并通过事件交给桌面；PAM 由 polkit-agent-helper-1 完成。
 

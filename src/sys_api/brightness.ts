@@ -2,7 +2,7 @@ const fs = require("node:fs") as typeof import("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const { execFile } = require("node:child_process") as typeof import("node:child_process");
 
-import { dbusClient, type dbusInterface, type dbusIO } from "myde-dbus";
+import { dbusClient, type dbusInterface, type dbusIO, type dbusService } from "myde-dbus";
 import { EventEmitter } from "../event-emitter/event-emitter";
 
 const BACKLIGHT_DIR = "/sys/class/backlight";
@@ -11,6 +11,7 @@ const LOGIN_MANAGER_PATH = "/org/freedesktop/login1";
 const LOGIN_MANAGER_IFACE = "org.freedesktop.login1.Manager";
 const LOGIN_SESSION_IFACE = "org.freedesktop.login1.Session";
 const LOGIN_USER_IFACE = "org.freedesktop.login1.User";
+const LOGIN_SEAT_IFACE = "org.freedesktop.login1.Seat";
 const LOGIN_AUTO_SESSION = "/org/freedesktop/login1/session/auto";
 
 /** 内置屏走内核 backlight，外接屏走 DDC/CI */
@@ -151,6 +152,18 @@ function errorText(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * 读 logind 的 `(so)` 复合属性（如 `Session.Seat`、`Seat.ActiveSession`、
+ * `User.Display`），返回 `[id, 对象路径]`。myde-dbus 的 `get` 读到单个复合值时
+ * 会再包一层数组，这里两种形状都接受。
+ */
+async function getPair(iface: dbusInterface, property: string): Promise<[string, string] | undefined> {
+    const value = (await iface.get<"so">(property)) as unknown;
+    const pair = Array.isArray(value) && Array.isArray(value[0]) ? value[0] : value;
+    if (!Array.isArray(pair) || typeof pair[0] !== "string" || typeof pair[1] !== "string") return undefined;
+    return [pair[0], pair[1]];
+}
+
 /** 内置 backlight 对应的 DRM 连接器名（如 eDP-1），取不到时返回 undefined */
 function backlightConnector(dir: string): string | undefined {
     try {
@@ -175,7 +188,8 @@ function ddcMonitorName(entry: DdcDetectEntry): string {
  * 屏幕亮度。
  *
  * - 内置屏：读 `/sys/class/backlight/<dev>/{brightness,max_brightness}`，写入优先
- *   直接写 sysfs，没有权限时走 logind `Session.SetBrightness`（活动会话默认放行）。
+ *   直接写 sysfs，没有权限时走 logind `Session.SetBrightness`（写席位当前的前台会话，
+ *   切 VT 后自动跟随）。
  *   用 `fs.watch` 监听 sysfs，Fn 键或其他程序改亮度也会发出 `changed`。
  * - 外接屏：调用 `ddcutil`（DDC/CI，VCP 0x10）枚举和读写；需要 i2c 权限
  *   （udev `uaccess` 规则或 i2c 组），不可用时只记录告警，不影响内置屏。
@@ -183,7 +197,10 @@ function ddcMonitorName(entry: DdcDetectEntry): string {
 export class brightness extends EventEmitter<BrightnessEvents> {
     private dbus?: dbusIO;
     private client?: dbusClient;
-    private sessionIface?: dbusInterface;
+    private service?: dbusService;
+    private manager?: dbusInterface;
+    /** 当前席位（logind Seat 对象路径），和会话不同，VT 切换不会变 */
+    private seatPath?: string;
     private sessionError?: string;
     private logindAvailable = false;
 
@@ -218,10 +235,11 @@ export class brightness extends EventEmitter<BrightnessEvents> {
             }
             if (!this.sessionError) {
                 try {
-                    await this.getSession();
+                    // 只确认 logind 可用；具体写到哪个会话在每次写入时按席位前台会话重新取
+                    await this.getManager();
                     this.logindAvailable = true;
                 } catch (error) {
-                    console.warn("[brightness] logind 会话不可用，内置屏只能直接写 sysfs:", error);
+                    console.warn("[brightness] logind 不可用，内置屏只能直接写 sysfs:", error);
                 }
             }
         }
@@ -476,8 +494,7 @@ export class brightness extends EventEmitter<BrightnessEvents> {
             throw new Error(`没有权限写入 ${backlight.file}，且系统总线不可用（logind 回退不可用）`);
         }
         try {
-            const session = await this.getSession();
-            await session.call("SetBrightness", "ssu", "backlight", backlight.device, raw).await();
+            await this.setLogindBrightness(backlight, raw);
         } catch (error) {
             throw new Error(`logind SetBrightness 失败: ${errorText(error)}`);
         }
@@ -495,16 +512,68 @@ export class brightness extends EventEmitter<BrightnessEvents> {
         }
     }
 
-    /** 找到当前会话的 logind Session 接口，优先活动会话 */
-    private async getSession(): Promise<dbusInterface> {
-        if (this.sessionIface) return this.sessionIface;
+    /** 系统总线上的 logind 服务（进程内复用） */
+    private async getService(): Promise<dbusService> {
         if (!this.dbus) throw new Error("系统总线不可用");
         if (this.sessionError) throw new Error(this.sessionError);
-
         this.client ??= new dbusClient({ io: this.dbus });
-        const service = await this.client.getService(LOGIN_BUS);
-        const manager = await (await service.getObject(LOGIN_MANAGER_PATH)).getInterface(LOGIN_MANAGER_IFACE);
+        this.service ??= await this.client.getService(LOGIN_BUS);
+        return this.service;
+    }
 
+    /** 取 logind Manager 接口（进程内复用） */
+    private async getManager(): Promise<dbusInterface> {
+        if (this.manager) return this.manager;
+        const service = await this.getService();
+        this.manager = await (await service.getObject(LOGIN_MANAGER_PATH)).getInterface(LOGIN_MANAGER_IFACE);
+        return this.manager;
+    }
+
+    /**
+     * 找当前席位（seat）：优先环境里的 XDG_SEAT，其次从登录会话的 Seat 属性取，
+     * 都拿不到时退回唯一的席位。席位在运行期间不变，取到后缓存。
+     */
+    private async getSeatPath(): Promise<string | undefined> {
+        if (this.seatPath) return this.seatPath;
+        const manager = await this.getManager();
+        const service = await this.getService();
+        const seats: string[] = [];
+        const addSeat = (path: string | undefined) => {
+            if (path && path !== "/" && !seats.includes(path)) seats.push(path);
+        };
+
+        if (process.env.XDG_SEAT) {
+            try {
+                const [path] = await manager.call("GetSeat", "s", process.env.XDG_SEAT).as<"o">();
+                addSeat(path);
+            } catch {
+                // 环境里的席位名已失效
+            }
+        }
+        for (const path of await this.sessionCandidates(manager, service)) {
+            try {
+                const iface = await (await service.getObject(path)).getInterface(LOGIN_SESSION_IFACE);
+                const seat = await getPair(iface, "Seat");
+                addSeat(seat?.[1]);
+            } catch {
+                // 会话不存在或已结束
+            }
+        }
+        if (seats.length === 0) {
+            try {
+                const [paths] = await manager.call("ListSeats").as<"a(so)">();
+                for (const [, path] of paths) addSeat(path);
+            } catch {
+                // 没有席位信息
+            }
+        }
+
+        this.seatPath = seats[0];
+        return this.seatPath;
+    }
+
+    /** 可能属于当前用户的会话路径，按可信程度排序 */
+    private async sessionCandidates(manager: dbusInterface, service: dbusService): Promise<string[]> {
         const candidates: string[] = [];
         const add = (path: string | undefined) => {
             if (path && path !== "/" && !candidates.includes(path)) candidates.push(path);
@@ -519,8 +588,8 @@ export class brightness extends EventEmitter<BrightnessEvents> {
         try {
             const [userPath] = await manager.call("GetUser", "u", process.getuid?.() ?? 0).as<"o">();
             const user = await (await service.getObject(userPath)).getInterface(LOGIN_USER_IFACE);
-            const [, displayPath] = await user.get<"so">("Display");
-            add(displayPath);
+            const display = await getPair(user, "Display");
+            add(display?.[1]);
         } catch {
             // 没有图形会话
         }
@@ -528,28 +597,70 @@ export class brightness extends EventEmitter<BrightnessEvents> {
             add(`/org/freedesktop/login1/session/${process.env.XDG_SESSION_ID}`);
         }
         add(LOGIN_AUTO_SESSION);
+        return candidates;
+    }
 
-        let fallback: dbusInterface | undefined;
+    /**
+     * 取能设置亮度的 logind 会话：席位当前的前台会话（`Seat.ActiveSession`）。
+     *
+     * logind 只接受席位前台会话的 SetBrightness，其他会话一律
+     * `NotYourDevice: Session is not in foreground`。所以每次写入都重新读前台会话，
+     * 不缓存会话本身：切 VT 后旧会话立刻变成非前台。
+     */
+    private async getSession(): Promise<{ iface: dbusInterface; id: string }> {
+        const manager = await this.getManager();
+        const service = await this.getService();
+
+        const seatPath = await this.getSeatPath();
+        if (seatPath) {
+            try {
+                const seat = await (await service.getObject(seatPath)).getInterface(LOGIN_SEAT_IFACE);
+                const active = await getPair(seat, "ActiveSession");
+                const activePath = active?.[1];
+                if (activePath && activePath !== "/") {
+                    const iface = await (await service.getObject(activePath)).getInterface(LOGIN_SESSION_IFACE);
+                    const [id] = await iface.get<"s">("Id");
+                    return { iface, id };
+                }
+            } catch {
+                // 前台会话刚结束，继续用下面的候选会话
+            }
+        }
+
+        // 没有席位/前台会话时，退回找任意活动会话
+        const candidates = await this.sessionCandidates(manager, service);
+        let fallback: { iface: dbusInterface; id: string } | undefined;
         let lastError: unknown;
         for (const path of candidates) {
             try {
-                const object = await service.getObject(path);
-                const iface = await object.getInterface(LOGIN_SESSION_IFACE);
+                const iface = await (await service.getObject(path)).getInterface(LOGIN_SESSION_IFACE);
+                const [id] = await iface.get<"s">("Id");
                 const [active] = await iface.get<"b">("Active");
-                if (active) {
-                    this.sessionIface = iface;
-                    return iface;
-                }
-                fallback ??= iface;
+                if (active) return { iface, id };
+                fallback ??= { iface, id };
             } catch (error) {
                 lastError = error;
             }
         }
-        if (fallback) {
-            this.sessionIface = fallback;
-            return fallback;
-        }
+        if (fallback) return fallback;
         throw lastError instanceof Error ? lastError : new Error("找不到 logind 会话");
+    }
+
+    /**
+     * 经 logind 写 backlight。正好切过 VT 时前台会话和查询结果可能错开，
+     * logind 会拒绝并重新查一次。
+     */
+    private async setLogindBrightness(backlight: NonNullable<DisplayRecord["backlight"]>, raw: number): Promise<void> {
+        for (let attempt = 0; ; attempt++) {
+            const session = await this.getSession();
+            try {
+                await session.iface.call("SetBrightness", "ssu", "backlight", backlight.device, raw).await();
+                return;
+            } catch (error) {
+                if (attempt > 0 || !String(error).includes("NotYourDevice")) throw error;
+                console.warn(`[brightness] 会话 ${session.id} 不是前台会话，重新查找后重试`);
+            }
+        }
     }
 
     private ensureWatcher(record: DisplayRecord): void {
