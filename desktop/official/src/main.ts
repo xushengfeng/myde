@@ -1979,6 +1979,17 @@ class ViewData {
         const root = rootWindow(winid);
         const screen = this.win2Screen.get(root);
         if (!screen) return;
+        // 提升后会压住上层窗口太多时不提升，形成隐式置顶
+        const rootIndex = screen.winIds.indexOf(root);
+        const rootRect = rootIndex >= 0 ? windowLocalRect(root) : undefined;
+        if (rootRect) {
+            for (let i = rootIndex + 1; i < screen.winIds.length; i++) {
+                const other = windowLocalRect(screen.winIds[i]);
+                if (!other) continue;
+                const covered = intersectionArea(rootRect, other) / Math.max(1, other.w * other.h);
+                if (covered > OVERLAP_LIMIT) return;
+            }
+        }
         const raise = (id: MWinId) => {
             const index = screen.winIds.indexOf(id);
             if (index >= 0) {
@@ -2829,21 +2840,20 @@ function beginWindowResize(
         width = Math.min(width, stageWidth - left);
         height = Math.min(height, stageHeight - top);
 
-        // 缩放不能压到同屏其它窗口；压到就停在最后一个合法尺寸
+        // 缩放时先让同屏其它窗口躲开；躲不开才停在最后一个合法尺寸
         const overlapFrame = wayland ? clientWindowFrames.get(windowId) : undefined;
         const outerHeight = height + (overlapFrame ? decoratedTitlebarPx(overlapFrame) : 0);
-        if (
-            !windowParents.has(windowId) &&
-            rectOverlapsTooMuch(viewData.screenOf(windowId), windowId, {
-                x: left,
-                y: top,
-                w: width,
-                h: outerHeight,
-            })
-        ) {
-            resizeBlockedByOverlap = true;
-            desired = { left, top, width, height };
-            return;
+        if (!windowParents.has(windowId)) {
+            const screen = viewData.screenOf(windowId);
+            if (screen) {
+                const moves = planDodges(screen, windowId, { x: left, y: top, w: width, h: outerHeight });
+                if (!moves) {
+                    resizeBlockedByOverlap = true;
+                    desired = { left, top, width, height };
+                    return;
+                }
+                applyDodges(moves);
+            }
         }
         resizeBlockedByOverlap = false;
 
@@ -3079,7 +3089,7 @@ function setWindowPosition(winid: MWinId, left: number, top: number): void {
 }
 
 /** 覆盖阈值：交集面积 ÷ 较小窗口面积 */
-const OVERLAP_LIMIT = 0.12;
+const OVERLAP_LIMIT = 0.8;
 
 type ScreenRect = { x: number; y: number; w: number; h: number };
 
@@ -3089,10 +3099,14 @@ function windowLocalRect(winid: MWinId): ScreenRect | undefined {
     return { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight };
 }
 
-function overlapRatio(a: ScreenRect, b: ScreenRect): number {
+function intersectionArea(a: ScreenRect, b: ScreenRect): number {
     const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
     const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
-    const inter = ix * iy;
+    return ix * iy;
+}
+
+function overlapRatio(a: ScreenRect, b: ScreenRect): number {
+    const inter = intersectionArea(a, b);
     if (inter <= 0) return 0;
     return inter / Math.max(1, Math.min(a.w * a.h, b.w * b.h));
 }
@@ -3106,6 +3120,102 @@ function rectOverlapsTooMuch(screen: ViewScreen | undefined, winid: MWinId, rect
         if (r && overlapRatio(rect, r) > OVERLAP_LIMIT) return true;
     }
     return false;
+}
+
+type DodgeMove = { id: MWinId; x: number; y: number };
+
+/**
+ * 规划同屏其它窗口的平移，让它们不被 movingRect 压住。
+ * 只改位置不改尺寸；有窗口挪不开（被固定或屏内没有空位）时整次规划失败，返回 undefined。
+ */
+function planDodges(screen: ViewScreen, moving: MWinId, movingRect: ScreenRect): DodgeMove[] | undefined {
+    const stageWidth = windowEl.el.offsetWidth;
+    const stageHeight = windowEl.el.offsetHeight;
+    const positions = new Map<MWinId, ScreenRect>();
+    for (const id of screen.winIds) {
+        const rect = windowLocalRect(id);
+        if (rect) positions.set(id, rect);
+    }
+    // moving 自己的矩形由 movingRect 代表，不参与“躲到哪”的碰撞检查
+    positions.delete(moving);
+
+    const moves: DodgeMove[] = [];
+    for (const id of screen.winIds) {
+        if (id === moving) continue;
+        const current = positions.get(id);
+        if (!current) continue;
+        // 只有对方被压住超过阈值才躲；小窗口压在大窗口上不推大窗口
+        const covered = intersectionArea(movingRect, current) / Math.max(1, current.w * current.h);
+        if (covered <= OVERLAP_LIMIT) continue;
+        const info = server.server.windows.get(id);
+        if (info?.states.maximized || info?.states.fullscreen) return undefined;
+        const spot = findDodgeSpot(movingRect, current, positions, id, stageWidth, stageHeight);
+        if (!spot) return undefined;
+        positions.set(id, spot);
+        moves.push({ id, x: spot.x, y: spot.y });
+    }
+    return moves;
+}
+
+function findDodgeSpot(
+    moving: ScreenRect,
+    self: ScreenRect,
+    positions: Map<MWinId, ScreenRect>,
+    selfId: MWinId,
+    stageWidth: number,
+    stageHeight: number,
+): ScreenRect | undefined {
+    const clampX = (x: number) => Math.min(Math.max(0, Math.round(x)), Math.max(0, stageWidth - self.w));
+    const clampY = (y: number) => Math.min(Math.max(0, Math.round(y)), Math.max(0, stageHeight - self.h));
+    const candidates: ScreenRect[] = [
+        { x: clampX(moving.x - self.w), y: self.y, w: self.w, h: self.h },
+        { x: clampX(moving.x + moving.w), y: self.y, w: self.w, h: self.h },
+        { x: self.x, y: clampY(moving.y - self.h), w: self.w, h: self.h },
+        { x: self.x, y: clampY(moving.y + moving.h), w: self.w, h: self.h },
+    ];
+    const ok = (rect: ScreenRect) => {
+        if (overlapRatio(rect, moving) > 0) return false;
+        for (const [id, other] of positions) {
+            if (id === selfId) continue;
+            if (overlapRatio(rect, other) > OVERLAP_LIMIT) return false;
+        }
+        return true;
+    };
+    let best: ScreenRect | undefined;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const candidate of candidates) {
+        if (!ok(candidate)) continue;
+        const distance = (candidate.x - self.x) ** 2 + (candidate.y - self.y) ** 2;
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = candidate;
+        }
+    }
+    if (best) return best;
+
+    // 四个方向都被挡住时，再按网格找最近的空位
+    const step = 48;
+    for (let y = 0; y <= stageHeight - self.h; y += step) {
+        for (let x = 0; x <= stageWidth - self.w; x += step) {
+            const candidate = { x, y, w: self.w, h: self.h };
+            if (!ok(candidate)) continue;
+            const distance = (candidate.x - self.x) ** 2 + (candidate.y - self.y) ** 2;
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = candidate;
+            }
+        }
+    }
+    return best;
+}
+
+function applyDodges(moves: DodgeMove[]) {
+    for (const move of moves) {
+        const current = windowLocalRect(move.id);
+        if (!current) continue;
+        setWindowPosition(move.id, move.x, move.y);
+        moveChildWindows(move.id, move.x - current.x, move.y - current.y);
+    }
 }
 
 /**
@@ -3371,11 +3481,13 @@ function beginClientFrameMove(frame: ClientWindowFrame, handle: WinHandle, e: Po
         const height = frame.el.el.offsetHeight;
         const left = Math.min(Math.max(0, Math.round(ev.clientX - startX + origLeft)), Math.max(0, stageWidth - width));
         const top = Math.min(Math.max(0, Math.round(ev.clientY - startY + origTop)), Math.max(0, stageHeight - height));
-        if (
-            !windowParents.has(handle) &&
-            rectOverlapsTooMuch(viewData.screenOf(handle), handle, { x: left, y: top, w: width, h: height })
-        ) {
-            return;
+        if (!windowParents.has(handle)) {
+            const screen = viewData.screenOf(handle);
+            if (screen) {
+                const moves = planDodges(screen, handle, { x: left, y: top, w: width, h: height });
+                if (!moves) return;
+                applyDodges(moves);
+            }
         }
         frame.el.style({ left: `${left}px`, top: `${top}px` });
         moveChildWindows(handle, left - lastLeft, top - lastTop);
@@ -3543,6 +3655,10 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
     const el = view().data({ "client-frame": "", "client-window": info.handle }).style({
         position: "absolute",
         boxSizing: "border-box",
+        // 建立一个本窗口的层叠上下文：标题栏/热区的 z-index 只在本窗口内生效，
+        // 不能盖到 DOM 顺序更靠上的其它窗口；用 z-index 而不是 isolation，
+        // 避免窗口成为 backdrop root 后标题栏的 backdrop-filter 看不到后面的桌面。
+        zIndex: "0",
     });
     el.add([header, content]);
 
@@ -5720,11 +5836,13 @@ server.server.on("window.startMove", (wid) => {
             Math.max(0, Math.round(mousePos.y - startY + origTop)),
             Math.max(0, stageHeight - height),
         );
-        if (
-            !windowParents.has(wid) &&
-            rectOverlapsTooMuch(viewData.screenOf(wid), wid, { x: newLeft, y: newTop, w: width, h: height })
-        ) {
-            return;
+        if (!windowParents.has(wid)) {
+            const screen = viewData.screenOf(wid);
+            if (screen) {
+                const moves = planDodges(screen, wid, { x: newLeft, y: newTop, w: width, h: height });
+                if (!moves) return;
+                applyDodges(moves);
+            }
         }
         setClientFramePosition(movingFrame, newLeft, newTop);
         moveChildWindows(wid, newLeft - lastLeft, newTop - lastTop);
