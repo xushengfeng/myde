@@ -171,8 +171,12 @@ const frameSnapshot = () =>
                 fullscreen: !!document.querySelector("[data-client-frame][data-fullscreen]"),
                 screenId: frame ? frame.closest("[data-view-id]")?.getAttribute("data-view-id") ?? null : null,
                 closeVisible: (() => {
-                    const btn = document.querySelector("[data-desktop-ui='launch-panel'] [data-desktop-ui='window-control']");
-                    return !!btn && getComputedStyle(btn).display !== "none";
+                    const btn = document.querySelector(
+                        "[data-desktop-ui='launch-panel'] [data-desktop-ui='window-control']",
+                    );
+                    if (!btn) return false;
+                    const style = getComputedStyle(btn);
+                    return style.display !== "none" && Number(style.opacity || "1") > 0.5;
                 })(),
             };
         })()
@@ -365,7 +369,7 @@ describe("official desktop window open animation", () => {
             if (openCase.expectCloseAt !== undefined) {
                 await sleep(Math.max(0, launchEpoch + openCase.expectCloseAt - Date.now()));
                 const mid = await frameSnapshot();
-                expect(mid.closeVisible, "空占位面板落地后应立刻可以取消").toBe(true);
+                expect(mid.closeVisible, "空占位面板落地后应可以取消").toBe(true);
                 expect(mid.panels, "还没有窗口时面板应保留").toBe(1);
                 expect(mid.frames, "还没有窗口时不应有客户端窗口").toBe(0);
             }
@@ -503,6 +507,90 @@ describe("official desktop window open animation", () => {
             }
         });
     }
+
+    type CloseSample = {
+        panel: [number, number];
+        btn: { display: string; opacity: number; rect: [number, number, number, number] };
+        icon: [number, number, number, number] | null;
+    };
+
+    const closeSampleExpr = `
+    (() => {
+        const panel = document.querySelector("[data-desktop-ui='launch-panel']");
+        if (!panel) return null;
+        const p = panel.getBoundingClientRect();
+        const btn = panel.querySelector("[data-desktop-ui='window-control']");
+        const style = btn ? getComputedStyle(btn) : null;
+        const br = btn ? btn.getBoundingClientRect() : null;
+        const iconBox = panel.firstElementChild?.firstElementChild;
+        const ir = iconBox ? iconBox.getBoundingClientRect() : null;
+        return {
+            panel: [p.width, p.height],
+            btn: br && style
+                ? { display: style.display, opacity: Number(style.opacity || "1"), rect: [br.left, br.top, br.width, br.height] }
+                : null,
+            icon: ir ? [ir.left, ir.top, ir.width, ir.height] : null,
+        };
+    })()
+`;
+
+    function overlapArea(a: [number, number, number, number], b: [number, number, number, number]): number {
+        const width = Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]));
+        const height = Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
+        return width * height;
+    }
+
+    // 进程可能在面板还小的时候就退出（单实例交接、启动失败）。这时不能立刻显示取消按钮，
+    // 否则会压住正在缩放的图标；要等面板落地成空槽后再透明+模糊淡入。
+    run("空面板的取消按钮不在小图标阶段出现，落地后淡入", { timeout: 25000 }, async () => {
+        expect(await screenCount(), "每个用例开始前应该回到初始虚拟屏数量").toBe(2);
+        await desktop.evaluate(`
+            __mydeTest.launchApp({
+                exec: ${JSON.stringify(binary)},
+                name: "Window Open Cancel",
+                appid: ${JSON.stringify(APP_ID)},
+                env: ${JSON.stringify({
+                    APP_ID,
+                    CREATE_AT: "never",
+                    BUFFER_AT: "never",
+                    // 启动进程很早就退出，触发提前取消；窗口永远不建
+                    LIFETIME_MS: "300",
+                })},
+            })
+        `);
+
+        const samples: CloseSample[] = [];
+        for (let i = 0; i < 30; i++) {
+            await sleep(45);
+            const sample = await desktop.evaluate<CloseSample | null>(closeSampleExpr);
+            if (sample?.btn) samples.push(sample as CloseSample);
+        }
+
+        // 面板从 64px 长到 800×600，先确认采到了“还很小”的阶段
+        expect(
+            samples.some((s) => s.panel[0] < 200),
+            "没有采到面板还小的阶段",
+        ).toBe(true);
+        for (const sample of samples) {
+            if (sample.panel[0] >= 200) continue;
+            expect(sample.btn.display, "面板还小时不应显示取消按钮").toBe("none");
+        }
+
+        const visible = samples.filter((s) => s.btn.display !== "none" && s.btn.opacity > 0.05);
+        expect(visible.length, "空面板落地后应露出取消按钮").toBeGreaterThan(0);
+        for (const sample of visible) {
+            expect(sample.panel[0], "取消按钮只在落地成空槽后出现").toBeGreaterThan(200);
+            if (sample.icon) {
+                expect(overlapArea(sample.btn.rect, sample.icon), "取消按钮不能压住启动图标").toBe(0);
+            }
+        }
+        // 透明+模糊淡入：至少有一帧是半透明，不是 display 突然出现
+        expect(
+            visible.some((s) => s.btn.opacity < 0.95),
+            "取消按钮应淡入而不是立刻出现",
+        ).toBe(true);
+        expect(visible[visible.length - 1]?.btn.opacity, "取消按钮最终应完全显示").toBeGreaterThan(0.95);
+    });
 
     // 输出缩放重新应用时，还没拿到客户端几何（首帧之前 rect 是 0×0）的窗口
     // 不能按 0 重新摆外框，否则会缩成 1×1，等下一次尺寸上报才恢复。

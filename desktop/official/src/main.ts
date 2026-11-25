@@ -4428,8 +4428,11 @@ type PendingLaunch = {
     claiming: boolean;
     closing: boolean;
     arrivedAt: number;
+    /** 取消按钮是否已经开始淡入 */
+    cancelShown: boolean;
     flightGear?: AnimationGear<{ p: number }>;
     sizeGear?: AnimationGear<{ width: number; height: number }>;
+    cancelGear?: AnimationGear<{ p: number }>;
 };
 
 const pendingLaunches = new Set<PendingLaunch>();
@@ -4449,6 +4452,8 @@ const LAUNCH_PRESS_OUT = { duration: 180, map: timingFunction.easeOut };
 /** 面板飞入按真实屏幕的终点走直线；快进慢停，不跟虚拟屏自己的滑动曲线 */
 const LAUNCH_FLIGHT = { duration: 240, map: timingFunction.cubicBezier(0.16, 1, 0.3, 1) };
 const LAUNCH_REPLACE_FADE = { duration: 180, map: timingFunction.easeInOut };
+/** 空槽取消按钮：不要突然盖在图标上，落地后透明+模糊淡入 */
+const LAUNCH_CANCEL_FADE = { duration: 220, map: timingFunction.easeOut };
 const CLOSE_FADE = { duration: 220, map: timingFunction.easeOut };
 
 let launchLayer: ElType<HTMLElement> | undefined;
@@ -4700,6 +4705,7 @@ function launchApp(req: AppLaunchRequest) {
         claiming: false,
         closing: false,
         arrivedAt: Date.now(),
+        cancelShown: false,
     };
     pendingLaunches.add(state);
     ensureLaunchLayer().add(intro.panel);
@@ -4958,12 +4964,35 @@ function embedLaunchPanel(state: PendingLaunch) {
 
 /**
  * 面板已经落到屏里但还是空占位（没有窗口）：露出关闭按钮，随时可以取消这次启动。
- * 面板只是占位槽，窗口一建好就会把它替换掉，所以不必等超时。
+ * 进程可能很早就退出（单实例交接、启动失败），但按钮不能在小图标旁边立刻出现，
+ * 否则会压住启动图标；先记下来，等面板落地成全尺寸空槽后再透明+模糊淡入。
  */
 function showLaunchCancel(state: PendingLaunch) {
     if (!pendingLaunches.has(state) || state.replacing || state.closing) return;
+    if (state.phase !== "embedded") return;
+    revealLaunchCancel(state);
+}
+
+function revealLaunchCancel(state: PendingLaunch) {
+    if (!pendingLaunches.has(state) || state.cancelShown || state.replacing || state.closing) return;
+    state.cancelShown = true;
     state.panel.style({ pointerEvents: "auto" });
-    state.closeBtn.style({ display: "flex" });
+    state.closeBtn.style({
+        display: "flex",
+        opacity: "0",
+        filter: "blur(4px)",
+        pointerEvents: "none",
+    });
+    const gear = new AnimationGear({ p: 0 }, { transition: LAUNCH_CANCEL_FADE });
+    state.cancelGear = gear;
+    gear.setUpdateCallback(({ p }) => {
+        if (!pendingLaunches.has(state) || state.replacing || state.closing) return;
+        state.closeBtn.style({ opacity: `${p}`, filter: p >= 1 ? "none" : `blur(${(1 - p) * 4}px)` });
+    });
+    gear.moveTo({ p: 1 }, LAUNCH_CANCEL_FADE, () => {
+        if (!pendingLaunches.has(state) || state.replacing || state.closing) return;
+        state.closeBtn.style({ pointerEvents: "auto", filter: "none" });
+    });
 }
 
 /** 面板已经嵌入并停稳后，把真实窗口放进面板内部淡入，完成后再移回虚拟屏 */
@@ -4971,7 +5000,7 @@ function beginLaunchReplacement(state: PendingLaunch) {
     const frame = state.frame;
     if (!frame || !pendingLaunches.has(state) || state.replacing || state.closing) return;
     state.replacing = true;
-    state.closeBtn.style({ display: "none" });
+    state.closeBtn.style({ display: "none", pointerEvents: "none" });
     state.panel.style({ pointerEvents: "none" });
     // 窗口已经挂在面板内部；面板 overflow 裁掉它，动画不会漏到外面
     mountLaunchFrameInPanel(state);
