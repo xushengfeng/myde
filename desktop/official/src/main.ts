@@ -1999,20 +1999,22 @@ class ViewData {
         else void ime?.focus(winid);
     }
 
-    /** 把窗口所在栈提到屏内最上层；子窗口跟随父窗口一起提升 */
-    private raiseWindow(winid: MWinId) {
+    /**
+     * 把窗口所在栈提到屏内最上层；子窗口跟随父窗口一起提升。
+     * force 跳过隐式置顶检查，用于最大化这类显式动作。
+     */
+    private raiseWindow(winid: MWinId, force = false) {
         const root = rootWindow(winid);
         const screen = this.win2Screen.get(root);
         if (!screen) return;
         // 提升后会压住上层窗口太多时不提升，形成隐式置顶
         const rootIndex = screen.winIds.indexOf(root);
         const rootRect = rootIndex >= 0 ? windowLocalRect(root) : undefined;
-        if (rootRect) {
+        if (!force && rootRect) {
             for (let i = rootIndex + 1; i < screen.winIds.length; i++) {
                 const other = windowLocalRect(screen.winIds[i]);
                 if (!other) continue;
-                const covered = intersectionArea(rootRect, other) / Math.max(1, other.w * other.h);
-                if (covered > OVERLAP_LIMIT) return;
+                if (coveredRatio(rootRect, other) > OVERLAP_LIMIT) return;
             }
         }
         const raise = (id: MWinId) => {
@@ -2031,6 +2033,11 @@ class ViewData {
             }
         };
         raise(root);
+    }
+
+    /** 显式提到最上层，不受隐式置顶限制 */
+    raiseWin(winid: MWinId) {
+        this.raiseWindow(winid, true);
     }
 
     /** 沿模态子窗口链往下找：焦点落在最内层的模态对话框上 */
@@ -3139,13 +3146,18 @@ function overlapRatio(a: ScreenRect, b: ScreenRect): number {
     return inter / Math.max(1, Math.min(a.w * a.h, b.w * b.h));
 }
 
-/** 这块矩形放进 screen 后，是否和屏里其它顶层窗口重叠过多 */
+/** upper 压住 lower 的比例：交集 ÷ lower 面积；只看上层对下层的遮挡 */
+function coveredRatio(upper: ScreenRect, lower: ScreenRect): number {
+    return intersectionArea(upper, lower) / Math.max(1, lower.w * lower.h);
+}
+
+/** 这块矩形（会放到最上层）放进 screen 后，是否把其它窗口压住过多 */
 function rectOverlapsTooMuch(screen: ViewScreen | undefined, winid: MWinId, rect: ScreenRect): boolean {
     if (!screen) return false;
     for (const other of screen.winIds) {
         if (other === winid) continue;
         const r = windowLocalRect(other);
-        if (r && overlapRatio(rect, r) > OVERLAP_LIMIT) return true;
+        if (r && coveredRatio(rect, r) > OVERLAP_LIMIT) return true;
     }
     return false;
 }
@@ -3166,16 +3178,18 @@ function planDodges(screen: ViewScreen, moving: MWinId, movingRect: ScreenRect):
     positions.delete(moving);
 
     const moves: DodgeMove[] = [];
+    const movingIndex = screen.winIds.indexOf(moving);
     for (const id of screen.winIds) {
         if (id === moving) continue;
         const current = positions.get(id);
         if (!current) continue;
-        // 只有对方被压住超过阈值才躲；小窗口压在大窗口上不推大窗口
-        const covered = intersectionArea(movingRect, current) / Math.max(1, current.w * current.h);
+        // 移动窗口在对方下面时不推对方；覆盖只看上层压住下层
+        if (movingIndex >= 0 && movingIndex < screen.winIds.indexOf(id)) continue;
+        const covered = coveredRatio(movingRect, current);
         if (covered <= OVERLAP_LIMIT) continue;
         const info = server.server.windows.get(id);
         if (info?.states.maximized || info?.states.fullscreen) return undefined;
-        const spot = findDodgeSpot(movingRect, current, positions, id);
+        const spot = findDodgeSpot(screen, movingRect, current, positions, id);
         if (!spot) return undefined;
         positions.set(id, spot);
         moves.push({ id, x: spot.x, y: spot.y });
@@ -3184,6 +3198,7 @@ function planDodges(screen: ViewScreen, moving: MWinId, movingRect: ScreenRect):
 }
 
 function findDodgeSpot(
+    screen: ViewScreen,
     moving: ScreenRect,
     self: ScreenRect,
     positions: Map<MWinId, ScreenRect>,
@@ -3202,11 +3217,18 @@ function findDodgeSpot(
         { x: self.x, y: clampY(moving.y - self.h), w: self.w, h: self.h },
         { x: self.x, y: clampY(moving.y + moving.h), w: self.w, h: self.h },
     ];
+    const selfIndex = screen.winIds.indexOf(selfId);
     const ok = (rect: ScreenRect) => {
         if (overlapRatio(rect, moving) > 0) return false;
         for (const [id, other] of positions) {
             if (id === selfId) continue;
-            if (overlapRatio(rect, other) > OVERLAP_LIMIT) return false;
+            // 按层级判断：上层压住下层太多才算冲突
+            const otherIndex = screen.winIds.indexOf(id);
+            const bad =
+                selfIndex > otherIndex
+                    ? coveredRatio(rect, other) > OVERLAP_LIMIT
+                    : coveredRatio(other, rect) > OVERLAP_LIMIT;
+            if (bad) return false;
         }
         return true;
     };
@@ -3257,8 +3279,7 @@ function maximizeCoversOthers(winid: MWinId): boolean {
         if (other === winid) continue;
         const rect = windowLocalRect(other);
         if (!rect) continue;
-        const covered = intersectionArea(maxRect, rect) / Math.max(1, rect.w * rect.h);
-        if (covered > OVERLAP_LIMIT) return true;
+        if (coveredRatio(maxRect, rect) > OVERLAP_LIMIT) return true;
     }
     return false;
 }
@@ -6008,7 +6029,8 @@ server.server.on("window.changed", (info) => {
         if (info.states.fullscreen) return;
         if (!frame) return;
         if (info.states.maximized) {
-            // 最大化会压住其它窗口时才挪到新屏
+            // 最大化先改层级，再按覆盖决定是否换屏
+            viewData.raiseWin(info.handle);
             if (maximizeCoversOthers(info.handle)) viewData.moveWindowToNewScreen(info.handle);
             const available = availableStageSize();
             const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
@@ -10081,7 +10103,8 @@ function toggleMaximizeWindow(winid = viewData.focusHandle) {
 
     syncClientFrameMaximized(frame, maximized);
     if (maximized) {
-        // 桌面命令不会回 window.changed，这里直接处理「最大化会压住其它窗口就先挪到新屏」
+        // 桌面命令不会回 window.changed；最大化先改层级，再按覆盖决定是否换屏
+        viewData.raiseWin(winid);
         if (maximizeCoversOthers(winid)) viewData.moveWindowToNewScreen(winid);
         const available = availableStageSize();
         const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
