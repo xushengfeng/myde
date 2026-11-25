@@ -132,7 +132,9 @@ export async function launchMock(desktop: DesktopRunner, spec: MockWindowSpec): 
 
 /** 关掉所有窗口、取消手势、退出预览、收起搜索并回到空桌面 */
 export async function resetDesktop(desktop: DesktopRunner) {
-    await desktop.evaluate("__mydeTest.touchpadDetach(); __mydeTest.resetView(); __mydeTest.setReorderDelay(3000)");
+    await desktop.evaluate(
+        "__mydeTest.touchpadDetach(); __mydeTest.setAnimationSpeed(6); __mydeTest.resetView(); __mydeTest.setReorderDelay(3000)",
+    );
     await waitState(
         desktop,
         (value) =>

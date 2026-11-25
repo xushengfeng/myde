@@ -8,11 +8,13 @@ import {
     currentScreen,
     drag,
     elementBox,
+    forceCloseWindow,
     launchMock,
     mockAppPath,
     resetDesktop,
     screenById,
     state,
+    waitCloseRequest,
     waitState,
     windowByAppid,
 } from "./helpers";
@@ -183,7 +185,11 @@ describe("全局预览", () => {
         const button = await elementBox(desktop, `[data-view-id='${win.screen}'] [data-desktop-ui='window-close']`);
         expect(button, "预览里应该有窗口关闭按钮").toBeTruthy();
         if (!button) return;
+        await desktop.evaluate("__mydeTest.clearCloseRequests()");
         await desktop.click(button.x + button.width / 2, button.y + button.height / 2);
+        await waitCloseRequest(desktop, win.handle);
+        // 客户端退出后的 peer end 在测试环境里可能延迟，先确认请求再回收桌面侧窗口
+        await forceCloseWindow(desktop, win.handle);
 
         const closed = await waitState(desktop, (value) => !value.windows.some((item) => item.handle === win.handle));
         expect(closed.overview).toBe(true);

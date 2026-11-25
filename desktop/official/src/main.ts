@@ -1,5 +1,5 @@
 import { addClass, addStyle, button, type ElType, ele, image, input, pack, txt, view } from "dkh-ui";
-import { AnimationGear, timingFunction } from "myde-ui";
+import { type AnimationGear, timingFunction } from "myde-ui";
 import type {
     ConnectConnection,
     DesktopIconConfig,
@@ -17,6 +17,7 @@ import type { powerDevice } from "../../../src/sys_api/power";
 import { normalizePointerSpeed } from "../../../src/utils/pointer_accel";
 import { TouchpadInput } from "../../../src/utils/touchpad";
 import type { DragStartInfo, GestureCommand, WindowInfo } from "../../../src/wayland";
+import { createAnimationGear, setAnimationSpeed } from "./animation_time";
 import { type ClipboardItem, type ClipboardStation, initClipboard } from "./clipboard";
 import { clipboardPreview, clipboardTime, createClipboardStationTool } from "./clipboard_tool";
 import { Cursor } from "./cursor";
@@ -274,7 +275,7 @@ class Tools {
                 .bindGet(() => show);
             return el;
         })().sv("hide");
-        const gear = new AnimationGear<{ show: number }>(
+        const gear = createAnimationGear<{ show: number }>(
             { show: 0 },
             { transition: { duration: 280, map: (x) => timingFunction.easeOut(x) } },
         );
@@ -313,7 +314,7 @@ class Tools {
                 display: "none",
             })
             .addInto(this.tipEl);
-        const toastGear = new AnimationGear<{ show: number }>(
+        const toastGear = createAnimationGear<{ show: number }>(
             { show: 0 },
             { transition: { duration: 280, map: (x) => timingFunction.easeOut(x) } },
         );
@@ -652,7 +653,7 @@ class ViewData {
                 background: "#fff",
             })
             .addInto(windowEl);
-        this.focusPanelGear = new AnimationGear(
+        this.focusPanelGear = createAnimationGear(
             { opacity: 0 },
             { transition: { duration: FOCUS_PANEL_FADE, map: timingFunction.easeOut } },
         );
@@ -660,7 +661,7 @@ class ViewData {
             this.focusPanelEl.style({ opacity: `${value.opacity}` });
         });
         // 和虚拟屏吸附用同一条过渡，焦点下标与窗口布局同步推进
-        this.focusSnapGear = new AnimationGear({ pos: 0 }, { transition: SCREEN_TRANSITION });
+        this.focusSnapGear = createAnimationGear({ pos: 0 }, { transition: SCREEN_TRANSITION });
         this.focusSnapGear.setUpdateCallback((value) => {
             this.applyFocusPanelAtPos(value.pos);
         });
@@ -742,7 +743,7 @@ class ViewData {
             if (this.overview) this.selectFromOverview(id);
         });
         const start = { x: this.stageWidth, y: 0, scale: 1, opacity: 1, blur: 0 };
-        const gear = new AnimationGear<ViewTransform>(start, { transition: SCREEN_TRANSITION });
+        const gear = createAnimationGear<ViewTransform>(start, { transition: SCREEN_TRANSITION });
         const screen: ViewScreen = {
             id,
             winIds: [],
@@ -4888,7 +4889,7 @@ function startLaunchPress(state: PendingLaunch) {
         return;
     }
     // 图标先缩小淡出；完全透明时再创建白色面板，让面板从同样的缩小状态淡回来
-    const gear = new AnimationGear({ p: 0 }, { transition: LAUNCH_PRESS_IN });
+    const gear = createAnimationGear({ p: 0 }, { transition: LAUNCH_PRESS_IN });
     gear.setUpdateCallback(({ p }) => {
         intro.style({ transform: `scale(${1 - 0.14 * p})`, opacity: `${1 - p}` });
     });
@@ -4901,7 +4902,7 @@ function startLaunchPress(state: PendingLaunch) {
         ensureLaunchLayer().add(state.panel);
         setLaunchPanelRect(state, state.startRect);
         state.panel.style({ opacity: "0", transform: "scale(0.86)" });
-        const back = new AnimationGear({ p: 0 }, { transition: LAUNCH_PRESS_OUT });
+        const back = createAnimationGear({ p: 0 }, { transition: LAUNCH_PRESS_OUT });
         back.setUpdateCallback(({ p }) => {
             state.panel.style({ opacity: `${p}`, transform: `scale(${0.86 + 0.14 * p})` });
         });
@@ -4978,13 +4979,13 @@ function startLaunchFlight(state: PendingLaunch) {
     const targetViewport = screenRectOf(state.flightTarget, targetLocal);
 
     // 位置按中心直线走；尺寸单独用 gear。窗口尺寸中途变化时只重新瞄准尺寸，不改变中心轨迹。
-    const gear = new AnimationGear({ p: 0 }, { transition: LAUNCH_FLIGHT });
+    const gear = createAnimationGear({ p: 0 }, { transition: LAUNCH_FLIGHT });
     state.flightGear = gear;
     gear.setUpdateCallback(({ p }) => {
         state.flightProgress = p;
         renderLaunchGeometry(state);
     });
-    const sizeGear = new AnimationGear(
+    const sizeGear = createAnimationGear(
         { width: state.startRect.width, height: state.startRect.height },
         { transition: LAUNCH_FLIGHT },
     );
@@ -5130,7 +5131,7 @@ function revealLaunchCancel(state: PendingLaunch) {
         filter: "blur(4px)",
         pointerEvents: "none",
     });
-    const gear = new AnimationGear({ p: 0 }, { transition: LAUNCH_CANCEL_FADE });
+    const gear = createAnimationGear({ p: 0 }, { transition: LAUNCH_CANCEL_FADE });
     state.cancelGear = gear;
     gear.setUpdateCallback(({ p }) => {
         if (!pendingLaunches.has(state) || state.replacing || state.closing) return;
@@ -5153,7 +5154,7 @@ function beginLaunchReplacement(state: PendingLaunch) {
     mountLaunchFrameInPanel(state);
     frame.el.style({ opacity: "0", pointerEvents: "none" });
 
-    const gear = new AnimationGear({ fade: 0 }, { transition: LAUNCH_REPLACE_FADE });
+    const gear = createAnimationGear({ fade: 0 }, { transition: LAUNCH_REPLACE_FADE });
     gear.setUpdateCallback(({ fade }) => {
         if (!pendingLaunches.has(state)) return;
         state.cover.style({ opacity: `${1 - fade}` });
@@ -5344,7 +5345,7 @@ function forceQuitLaunch(state: PendingLaunch) {
         });
     }
 
-    const gear = new AnimationGear({ opacity: 1 }, { transition: CLOSE_FADE });
+    const gear = createAnimationGear({ opacity: 1 }, { transition: CLOSE_FADE });
     gear.setUpdateCallback(({ opacity }) => state.panel.style({ opacity: `${opacity}` }));
     gear.moveTo({ opacity: 0 }, CLOSE_FADE, () => {
         if (!pendingLaunches.has(state)) return;
@@ -6072,7 +6073,7 @@ function closeClientFrameWithFade(wid: WinHandle, frame: ClientWindowFrame) {
         frame.el.el.remove();
         return;
     }
-    const gear = new AnimationGear({ opacity: from }, { transition: CLOSE_FADE });
+    const gear = createAnimationGear({ opacity: from }, { transition: CLOSE_FADE });
     gear.setUpdateCallback(({ opacity }) => {
         frame.el.style({ opacity: `${opacity}`, pointerEvents: "none" });
     });
@@ -6491,7 +6492,7 @@ function xPosition(x: number, y: number) {
     };
 }
 
-const lockScreenAnimate = new AnimationGear({
+const lockScreenAnimate = createAnimationGear({
     viewShow: 0,
     passwordShow: 0,
 });
@@ -7152,7 +7153,7 @@ async function confirm(text: string) {
                     }),
             ]),
     );
-    const gear = new AnimationGear({ v: 0 }, { transition: { duration: 200, map: timingFunction.easeOut } });
+    const gear = createAnimationGear({ v: 0 }, { transition: { duration: 200, map: timingFunction.easeOut } });
     gear.addState("show", { v: 1 }, ["hide"]);
     gear.addState("hide", { v: 0 }, ["show"]);
     gear.moveTo("hide", 0);
@@ -8447,10 +8448,10 @@ function createLauncher(): LauncherController {
     shell.add([inputPanel, resultsPanel]);
     shell.on("click", () => field.el.focus());
 
-    const gear = new AnimationGear({ value: 0 }, { transition: LAUNCHER_TRANSITION });
+    const gear = createAnimationGear({ value: 0 }, { transition: LAUNCHER_TRANSITION });
     // 直连和 N-H-T 线用各自的动画器：直连的 progress 是 0..1，线的 level 是 -1..1，
     // 共用一个值会出现“t→n 完成后最后一帧把 -1 写回 1”的问题。
-    const directGear = new AnimationGear({ value: 0 }, { transition: LAUNCHER_TRANSITION });
+    const directGear = createAnimationGear({ value: 0 }, { transition: LAUNCHER_TRANSITION });
     const blurInput = () => {
         if (document.activeElement instanceof HTMLElement && document.activeElement.closest("[data-launcher-input]")) {
             document.activeElement.blur();
@@ -9159,7 +9160,7 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
             autoHide.moveTo("hide");
         })
         .addInto(tipEl);
-    const autoHide = new AnimationGear({ v: 0 }, { transition: { duration: 400 } });
+    const autoHide = createAnimationGear({ v: 0 }, { transition: { duration: 400 } });
     autoHide.setUpdateCallback((v) => {
         if (v.v === 1) {
             showTip({ state: "hide" });
@@ -10374,7 +10375,7 @@ function syncFullscreenWindowBoxes() {
     }
 }
 
-const fullscreenChromeGear = new AnimationGear(
+const fullscreenChromeGear = createAnimationGear(
     { mix: 0 },
     { transition: { duration: 260, map: timingFunction.easeOut } },
 );
@@ -11502,6 +11503,7 @@ if ((globalThis as { process?: { env?: Record<string, string | undefined> } }).p
         setReorderDelay: (ms: number) => {
             reorderDelay = normalizeReorderDelay(ms);
         },
+        setAnimationSpeed: (value: number) => setAnimationSpeed(value),
         closeRequests: () => [...closeRequests],
         clearCloseRequests: () => {
             closeRequests.length = 0;
