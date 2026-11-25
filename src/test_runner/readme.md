@@ -65,12 +65,46 @@ try {
 
 - `desktop`：相对项目根的桌面目录，或绝对路径；`:test` 是内置测试桌面。
 - 桌面需要先构建：`desktop/official` 读 `dist/index.js`，先 `pnpm build:desktop`；其他桌面按各自 README 构建。
-- 接口：`evaluate`、`waitFor`、`screenshot`、`move`/`click`/`mouse`、`key`/`text`、`logs`、`output`、`send`。
+- `showWindow`：在私有 headless 显示里真正显示窗口（默认隐藏）。逐帧像素/流畅度测试需要持续合成帧时必须打开；窗口不会出现在宿主桌面上。
+- 接口：`evaluate`、`waitFor`、`screenshot`（可传 `clip`/`format`）、`move`/`click`/`mouse`、`key`/`text`、`logs`、`output`、`send`、`on`。
 - 截图用 `Page.captureScreenshot({ fromSurface: false })`；隐藏窗口用 `fromSurface: true` 会等不到合成帧。
-- 输入走 CDP 的 `Input.*`，对应窗口模式的 DOM 输入路径；原生 evdev 路径不在自动化范围。
+- 输入走 CDP 的 `Input.*`，对应窗口模式的 DOM 输入路径；原生 evdev 路径不在自动化范围。`key(key, { modifiers })` 会先按下 Meta/Alt 等修饰键再发主键，桌面按真实按键维护修饰状态。
 - `logs()` 收 renderer 的 console、异常和 CDP browser log；`output()` 是 electron-vite/Electron 原始输出，启动失败时用于排查。
 
 示例见 `desktop_runner.test.ts` 和 `desktop/official/test/desktop.e2e.test.ts`。
+
+## 流畅度测试（逐帧像素）
+
+`src/test_runner/smoothness.ts` 连续取帧、比对相邻帧像素，判断动画“看起来是否流畅”：
+
+```ts
+const desktop = await startDesktopRunner({ desktop: "desktop/official", showWindow: true });
+await desktop.waitFor("document.documentElement.dataset.desktopReady === '1'", 60000);
+
+const recorder = await FrameRecorder.start(desktop, {
+    durationMs: 1000,
+    // 只分析顶部区域，减少无关变化的影响
+    region: { x: 0, y: 0, width: 4000, height: 400 },
+});
+await sleep(120);
+const markAt = recorder.mark("open");
+await desktop.key("Space", { modifiers: 1 });
+const report = await recorder.stop();
+
+const stats = motionStats(report, { fromMs: markAt - 20 });
+console.log(formatReport(report));
+```
+
+- 用 `Page.startScreencast` 推合成帧，通常 40–60fps。必须有真实合成，所以桌面要用 `showWindow: true` 启动；隐藏窗口不产生帧，截屏会长时间阻塞。
+- 帧时间取到达测试进程的时间：合成器给的 `metadata.timestamp` 同一次捕获/呈现偶尔会倒退十几毫秒，会让相邻帧间隔出现负数。
+- `peakShare`：单帧变化占总运动量的比例。跳变/瞬移接近 1，分散到多帧的动画通常低于 0.2。
+- `spanMs`：累计到 95% 运动量的时间跨度。easeOut 动画的大部分变化在前半段，跨度会小于动画时长。
+- `maxStallMs`：运动过程中相邻变化帧的最大间隔，掉帧或停顿会变大。
+- 响应延迟：`recorder.mark()` 记输入时刻，`responseLatencies(report)` 给出每个标记到第一帧变化的延迟；`flow` 是逐帧位移估计，连续拖动应持续有变化，打断后方向应立即翻转。
+- 官方桌面的用例在 `desktop/official/test/smoothness.test.ts`：`pnpm test:smoothness`（需要先 `pnpm build:desktop`）。
+- 三指手势走 evdev 触摸板，不在自动化输入范围；连续输入用内部窗口标题栏拖拽代替（`mouse down` + 多次 `move`），同样能测“跟手”和“反向打断”。
+
+官方桌面在同步初始化（快捷键、输入聚合层、工具栏注册完毕）后设置 `document.documentElement.dataset.desktopReady = "1"`，测试要等这个标记再发输入，否则第一次按键可能落在初始化完成之前。
 
 ## 截屏 / 输入 / 日志
 
@@ -100,6 +134,8 @@ pnpm test
 npx vitest run src/wayland
 npx vitest run src/test_runner/desktop_runner.test.ts
 npx vitest run desktop/official/test/desktop.e2e.test.ts
+# 官方桌面逐帧流畅度（需要先 pnpm build:desktop）
+pnpm test:smoothness
 
 # 额外跑真实宿主服务冒烟（fcitx5、PipeWire、BlueZ、网络、电源、亮度、播放器）
 pnpm test:host-services

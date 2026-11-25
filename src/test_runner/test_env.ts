@@ -46,6 +46,8 @@ export function createTestEnv(op: TestEnvOptions): NodeJS.ProcessEnv {
     }
     delete testEnv.ELECTRON_OZONE_PLATFORM_HINT;
     delete testEnv.ELECTRON_CLI_ARGS;
+    // 只有 runner 显式要求时才在私有显示里显示窗口
+    delete testEnv.MYDE_TEST_SHOW_WINDOW;
     if (op.userDataDir) testEnv.MYDE_TEST_USER_DATA_DIR = op.userDataDir;
     else delete testEnv.MYDE_TEST_USER_DATA_DIR;
 

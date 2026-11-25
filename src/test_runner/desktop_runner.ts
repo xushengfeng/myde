@@ -143,16 +143,37 @@ class CdpClient {
     }
 }
 
+export type ScreenshotClip = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    /** 截图缩放；小于 1 时 Chromium 直接输出更小的图，适合高频采样 */
+    scale?: number;
+};
+
+export type ScreenshotOptions = {
+    format?: "png" | "jpeg";
+    /**
+     * 只截一块区域（CSS px）。高频逐帧采样时用它缩小截图和解码成本。
+     */
+    clip?: ScreenshotClip;
+    /** 是否从合成表面截；隐藏窗口必须为 false（默认） */
+    fromSurface?: boolean;
+};
+
 /** 桌面页面的 DOM / 输入 / 截图 / 日志入口。 */
 export type DesktopRunner = {
     /** 原生 CDP 调用，域和参数见 Chrome DevTools Protocol */
     send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
+    /** 订阅 CDP 事件，返回取消订阅函数 */
+    on(method: string, listener: (params: Record<string, unknown>) => void): () => void;
     /** 在桌面页面求值；返回 JSON 可序列化的值 */
     evaluate<T = unknown>(expression: string): Promise<T>;
     /** 等页面表达式为真 */
     waitFor(expression: string, timeout?: number): Promise<void>;
-    /** 截取桌面页面（隐藏窗口也能截） */
-    screenshot(): Promise<Buffer>;
+    /** 截取桌面页面（隐藏窗口也能截）；可只截一块区域 */
+    screenshot(options?: ScreenshotOptions): Promise<Buffer>;
     /** 移动指针 */
     move(x: number, y: number): Promise<void>;
     /** 点击 */
@@ -203,6 +224,11 @@ export type DesktopRunnerOptions = {
     env?: Record<string, string>;
     /** 额外 Electron 参数 */
     electronArgs?: string[];
+    /**
+     * 在私有显示里真正显示窗口。默认隐藏；逐帧截屏/像素测试需要合成帧，
+     * 隐藏窗口不会持续提交帧，截屏会等很久。不会出现在宿主桌面上。
+     */
+    showWindow?: boolean;
 };
 
 function resolveDesktop(desktop: string, root: string): string {
@@ -353,6 +379,10 @@ class DesktopRunnerImpl implements DesktopRunner {
         return this.cdp.send<T>(method, params);
     }
 
+    on(method: string, listener: (params: Record<string, unknown>) => void): () => void {
+        return this.cdp.on(method, listener);
+    }
+
     async evaluate<T = unknown>(expression: string): Promise<T> {
         const result = await this.cdp.send<{
             result?: { value?: T; description?: string };
@@ -387,12 +417,24 @@ class DesktopRunnerImpl implements DesktopRunner {
         );
     }
 
-    async screenshot(): Promise<Buffer> {
-        const result = await this.cdp.send<{ data: string }>("Page.captureScreenshot", {
-            format: "png",
+    async screenshot(options: ScreenshotOptions = {}): Promise<Buffer> {
+        const params: Record<string, unknown> = {
+            format: options.format ?? "png",
             // 测试桌面窗口是隐藏的；fromSurface 会等一帧合成，隐藏窗口等不到
-            fromSurface: false,
-        });
+            fromSurface: options.fromSurface ?? false,
+        };
+        if (options.clip) params.clip = options.clip;
+        let result: { data: string };
+        try {
+            result = await this.cdp.send<{ data: string }>("Page.captureScreenshot", {
+                ...params,
+                // 逐帧采样不需要最优压缩；不认这个参数时退回普通截图
+                optimizeForSpeed: true,
+            });
+        } catch (e) {
+            if (!/optimizeForSpeed|Invalid parameters|Unrecognized/i.test(String(e))) throw e;
+            result = await this.cdp.send<{ data: string }>("Page.captureScreenshot", params);
+        }
         if (!result.data) throw new Error("截屏没有返回数据");
         return Buffer.from(result.data, "base64");
     }
@@ -440,21 +482,69 @@ class DesktopRunnerImpl implements DesktopRunner {
         const info = keyInfo(key);
         const code = op.code ?? info.code;
         const keyCode = op.keyCode ?? info.keyCode;
+        const modifiers = op.modifiers ?? 0;
         const base = {
             key,
             code,
             windowsVirtualKeyCode: keyCode,
             nativeVirtualKeyCode: keyCode,
-            modifiers: op.modifiers ?? 0,
         };
         // 带修饰键时按快捷键处理，不能把字符当文本插进去（Ctrl+C 不是输入 c）
-        const text = op.modifiers ? undefined : info.text;
-        await this.cdp.send("Input.dispatchKeyEvent", {
-            ...base,
-            type: text ? "keyDown" : "rawKeyDown",
-            ...(text ? { text, unmodifiedText: text } : {}),
-        });
-        await this.cdp.send("Input.dispatchKeyEvent", { ...base, type: "keyUp" });
+        const text = modifiers ? undefined : info.text;
+
+        // 所有事件一次按顺序发出，不逐个等返回：逐个 await 会让“按下”时间被前几次
+        // 协议往返推迟几十毫秒，测响应延迟时会算成应用的延迟。
+        const pending: Promise<unknown>[] = [];
+
+        // 先真正按下修饰键：桌面把原生按键转成自己的输入事件，修饰状态靠
+        // MetaLeft/AltLeft 等按键的 down/up 维护，只给主键带 modifiers 不会生效
+        const held: { code: string; key: string; keyCode: number; mask: number }[] = [];
+        let current = 0;
+        for (const [mask, code, key, keyCode] of [
+            [1, "AltLeft", "Alt", 18],
+            [2, "ControlLeft", "Control", 17],
+            [4, "MetaLeft", "Meta", 91],
+            [8, "ShiftLeft", "Shift", 16],
+        ] as const) {
+            if (!(modifiers & mask)) continue;
+            current |= mask;
+            held.push({ code, key, keyCode, mask });
+            pending.push(
+                this.cdp.send("Input.dispatchKeyEvent", {
+                    type: "rawKeyDown",
+                    key,
+                    code,
+                    windowsVirtualKeyCode: keyCode,
+                    nativeVirtualKeyCode: keyCode,
+                    modifiers: current,
+                }),
+            );
+        }
+
+        pending.push(
+            this.cdp.send("Input.dispatchKeyEvent", {
+                ...base,
+                modifiers,
+                type: text ? "keyDown" : "rawKeyDown",
+                ...(text ? { text, unmodifiedText: text } : {}),
+            }),
+            this.cdp.send("Input.dispatchKeyEvent", { ...base, modifiers, type: "keyUp" }),
+        );
+
+        for (const mod of held.toReversed()) {
+            pending.push(
+                this.cdp.send("Input.dispatchKeyEvent", {
+                    type: "keyUp",
+                    key: mod.key,
+                    code: mod.code,
+                    windowsVirtualKeyCode: mod.keyCode,
+                    nativeVirtualKeyCode: mod.keyCode,
+                    modifiers: current,
+                }),
+            );
+            current &= ~mod.mask;
+        }
+        await Promise.all(pending);
     }
 
     async text(text: string): Promise<void> {
@@ -517,7 +607,16 @@ export async function startDesktopRunner(opts: DesktopRunnerOptions = {}): Promi
     const port = await getFreePort();
     const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "myde-test-userdata-"));
     activeUserDataDirs.add(userDataDir);
-    const env = createTestEnv({ desktop, display, bus, userDataDir, extraEnv: opts.env });
+    const env = createTestEnv({
+        desktop,
+        display,
+        bus,
+        userDataDir,
+        extraEnv: {
+            ...(opts.showWindow ? { MYDE_TEST_SHOW_WINDOW: "1" } : {}),
+            ...opts.env,
+        },
+    });
 
     const runtime = child_process.spawn(
         "npx",

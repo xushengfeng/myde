@@ -11149,3 +11149,7 @@ MSysApi.getDesktopEntries().then((e) => {
         });
     }
 }); // 预加载
+
+// 同步初始化到这里结束：快捷键、输入聚合层和工具栏都已就绪。
+// 自动化测试等这个标记再发输入，避免首帧输入落在初始化完成之前被丢掉。
+document.documentElement.dataset.desktopReady = "1";

@@ -189,6 +189,8 @@ resize ↔ `move` / `all_scroll` / `all_resize` 过渡时优先用十字的一�
 
 `test/frametime` 用同一份 `src/frame_chart.ts` 做独立预览：`pnpm test:frametime` 启动 vite 后，在 myde 里用浏览器打开终端输出的地址；可切换窗口与刷新率、实测刷新率，并用持续负载或一次性长帧验证图表。
 
+逐帧流畅度（动画是否分散到多帧、输入后是否立即响应、打断后是否立即反向）由 `test/smoothness.test.ts` 在私有 headless 显示里自动检查，运行 `pnpm test:smoothness`（先 `pnpm build:desktop`）。采样方式和指标见[测试 runner](../../src/test_runner/readme.md#流畅度测试逐帧像素)。
+
 ## 文件选择器
 
 监听 `MSysApi.portal` 的 `fileChooser.request`，用和设置窗口相同的内部 DOM 窗口呈现；一个窗口同时只显示一个请求，后续请求排队，关闭后自动显示下一个。

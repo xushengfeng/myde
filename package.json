@@ -16,6 +16,7 @@
         "typecheck": "pnpm -r --filter \"./packages/*\" run build:ts && pnpm -r --filter \"./packages/*\" run typecheck && tsc --noEmit -p tsconfig.typecheck.json",
         "test": "vitest run",
         "test:host-services": "MYDE_TEST_HOST_SERVICES=1 vitest run src/sys_api/test",
+        "test:smoothness": "vitest run desktop/official/test/smoothness.test.ts",
         "biome": "biome check .",
         "biome:fix": "biome check --write .",
         "biome:format": "biome format --write .",

@@ -204,7 +204,8 @@ async function createWin() {
     const main_window = new BrowserWindow({
         backgroundColor: nativeTheme.shouldUseDarkColors ? "#0f0f0f" : "#ffffff",
         icon: the_icon,
-        show: !isTestMode,
+        // 测试实例默认隐藏；逐帧截屏测试需要真实合成，才在私有 headless 显示里显示窗口
+        show: !isTestMode || process.env.MYDE_TEST_SHOW_WINDOW === "1",
         width: 1200,
         height: 800,
         webPreferences: {
