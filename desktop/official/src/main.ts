@@ -9173,7 +9173,7 @@ tools.registerTool(
 tools.registerTool(
     "tray",
     ({ tipEl, showTip }) => {
-        const el = view("x");
+        const el = view("x").style({ alignItems: "center" });
         rawRegistry.get("tray.list").getAndSubscribe(async (ids) => {
             el.clear();
             for (const id of ids) {
