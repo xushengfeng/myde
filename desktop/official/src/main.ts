@@ -108,6 +108,19 @@ let stationWasHover = false;
 const { MSysApi, MInputMap, MUtils, MSetting } = myde;
 const fs = MSysApi.fs;
 
+/** 测试注入的应用列表；设置后替代真实 .desktop 扫描（`__mydeTest.setApps`） */
+let testApps: DesktopApp[] | undefined;
+
+function desktopApps(lans: string[] = []): Promise<DesktopApp[]> {
+    return testApps ? Promise.resolve(testApps) : MSysApi.getDesktopEntries(lans);
+}
+
+function desktopApp(appid: string, lans: string[] = []): Promise<DesktopApp | undefined> {
+    return testApps
+        ? Promise.resolve(testApps.find((app) => app.desktopFile === appid))
+        : MSysApi.getDesktopEntry(appid, lans);
+}
+
 type InternalWindowEntry = {
     el: ElType<HTMLDivElement>;
     title: string;
@@ -2168,6 +2181,52 @@ class ViewData {
         return this.focusHandle !== undefined && !isInternalWindow(this.focusHandle) ? this.focusHandle : undefined;
     }
 
+    /** 只读状态快照：testMode 的 `__mydeTest.state()` 用，测试直接断言窗口管理结果 */
+    snapshot() {
+        return {
+            stage: { width: this.stageWidth, height: this.stageHeight },
+            screens: this.screens.map((screen) => ({
+                id: screen.id,
+                windows: [...screen.winIds],
+                empty: screen.empty,
+                launchpad: screen.launchpad,
+                used: screen.used,
+                current: screen.id === this.currentId,
+                visual: { ...screen.visual },
+                target: { ...screen.target },
+            })),
+            current: this.currentId,
+            focus: this.focusHandle,
+            overview: this.overview,
+            overviewProgress: this.overviewProgress,
+            overviewFocus: this.overviewFocusId,
+            gesture: this.gesture
+                ? {
+                      level: this.gesture.level,
+                      startLevel: this.gesture.startLevel,
+                      totalX: this.gesture.totalX,
+                      totalY: this.gesture.totalY,
+                      horizontalMode: this.gesture.horizontalMode,
+                      offset: this.gesture.offset,
+                      focusPos: this.gesture.focusPos,
+                      launcherBinding: this.gesture.launcherBinding,
+                  }
+                : undefined,
+            launcher: this.launcher
+                ? {
+                      binding: this.launcher.getBinding(),
+                      visible: this.launcher.isVisible(),
+                      focused: isLauncherInputFocused(),
+                  }
+                : undefined,
+            windows: [...this.win2Screen].map(([handle, screen]) => ({
+                handle,
+                screen: screen.id,
+                appid: clientWindowFrames.get(handle)?.appid ?? server.server.windows.get(handle)?.appid ?? "",
+            })),
+        };
+    }
+
     blurAll() {
         this.focusHandle = undefined;
         for (const win of internalWindows.values()) {
@@ -3664,7 +3723,7 @@ function updateClientFrameIcon(frame: ClientWindowFrame, appid: string) {
     frame.icon.clear();
     if (!appid) return;
     void (async () => {
-        const desk = await MSysApi.getDesktopEntry(appid);
+        const desk = await desktopApp(appid);
         const path = desk ? await MSysApi.getDesktopIcon(desk.icon || "", { theme: setting.get("icon.theme") }) : "";
         // await 期间 appid 可能又变了
         if (!path || frame.appid !== appid) return;
@@ -7948,7 +8007,7 @@ function searchIconByAppid(appid: string) {
     return async () => {
         if (!appid || appid === "桌面窗口") return undefined;
         try {
-            const app = await MSysApi.getDesktopEntry(appid);
+            const app = await desktopApp(appid);
             if (!app?.icon) return undefined;
             return (await MSysApi.getDesktopIcon(app.icon, { theme: setting.get("icon.theme") })) || undefined;
         } catch {
@@ -7974,7 +8033,7 @@ function createAppSearchProvider(): SearchProvider {
         order: 10,
         limit: 8,
         async search(query, signal) {
-            const apps = await MSysApi.getDesktopEntries().catch(() => [] as DesktopApp[]);
+            const apps = await desktopApps().catch(() => [] as DesktopApp[]);
             if (signal.aborted) return [];
             const scored: ScoredSearchResult[] = [];
             for (const app of apps) {
@@ -8854,7 +8913,7 @@ function createLaunchpadContent() {
         onSettingsClick: () => openSettingsWindow(),
     });
 
-    void MSysApi.getDesktopEntries()
+    void desktopApps()
         .catch(() => [] as DesktopApp[])
         .then(async (apps) => {
             loadingEl.remove();
@@ -8914,13 +8973,13 @@ function createStartMenu(
         onAppLaunch: () => showTip({ state: "hide" }),
     });
 
-    // 元数据在空闲时预取，但不创建 DOM / 不读图标
-    const entriesPromise = MSysApi.getDesktopEntries().catch(() => [] as DesktopApp[]);
+    // 元数据在空闲时预取；展开时如果注入了测试应用列表，按注入的列表读取
+    const prefetchedApps = desktopApps().catch(() => [] as DesktopApp[]);
     let buildPromise: Promise<void> | null = null;
     function build() {
         if (buildPromise) return buildPromise;
         buildPromise = (async () => {
-            const apps = await entriesPromise;
+            const apps = testApps ? await desktopApps().catch(() => [] as DesktopApp[]) : await prefetchedApps;
             loadingEl.remove();
             menu.add(tileFactory.createSettingsTile());
             if (apps.length === 0) {
@@ -8983,7 +9042,7 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
         theme: setting.get("icon.theme"),
     };
 
-    MSysApi.getDesktopEntries().then(async (apps) => {
+    desktopApps().then(async (apps) => {
         console.log(apps);
 
         const browserApp =
@@ -9060,7 +9119,7 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
         if (nowApps.has(appid) || pendingApps.has(appid)) return;
         pendingApps.add(appid);
         try {
-            const desk = await MSysApi.getDesktopEntry(appid);
+            const desk = await desktopApp(appid);
             const iconPath = async () => (await MSysApi.getDesktopIcon(desk?.icon || "", iconConfig)) || "";
             const appEl = appIconEl();
             loadAppIcon(appEl, iconPath, desk?.name || appid);
@@ -11229,7 +11288,7 @@ if (MSysApi.display.getType() === "desktop" && inputApi?.isInitialized()) {
     console.log("[input] use dom input");
 }
 
-MSysApi.getDesktopEntries().then((e) => {
+desktopApps().then((e) => {
     for (const x of e) {
         MSysApi.getDesktopIcon(x.icon, {
             theme: setting.get("icon.theme"),
@@ -11242,8 +11301,119 @@ MSysApi.getDesktopEntries().then((e) => {
 document.documentElement.dataset.desktopReady = "1";
 
 // 测试入口：启动动画测试直接调用 launchApp，避免依赖启动器搜索和临时 .desktop。
-// 只在 testMode 下挂到 globalThis，正常桌面不存在这个入口。
+// touchpadFeed 把假触摸板的 evdev 原始事件接进真实的 evdev → TouchpadInput → ViewData 链路，
+// state 返回只读快照；只在 testMode 下挂到 globalThis，正常桌面不存在这个入口。
 if ((globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.testMode === "on") {
+    type TestTouchpadEvent = { type: "abs" | "rel" | "key"; code: number; value: number } | { type: "sync" };
+
+    /** 假触摸板：实现 useEvdevDevice/TouchpadInput 用到的设备接口，事件由测试逐帧喂入 */
+    const createTestTouchpad = () => {
+        const info: DeviceInfo = {
+            path: "test:touchpad",
+            name: "myde test touchpad",
+            type: "touchpad",
+            vendor: 0,
+            product: 0,
+            version: 0,
+            capabilities: {
+                eventTypes: [],
+                keyCodes: [
+                    InputEventCodes.BTN_TOUCH,
+                    InputEventCodes.BTN_TOOL_FINGER,
+                    InputEventCodes.BTN_TOOL_DOUBLETAP,
+                    InputEventCodes.BTN_TOOL_TRIPLETAP,
+                    InputEventCodes.BTN_TOOL_QUADTAP,
+                ],
+                relAxes: [],
+                absAxes: [
+                    InputEventCodes.ABS_MT_SLOT,
+                    InputEventCodes.ABS_MT_TRACKING_ID,
+                    InputEventCodes.ABS_MT_POSITION_X,
+                    InputEventCodes.ABS_MT_POSITION_Y,
+                ],
+                hasKeyboard: false,
+                hasMouse: false,
+                hasTouchpad: true,
+                hasTouchscreen: false,
+            },
+            absInfo: {
+                [InputEventCodes.ABS_MT_POSITION_X]: { min: 0, max: 4000, fuzz: 0, flat: 0, resolution: 100 },
+                [InputEventCodes.ABS_MT_POSITION_Y]: { min: 0, max: 4000, fuzz: 0, flat: 0, resolution: 100 },
+            },
+            errors: [],
+        };
+        const handlers = new Map<string, Set<(...args: unknown[]) => void>>();
+        const dev = {
+            info,
+            reading: false,
+            on(name: string, callback: (...args: unknown[]) => void): void {
+                const set = handlers.get(name) ?? new Set<(...args: unknown[]) => void>();
+                handlers.set(name, set);
+                set.add(callback);
+            },
+            removeAllListeners(): void {
+                handlers.clear();
+            },
+            startReading() {
+                dev.reading = true;
+                return { ok: true, value: undefined };
+            },
+            stopReading() {
+                dev.reading = false;
+                return { ok: true, value: undefined };
+            },
+            isReading(): boolean {
+                return dev.reading;
+            },
+            emit(name: string, ...args: unknown[]): void {
+                for (const callback of [...(handlers.get(name) ?? [])]) callback(...args);
+            },
+        };
+        const manager = { getDevice: (path: string) => (path === info.path ? dev : undefined) };
+        const dispose = useEvdevDevice(
+            manager as unknown as InputManager,
+            dispatchInput,
+            inputPointerPos,
+            info.path,
+            new Map<string, number>(),
+            new Set<string>(),
+            new Map<string, number>(),
+            new Set<string>(),
+        );
+        return { dev, dispose };
+    };
+
+    let testTouchpad: ReturnType<typeof createTestTouchpad> | undefined;
+
+    const touchpadFeed = (events: TestTouchpadEvent[]) => {
+        testTouchpad ??= createTestTouchpad();
+        const { dev } = testTouchpad;
+        for (const event of events) {
+            if (event.type === "sync") dev.emit("sync");
+            else if (event.type === "abs") dev.emit("absolute", event.code, event.value);
+            else if (event.type === "rel") dev.emit("relative", event.code, event.value);
+            else dev.emit("key", event.code, event.value);
+        }
+        return events.length;
+    };
+
+    /** 替换桌面看到的应用列表；启动台立即重建，开始菜单在首次展开时读取 */
+    const setApps = (apps: DesktopApp[] | undefined) => {
+        testApps = apps;
+        const launchpad = viewData.launchpadScreen;
+        if (launchpad && launchpadContentEl) {
+            launchpadContentEl.remove();
+            launchpadContentEl = createLaunchpadContent();
+            launchpad.el.add(launchpadContentEl);
+            launchpadContentEl.style({
+                top: `${wino.t}px`,
+                left: `${wino.l}px`,
+                right: `${wino.r}px`,
+                bottom: `${wino.b}px`,
+            });
+        }
+    };
+
     (globalThis as Record<string, unknown>).__mydeTest = {
         launchApp: (req: AppLaunchRequest) => launchApp(req),
         closeWindows: () => {
@@ -11258,5 +11428,12 @@ if ((globalThis as { process?: { env?: Record<string, string | undefined> } }).p
             for (const state of [...pendingLaunches]) forceQuitLaunch(state);
         },
         applyUiScale: (scale: number) => applyUiScale(scale),
+        state: () => viewData.snapshot(),
+        setApps: (apps?: DesktopApp[]) => setApps(apps),
+        touchpadFeed,
+        touchpadDetach: () => {
+            testTouchpad?.dispose();
+            testTouchpad = undefined;
+        },
     };
 }

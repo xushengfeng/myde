@@ -106,7 +106,7 @@ console.log(formatReport(report));
 - `maxStallMs`：运动过程中相邻变化帧的最大间隔，掉帧或停顿会变大。
 - 响应延迟：`recorder.mark()` 记输入时刻，`responseLatencies(report)` 给出每个标记到第一帧变化的延迟；`flow` 是逐帧位移估计，连续拖动应持续有变化，打断后方向应立即翻转。
 - 官方桌面的用例在 `desktop/official/test/smoothness.test.ts`：`pnpm test:smoothness`（需要先 `pnpm build:desktop`）。
-- 三指手势走 evdev 触摸板，不在自动化输入范围；连续输入用内部窗口标题栏拖拽代替（`mouse down` + 多次 `move`），同样能测“跟手”和“反向打断”。
+- 三指手势走 evdev 触摸板，window 模式的 CDP 输入到不了 `multiStart`；用 `__mydeTest.touchpadFeed` 注入假触摸板原始事件（见下），连续输入也可以用内部窗口标题栏拖拽测“跟手”和“反向打断”。
 
 官方桌面在同步初始化（快捷键、输入聚合层、工具栏注册完毕）后设置 `document.documentElement.dataset.desktopReady = "1"`，测试要等这个标记再发输入，否则第一次按键可能落在初始化完成之前。
 
@@ -126,6 +126,17 @@ console.log(formatReport(report));
 为了控制时长，每个用例只录到“最后一次可见变化 + 余量”就 `stop()`（只有检查静止期的用例才录满 `wait`），不做无意义的静止帧采样；`flow: false` 跳过逐帧位移估计，推流用 `maxSide: 480`。
 
 运行：先 `pnpm build:test-apps`（构建 Rust 窗口）和 `pnpm build:desktop`，再 `pnpm test:window-open`。
+
+### 手势输入与状态快照
+
+官方桌面在 `testMode` 下还提供：
+
+- `__mydeTest.state()`：只读快照，含 `stage`、`screens`（顺序/窗口/used/current/visual）、`current`、`focus`、`overview`、`overviewProgress`、手势的 `level`/`horizontalMode`、启动器 binding 和窗口的屏归属/appid。断言窗口管理结果时用它，不要从 transform 或截图像素反推当前屏。
+- `__mydeTest.setApps(apps)`：替换桌面看到的应用列表（启动台、搜索、开始菜单、窗口图标反查）。`apps` 是 `.desktop` 条目的形状，`undefined` 恢复真实的 `MSysApi` 扫描；启动台立即重建，开始菜单在首次展开时读取。把 `exec` 指向 `test/simple_app` 里的 mock 客户端，就能让假应用走真实的启动动画、窗口创建和 appid 认领（示例见 `desktop/official/test/mock_apps.test.ts`）。
+- `__mydeTest.touchpadFeed(events)`：把原始 evdev 事件送进真实的 `useEvdevDevice → TouchpadInput → ViewData` 链路。事件是 `{ type: "abs"|"rel"|"key", code, value }` 或 `{ type: "sync" }`；第一次调用时挂一台纯 TS 假触摸板（MT-B、4000 单位量程），之后按帧喂入即可。
+- `__mydeTest.touchpadDetach()`：拆掉假触摸板。
+
+`desktop/official/test/window_gesture.test.ts` 用三指上滑/下滑/横滑覆盖 `multiStart`/`multiMove`/`multiEnd` 到预览、搜索和切屏的接线。手势要按帧喂（帧之间留十几毫秒），同一帧只放一次 `sync`。
 
 ## 截屏 / 输入 / 日志
 
