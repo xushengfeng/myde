@@ -898,10 +898,13 @@ class ViewData {
         return true;
     }
 
-    /** 源屏还有其它窗口时，把窗口挪到一张新的应用屏；已经独占一屏时返回 undefined */
-    moveWindowToNewScreen(winid: MWinId): ViewScreen | undefined {
+    /**
+     * 把窗口挪到一张新的应用屏。`force` 为 true 时即使独占一屏也换屏；
+     * 否则只在源屏还有其它窗口时换屏。
+     */
+    moveWindowToNewScreen(winid: MWinId, force = false): ViewScreen | undefined {
         const source = this.win2Screen.get(winid);
-        if (!source || source.winIds.length <= 1) return undefined;
+        if (!source || (!force && source.winIds.length <= 1)) return undefined;
         const target = this.createAppScreen();
         if (!this.moveWindowToScreen(winid, target)) {
             this.removeScreen(target);
@@ -3242,6 +3245,22 @@ function applyDodges(moves: DodgeMove[]) {
         setWindowPosition(move.id, move.x, move.y);
         moveChildWindows(move.id, move.x - current.x, move.y - current.y);
     }
+}
+
+/** 最大化后是否会压住同屏其它窗口超过阈值 */
+function maximizeCoversOthers(winid: MWinId): boolean {
+    const screen = viewData.screenOf(winid);
+    if (!screen) return false;
+    const available = availableStageSize();
+    const maxRect: ScreenRect = { x: available.x, y: available.y, w: available.width, h: available.height };
+    for (const other of screen.winIds) {
+        if (other === winid) continue;
+        const rect = windowLocalRect(other);
+        if (!rect) continue;
+        const covered = intersectionArea(maxRect, rect) / Math.max(1, rect.w * rect.h);
+        if (covered > OVERLAP_LIMIT) return true;
+    }
+    return false;
 }
 
 /**
@@ -5916,8 +5935,8 @@ server.server.on("window.changed", (info) => {
     if (applied.fullscreen !== info.states.fullscreen) {
         applied.fullscreen = info.states.fullscreen;
         if (info.states.fullscreen) {
-            // 本屏还有其它窗口：先挪到新屏再全屏
-            viewData.moveWindowToNewScreen(info.handle);
+            // 全屏总是换到新虚拟屏
+            viewData.moveWindowToNewScreen(info.handle, true);
             // 最大化与全屏互斥；进入全屏时把本地最大化快照一起收敛，避免走恢复分支
             applied.maximized = info.states.maximized;
             pauseCenteringForFullscreen(info.handle);
@@ -5989,8 +6008,8 @@ server.server.on("window.changed", (info) => {
         if (info.states.fullscreen) return;
         if (!frame) return;
         if (info.states.maximized) {
-            // 本屏还有其它窗口：先挪到新屏再最大化
-            viewData.moveWindowToNewScreen(info.handle);
+            // 最大化会压住其它窗口时才挪到新屏
+            if (maximizeCoversOthers(info.handle)) viewData.moveWindowToNewScreen(info.handle);
             const available = availableStageSize();
             const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
             setClientFrameLayout(frame, available.width, contentHeight);
@@ -10062,8 +10081,8 @@ function toggleMaximizeWindow(winid = viewData.focusHandle) {
 
     syncClientFrameMaximized(frame, maximized);
     if (maximized) {
-        // 桌面命令不会回 window.changed，这里直接处理「本屏还有其它窗口就先挪到新屏」
-        viewData.moveWindowToNewScreen(winid);
+        // 桌面命令不会回 window.changed，这里直接处理「最大化会压住其它窗口就先挪到新屏」
+        if (maximizeCoversOthers(winid)) viewData.moveWindowToNewScreen(winid);
         const available = availableStageSize();
         const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
         setClientFrameLayout(frame, available.width, contentHeight);
@@ -10103,8 +10122,8 @@ function toggleFullscreen(winid = viewData.focusHandle) {
     const frame = clientWindowFrames.get(winid);
 
     if (next) {
-        // 桌面命令不会回 window.changed，这里直接处理「本屏还有其它窗口就先挪到新屏」
-        viewData.moveWindowToNewScreen(winid);
+        // 全屏总是换到新虚拟屏
+        viewData.moveWindowToNewScreen(winid, true);
         const out = fullOutputSize();
         server.server.notify("window.fullscreen", winid, {
             width: Math.max(1, Math.floor(out.width / info.scale)),
