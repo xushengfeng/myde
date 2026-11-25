@@ -1999,18 +1999,15 @@ class ViewData {
         else void ime?.focus(winid);
     }
 
-    /**
-     * 把窗口所在栈提到屏内最上层；子窗口跟随父窗口一起提升。
-     * force 跳过隐式置顶检查，用于最大化这类显式动作。
-     */
-    private raiseWindow(winid: MWinId, force = false) {
+    /** 把窗口所在栈提到屏内最上层；子窗口跟随父窗口一起提升 */
+    private raiseWindow(winid: MWinId) {
         const root = rootWindow(winid);
         const screen = this.win2Screen.get(root);
         if (!screen) return;
         // 提升后会压住上层窗口太多时不提升，形成隐式置顶
         const rootIndex = screen.winIds.indexOf(root);
         const rootRect = rootIndex >= 0 ? windowLocalRect(root) : undefined;
-        if (!force && rootRect) {
+        if (rootRect) {
             for (let i = rootIndex + 1; i < screen.winIds.length; i++) {
                 const other = windowLocalRect(screen.winIds[i]);
                 if (!other) continue;
@@ -2035,9 +2032,21 @@ class ViewData {
         raise(root);
     }
 
-    /** 显式提到最上层，不受隐式置顶限制 */
-    raiseWin(winid: MWinId) {
-        this.raiseWindow(winid, true);
+    /** 把顶层窗口按到屏内最下层；子窗口仍在它上面 */
+    sendWinToBottom(winid: MWinId) {
+        const root = rootWindow(winid);
+        const screen = this.win2Screen.get(root);
+        if (!screen) return;
+        const index = screen.winIds.indexOf(root);
+        if (index < 0) return;
+        if (index > 0) {
+            screen.winIds.splice(index, 1);
+            screen.winIds.unshift(root);
+        }
+        const el = windowElement(root);
+        if (el && el.parentElement === screen.el.el) {
+            screen.el.el.insertBefore(el, screen.el.el.firstChild);
+        }
     }
 
     /** 沿模态子窗口链往下找：焦点落在最内层的模态对话框上 */
@@ -3140,6 +3149,41 @@ function intersectionArea(a: ScreenRect, b: ScreenRect): number {
     return ix * iy;
 }
 
+/** 多个矩形的并集面积；用于“被多个上层窗口合计盖住多少” */
+function unionArea(rects: ScreenRect[]): number {
+    if (rects.length === 0) return 0;
+    const xs = [...new Set(rects.flatMap((r) => [r.x, r.x + r.w]))].sort((a, b) => a - b);
+    let area = 0;
+    for (let i = 0; i < xs.length - 1; i++) {
+        const x0 = xs[i];
+        const x1 = xs[i + 1];
+        if (x1 <= x0) continue;
+        const intervals: [number, number][] = [];
+        for (const rect of rects) {
+            if (rect.x < x1 && rect.x + rect.w > x0) intervals.push([rect.y, rect.y + rect.h]);
+        }
+        intervals.sort((a, b) => a[0] - b[0]);
+        let length = 0;
+        let start = Number.NaN;
+        let end = Number.NaN;
+        for (const [a, b] of intervals) {
+            if (Number.isNaN(start)) {
+                start = a;
+                end = b;
+            } else if (a > end) {
+                length += end - start;
+                start = a;
+                end = b;
+            } else if (b > end) {
+                end = b;
+            }
+        }
+        if (!Number.isNaN(start)) length += end - start;
+        area += (x1 - x0) * length;
+    }
+    return area;
+}
+
 function overlapRatio(a: ScreenRect, b: ScreenRect): number {
     const inter = intersectionArea(a, b);
     if (inter <= 0) return 0;
@@ -3269,19 +3313,25 @@ function applyDodges(moves: DodgeMove[]) {
     }
 }
 
-/** 最大化后是否会压住同屏其它窗口超过阈值 */
-function maximizeCoversOthers(winid: MWinId): boolean {
+/** 最大化窗口按最底层算：是否被同屏上层窗口合计盖住超过阈值 */
+function maximizeCoveredByOthers(winid: MWinId): boolean {
     const screen = viewData.screenOf(winid);
     if (!screen) return false;
     const available = availableStageSize();
     const maxRect: ScreenRect = { x: available.x, y: available.y, w: available.width, h: available.height };
+    const covered: ScreenRect[] = [];
     for (const other of screen.winIds) {
         if (other === winid) continue;
         const rect = windowLocalRect(other);
         if (!rect) continue;
-        if (coveredRatio(maxRect, rect) > OVERLAP_LIMIT) return true;
+        const x1 = Math.max(maxRect.x, rect.x);
+        const y1 = Math.max(maxRect.y, rect.y);
+        const x2 = Math.min(maxRect.x + maxRect.w, rect.x + rect.w);
+        const y2 = Math.min(maxRect.y + maxRect.h, rect.y + rect.h);
+        if (x2 > x1 && y2 > y1) covered.push({ x: x1, y: y1, w: x2 - x1, h: y2 - y1 });
     }
-    return false;
+    if (covered.length === 0) return false;
+    return unionArea(covered) / Math.max(1, maxRect.w * maxRect.h) > OVERLAP_LIMIT;
 }
 
 /**
@@ -6029,9 +6079,9 @@ server.server.on("window.changed", (info) => {
         if (info.states.fullscreen) return;
         if (!frame) return;
         if (info.states.maximized) {
-            // 最大化先改层级，再按覆盖决定是否换屏
-            viewData.raiseWin(info.handle);
-            if (maximizeCoversOthers(info.handle)) viewData.moveWindowToNewScreen(info.handle);
+            // 最大化按最底层算，被上层盖住才换屏
+            viewData.sendWinToBottom(info.handle);
+            if (maximizeCoveredByOthers(info.handle)) viewData.moveWindowToNewScreen(info.handle);
             const available = availableStageSize();
             const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
             setClientFrameLayout(frame, available.width, contentHeight);
@@ -10103,9 +10153,9 @@ function toggleMaximizeWindow(winid = viewData.focusHandle) {
 
     syncClientFrameMaximized(frame, maximized);
     if (maximized) {
-        // 桌面命令不会回 window.changed；最大化先改层级，再按覆盖决定是否换屏
-        viewData.raiseWin(winid);
-        if (maximizeCoversOthers(winid)) viewData.moveWindowToNewScreen(winid);
+        // 桌面命令不会回 window.changed；最大化按最底层算，被上层盖住才换屏
+        viewData.sendWinToBottom(winid);
+        if (maximizeCoveredByOthers(winid)) viewData.moveWindowToNewScreen(winid);
         const available = availableStageSize();
         const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
         setClientFrameLayout(frame, available.width, contentHeight);
