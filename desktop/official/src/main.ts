@@ -2083,20 +2083,22 @@ class ViewData {
                 if (coveredRatio(rootRect, other) > OVERLAP_LIMIT) return;
             }
         }
+        // 焦点所在的父链：同一层里这条链最后提升，被聚焦的对话框才会在兄弟之上
+        const focusPath = new Set<MWinId>();
+        for (let cur: MWinId | undefined = winid; cur !== undefined; cur = windowParents.get(cur)) focusPath.add(cur);
         const raise = (id: MWinId) => {
+            // 只有顶层窗口在 winIds 里；子窗口仍要重新 append，否则父窗口提升后会把子窗口压到下面
             const index = screen.winIds.indexOf(id);
-            if (index >= 0) {
-                if (index !== screen.winIds.length - 1) {
-                    screen.winIds.splice(index, 1);
-                    screen.winIds.push(id);
-                }
-                const el = windowElement(id);
-                // 启动动画期间窗口还在面板里，别把它抢回屏
-                if (el && el.parentElement === screen.el.el) screen.el.add(el);
+            if (index >= 0 && index !== screen.winIds.length - 1) {
+                screen.winIds.splice(index, 1);
+                screen.winIds.push(id);
             }
-            for (const [child, parent] of windowParents) {
-                if (parent === id) raise(child);
-            }
+            const el = windowElement(id);
+            // 启动动画期间窗口还在面板里，别把它抢回屏
+            if (el && el.parentElement === screen.el.el) screen.el.add(el);
+            const children = [...windowParents].flatMap(([child, parent]) => (parent === id ? [child] : []));
+            children.sort((a, b) => Number(focusPath.has(a)) - Number(focusPath.has(b)));
+            for (const child of children) raise(child);
         };
         raise(root);
     }
@@ -2112,9 +2114,16 @@ class ViewData {
             screen.winIds.splice(index, 1);
             screen.winIds.unshift(root);
         }
-        const el = windowElement(root);
-        if (el && el.parentElement === screen.el.el) {
-            screen.el.el.insertBefore(el, screen.el.el.firstChild);
+        // 整个窗口栈一起沉到最底：父窗口在前，子窗口依次跟在它后面
+        const rootEl = windowElement(root);
+        if (!rootEl || rootEl.parentElement !== screen.el.el) return;
+        screen.el.el.insertBefore(rootEl, screen.el.el.firstChild);
+        let anchor: Node = rootEl;
+        for (const id of windowStackOrder(root).slice(1)) {
+            const el = windowElement(id);
+            if (!el || el.parentElement !== screen.el.el) continue;
+            screen.el.el.insertBefore(el, anchor.nextSibling);
+            anchor = el;
         }
     }
 
@@ -3166,6 +3175,19 @@ function windowDepth(winid: MWinId): number {
         cur = windowParents.get(cur);
     }
     return depth;
+}
+
+/** 窗口和它的全部子窗口：深度优先，父窗口在前、子窗口按创建顺序跟在后面 */
+function windowStackOrder(winid: MWinId): MWinId[] {
+    const list: MWinId[] = [];
+    const visit = (id: MWinId) => {
+        list.push(id);
+        for (const [child, parent] of windowParents) {
+            if (parent === id) visit(child);
+        }
+    };
+    visit(winid);
+    return list;
 }
 
 /**

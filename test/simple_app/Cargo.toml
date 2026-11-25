@@ -32,3 +32,7 @@ gbm = "0.18"
 [[bin]]
 name = "window_open"
 path = "src/bin/window_open.rs"
+
+[[bin]]
+name = "child_window"
+path = "src/bin/child_window.rs"
