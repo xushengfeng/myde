@@ -24,6 +24,8 @@ export type FrameRecorderOptions = {
     tileThreshold?: number;
     /** 变化统计的 tile 边长（分析图上的像素），默认 8 */
     tileSize?: number;
+    /** 是否估计逐帧位移（判断切屏/拖动的方向），默认 true；只看运动量时关掉能省很多分析时间 */
+    flow?: boolean;
 };
 
 export type RecordedFrame = {
@@ -102,6 +104,7 @@ const DEFAULTS = {
     maxSide: 800,
     tileThreshold: 4,
     tileSize: 8,
+    flow: true,
 };
 
 type RawFrame = {
@@ -138,6 +141,7 @@ export class FrameRecorder {
             maxSide: DEFAULTS.maxSide,
             tileThreshold: DEFAULTS.tileThreshold,
             tileSize: DEFAULTS.tileSize,
+            flow: DEFAULTS.flow,
             ...options,
         });
         await recorder.begin();
@@ -296,7 +300,7 @@ function analyze(
         const prev = frames[i - 1];
         const next = frames[i];
         const { meanDiff, changedRatio } = compareLuma(prev, next, options.tileSize, options.tileThreshold);
-        const flow = estimateFlow(prev, next);
+        const flow = options.flow ? estimateFlow(prev, next) : { x: 0, y: 0 };
         diffs.push({
             index: next.index,
             at: next.at,

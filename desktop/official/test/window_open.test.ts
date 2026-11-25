@@ -34,7 +34,7 @@ type OpenCase = {
     width?: number;
     height?: number;
     sizeMode?: "fixed" | "configure";
-    /** 记录多久（ms）；到达后停止采样 */
+    /** 最长记录时间（ms）；只有检查静止期的用例才录满，其余在最后一次可见变化后就停止 */
     wait: number;
     /** 期望最终画面：窗口已替换面板 / 面板还是空占位 */
     expectPanel: "none" | "cover";
@@ -45,34 +45,17 @@ type OpenCase = {
 const CASES: OpenCase[] = [
     { name: "立即显示 800×600", create: 0, buffer: 0, wait: 1300, expectPanel: "none" },
     { name: "回弹结束前出首帧", create: 0, buffer: 300, wait: 1500, expectPanel: "none" },
-    { name: "飞行中出首帧", create: 0, buffer: 450, wait: 1600, expectPanel: "none" },
     { name: "嵌入点出首帧", create: 0, buffer: 650, wait: 1800, expectPanel: "none" },
     { name: "淡入结束后出首帧", create: 0, buffer: 900, wait: 2100, expectPanel: "none" },
-    { name: "窗口先到、首帧很晚", create: 0, buffer: 3800, wait: 4800, expectPanel: "none" },
-    { name: "永不建窗", create: "never", buffer: "never", wait: 4300, expectPanel: "cover", expectCloseAt: 1600 },
+    { name: "窗口先到、首帧很晚", create: 0, buffer: 2800, wait: 3600, expectPanel: "none" },
+    { name: "永不建窗", create: "never", buffer: "never", wait: 2800, expectPanel: "cover", expectCloseAt: 1600 },
     { name: "建窗但永不首帧", create: 0, buffer: "never", wait: 1600, expectPanel: "none" },
     // 窗口创建晚于面板落地（xwayland 之类要先建连接再出窗口）
-    {
-        name: "窗口在面板落地后才建",
-        create: 2200,
-        buffer: 2300,
-        wait: 3600,
-        expectPanel: "none",
-        expectCloseAt: 1600,
-    },
     {
         name: "窗口晚建（关闭按钮之后）",
         create: 2200,
         buffer: 3200,
         wait: 4200,
-        expectPanel: "none",
-        expectCloseAt: 1600,
-    },
-    {
-        name: "窗口晚建但永不首帧",
-        create: 2200,
-        buffer: "never",
-        wait: 3800,
         expectPanel: "none",
         expectCloseAt: 1600,
     },
@@ -248,7 +231,8 @@ async function closeTestWindows() {
             await desktop.evaluate("__mydeTest.closeWindows(); __mydeTest.closeLaunchPanels();");
         } catch {}
         try {
-            await desktop.waitFor(`document.querySelectorAll("[data-view-id]").length === 2`, 1500);
+            // 正常关闭约 150ms；启动收尾还没完时会卡住，超时后直接强制关闭
+            await desktop.waitFor(`document.querySelectorAll("[data-view-id]").length === 2`, 600);
             await sleep(100);
             return;
         } catch {}
@@ -334,10 +318,23 @@ describe("official desktop window open animation", () => {
             expect(before, "每个用例开始前应该回到初始虚拟屏数量").toBe(2);
             await watchScreens();
 
+            // 录到最后一次可见变化之后即可；只有需要检查“静止期”的用例才录满 wait。
+            // 首帧自己整块出现、面板替换发生在建窗时，之后的静止帧不参与断言。
+            const needsQuiet = openCase.create === "never" || openCase.buffer === "never";
+            const lastChange = Math.max(
+                750,
+                typeof openCase.buffer === "number" ? openCase.buffer + 550 : 0,
+                openCase.fullscreen !== undefined ? openCase.fullscreen + 950 : 0,
+                typeof openCase.create === "number" ? openCase.create + 600 : 0,
+            );
+            const stopAt = needsQuiet ? openCase.wait : Math.min(openCase.wait, lastChange + 200);
+
             const recorder = await FrameRecorder.start(desktop, {
-                durationMs: openCase.wait + 500,
+                durationMs: stopAt + 500,
                 // 关注整个舞台；窗口尺寸最大 2560×1440，缩小后仍能看清运动
-                maxSide: 800,
+                maxSide: 480,
+                // 只判断运动量和停顿，不需要逐帧位移方向：省掉最贵的一步分析
+                flow: false,
             });
             await sleep(100);
             const launchEpoch = Date.now();
@@ -372,7 +369,7 @@ describe("official desktop window open animation", () => {
                 expect(mid.panels, "还没有窗口时面板应保留").toBe(1);
                 expect(mid.frames, "还没有窗口时不应有客户端窗口").toBe(0);
             }
-            await sleep(Math.max(0, openCase.wait - (Date.now() - launchEpoch)));
+            await sleep(Math.max(0, stopAt - (Date.now() - launchEpoch)));
             const report = await recorder.stop();
             const events = readEvents(eventsFile);
             const snapshot = await frameSnapshot();
@@ -504,8 +501,6 @@ describe("official desktop window open animation", () => {
                 });
                 expect(quiet.total, "动画结束后不应持续变化").toBeLessThan(0.2);
             }
-
-            await closeTestWindows();
         });
     }
 

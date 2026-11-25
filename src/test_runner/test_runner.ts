@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { WaylandServer } from "../wayland";
 import type { renderTools } from "../wayland/render_tools";
+import { electronViteBuildArgs } from "./build_mode";
 import { startHeadlessDisplay } from "./headless_display";
 import { createTestEnv } from "./test_env";
 
@@ -60,6 +61,7 @@ export function testRunnerRaw(js: string) {
             "electron-vite",
             "--ignoreConfigWarning",
             "preview",
+            ...electronViteBuildArgs(),
             // electron-vite 会把 `--` 之后的参数通过 ELECTRON_CLI_ARGS 传给 Electron。
             // headless ozone 默认屏幕只有 1x1，会让 window.innerWidth 等布局值失真。
             "--",

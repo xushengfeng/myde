@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { electronViteBuildArgs } from "./build_mode";
 import { type HeadlessDisplay, startHeadlessDisplay } from "./headless_display";
 import { type PrivateBus, startPrivateBus } from "./private_bus";
 import { sleep } from "./process_utils";
@@ -624,6 +625,7 @@ export async function startDesktopRunner(opts: DesktopRunnerOptions = {}): Promi
             "electron-vite",
             "--ignoreConfigWarning",
             "preview",
+            ...electronViteBuildArgs(),
             "--",
             ...(display
                 ? ["--ozone-platform=x11"]

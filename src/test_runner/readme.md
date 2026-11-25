@@ -97,6 +97,10 @@ console.log(formatReport(report));
 
 - 用 `Page.startScreencast` 推合成帧，通常 40–60fps。必须有真实合成，所以桌面要用 `showWindow: true` 启动；隐藏窗口不产生帧，截屏会长时间阻塞。
 - 帧时间取到达测试进程的时间：合成器给的 `metadata.timestamp` 同一次捕获/呈现偶尔会倒退十几毫秒，会让相邻帧间隔出现负数。
+- `maxSide` 控制推流分辨率，默认 800；只看运动量、不看小元素时降到 480 能明显减少分析时间。
+- `flow: false` 跳过逐帧位移估计（`estimateFlow` 是分析里最贵的一步）；只判断运动量/停顿时关掉。需要 `flow`/`flowX` 判断切屏、拖动方向时保持默认 `true`。
+- `src/test_runner/smoothness.test.ts` 有一组对照用例：平滑动画的 `peakShare` 必须远低于 0.6，整屏一帧跳变的 `peakShare` 必须高于 0.6。第二个用例用 `flow:false、maxSide:480` 跑，确认窗口动画测试的省时配置仍然能识别跳变。
+- 只关心到某次变化为止时，`durationMs` 可以给到那一刻之后，`stop()` 提前调用即可；不要为了统一时长把大段静止帧也录下来。
 - `peakShare`：单帧变化占总运动量的比例。跳变/瞬移接近 1，分散到多帧的动画通常低于 0.2。
 - `spanMs`：累计到 95% 运动量的时间跨度。easeOut 动画的大部分变化在前半段，跨度会小于动画时长。
 - `maxStallMs`：运动过程中相邻变化帧的最大间隔，掉帧或停顿会变大。
@@ -117,7 +121,9 @@ console.log(formatReport(report));
 
 启动面板只是占位槽：第一个窗口一创建就替换面板，不等首帧；面板落到屏里仍然没有窗口时立刻露出关闭按钮，可以提前取消。
 
-用例覆盖：立即、飞行中、嵌入点、首帧很晚，永不建窗（空面板可以提前关闭），建窗但永不首帧，窗口晚于面板落地才创建，1200×900 / 1600×1000 / 2560×1440 大 buffer，以及首帧前/后/飞行中/动画结束后的全屏。每个用例同时断言虚拟屏只增加一张、窗口只出现一个、尺寸来自客户端 buffer、启动动画有足够中间帧且没有长时间停顿；首帧内容由客户端整块画出，不算桌面动画。
+用例覆盖：立即、回弹结束前、嵌入点、淡入结束后、首帧很晚，永不建窗（空面板可以提前关闭），建窗但永不首帧，窗口晚于面板落地才创建，1200×900 / 1600×1000 / 2560×1440 大 buffer，以及首帧前/后/飞行中/动画结束后的全屏。每个用例同时断言虚拟屏只增加一张、窗口只出现一个、尺寸来自客户端 buffer、启动动画有足够中间帧且没有长时间停顿；首帧内容由客户端整块画出，不算桌面动画。
+
+为了控制时长，每个用例只录到“最后一次可见变化 + 余量”就 `stop()`（只有检查静止期的用例才录满 `wait`），不做无意义的静止帧采样；`flow: false` 跳过逐帧位移估计，推流用 `maxSide: 480`。
 
 运行：先 `pnpm build:test-apps`（构建 Rust 窗口）和 `pnpm build:desktop`，再 `pnpm test:window-open`。
 
@@ -145,10 +151,12 @@ console.log(formatReport(report));
 # 全量默认：可隔离的系统 API + Wayland + 桌面；真实宿主服务冒烟跳过
 pnpm test
 
-# 只跑 Wayland / 桌面 runner
+# 只跑 Wayland / 桌面 runner（串行）
 npx vitest run src/wayland
 npx vitest run src/test_runner/desktop_runner.test.ts
 npx vitest run desktop/official/test/desktop.e2e.test.ts
+# 桌面 UI/e2e 一组：构建一次 out/ 后并行跑，比逐个文件串行快
+pnpm test:desktop
 # 官方桌面逐帧流畅度（需要先 pnpm build:desktop）
 pnpm test:smoothness
 # 官方桌面窗口打开动画（还需要 pnpm build:test-apps）
@@ -158,4 +166,6 @@ pnpm test:window-open
 pnpm test:host-services
 ```
 
-`vitest.config.ts` 里 `fileParallelism: false` 是因为 `electron-vite preview` 共用 `out/`；每个 runner 的 weston/Xwayland 是独立的，未来可以放开并行。
+`pnpm test` 先由 `src/test_runner/global_setup.ts` 构建一次 `out/`，各 runner 用 `--skipBuild` 只启动 Electron，省掉每个测试文件重复构建；测试文件仍然串行，因为 dma-buf GPU 内存、逐帧流畅度这类用例会被同时运行的 Electron 实例干扰。
+
+`pnpm test:desktop` 只跑桌面 UI/e2e 用例并加 `--fileParallelism`：这些用例互不测 GPU 内存，并行不会互相影响。逐帧流畅度用例默认配置不变（`flow` 开、`maxSide` 800），并行时实测采样率和中位间隔与单独跑一致；如果要最干净的帧间隔数据，还是单独跑 `pnpm test:smoothness` / `pnpm test:window-open`。单独 `vitest run` 或跑 `test:xxx` 单文件脚本时仍然每个文件自己构建，保证改完源码后用的是最新产物。每个 runner 的 weston/Xwayland、私有总线、userData 都是独立的。
