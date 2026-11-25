@@ -65,6 +65,8 @@ export interface RegistrySchema {
         closed: boolean;
         /** 1 超时 / 2 用户关闭 / 3 CloseNotification；活动通知为 0 */
         reason: number;
+        /** 通知到达时间（毫秒时间戳） */
+        time: number;
     };
     "notification.list[].delete": boolean;
     "media.list": id<"media.list[]">[];

@@ -7464,7 +7464,7 @@ MSysApi.blue
     })
     .catch((e) => console.error("blue init error", e));
 
-type NotificationEntry = NotificationData & { closed: boolean; reason: number };
+type NotificationEntry = NotificationData & { closed: boolean; reason: number; time: number };
 const notifications = new Map<string, NotificationEntry>();
 
 MSysApi.notification
@@ -7490,6 +7490,7 @@ MSysApi.notification
                 replacesId: entry.replaces_id,
                 closed: entry.closed,
                 reason: entry.reason,
+                time: entry.time,
             });
         };
 
@@ -7501,7 +7502,7 @@ MSysApi.notification
 
         notification.on("new", (n) => {
             const key = String(n.id);
-            const entry: NotificationEntry = { ...n, closed: false, reason: 0 };
+            const entry: NotificationEntry = { ...n, closed: false, reason: 0, time: Date.now() };
             notifications.set(key, entry);
             setList();
             setItem(entry);

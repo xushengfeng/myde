@@ -927,17 +927,46 @@ export function bButton(txt: string, onClick: () => void) {
         });
 }
 
+/** 通知时间：当天只显示时分，更早的带上日期 */
+function formatNotiTime(ts: number) {
+    const d = new Date(ts);
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    if (d.getFullYear() !== now.getFullYear())
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
+    if (d.getMonth() !== now.getMonth() || d.getDate() !== now.getDate())
+        return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
+    return hm;
+}
+
 /** 通知条目的内容；下拉面板和临时提示共用同一套排版 */
-export function nNotiContent(op: { title: string; content: string; onClose?: () => void }) {
+export function nNotiContent(op: { title: string; content: string; time?: number; onClose?: () => void }) {
     const titleRow = view("x").style({ alignItems: "center" });
-    titleRow.add(aLineText().sv(op.title).style(fontStyle.title));
+    titleRow.add(
+        aLineText()
+            .sv(op.title)
+            .style({ ...fontStyle.title, flexGrow: 1, width: "auto" }),
+    );
+    if (op.time !== undefined) {
+        titleRow.add(
+            aLineText()
+                .sv(formatNotiTime(op.time))
+                .style({
+                    width: "fit-content",
+                    flexShrink: 0,
+                    marginRight: px(4),
+                    ...gTextStyle.caption,
+                    color: gTextStyle.color.secondary,
+                }),
+        );
+    }
     if (op.onClose) {
-        titleRow.add([
-            spacer(),
+        titleRow.add(
             button(getIconXEl("cross")).on("click", () => {
                 op.onClose?.();
             }),
-        ]);
+        );
     }
     return view("y")
         .style({
@@ -963,7 +992,9 @@ export function nNotiToast(op: { title: string; content: string; width?: number 
         .add(nNotiContent(op));
 }
 
-export function nNotiList(op: { map: (k: string) => Promise<{ title: string; content: string; delete: () => void }> }) {
+export function nNotiList(op: {
+    map: (k: string) => Promise<{ title: string; content: string; time: number; delete: () => void }>;
+}) {
     let list: string[] = [];
     const nl = uScrollList<string>({
         itemSize: sSize(2),
@@ -978,6 +1009,7 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
                     nNotiContent({
                         title: n.title,
                         content: n.content,
+                        time: n.time,
                         onClose: n.delete,
                     }),
                 );
@@ -1016,9 +1048,11 @@ export function nNotiList(op: { map: (k: string) => Promise<{ title: string; con
                 ),
         ]).el,
         setList: (l: string[]) => {
-            // 清空时直接收起列表，避免旧项退场动画和空提示重叠
-            nl.setList(l, l.length === 0);
             list = l;
+            // 最新通知在最上面
+            const desc = [...l].reverse();
+            // 清空时直接收起列表，避免旧项退场动画和空提示重叠
+            nl.setList(desc, desc.length === 0);
         },
     };
 }

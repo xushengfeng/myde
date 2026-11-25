@@ -620,11 +620,12 @@ const n = nNotiList({
     },
 });
 const noMap = {
-    a: { title: "title", content: "aaaaaaaaaaaaaaaaa" },
-    b: { title: "title", content: "bb bb" },
+    a: { title: "title", content: "aaaaaaaaaaaaaaaaa", time: Date.now() },
+    b: { title: "title", content: "bb bb", time: Date.now() - 60_000 },
     c: {
         title: "title",
         content: "xx xx xx x xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        time: Date.now() - 24 * 60 * 60 * 1000,
     },
 };
 const noSet = new Set<string>();
