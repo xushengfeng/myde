@@ -428,6 +428,8 @@ export type MotionWindow = {
     toMs?: number;
     /** 一帧算“动了”的阈值：平均亮度差，默认 max(0.05, peak * 0.02) */
     activeThreshold?: number;
+    /** 变化 tile 占比达到这个值也算“动了”；小面积动画（图标、面板）主要靠它 */
+    activeChangedRatio?: number;
 };
 
 /** 统计一段窗口内的运动，用来判断动画是否分散、是否卡顿。 */
@@ -437,7 +439,10 @@ export function motionStats(report: SmoothnessReport, window: MotionWindow = {})
     const diffs = report.diffs.filter((d) => d.at > from && d.at <= to);
     const peak = diffs.reduce((max, d) => Math.max(max, d.meanDiff), 0);
     const threshold = window.activeThreshold ?? Math.max(0.05, peak * 0.02);
-    const active = diffs.filter((d) => d.meanDiff >= threshold);
+    const ratioThreshold = window.activeChangedRatio ?? 0;
+    const active = diffs.filter(
+        (d) => d.meanDiff >= threshold || (ratioThreshold > 0 && d.changedRatio >= ratioThreshold),
+    );
     const total = diffs.reduce((sum, d) => sum + d.meanDiff, 0);
     let flowX = 0;
     let flowY = 0;

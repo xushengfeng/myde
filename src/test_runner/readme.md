@@ -106,6 +106,21 @@ console.log(formatReport(report));
 
 官方桌面在同步初始化（快捷键、输入聚合层、工具栏注册完毕）后设置 `document.documentElement.dataset.desktopReady = "1"`，测试要等这个标记再发输入，否则第一次按键可能落在初始化完成之前。
 
+### 窗口打开动画
+
+`desktop/official/test/window_open.test.ts` 用真实的 Rust Wayland 窗口测启动动画。窗口应用在 `test/simple_app/src/bin/window_open.rs`：
+
+- 环境变量控制时刻：`CREATE_AT`（创建 toplevel）、`BUFFER_AT`（提交首帧）、`FULLSCREEN_AT`（切全屏），都是 epoch 毫秒，`never` 表示不做。
+- `WIDTH`/`HEIGHT` + `SIZE_MODE=fixed` 用来提交比桌面默认 800×600 更大的 buffer；客户端不发送 `set_window_geometry`、min/max 等 xdg 尺寸设置。
+- 每个事件写到 `EVENTS_FILE`，测试按 epoch 时间和帧时间对齐。
+- 桌面在 `testMode` 下提供 `__mydeTest.launchApp(req)` / `__mydeTest.closeWindows()`，测试直接走真实的 `launchApp`，不用依赖启动器搜索或临时 `.desktop`。
+
+启动面板只是占位槽：第一个窗口一创建就替换面板，不等首帧；面板落到屏里仍然没有窗口时立刻露出关闭按钮，可以提前取消。
+
+用例覆盖：立即、飞行中、嵌入点、首帧很晚，永不建窗（空面板可以提前关闭），建窗但永不首帧，窗口晚于面板落地才创建，1200×900 / 1600×1000 / 2560×1440 大 buffer，以及首帧前/后/飞行中/动画结束后的全屏。每个用例同时断言虚拟屏只增加一张、窗口只出现一个、尺寸来自客户端 buffer、启动动画有足够中间帧且没有长时间停顿；首帧内容由客户端整块画出，不算桌面动画。
+
+运行：先 `pnpm build:test-apps`（构建 Rust 窗口）和 `pnpm build:desktop`，再 `pnpm test:window-open`。
+
 ## 截屏 / 输入 / 日志
 
 | 层 | 截屏 | 输入 | 日志 |
@@ -136,6 +151,8 @@ npx vitest run src/test_runner/desktop_runner.test.ts
 npx vitest run desktop/official/test/desktop.e2e.test.ts
 # 官方桌面逐帧流畅度（需要先 pnpm build:desktop）
 pnpm test:smoothness
+# 官方桌面窗口打开动画（还需要 pnpm build:test-apps）
+pnpm test:window-open
 
 # 额外跑真实宿主服务冒烟（fcitx5、PipeWire、BlueZ、网络、电源、亮度、播放器）
 pnpm test:host-services

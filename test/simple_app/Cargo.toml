@@ -29,3 +29,6 @@ memmap2 = "0.9"
 libc = "0.2"
 gbm = "0.18"
 
+[[bin]]
+name = "window_open"
+path = "src/bin/window_open.rs"

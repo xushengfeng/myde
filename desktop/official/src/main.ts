@@ -905,6 +905,8 @@ class ViewData {
     moveWindowToNewScreen(winid: MWinId, force = false): ViewScreen | undefined {
         const source = this.win2Screen.get(winid);
         if (!source || (!force && source.winIds.length <= 1)) return undefined;
+        // 启动流程占着的窗口由启动收尾决定落屏；现在换屏会连启动面板一起搬走
+        if (inLaunchFlow(winid)) return undefined;
         const target = this.createAppScreen();
         if (!this.moveWindowToScreen(winid, target)) {
             this.removeScreen(target);
@@ -4428,12 +4430,20 @@ type PendingLaunch = {
     arrivedAt: number;
     flightGear?: AnimationGear<{ p: number }>;
     sizeGear?: AnimationGear<{ width: number; height: number }>;
-    trayTimer?: number;
 };
 
 const pendingLaunches = new Set<PendingLaunch>();
-/** 等待窗口时多久后把面板当成托盘应用，显示关闭按钮 */
-const LAUNCH_TRAY_DELAY = 3000;
+
+/**
+ * 窗口还在启动流程里（面板占位或替换中）。
+ * 这时它暂时住在启动面板里，换屏会把面板/窗口一起搬走并回收启动屏，等收尾时再换。
+ */
+function inLaunchFlow(winid: MWinId): boolean {
+    for (const state of pendingLaunches) {
+        if (state.winHandle === winid) return true;
+    }
+    return false;
+}
 const LAUNCH_PRESS_IN = { duration: 130, map: timingFunction.easeIn };
 const LAUNCH_PRESS_OUT = { duration: 180, map: timingFunction.easeOut };
 /** 面板飞入按真实屏幕的终点走直线；快进慢停，不跟虚拟屏自己的滑动曲线 */
@@ -4550,6 +4560,14 @@ function launchTargetLocalRect(state: PendingLaunch): LaunchRect {
         width: state.targetWidth,
         height: state.targetHeight,
     };
+}
+
+/** 没有客户端几何的普通窗口先用和启动动画一样的默认尺寸占位 */
+function prepareWindowSizeFallback(frame: ClientWindowFrame, info: WindowInfo) {
+    const scale = info.scale || screenManager.getScale() || 1;
+    frame.surfaceWidth = Math.max(1, Math.round((info.rect.w || 800) * scale));
+    frame.surfaceHeight = Math.max(1, Math.round((info.rect.h || 600) * scale));
+    applyFrameSurfaceSize(frame);
 }
 
 /**
@@ -4700,12 +4718,12 @@ function launchApp(req: AppLaunchRequest) {
             await server.startXwayland();
             const child = server.runApp(req.exec, { env: req.env });
             state.child = child;
-            // 启动失败/提前退出：没有窗口就按托盘面板保留，关掉它时才回收
-            child.once("error", () => markLaunchAsTray(state));
-            child.once("exit", () => markLaunchAsTray(state));
+            // 启动失败/提前退出：没有窗口就保留占位面板，并立即露出关闭按钮
+            child.once("error", () => showLaunchCancel(state));
+            child.once("exit", () => showLaunchCancel(state));
         } catch (error) {
             console.warn(`[launch] 启动 ${req.exec} 失败:`, error);
-            markLaunchAsTray(state);
+            showLaunchCancel(state);
         }
     })();
 }
@@ -4786,7 +4804,7 @@ function startLaunchFlight(state: PendingLaunch) {
         if (state.frame) {
             state.screen = viewData.addWindowScreen(state.frame.handle);
             addWindow(state.screen, state.frame.el.el, state.frame.handle, true);
-            viewData.focusWin(state.frame.handle);
+            // 焦点等启动收尾时再给：创建阶段客户端还没初始化完，激活会被丢掉
         } else {
             state.screen = viewData.addPendingAppScreen();
         }
@@ -4825,6 +4843,7 @@ function startLaunchFlight(state: PendingLaunch) {
     });
     sizeGear.moveTo({ width: targetViewport.width, height: targetViewport.height }, LAUNCH_FLIGHT);
     gear.moveTo({ p: 1 }, LAUNCH_FLIGHT, () => finishLaunchFlight(state));
+    // 窗口已经建好就直接开始替换；晚到的窗口在 attachWindowToLaunch 里开始
     if (state.frame) beginLaunchReplacement(state);
 }
 
@@ -4934,27 +4953,15 @@ function embedLaunchPanel(state: PendingLaunch) {
     if (state.frame) {
         if (!state.replacing) beginLaunchReplacement(state);
         finishLaunchReplacementIfReady(state);
-    } else startLaunchTrayTimer(state);
+    } else showLaunchCancel(state);
 }
 
-function startLaunchTrayTimer(state: PendingLaunch) {
-    clearLaunchTrayTimer(state);
-    state.trayTimer = window.setTimeout(() => {
-        state.trayTimer = undefined;
-        if (!pendingLaunches.has(state) || state.frame) return;
-        markLaunchAsTray(state);
-    }, LAUNCH_TRAY_DELAY);
-}
-
-function clearLaunchTrayTimer(state: PendingLaunch) {
-    if (state.trayTimer === undefined) return;
-    clearTimeout(state.trayTimer);
-    state.trayTimer = undefined;
-}
-
-function markLaunchAsTray(state: PendingLaunch) {
-    if (!pendingLaunches.has(state) || state.frame || state.replacing || state.closing) return;
-    if (state.phase === "press" || state.phase === "flying") return;
+/**
+ * 面板已经落到屏里但还是空占位（没有窗口）：露出关闭按钮，随时可以取消这次启动。
+ * 面板只是占位槽，窗口一建好就会把它替换掉，所以不必等超时。
+ */
+function showLaunchCancel(state: PendingLaunch) {
+    if (!pendingLaunches.has(state) || state.replacing || state.closing) return;
     state.panel.style({ pointerEvents: "auto" });
     state.closeBtn.style({ display: "flex" });
 }
@@ -4964,7 +4971,6 @@ function beginLaunchReplacement(state: PendingLaunch) {
     const frame = state.frame;
     if (!frame || !pendingLaunches.has(state) || state.replacing || state.closing) return;
     state.replacing = true;
-    clearLaunchTrayTimer(state);
     state.closeBtn.style({ display: "none" });
     state.panel.style({ pointerEvents: "none" });
     // 窗口已经挂在面板内部；面板 overflow 裁掉它，动画不会漏到外面
@@ -4987,13 +4993,22 @@ function beginLaunchReplacement(state: PendingLaunch) {
 /** 面板已经嵌入后，窗口也淡入完，才把窗口移回虚拟屏并撤掉面板 */
 function finishLaunchReplacementIfReady(state: PendingLaunch) {
     const frame = state.frame;
-    const screen = state.screen;
-    if (!frame || !screen || !pendingLaunches.has(state)) return;
+    if (!frame || !pendingLaunches.has(state)) return;
     if (!state.revealed || state.phase !== "embedded") return;
-    const final = launchTargetLocalRect(state);
-    addWindow(screen, frame.el.el, frame.handle, true);
-    setClientFramePosition(frame, final.left, final.top);
+    // 启动过程中窗口可能已经被移到别的屏（全屏/最大化）；以它当前的屏为准
+    const screen = viewData.screenOf(frame.handle) ?? state.screen;
+    if (!screen) return;
+    if (frame.el.el.parentElement !== screen.el.el) {
+        if (screen === state.screen) addWindow(screen, frame.el.el, frame.handle, true);
+        else screen.el.add(frame.el.el);
+    }
+    if (screen === state.screen) {
+        const final = launchTargetLocalRect(state);
+        setClientFramePosition(frame, final.left, final.top);
+    }
     frame.el.style({ opacity: "1", pointerEvents: "auto", transform: "none", transformOrigin: "" });
+    // 窗口这时才真正接管屏幕；到这里再激活，客户端已经完成初始化，不会丢掉焦点事件
+    viewData.focusWin(frame.handle);
     state.panel.remove();
     pendingLaunches.delete(state);
     state.flightGear = undefined;
@@ -5075,11 +5090,8 @@ function attachWindowToLaunch(state: PendingLaunch, frame: ClientWindowFrame) {
     state.frame = frame;
     state.winHandle = frame.handle;
     state.claiming = false;
-    clearLaunchTrayTimer(state);
-    state.closeBtn.style({ display: "none" });
-    state.panel.style({ pointerEvents: "none" });
     frame.el.style({ opacity: "0", pointerEvents: "none" });
-    // 只要有真实窗口就放进面板，按面板大小缩放居中；创建后立即开始淡入
+    // 面板是占位槽：第一个窗口建好就放进面板并开始替换，不等首帧
     mountLaunchFrameInPanel(state);
     beginLaunchReplacement(state);
 }
@@ -5111,7 +5123,6 @@ function notifyLaunchWindowSized(frame: ClientWindowFrame) {
 function notifyLaunchWindowClosed(winid: WinHandle) {
     for (const state of pendingLaunches) {
         if (state.winHandle !== winid) continue;
-        clearLaunchTrayTimer(state);
         state.intro?.remove();
         state.intro = undefined;
         state.panel.remove();
@@ -5141,7 +5152,6 @@ async function killProcessTree(pid: number) {
 function forceQuitLaunch(state: PendingLaunch) {
     if (!pendingLaunches.has(state) || state.closing) return;
     state.closing = true;
-    clearLaunchTrayTimer(state);
     state.intro?.remove();
     state.intro = undefined;
     state.closeBtn.style({ display: "none" });
@@ -5923,7 +5933,9 @@ server.server.on("window.created", (info) => {
     const frame = createClientWindowFrame(info, winEl);
     clientWindowFrames.set(wid, frame);
     if (pending) prepareLaunchWindowSize(pending, frame, info);
-    else applyFrameSurfaceSize(frame);
+    else if (info.rect.w > 0 && info.rect.h > 0) applyFrameSurfaceSize(frame);
+    // 还没有客户端几何时先用默认尺寸占位，否则首帧之前会缩成 1×1，多个窗口全叠在正中
+    else prepareWindowSizeFallback(frame, info);
     setClientFramePosition(frame, wino.l, wino.t);
     addWindow(screen, frame.el.el, wid, parent === undefined);
     addResizeHandles(frame.el.el, wid, true, winEl);
@@ -5939,7 +5951,8 @@ server.server.on("window.created", (info) => {
         wid,
         parent === undefined ? { width: 800, height: 600 } : { width: 0, height: 0 },
     );
-    if (screen) viewData.focusWin(wid);
+    // 启动认领的窗口等启动收尾时再聚焦：创建时客户端还没初始化完，激活会被丢掉
+    if (screen && !pending) viewData.focusWin(wid);
     if (parent !== undefined) {
         placeChildWindow(wid, true);
         // 客户端提交首帧后尺寸才确定，下一帧再摆一次（用户拖过之后 placeChildWindow 自己会跳过）
@@ -10487,7 +10500,8 @@ function applyUiScale(scale: number) {
         const info = server.server.windows.get(handle);
         if (!info || info.states.maximized || info.states.fullscreen) continue;
         applyClientFrameChrome(frame);
-        if (frame.decorated) applyFrameSurfaceSize(frame);
+        // 还没有客户端几何（首帧之前是 0×0）时保持当前外框，不能按 0 摆成 1×1
+        if (frame.decorated || info.rect.w <= 0 || info.rect.h <= 0) applyFrameSurfaceSize(frame);
         else setClientFrameLayout(frame, info.rect.w * info.scale, info.rect.h * info.scale);
     }
     // 界面缩放会改变内部窗口的外层尺寸；只重排未被用户拖动的内部窗口，不动应用窗口
@@ -11153,3 +11167,23 @@ MSysApi.getDesktopEntries().then((e) => {
 // 同步初始化到这里结束：快捷键、输入聚合层和工具栏都已就绪。
 // 自动化测试等这个标记再发输入，避免首帧输入落在初始化完成之前被丢掉。
 document.documentElement.dataset.desktopReady = "1";
+
+// 测试入口：启动动画测试直接调用 launchApp，避免依赖启动器搜索和临时 .desktop。
+// 只在 testMode 下挂到 globalThis，正常桌面不存在这个入口。
+if ((globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.testMode === "on") {
+    (globalThis as Record<string, unknown>).__mydeTest = {
+        launchApp: (req: AppLaunchRequest) => launchApp(req),
+        closeWindows: () => {
+            for (const frame of [...clientWindowFrames.values()]) {
+                server.server.notify("window.close", frame.handle);
+            }
+        },
+        forceCloseWindows: () => {
+            for (const frame of [...clientWindowFrames.values()]) closeClientFrameWithFade(frame.handle, frame);
+        },
+        closeLaunchPanels: () => {
+            for (const state of [...pendingLaunches]) forceQuitLaunch(state);
+        },
+        applyUiScale: (scale: number) => applyUiScale(scale),
+    };
+}
