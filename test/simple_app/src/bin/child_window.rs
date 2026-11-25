@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use simple_app::dmabuf;
 use wayland_client::protocol::{wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface};
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
+use wayland_protocols::xdg::decoration::zv1::client::{zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 fn now_ms() -> u128 {
@@ -28,6 +29,8 @@ enum Kind {
 
 struct Win {
     surface: wl_surface::WlSurface,
+    /// 持有引用，保证装饰协议对象不被销毁
+    _decoration: Option<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1>,
     pending_size: Option<(i32, i32)>,
     configured_size: Option<(i32, i32)>,
     frame_size: Option<(i32, i32)>,
@@ -53,6 +56,7 @@ struct App {
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
+    decoration_manager: Option<zxdg_decoration_manager_v1::ZxdgDecorationManagerV1>,
     windows: Vec<Win>,
 }
 
@@ -97,6 +101,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 "wl_compositor" => state.compositor = Some(registry.bind(name, version.min(4), qh, ())),
                 "wl_shm" => state.shm = Some(registry.bind(name, version.min(1), qh, ())),
                 "xdg_wm_base" => state.wm_base = Some(registry.bind(name, version.min(5), qh, ())),
+                "zxdg_decoration_manager_v1" => {
+                    state.decoration_manager = Some(registry.bind(name, version.min(1), qh, ()))
+                }
                 _ => {}
             }
         }
@@ -172,6 +179,8 @@ impl_ignore_dispatch!(
     wl_shm_pool::WlShmPool,
     wl_buffer::WlBuffer,
     wl_surface::WlSurface,
+    zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+    zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1,
 );
 
 impl App {
@@ -233,6 +242,7 @@ fn main() -> Result<()> {
         compositor: None,
         shm: None,
         wm_base: None,
+        decoration_manager: None,
         windows: Vec::new(),
     };
     queue.roundtrip(&mut app)?;
@@ -248,8 +258,14 @@ fn main() -> Result<()> {
     let toplevel = xdg_surface.get_toplevel(&qh, parent_index);
     toplevel.set_app_id(appid.clone());
     toplevel.set_title("Parent Window".to_string());
+    let decoration = app.decoration_manager.as_ref().map(|manager| {
+        let decoration = manager.get_toplevel_decoration(&toplevel, &qh, ());
+        decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
+        decoration
+    });
     app.windows.push(Win {
         surface: surface.clone(),
+        _decoration: decoration,
         pending_size: None,
         configured_size: None,
         frame_size: None,
@@ -284,8 +300,14 @@ fn main() -> Result<()> {
         child_toplevel.set_parent(Some(&toplevel));
     }
     child_toplevel.set_title("Child Dialog".to_string());
+    let child_decoration = app.decoration_manager.as_ref().map(|manager| {
+        let decoration = manager.get_toplevel_decoration(&child_toplevel, &qh, ());
+        decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
+        decoration
+    });
     app.windows.push(Win {
         surface: child_surface.clone(),
+        _decoration: child_decoration,
         pending_size: None,
         configured_size: None,
         frame_size: None,

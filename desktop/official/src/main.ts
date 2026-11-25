@@ -746,6 +746,7 @@ class ViewData {
             screen.visual = value;
             applyScreenTransform(el, value);
             this.syncFocusPanelFrame(screen);
+            this.refreshOverviewReparentedRaster(screen, value);
         });
         el.on("pointerdown", (e) => this.beginOverviewCardDrag(e, screen));
         return screen;
@@ -891,6 +892,8 @@ class ViewData {
         if (this.overview) {
             this.overviewFocusId = target.id;
             this.focusPanelId = target.id;
+            // 预览里屏幕还缩放着，窗口会在缩小状态下重新绘制；退出预览后要再挂一次
+            overviewReparentedWindows.add(winid);
         }
         this.focusWin(winid);
         this.scheduleReorder();
@@ -1016,6 +1019,22 @@ class ViewData {
             }
         };
         for (const id of screen.winIds) append(id);
+    }
+
+    /**
+     * 预览把屏缩小后，期间搬到这张屏的窗口是按缩小尺寸绘制/栅格化的；
+     * 屏回到 1x 后重新挂一次元素，让它们按当前缩放重新栅格化（否则顶栏文字会发虚）。
+     */
+    private refreshOverviewReparentedRaster(screen: ViewScreen, value: ViewTransform) {
+        if (this.overview || Math.abs(value.scale - 1) > 0.001) return;
+        let dirty = false;
+        for (const winid of overviewReparentedWindows) {
+            const el = windowElement(winid);
+            if (!el || el.parentElement !== screen.el.el) continue;
+            overviewReparentedWindows.delete(winid);
+            dirty = true;
+        }
+        if (dirty) this.applyScreenDomOrder(screen);
     }
 
     private suppressOverviewClickUntil = 0;
@@ -1251,6 +1270,7 @@ class ViewData {
     }
 
     closeWin(winid: MWinId) {
+        overviewReparentedWindows.delete(winid);
         const screen = this.win2Screen.get(winid);
         if (!screen) return undefined;
         // 子窗口只从父窗口的屏里摘掉自己：父窗口和虚拟屏都还在，焦点回到父窗口
@@ -3155,6 +3175,8 @@ const windowParents = new Map<MWinId, MWinId>();
 const modalWindows = new Set<MWinId>();
 /** 用户拖动/缩放过位置的子窗口：不再自动居中覆盖父窗口 */
 const childWindowPinned = new Set<MWinId>();
+/** 预览缩放期间被搬到别的虚拟屏的窗口：屏回到 1x 后要重新挂一次，避免沿用缩小尺寸的栅格 */
+const overviewReparentedWindows = new Set<MWinId>();
 
 /** 沿 parent 链找到顶层窗口（对话框的父窗口是应用主窗口，不是别的对话框） */
 function rootWindow(winid: MWinId): MWinId {
