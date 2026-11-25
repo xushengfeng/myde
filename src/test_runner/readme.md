@@ -142,7 +142,7 @@ console.log(formatReport(report));
 
 mock 客户端 `test/simple_app` 的 `window_open` 支持 `DECORATED=1`（请求服务端装饰，桌面会画标题栏和关闭/最大化按钮）和 `SIZE_MODE=configure`（跟随桌面 configure 改尺寸），鼠标窗口操作测试用它们。
 
-窗口管理用例在 `desktop/official/test/window/`：`screens`、`overview`、`launcher`、`pointer`、`gesture`、`interrupt`，统一断言 `state()`；手势按帧喂（帧之间留十几毫秒，单帧位移过大会被触摸板跳变检测丢弃），同一帧只放一次 `sync`。运行：`npx vitest run desktop/official/test/window`（先 `pnpm build:desktop`、`pnpm build:test-apps`）。
+窗口管理用例在 `desktop/official/test/window/`：`screens`、`overview`、`launcher`、`pointer`、`gesture`、`interrupt`，统一断言 `state()`；手势按帧喂（帧之间留十几毫秒，单帧位移过大会被触摸板跳变检测丢弃），同一帧只放一次 `sync`。运行：`npx vitest run desktop/official/test/window/`（尾斜杠避免把 `window_open.test.ts` 也匹配进来；先 `pnpm build:desktop`、`pnpm build:test-apps`）。
 
 ## 截屏 / 输入 / 日志
 
