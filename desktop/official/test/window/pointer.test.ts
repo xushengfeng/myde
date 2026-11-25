@@ -7,6 +7,7 @@ import {
     drag,
     elementBox,
     forceCloseWindow,
+    frameBox,
     launchMock,
     mockAppPath,
     resetDesktop,
@@ -72,19 +73,60 @@ describe("鼠标窗口操作", () => {
         expect(screenById(value, second.screen)?.windows).toEqual([first.handle, second.handle]);
     });
 
-    run("拖动标题栏不能进入顶部工具栏区域", { timeout: 30000 }, async () => {
+    run("拖动标题栏跟随指针移动", { timeout: 30000 }, async () => {
         const win = await launchDecorated("pointer-c", 360, 260);
+        await sleep(250);
+        const before = windowByAppid(await state(desktop), "pointer-c")?.rect;
+        expect(before).toBeTruthy();
+        if (!before) return;
+        const start = await titlebarPoint(desktop, win.handle);
+        await drag(desktop, start, { x: start.x + 120, y: start.y + 80 }, 6);
+
+        const after = await waitState(
+            desktop,
+            (next) => (windowByAppid(next, "pointer-c")?.rect?.x ?? 0) > before.x + 100,
+        );
+        const moved = windowByAppid(after, "pointer-c")?.rect;
+        expect(moved).toBeTruthy();
+        if (!moved) return;
+        expect(Math.abs(moved.x - before.x - 120)).toBeLessThanOrEqual(10);
+        expect(Math.abs(moved.y - before.y - 80)).toBeLessThanOrEqual(10);
+    });
+
+    run("拖到左上角被顶部工具栏夹住", { timeout: 30000 }, async () => {
+        const win = await launchDecorated("pointer-c2", 360, 260);
+        await sleep(250);
         const before = await state(desktop);
         const start = await titlebarPoint(desktop, win.handle);
 
         await drag(desktop, start, { x: 1, y: 1 }, 4);
         const value = await waitState(desktop, (next) => {
-            const moved = windowByAppid(next, "pointer-c");
+            const moved = windowByAppid(next, "pointer-c2");
             return !!moved?.rect && moved.rect.x === next.available.x && moved.rect.y === next.available.y;
         });
-        const rect = windowByAppid(value, "pointer-c")?.rect;
+        const rect = windowByAppid(value, "pointer-c2")?.rect;
         expect(rect?.x).toBe(before.available.x);
         expect(rect?.y).toBe(before.available.y);
+    });
+
+    run("拖到右下角被可用区边界夹住", { timeout: 30000 }, async () => {
+        const win = await launchDecorated("pointer-c3", 360, 260);
+        await sleep(250);
+        const start = await titlebarPoint(desktop, win.handle);
+        const stage = (await state(desktop)).stage;
+
+        await drag(desktop, start, { x: stage.width - 2, y: stage.height - 2 }, 6);
+        const value = await waitState(desktop, (next) => {
+            const moved = windowByAppid(next, "pointer-c3");
+            if (!moved?.rect) return false;
+            return (
+                moved.rect.x === next.available.x + next.available.width - moved.rect.w &&
+                moved.rect.y === next.available.y + next.available.height - moved.rect.h
+            );
+        });
+        const rect = windowByAppid(value, "pointer-c3")?.rect;
+        expect(rect?.x).toBe(value.available.x + value.available.width - (rect?.w ?? 0));
+        expect(rect?.y).toBe(value.available.y + value.available.height - (rect?.h ?? 0));
     });
 
     run("拖动窗口时下层窗口躲开覆盖", { timeout: 30000 }, async () => {
@@ -110,6 +152,56 @@ describe("鼠标窗口操作", () => {
         const otherAfter = windowByAppid(after, "pointer-e")?.rect;
         expect(otherAfter).toBeTruthy();
         expect(JSON.stringify(otherAfter)).not.toBe(JSON.stringify(otherBefore));
+        const movedSelf = windowByAppid(after, "pointer-d")?.rect;
+        if (otherAfter && movedSelf) {
+            const width = Math.max(
+                0,
+                Math.min(movedSelf.x + movedSelf.w, otherAfter.x + otherAfter.w) - Math.max(movedSelf.x, otherAfter.x),
+            );
+            const height = Math.max(
+                0,
+                Math.min(movedSelf.y + movedSelf.h, otherAfter.y + otherAfter.h) - Math.max(movedSelf.y, otherAfter.y),
+            );
+            // 躲避只保证覆盖不超过阈值，不要求完全不重叠
+            expect((width * height) / Math.max(1, otherAfter.w * otherAfter.h)).toBeLessThanOrEqual(0.8);
+        }
+    });
+
+    run("屏内躲不开时拖动停在最后一个合法位置", { timeout: 30000 }, async () => {
+        // 800×600 的窗口在可用区里放不下第二个：下层没有可躲的位置
+        const lower = await launchMock(desktop, {
+            appid: "pointer-k",
+            width: 800,
+            height: 600,
+            env: { DECORATED: "1" },
+        });
+        const upper = await launchMock(desktop, {
+            appid: "pointer-l",
+            width: 800,
+            height: 600,
+            env: { DECORATED: "1" },
+        });
+        await desktop.evaluate(
+            `__mydeTest.placeWindow(${JSON.stringify(lower.handle)}, ${JSON.stringify(lower.screen)}, 0, 28)`,
+        );
+        await desktop.evaluate(
+            `__mydeTest.placeWindow(${JSON.stringify(upper.handle)}, ${JSON.stringify(lower.screen)}, 0, 28)`,
+        );
+        await sleep(100);
+
+        const before = await state(desktop);
+        const beforeUpper = windowByAppid(before, "pointer-k")?.rect;
+        const beforeLower = windowByAppid(before, "pointer-l")?.rect;
+        expect(beforeUpper && beforeLower).toBeTruthy();
+        if (!beforeUpper || !beforeLower) return;
+
+        const start = await titlebarPoint(desktop, upper.handle);
+        await drag(desktop, start, { x: start.x + 40, y: start.y + 30 }, 4);
+        await sleep(200);
+
+        const after = await state(desktop);
+        expect(windowByAppid(after, "pointer-k")?.rect).toEqual(beforeUpper);
+        expect(windowByAppid(after, "pointer-l")?.rect).toEqual(beforeLower);
     });
 
     run("下层被大幅覆盖时点击只换焦点，不提升", { timeout: 30000 }, async () => {
@@ -171,6 +263,47 @@ describe("鼠标窗口操作", () => {
         expect(Math.abs((rect?.w ?? 0) - 800)).toBeLessThanOrEqual(2);
         expect(rect?.h ?? 0).toBeGreaterThan(600);
         expect(rect?.h ?? 0).toBeLessThan(660);
+    });
+
+    run("最大化时被同屏窗口大面积覆盖，会移到新虚拟屏", { timeout: 40000 }, async () => {
+        const small = await launchMock(desktop, {
+            appid: "pointer-m",
+            width: 400,
+            height: 300,
+            env: { DECORATED: "1" },
+        });
+        const big = await launchMock(desktop, {
+            appid: "pointer-n",
+            width: 1200,
+            height: 600,
+            env: { DECORATED: "1" },
+        });
+        await desktop.evaluate(
+            `__mydeTest.placeWindow(${JSON.stringify(big.handle)}, ${JSON.stringify(big.screen)}, 0, 28)`,
+        );
+        await desktop.evaluate(
+            `__mydeTest.placeWindow(${JSON.stringify(small.handle)}, ${JSON.stringify(big.screen)}, 0, 400)`,
+        );
+        await sleep(100);
+
+        await clickControl(small.handle, "maximize");
+        const maximized = await waitState(
+            desktop,
+            (next) => {
+                const win = windowByAppid(next, "pointer-m");
+                return win?.maximized === true && win.screen !== big.screen;
+            },
+            8000,
+            "被覆盖的最大化窗口换屏",
+        );
+        const moved = windowByAppid(maximized, "pointer-m");
+        expect(moved?.screen).not.toBe(big.screen);
+        expect(maximized.current).toBe(moved?.screen);
+        expect(
+            maximized.screens.filter((screen) => !screen.empty && !screen.launchpad).length,
+            "原屏还有大窗口，不能回收",
+        ).toBe(2);
+        expect(windowByAppid(maximized, "pointer-n")?.screen).toBe(big.screen);
     });
 
     run("拖动右边缩放热区改变窗口尺寸", { timeout: 30000 }, async () => {

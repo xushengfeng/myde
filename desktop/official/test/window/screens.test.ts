@@ -138,6 +138,24 @@ describe("虚拟屏与启动", () => {
         expect(afterSecond.current).toBe(afterSecond.screens[0].id);
     });
 
+    run("关闭中间屏最后一个窗口：落到左邻，右屏不动", { timeout: 40000 }, async () => {
+        const first = await launchMock(desktop, { appid: "screen-o" });
+        const second = await launchMock(desktop, { appid: "screen-p" });
+        const third = await launchMock(desktop, { appid: "screen-q" });
+
+        await desktop.key("ArrowRight", { modifiers: META });
+        await waitState(desktop, (value) => value.current === second.screen);
+
+        await closeWindow(desktop, second.handle);
+        const after = await waitState(
+            desktop,
+            (value) => !value.windows.some((win) => win.handle === second.handle) && value.current === first.screen,
+        );
+        expect(after.screens.some((screen) => screen.id === second.screen)).toBe(false);
+        expect(after.screens.map((screen) => screen.id).slice(0, 2)).toEqual([first.screen, third.screen]);
+        expect(screenById(after, third.screen)?.windows).toEqual([third.handle]);
+    });
+
     run("Super+D 在空桌面和最近使用应用之间切换", { timeout: 40000 }, async () => {
         const emptyOnly = await state(desktop);
         await desktop.key("KeyD", { modifiers: META });
