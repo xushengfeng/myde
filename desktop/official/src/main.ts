@@ -949,6 +949,73 @@ class ViewData {
         return undefined;
     }
 
+    /**
+     * 给正在 resize 的窗口找一个覆盖冲突最少的层序。
+     * 返回插入位置（0 最底，others.length 最顶）；没有任何零冲突层序时返回 undefined。
+     */
+    chooseOrderForRect(winid: MWinId, rect: ScreenRect): number | undefined {
+        const screen = this.win2Screen.get(winid);
+        if (!screen) return 0;
+        const others = screen.winIds.filter((id) => id !== winid);
+        const rects = new Map<MWinId, ScreenRect>();
+        for (const id of others) {
+            const other = windowLocalRect(id);
+            if (other) rects.set(id, other);
+        }
+        let bestIndex = 0;
+        let bestScore = Number.POSITIVE_INFINITY;
+        for (let k = 0; k <= others.length; k++) {
+            let score = 0;
+            // 窗口在下面这些窗口之上：窗口压住它们
+            for (let j = 0; j < k; j++) {
+                const other = rects.get(others[j]);
+                if (other && coveredRatio(rect, other) > OVERLAP_LIMIT) score++;
+            }
+            // 窗口在上面这些窗口之下：它们合计压住窗口
+            const covered: ScreenRect[] = [];
+            for (let j = k; j < others.length; j++) {
+                const other = rects.get(others[j]);
+                if (!other) continue;
+                const x1 = Math.max(rect.x, other.x);
+                const y1 = Math.max(rect.y, other.y);
+                const x2 = Math.min(rect.x + rect.w, other.x + other.w);
+                const y2 = Math.min(rect.y + rect.h, other.y + other.h);
+                if (x2 > x1 && y2 > y1) covered.push({ x: x1, y: y1, w: x2 - x1, h: y2 - y1 });
+            }
+            if (covered.length > 0 && unionArea(covered) / Math.max(1, rect.w * rect.h) > OVERLAP_LIMIT) {
+                score++;
+            }
+            if (score < bestScore) {
+                bestScore = score;
+                bestIndex = k;
+            }
+        }
+        return bestScore === 0 ? bestIndex : undefined;
+    }
+
+    /** 把窗口放到指定的层序位置，并同步 DOM 顺序 */
+    applyWinOrder(winid: MWinId, index: number) {
+        const screen = this.win2Screen.get(winid);
+        if (!screen) return;
+        const others = screen.winIds.filter((id) => id !== winid);
+        const next = [...others.slice(0, index), winid, ...others.slice(index)];
+        if (next.every((id, i) => screen.winIds[i] === id)) return;
+        screen.winIds = next;
+        this.applyScreenDomOrder(screen);
+    }
+
+    private applyScreenDomOrder(screen: ViewScreen) {
+        const append = (id: MWinId) => {
+            const el = windowElement(id);
+            if (!el || el.parentElement !== screen.el.el) return;
+            screen.el.el.appendChild(el);
+            for (const [child, parent] of windowParents) {
+                if (parent === id) append(child);
+            }
+        };
+        for (const id of screen.winIds) append(id);
+    }
+
     private suppressOverviewClickUntil = 0;
 
     /** 全局预览里拖动卡片：把这张屏最上层的窗口拖到指针下的另一张屏 */
@@ -2884,20 +2951,17 @@ function beginWindowResize(
         width = Math.max(minWidth, Math.min(width, maxX - left));
         height = Math.max(minHeight, Math.min(height, maxY - top));
 
-        // 缩放时先让同屏其它窗口躲开；躲不开才停在最后一个合法尺寸
+        // 缩放时先改层序，让覆盖冲突最少；没有零冲突层序才停在最后一个合法尺寸
         const overlapFrame = wayland ? clientWindowFrames.get(windowId) : undefined;
         const outerHeight = height + (overlapFrame ? decoratedTitlebarPx(overlapFrame) : 0);
         if (!windowParents.has(windowId)) {
-            const screen = viewData.screenOf(windowId);
-            if (screen) {
-                const moves = planDodges(screen, windowId, { x: left, y: top, w: width, h: outerHeight });
-                if (!moves) {
-                    resizeBlockedByOverlap = true;
-                    desired = { left, top, width, height };
-                    return;
-                }
-                applyDodges(moves);
+            const order = viewData.chooseOrderForRect(windowId, { x: left, y: top, w: width, h: outerHeight });
+            if (order === undefined) {
+                resizeBlockedByOverlap = true;
+                desired = { left, top, width, height };
+                return;
             }
+            viewData.applyWinOrder(windowId, order);
         }
         resizeBlockedByOverlap = false;
 
