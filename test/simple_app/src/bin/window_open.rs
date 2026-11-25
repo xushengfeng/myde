@@ -7,6 +7,7 @@
 //! - `SIZE_MODE`：`fixed`（忽略 configure，用 WIDTH×HEIGHT）或 `configure`
 //! - `WIDTH` / `HEIGHT`：buffer 尺寸（默认 800×600）
 //! - `APP_ID`：xdg_toplevel.set_app_id（默认 window-open-test）
+//! - `DECORATED`：`1` 时请求服务端装饰，桌面会额外画标题栏和窗口按钮
 //! - `LIFETIME_MS`：最长运行时间（默认 8000）
 //!
 //! 按需求不发送任何 xdg 尺寸设置：不调用 set_window_geometry、set_min_size、
@@ -23,6 +24,7 @@ use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_protocols::xdg::decoration::zv1::client::{zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 fn now_ms() -> u128 {
@@ -93,6 +95,9 @@ struct App {
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
+    decoration_manager: Option<zxdg_decoration_manager_v1::ZxdgDecorationManagerV1>,
+    /// 持有引用，保证装饰协议对象不被销毁
+    decoration: Option<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1>,
     surface: Option<wl_surface::WlSurface>,
     xdg_surface: Option<xdg_surface::XdgSurface>,
     toplevel: Option<xdg_toplevel::XdgToplevel>,
@@ -112,6 +117,8 @@ impl App {
             compositor: None,
             shm: None,
             wm_base: None,
+            decoration_manager: None,
+            decoration: None,
             surface: None,
             xdg_surface: None,
             toplevel: None,
@@ -209,6 +216,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 "xdg_wm_base" => {
                     state.wm_base = Some(registry.bind(name, version.min(5), qh, ()));
                 }
+                "zxdg_decoration_manager_v1" => {
+                    state.decoration_manager = Some(registry.bind(name, version.min(1), qh, ()));
+                }
                 _ => {}
             }
         }
@@ -294,6 +304,8 @@ impl_ignore_dispatch!(
     wl_shm_pool::WlShmPool,
     wl_buffer::WlBuffer,
     wl_surface::WlSurface,
+    zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+    zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1,
 );
 
 fn main() -> Result<()> {
@@ -344,6 +356,14 @@ fn main() -> Result<()> {
     let toplevel = xdg_surface.get_toplevel(&qh, ());
     toplevel.set_app_id(appid.clone());
     toplevel.set_title("Window Open Test".to_string());
+    let decorated = std::env::var("DECORATED").map(|v| v != "0").unwrap_or(false);
+    if decorated {
+        if let Some(manager) = app.decoration_manager.as_ref() {
+            let decoration = manager.get_toplevel_decoration(&toplevel, &qh, ());
+            decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
+            app.decoration = Some(decoration);
+        }
+    }
     app.surface = Some(surface.clone());
     app.xdg_surface = Some(xdg_surface.clone());
     app.toplevel = Some(toplevel.clone());

@@ -1127,7 +1127,7 @@ try {
 - 自动化测试不得直接使用宿主 `DISPLAY`/`WAYLAND_DISPLAY`，不得在宿主桌面开窗口。`startDesktopRunner` 会启动私有 weston headless + Xwayland，窗口在 weston 里且隐藏；没有 weston/Xwayland 时退回 Electron headless ozone。
 - 临时 UI 检查用 `startDesktopRunner` 截图、无头浏览器或其他无头工具；不要用 `desktop:official`/`desktop:simpletest` 作为自动测试步骤。它们是开发预览脚本，会打开真实窗口。
 - `desktop` 参数指向桌面包；`desktop/official` 读 `dist/index.js`，测试前先 `pnpm build:desktop`。没有构建时示例测试会跳过。
-- 端到端测试只覆盖窗口模式（`displayType=window`）。原生模式（`runAsDesktop` + `myde-wrap` DRM）依赖真实 evdev/DRM，不在自动测试范围。三指手势在窗口模式下没有真实触摸板，用 testMode 的 `__mydeTest.touchpadFeed` 注入，状态断言用 `__mydeTest.state()`，见 `desktop/official/test/window_gesture.test.ts`。应用列表用 `__mydeTest.setApps` 换成假应用，`exec` 指向 mock 客户端，见 `desktop/official/test/mock_apps.test.ts`。
+- 端到端测试只覆盖窗口模式（`displayType=window`）。原生模式（`runAsDesktop` + `myde-wrap` DRM）依赖真实 evdev/DRM，不在自动测试范围。三指手势在窗口模式下没有真实触摸板，用 testMode 的 `__mydeTest.touchpadFeed` 注入，状态断言用 `__mydeTest.state()`；窗口管理用例在 `desktop/official/test/window/`（键盘、鼠标、手势、打断）。应用列表用 `__mydeTest.setApps` 换成假应用，`exec` 指向 mock 客户端（`DECORATED=1` 可测标题栏按钮），见 `desktop/official/test/mock_apps.test.ts`。
 - `startDesktopRunner` 默认使用私有 session bus，避免通知/托盘 watcher 注册到宿主会话；测试自己用 `DBusTestEnv` 时通过 `env` 覆盖。
 - 截屏/输入/日志的分层见[测试 runner](../src/test_runner/readme.md)。
 

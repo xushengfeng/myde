@@ -2185,6 +2185,7 @@ class ViewData {
     snapshot() {
         return {
             stage: { width: this.stageWidth, height: this.stageHeight },
+            available: availableStageSize(),
             screens: this.screens.map((screen) => ({
                 id: screen.id,
                 windows: [...screen.winIds],
@@ -2219,12 +2220,55 @@ class ViewData {
                       focused: isLauncherInputFocused(),
                   }
                 : undefined,
-            windows: [...this.win2Screen].map(([handle, screen]) => ({
-                handle,
-                screen: screen.id,
-                appid: clientWindowFrames.get(handle)?.appid ?? server.server.windows.get(handle)?.appid ?? "",
-            })),
+            windows: [...this.win2Screen].map(([handle, screen]) => {
+                const info = server.server.windows.get(handle);
+                const rect = windowLocalRect(handle);
+                return {
+                    handle,
+                    screen: screen.id,
+                    appid: clientWindowFrames.get(handle)?.appid ?? info?.appid ?? "",
+                    rect: rect ? { ...rect } : undefined,
+                    maximized: info?.states.maximized ?? false,
+                    fullscreen: info?.states.fullscreen ?? false,
+                    parent: windowParents.get(handle),
+                    modal: modalWindows.has(handle),
+                };
+            }),
         };
+    }
+
+    /** 测试复位：取消手势、退出预览、回到空桌面（窗口由调用方先关掉） */
+    resetView() {
+        this.cancelGesture();
+        this.setOverviewInternal(false);
+        this.cancelReorder();
+        const empty = this.screens.find((screen) => screen.empty);
+        if (empty) this.setCurrentScreen(empty.id, false);
+        this.cancelReorder();
+    }
+
+    /** 测试夹具：把窗口直接放到指定屏的坐标，跳过空位和覆盖检查 */
+    placeWindow(winid: MWinId, screenId: string, x: number, y: number) {
+        const target = this.screens.find((screen) => screen.id === screenId);
+        const source = this.win2Screen.get(winid);
+        if (!target || !source || target.launchpad) return false;
+        if (source !== target) {
+            const index = source.winIds.indexOf(winid);
+            if (index >= 0) source.winIds.splice(index, 1);
+            this.win2Screen.set(winid, target);
+            if (!target.winIds.includes(winid)) target.winIds.push(winid);
+            this.moveWindowStackToScreen(winid, target);
+            if (source.winIds.length === 0 && !source.empty && !source.launchpad) this.removeScreen(source, target);
+            if (target.empty) {
+                target.empty = false;
+                this.createEmptyScreen();
+            }
+            target.used = ++this.usedSeq;
+        }
+        setWindowPosition(winid, x, y);
+        this.currentId = target.id;
+        this.render(false);
+        return true;
     }
 
     blurAll() {
@@ -11401,6 +11445,14 @@ if ((globalThis as { process?: { env?: Record<string, string | undefined> } }).p
 
     let testTouchpad: ReturnType<typeof createTestTouchpad> | undefined;
 
+    /** 测试里点关闭按钮时先记录关窗请求，不依赖客户端进程的 peer end 时序 */
+    const closeRequests: WinHandle[] = [];
+    const rawNotify = server.server.notify.bind(server.server) as (key: string, ...args: unknown[]) => void;
+    server.server.notify = ((key: string, ...args: unknown[]) => {
+        if (key === "window.close") closeRequests.push(args[0] as WinHandle);
+        rawNotify(key, ...args);
+    }) as unknown as typeof server.server.notify;
+
     const touchpadFeed = (events: TestTouchpadEvent[]) => {
         testTouchpad ??= createTestTouchpad();
         const { dev } = testTouchpad;
@@ -11437,6 +11489,7 @@ if ((globalThis as { process?: { env?: Record<string, string | undefined> } }).p
                 server.server.notify("window.close", frame.handle);
             }
         },
+        closeWindow: (handle: WinHandle) => server.server.notify("window.close", handle),
         forceCloseWindows: () => {
             for (const frame of [...clientWindowFrames.values()]) closeClientFrameWithFade(frame.handle, frame);
         },
@@ -11446,6 +11499,27 @@ if ((globalThis as { process?: { env?: Record<string, string | undefined> } }).p
         applyUiScale: (scale: number) => applyUiScale(scale),
         state: () => viewData.snapshot(),
         setApps: (apps?: DesktopApp[]) => setApps(apps),
+        setReorderDelay: (ms: number) => {
+            reorderDelay = normalizeReorderDelay(ms);
+        },
+        closeRequests: () => [...closeRequests],
+        clearCloseRequests: () => {
+            closeRequests.length = 0;
+        },
+        resetView: () => {
+            for (const frame of [...clientWindowFrames.values()]) server.server.notify("window.close", frame.handle);
+            for (const frame of [...clientWindowFrames.values()]) closeClientFrameWithFade(frame.handle, frame);
+            for (const state of [...pendingLaunches]) forceQuitLaunch(state);
+            viewData.resetView();
+            launcher.applyBinding({ kind: "line", level: 0 });
+            closeRequests.length = 0;
+        },
+        forceCloseWindow: (handle: WinHandle) => {
+            const frame = clientWindowFrames.get(handle);
+            if (frame) closeClientFrameWithFade(handle, frame);
+        },
+        placeWindow: (handle: WinHandle, screenId: string, x: number, y: number) =>
+            viewData.placeWindow(handle, screenId, x, y),
         touchpadFeed,
         touchpadDetach: () => {
             testTouchpad?.dispose();
