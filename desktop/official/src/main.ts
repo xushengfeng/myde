@@ -846,7 +846,7 @@ class ViewData {
      * 把窗口移到另一张虚拟屏。目标屏放不下（覆盖超限）时返回 false，窗口留在原屏。
      * 目标屏是空桌面时，它会变成应用屏，并在右边补一个新的空桌面。
      */
-    moveWindowToScreen(winid: MWinId, target: ViewScreen): boolean {
+    moveWindowToScreen(winid: MWinId, target: ViewScreen, at?: { x: number; y: number }): boolean {
         const source = this.win2Screen.get(winid);
         if (!source || source === target || target.launchpad) return false;
         const el = windowElement(winid);
@@ -854,11 +854,15 @@ class ViewData {
         const height = el?.offsetHeight ?? 0;
         const oldLeft = el?.offsetLeft ?? 0;
         const oldTop = el?.offsetTop ?? 0;
-        const stageWidth = windowEl.el.offsetWidth;
-        const stageHeight = windowEl.el.offsetHeight;
+        // 全局拖放时用指针位置当落点，否则沿用窗口原来的屏内位置
+        const available = availableStageSize();
+        const minX = available.x;
+        const minY = available.y;
+        const maxX = Math.max(minX, available.x + available.width - width);
+        const maxY = Math.max(minY, available.y + available.height - height);
         const spot = this.findFreeSpot(target, winid, {
-            x: Math.max(0, Math.min(oldLeft, Math.max(0, stageWidth - width))),
-            y: Math.max(0, Math.min(oldTop, Math.max(0, stageHeight - height))),
+            x: Math.min(Math.max(minX, at?.x ?? oldLeft), maxX),
+            y: Math.min(Math.max(minY, at?.y ?? oldTop), maxY),
             w: width,
             h: height,
         });
@@ -917,21 +921,25 @@ class ViewData {
     }
 
     private findFreeSpot(screen: ViewScreen, winid: MWinId, rect: ScreenRect): ScreenRect | undefined {
-        const stageWidth = windowEl.el.offsetWidth;
-        const stageHeight = windowEl.el.offsetHeight;
+        const available = availableStageSize();
+        const minX = available.x;
+        const minY = available.y;
+        const maxX = available.x + available.width;
+        const maxY = available.y + available.height;
         const fits = (x: number, y: number) =>
-            x >= 0 &&
-            y >= 0 &&
-            x + rect.w <= stageWidth &&
-            y + rect.h <= stageHeight &&
+            x >= minX &&
+            y >= minY &&
+            // 窗口本身比可用区还大时允许溢出，只保证左上角在可用区内
+            (rect.w > available.width || x + rect.w <= maxX) &&
+            (rect.h > available.height || y + rect.h <= maxY) &&
             !rectOverlapsTooMuch(screen, winid, { x, y, w: rect.w, h: rect.h });
         if (fits(rect.x, rect.y)) return rect;
-        const cx = Math.round((stageWidth - rect.w) / 2);
-        const cy = Math.round((stageHeight - rect.h) / 2);
+        const cx = Math.round(minX + (available.width - rect.w) / 2);
+        const cy = Math.round(minY + (available.height - rect.h) / 2);
         if (fits(cx, cy)) return { x: cx, y: cy, w: rect.w, h: rect.h };
         const step = 48;
-        for (let y = 0; y <= stageHeight - rect.h; y += step) {
-            for (let x = 0; x <= stageWidth - rect.w; x += step) {
+        for (let y = minY; y <= maxY - rect.h; y += step) {
+            for (let x = minX; x <= maxX - rect.w; x += step) {
                 if (fits(x, y)) return { x, y, w: rect.w, h: rect.h };
             }
         }
@@ -964,13 +972,27 @@ class ViewData {
             window.removeEventListener("pointerup", onUp);
             window.removeEventListener("pointercancel", onUp);
         };
-        const onUp = () => {
+        const onUp = (ev: PointerEvent) => {
             cleanup();
             clearHighlight();
             if (!moved) return;
             this.suppressOverviewClickUntil = performance.now() + 250;
+            if (ev.type === "pointercancel" || !target) return;
             const winid = topWin(source);
-            if (target && winid) this.moveWindowToScreen(winid, target);
+            if (!winid) return;
+            // 目标卡片的视觉矩形换算回屏内坐标；窗口中心跟随松手位置
+            const rect = target.el.el.getBoundingClientRect();
+            const stageWidth = windowEl.el.offsetWidth;
+            const stageHeight = windowEl.el.offsetHeight;
+            const scaleX = rect.width / Math.max(1, stageWidth);
+            const scaleY = rect.height / Math.max(1, stageHeight);
+            const el = windowElement(winid);
+            const width = el?.offsetWidth ?? 0;
+            const height = el?.offsetHeight ?? 0;
+            this.moveWindowToScreen(winid, target, {
+                x: (ev.clientX - rect.left) / Math.max(0.0001, scaleX) - width / 2,
+                y: (ev.clientY - rect.top) / Math.max(0.0001, scaleY) - height / 2,
+            });
         };
         window.addEventListener("pointermove", onMove);
         window.addEventListener("pointerup", onUp);
@@ -2826,19 +2848,22 @@ function beginWindowResize(
             height = minHeight;
         }
 
-        // 不越出虚拟屏
-        const stageWidth = windowEl.el.offsetWidth;
-        const stageHeight = windowEl.el.offsetHeight;
-        if (left < 0) {
-            width += left;
-            left = 0;
+        // 不越出窗口可用区（顶部工具栏等）
+        const available = availableStageSize();
+        const minX = available.x;
+        const minY = available.y;
+        const maxX = available.x + available.width;
+        const maxY = available.y + available.height;
+        if (left < minX) {
+            width += left - minX;
+            left = minX;
         }
-        if (top < 0) {
-            height += top;
-            top = 0;
+        if (top < minY) {
+            height += top - minY;
+            top = minY;
         }
-        width = Math.min(width, stageWidth - left);
-        height = Math.min(height, stageHeight - top);
+        width = Math.max(minWidth, Math.min(width, maxX - left));
+        height = Math.max(minHeight, Math.min(height, maxY - top));
 
         // 缩放时先让同屏其它窗口躲开；躲不开才停在最后一个合法尺寸
         const overlapFrame = wayland ? clientWindowFrames.get(windowId) : undefined;
@@ -3129,8 +3154,6 @@ type DodgeMove = { id: MWinId; x: number; y: number };
  * 只改位置不改尺寸；有窗口挪不开（被固定或屏内没有空位）时整次规划失败，返回 undefined。
  */
 function planDodges(screen: ViewScreen, moving: MWinId, movingRect: ScreenRect): DodgeMove[] | undefined {
-    const stageWidth = windowEl.el.offsetWidth;
-    const stageHeight = windowEl.el.offsetHeight;
     const positions = new Map<MWinId, ScreenRect>();
     for (const id of screen.winIds) {
         const rect = windowLocalRect(id);
@@ -3149,7 +3172,7 @@ function planDodges(screen: ViewScreen, moving: MWinId, movingRect: ScreenRect):
         if (covered <= OVERLAP_LIMIT) continue;
         const info = server.server.windows.get(id);
         if (info?.states.maximized || info?.states.fullscreen) return undefined;
-        const spot = findDodgeSpot(movingRect, current, positions, id, stageWidth, stageHeight);
+        const spot = findDodgeSpot(movingRect, current, positions, id);
         if (!spot) return undefined;
         positions.set(id, spot);
         moves.push({ id, x: spot.x, y: spot.y });
@@ -3162,11 +3185,14 @@ function findDodgeSpot(
     self: ScreenRect,
     positions: Map<MWinId, ScreenRect>,
     selfId: MWinId,
-    stageWidth: number,
-    stageHeight: number,
 ): ScreenRect | undefined {
-    const clampX = (x: number) => Math.min(Math.max(0, Math.round(x)), Math.max(0, stageWidth - self.w));
-    const clampY = (y: number) => Math.min(Math.max(0, Math.round(y)), Math.max(0, stageHeight - self.h));
+    const available = availableStageSize();
+    const minX = available.x;
+    const minY = available.y;
+    const maxX = available.x + available.width;
+    const maxY = available.y + available.height;
+    const clampX = (x: number) => Math.min(Math.max(minX, Math.round(x)), Math.max(minX, maxX - self.w));
+    const clampY = (y: number) => Math.min(Math.max(minY, Math.round(y)), Math.max(minY, maxY - self.h));
     const candidates: ScreenRect[] = [
         { x: clampX(moving.x - self.w), y: self.y, w: self.w, h: self.h },
         { x: clampX(moving.x + moving.w), y: self.y, w: self.w, h: self.h },
@@ -3195,8 +3221,8 @@ function findDodgeSpot(
 
     // 四个方向都被挡住时，再按网格找最近的空位
     const step = 48;
-    for (let y = 0; y <= stageHeight - self.h; y += step) {
-        for (let x = 0; x <= stageWidth - self.w; x += step) {
+    for (let y = minY; y <= maxY - self.h; y += step) {
+        for (let x = minX; x <= maxX - self.w; x += step) {
             const candidate = { x, y, w: self.w, h: self.h };
             if (!ok(candidate)) continue;
             const distance = (candidate.x - self.x) ** 2 + (candidate.y - self.y) ** 2;
@@ -3475,12 +3501,13 @@ function beginClientFrameMove(frame: ClientWindowFrame, handle: WinHandle, e: Po
     let lastTop = Math.round(origTop);
 
     function onPointerMove(ev: PointerEvent) {
-        const stageWidth = windowEl.el.offsetWidth;
-        const stageHeight = windowEl.el.offsetHeight;
+        const available = availableStageSize();
         const width = frame.el.el.offsetWidth;
         const height = frame.el.el.offsetHeight;
-        const left = Math.min(Math.max(0, Math.round(ev.clientX - startX + origLeft)), Math.max(0, stageWidth - width));
-        const top = Math.min(Math.max(0, Math.round(ev.clientY - startY + origTop)), Math.max(0, stageHeight - height));
+        const maxX = Math.max(available.x, available.x + available.width - width);
+        const maxY = Math.max(available.y, available.y + available.height - height);
+        const left = Math.min(Math.max(available.x, Math.round(ev.clientX - startX + origLeft)), maxX);
+        const top = Math.min(Math.max(available.y, Math.round(ev.clientY - startY + origTop)), maxY);
         if (!windowParents.has(handle)) {
             const screen = viewData.screenOf(handle);
             if (screen) {
@@ -5824,18 +5851,13 @@ server.server.on("window.startMove", (wid) => {
     let lastTop = Math.round(origTop);
 
     function onPointerMove() {
-        const stageWidth = windowEl.el.offsetWidth;
-        const stageHeight = windowEl.el.offsetHeight;
+        const available = availableStageSize();
         const width = movingFrame.el.el.offsetWidth;
         const height = movingFrame.el.el.offsetHeight;
-        const newLeft = Math.min(
-            Math.max(0, Math.round(mousePos.x - startX + origLeft)),
-            Math.max(0, stageWidth - width),
-        );
-        const newTop = Math.min(
-            Math.max(0, Math.round(mousePos.y - startY + origTop)),
-            Math.max(0, stageHeight - height),
-        );
+        const maxX = Math.max(available.x, available.x + available.width - width);
+        const maxY = Math.max(available.y, available.y + available.height - height);
+        const newLeft = Math.min(Math.max(available.x, Math.round(mousePos.x - startX + origLeft)), maxX);
+        const newTop = Math.min(Math.max(available.y, Math.round(mousePos.y - startY + origTop)), maxY);
         if (!windowParents.has(wid)) {
             const screen = viewData.screenOf(wid);
             if (screen) {
