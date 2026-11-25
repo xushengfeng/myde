@@ -8404,6 +8404,9 @@ function createLauncher(): LauncherController {
     shell.on("click", () => field.el.focus());
 
     const gear = new AnimationGear({ value: 0 }, { transition: LAUNCHER_TRANSITION });
+    // 直连和 N-H-T 线用各自的动画器：直连的 progress 是 0..1，线的 level 是 -1..1，
+    // 共用一个值会出现“t→n 完成后最后一帧把 -1 写回 1”的问题。
+    const directGear = new AnimationGear({ value: 0 }, { transition: LAUNCHER_TRANSITION });
     const blurInput = () => {
         if (document.activeElement instanceof HTMLElement && document.activeElement.closest("[data-launcher-input]")) {
             document.activeElement.blur();
@@ -8434,11 +8437,18 @@ function createLauncher(): LauncherController {
         }
     };
     gear.setUpdateCallback(({ value }) => {
-        if (path.kind === "line") lineLevel = clampNumber(value, -1, 1);
-        else directProgress = clampNumber(value, 0, 1);
+        // 直连期间线动画器的残留帧不能再写 lineLevel；切回线时由 setLineLevel/settle 同步
+        if (path.kind !== "line") return;
+        lineLevel = clampNumber(value, -1, 1);
+        apply();
+    });
+    directGear.setUpdateCallback(({ value }) => {
+        if (path.kind !== "direct") return;
+        directProgress = clampNumber(value, 0, 1);
         apply();
     });
     gear.moveTo({ value: 0 }, 0);
+    directGear.moveTo({ value: 0 }, 0);
 
     const setLineLevel = (level: number) => {
         path = { kind: "line" };
@@ -8449,13 +8459,15 @@ function createLauncher(): LauncherController {
     const setDirectProgress = (progress: number) => {
         if (path.kind !== "direct") return;
         directProgress = clampNumber(progress, 0, 1);
-        gear.moveTo({ value: directProgress }, 0);
+        directGear.moveTo({ value: directProgress }, 0);
         apply();
     };
     const animateLineTo = (target: number) => {
         path = { kind: "line" };
         gear.moveTo({ value: lineLevel }, 0);
-        gear.moveTo({ value: clampNumber(target, -1, 1) }, LAUNCHER_TRANSITION, () => {
+        // 每次给全新对象：moveTo 会把 onComplete 写到传入的 transition 上，
+        // 共用 LAUNCHER_TRANSITION 会让下一次无回调的 moveTo 继承旧回调
+        gear.moveTo({ value: clampNumber(target, -1, 1) }, { ...LAUNCHER_TRANSITION }, () => {
             if (target === 1) tOrigin = "h";
         });
     };
@@ -8463,19 +8475,19 @@ function createLauncher(): LauncherController {
         if (path.kind !== "direct") return;
         const from = path.from;
         const to = path.to;
-        gear.moveTo({ value: directProgress }, 0);
-        gear.moveTo({ value: target }, LAUNCHER_TRANSITION, () => {
+        directGear.moveTo({ value: directProgress }, 0);
+        directGear.moveTo({ value: target }, { ...LAUNCHER_TRANSITION }, () => {
             const endState = target === 1 ? to : from;
             if (endState === "t" && from === "n") tOrigin = "n";
-            // 直连结束后回到 N-H-T 线；不要在 gear 的完成回调里再启动 gear，下一次动画开始前会自己同步
             path = { kind: "line" };
             lineLevel = endState === "t" ? 1 : -1;
+            // 线动画器在直连期间没有动过，保持 idle；下一次线动画/吸附会先同步到 lineLevel
             apply();
         });
     };
     const settle = () => {
         if (path.kind === "line") gear.moveTo({ value: lineLevel }, 0);
-        else gear.moveTo({ value: directProgress }, 0);
+        else directGear.moveTo({ value: directProgress }, 0);
     };
     const applyBinding = (binding: LauncherBinding) => {
         if (binding.kind === "line") {
@@ -8484,7 +8496,7 @@ function createLauncher(): LauncherController {
         }
         path = { kind: "direct", from: binding.from, to: binding.to };
         directProgress = clampNumber(binding.progress, 0, 1);
-        gear.moveTo({ value: directProgress }, 0);
+        directGear.moveTo({ value: directProgress }, 0);
         apply();
     };
     const enterOverview = () => {
@@ -8496,7 +8508,6 @@ function createLauncher(): LauncherController {
         if (!gear.getRunningAnimation().isRunning && Math.abs(lineLevel + 1) < 0.0001) {
             path = { kind: "direct", from: "n", to: "t" };
             directProgress = 0;
-            gear.moveTo({ value: 0 }, 0);
             animateDirectTo(1);
             return;
         }
@@ -8511,7 +8522,6 @@ function createLauncher(): LauncherController {
         if (!gear.getRunningAnimation().isRunning && lineLevel >= 0.9999 && tOrigin === "n") {
             path = { kind: "direct", from: "t", to: "n" };
             directProgress = 0;
-            gear.moveTo({ value: 0 }, 0);
             animateDirectTo(1);
             return;
         }
@@ -10548,6 +10558,12 @@ body.on("keydown", (e) => {
         if (!e.repeat && e.code === "Escape") {
             e.preventDefault();
             viewData.setOverview(false);
+            return;
+        }
+        // Super+Tab 是预览开关：搜索框拿到焦点后也要能退出，不能留给输入框忽略
+        if (!e.repeat && e.code === "Tab" && matchBindings(e, DESKTOP_BINDINGS)) {
+            e.preventDefault();
+            viewData.toggleOverview();
             return;
         }
         if (isLauncherInputFocused() || isInternalWindow(viewData.focusHandle)) return;
