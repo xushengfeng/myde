@@ -10062,6 +10062,8 @@ function toggleMaximizeWindow(winid = viewData.focusHandle) {
 
     syncClientFrameMaximized(frame, maximized);
     if (maximized) {
+        // 桌面命令不会回 window.changed，这里直接处理「本屏还有其它窗口就先挪到新屏」
+        viewData.moveWindowToNewScreen(winid);
         const available = availableStageSize();
         const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
         setClientFrameLayout(frame, available.width, contentHeight);
@@ -10101,6 +10103,8 @@ function toggleFullscreen(winid = viewData.focusHandle) {
     const frame = clientWindowFrames.get(winid);
 
     if (next) {
+        // 桌面命令不会回 window.changed，这里直接处理「本屏还有其它窗口就先挪到新屏」
+        viewData.moveWindowToNewScreen(winid);
         const out = fullOutputSize();
         server.server.notify("window.fullscreen", winid, {
             width: Math.max(1, Math.floor(out.width / info.scale)),
