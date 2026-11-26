@@ -136,6 +136,35 @@ describe("搜索与全局模式", () => {
         expect(closed.launcher?.visible).toBe(false);
     });
 
+    run("直连进入预览后经过布局重算，退出仍回 1/3 搜索", { timeout: 40000 }, async () => {
+        const win = await launchMock(desktop, { appid: "direct-a", width: 480, height: 360 });
+        await openSearch();
+        await enterOverview();
+
+        // 预览里改窗口落点会走一次 render(false)；直连来源不能被这次重算冲掉
+        await desktop.evaluate(
+            `__mydeTest.placeWindow(${JSON.stringify(win.handle)}, ${JSON.stringify(win.screen)}, 80, 120)`,
+        );
+        await sleep(200);
+
+        await desktop.key("Tab", { modifiers: META });
+        const exited = await waitState(
+            desktop,
+            (value) =>
+                !value.overview && value.launcher?.binding.kind === "line" && value.launcher.binding.level === -1,
+            8000,
+            "布局重算后从直连退出到搜索",
+        );
+        expect(exited.launcher?.visible).toBe(true);
+
+        await desktop.key("Escape");
+        const closed = await waitState(
+            desktop,
+            (value) => value.launcher?.binding.kind === "line" && value.launcher.binding.level === 0,
+        );
+        expect(closed.launcher?.visible).toBe(false);
+    });
+
     run("搜索结果跳到另一个虚拟屏上的窗口", { timeout: 40000 }, async () => {
         const first = await launchMock(desktop, { appid: "search-a", width: 640, height: 420 });
         const second = await launchMock(desktop, { appid: "search-b", width: 640, height: 420 });

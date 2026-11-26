@@ -24,7 +24,13 @@ export function setAnimationSpeed(next: number) {
 
 type GearOptions = NonNullable<ConstructorParameters<typeof AnimationGear>[1]>;
 
-/** 始终使用共享时钟；测试设置倍率后所有齿轮一起加速 */
+/**
+ * 始终使用共享时钟；测试设置倍率后所有齿轮一起加速。
+ *
+ * 注意：`AnimationGear.moveTo` 会把 `onComplete` 直接写到传入的 transition 对象上。
+ * 共享的 transition 常量要传克隆（`{ ...TRANSITION, onComplete }`），否则下一次
+ * 无回调的 moveTo 会继承上一次的完成回调。
+ */
 export function createAnimationGear<T extends Record<string, number> = Record<string, number>>(
     initial: T,
     op?: Omit<GearOptions, "time">,

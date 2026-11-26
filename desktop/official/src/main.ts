@@ -435,7 +435,7 @@ type ViewScreen = {
     gear: AnimationGear<ViewTransform>;
     visual: ViewTransform;
     target: ViewTransform;
-    /** 手势进入预览时这张卡片的接力方式：跟手线性 / 定时去 grid / 打断后回线性 */
+    /** 预览展开时这张卡片的接力方式：跟手线性 / 定时去 grid / 打断后回线性 */
     pullMode: "tracked" | "grid" | "linear";
 };
 
@@ -459,9 +459,9 @@ const DEFAULT_GESTURE_GAIN = 4;
 const DEFAULT_REORDER_DELAY = 3000;
 /** 总览卡片间距（CSS px） */
 const OVERVIEW_GAP = 24;
-/** 过了这段纵向进度就从线性排布定时重排到 grid，不再绑定 level */
+/** 过了这段纵向进度就不再绑定 level，用固定时长把整排重排到 grid */
 const OVERVIEW_GRID_HANDOFF = 0.8;
-/** 跨过接力点后从线性布局重排到 grid 的定时动画 */
+/** 跨过接力点后的固定重排动画；与手势速度无关，避免不同速度下观感差异过大 */
 const OVERVIEW_GRID_TRANSITION = { duration: 200, map: timingFunction.easeOut };
 /** 聚焦面板比卡片略大 */
 const FOCUS_PANEL_SCALE = 1.04;
@@ -487,31 +487,16 @@ const OVERVIEW_LAUNCHER_TOP = 12;
 /** 全局预览 grid 顶部为启动器留出的高度 */
 const OVERVIEW_TOP_INSET = OVERVIEW_LAUNCHER_TOP + LAUNCHER_SHELL_HEIGHT + 24;
 
-type LauncherState = "h" | "n" | "t";
+/** 启动器两条连续路径：n-h-t 线与 n-t 直连 */
+type LauncherRoute = "line" | "direct";
 
-/** 当前视觉所在的路径：N-H-T 线，或按钮触发的 N-T 直连 */
 type LauncherBinding =
     | { kind: "line"; level: number }
     | { kind: "direct"; from: "n" | "t"; to: "n" | "t"; progress: number };
 
 type LauncherController = {
-    /** 手势开始时绑定当前视觉位置；N-T 直连只在按钮路径上存在 */
-    getBinding(): LauncherBinding;
-    /** 手势中逐帧驱动 N-H-T 线 */
-    setLineLevel(level: number): void;
-    /** 手势中逐帧驱动按钮 N-T 直连 */
-    setDirectProgress(progress: number): void;
-    /** 手势松手后沿当前路径吸附 */
-    animateLineTo(level: number): void;
-    animateDirectTo(progress: number): void;
-    /** 取消手势时恢复开始时的视觉 */
-    applyBinding(binding: LauncherBinding): void;
-    /** 按钮/快捷键：明确进入全局或退出 */
-    enterOverview(): void;
-    exitOverview(): void;
-    /** 常规里收起/打开搜索栏 */
-    toggleNormal(): void;
-    settle(): void;
+    /** 由纵轴驱动：路径决定 level 怎么映射到搜索栏位置 */
+    setLevel(level: number, route: LauncherRoute): void;
     isVisible(): boolean;
     blur(): void;
     /** 打开搜索栏并聚焦输入 */
@@ -549,6 +534,16 @@ function clampNumber(value: number, min: number, max: number) {
     return Math.min(max, Math.max(min, value));
 }
 
+function sameTransform(a: ViewTransform, b: ViewTransform) {
+    return (
+        Math.abs(a.x - b.x) < 0.5 &&
+        Math.abs(a.y - b.y) < 0.5 &&
+        Math.abs(a.scale - b.scale) < 0.001 &&
+        a.opacity === b.opacity &&
+        a.blur === b.blur
+    );
+}
+
 /** 输入法控制层在下方创建；焦点回调可能早于此时，统一走可选链 */
 let ime: ImeController | undefined;
 /** 虚拟键盘在输入法之后创建；锁屏/解锁回调可能更早 */
@@ -573,34 +568,32 @@ class ViewData {
     private win2Screen = new Map<MWinId, ViewScreen>();
     /** 当前聚焦的窗口 handle，键盘按它反查客户端下发 */
     focusHandle: MWinId | undefined;
-    /** 全局预览（grid）状态 */
-    overview = false;
-    /** 预览进度：0 常规，1 完整 grid；上下滑过程中连续变化 */
-    private overviewProgress = 0;
-    /** 预览里被横滑选中的窗口；退出预览后它就是当前窗口 */
-    private overviewFocusId: string | undefined;
-    /** 常规插值基准的连续屏序号；预览里横滑时跟手连续变化 */
-    private focusVisual = 0;
-    /** 预览里的聚焦面板，横滑时在卡片间跟手移动 */
+
+    /**
+     * 纵轴：桌面模式/预览进度。`<0` 只影响启动器，`>=0` 是预览进度。
+     * 启动器自己解释负半段，桌面布局只看 `max(0, level)`，所以路径不影响屏。
+     */
+    private readonly levelGear: AnimationGear<{ v: number }>;
+    /** 横轴：连续虚拟屏下标；整数表示停稳在某张屏 */
+    private readonly focusGear: AnimationGear<{ v: number }>;
+    private levelValue = 0;
+    private focusValue = 0;
+    /** 离散命令的目标；指针、键盘路由用 target，不用半动画中的视觉值 */
+    private levelTarget = 0;
+    private focusTarget = 0;
+    /**
+     * 启动器当前路径：`line` 是 n-h-t，`direct` 是 n-t。
+     * 桌面布局不读它；它只决定 level 怎么映射到启动器位置，以及手势接管后继续走哪条。
+     */
+    private launcherRoute: LauncherRoute = "line";
+    /** 从 t 程序化退出时回 n 还是 h；只有 direct 进入 t 才记 n */
+    private tOrigin: "n" | "h" = "h";
+
+    /** 预览里的聚焦面板；位置由 focus 连续插值，透明度独立淡入淡出 */
     private readonly focusPanelEl: ElType<HTMLElement>;
-    /** 聚焦面板跟随的屏；退出时保留，直到淡出结束 */
-    private focusPanelId: string | undefined;
-    /** 聚焦面板的目标显示状态；出现/消失各自是一次独立过渡，可互相打断 */
-    private focusPanelVisible = false;
-    /** 本次手势是否已经触发过聚焦面板显示；手势中一旦显示就不逐帧撤掉 */
-    private gestureFocusPanelTriggered = false;
-    private focusPanelTimer: number | undefined;
-    /** 聚焦面板透明度动画；出现/消失独立，可互相打断，不跟移动进度 */
     private readonly focusPanelGear: AnimationGear<{ opacity: number }>;
-    /** 聚焦面板当前所在的连续焦点位置（可落在两张卡片之间） */
-    private focusPanelPos = 0;
-    /** 全局预览里松手后把面板吸附到实际聚焦屏 */
-    private readonly focusSnapGear: AnimationGear<{ pos: number }>;
-    /** 松手回常规时复用连续焦点的跟踪，进度由虚拟屏自己的吸附动画推进 */
-    private focusSettle: { from: number; to: number } | undefined;
     private launcher?: LauncherController;
 
-    private currentId = "";
     private usedSeq = 0;
     private nextId = 1;
     private reorderTimer: number | undefined;
@@ -610,31 +603,19 @@ class ViewData {
     private stageHeight = 1;
     private gesture:
         | {
+              startLevel: number;
+              startFocus: number;
               totalX: number;
               totalY: number;
-              /** 手势开始时的模式坐标：-1 搜索、0 常规、1 预览 */
-              startLevel: number;
-              /** 连续模式坐标，手势中可以穿过 0 从预览直接滑到搜索 */
-              level: number;
-              /** 手势开始时的搜索栏路径，取消时恢复 */
-              launcherBinding: LauncherBinding;
-              /** 横轴当前作用：常规/搜索里切虚拟屏，预览里选窗口 */
-              horizontalMode: "screens" | "overview";
-              /** 横轴起点：切屏位移或预览选窗的累计位移 */
-              screenBaseX: number;
-              overviewBaseX: number;
-              /** 预览横滑的连续焦点位置（在可预览应用屏列表中的序号） */
-              focusPos: number;
-              focusBase: number;
-              /** 常规切屏跟手偏移 */
-              offset: number;
+              panelHold: boolean;
           }
         | undefined;
 
     constructor() {
         this.createEmptyScreen();
         this.createLaunchpadScreen();
-        this.currentId = this.screens[0]?.id ?? "";
+        this.focusTarget = 0;
+        this.focusValue = 0;
         this.focusPanelEl = view()
             .style({
                 position: "absolute",
@@ -652,6 +633,7 @@ class ViewData {
                 // 纯白不透明，避免 backdrop-filter 带来的合成压力
                 background: "#fff",
             })
+            .data({ "desktop-ui": "focus-panel" })
             .addInto(windowEl);
         this.focusPanelGear = createAnimationGear(
             { opacity: 0 },
@@ -660,10 +642,15 @@ class ViewData {
         this.focusPanelGear.setUpdateCallback((value) => {
             this.focusPanelEl.style({ opacity: `${value.opacity}` });
         });
-        // 和虚拟屏吸附用同一条过渡，焦点下标与窗口布局同步推进
-        this.focusSnapGear = createAnimationGear({ pos: 0 }, { transition: SCREEN_TRANSITION });
-        this.focusSnapGear.setUpdateCallback((value) => {
-            this.applyFocusPanelAtPos(value.pos);
+        this.levelGear = createAnimationGear({ v: 0 }, { transition: SCREEN_TRANSITION });
+        this.levelGear.setUpdateCallback(({ v }) => {
+            this.levelValue = v;
+            this.applyAxes();
+        });
+        this.focusGear = createAnimationGear({ v: 0 }, { transition: SCREEN_TRANSITION });
+        this.focusGear.setUpdateCallback(({ v }) => {
+            this.focusValue = v;
+            this.applyAxes();
         });
         this.render(false);
     }
@@ -676,22 +663,91 @@ class ViewData {
         return this.gesture !== undefined;
     }
 
+    /** 预览是否处于目标状态；手势途中看的是松手会落到哪一侧 */
+    get overview() {
+        return this.levelTarget >= 0.5;
+    }
+
+    private get overviewProgress() {
+        return clampNumber(this.levelValue, 0, 1);
+    }
+
     setLauncher(launcher: LauncherController) {
         this.launcher = launcher;
+        this.launcher.setLevel(this.levelValue, this.launcherRoute);
     }
 
     toggleLauncher() {
         if (this.overview) return;
-        this.launcher?.toggleNormal();
+        this.requestLauncherLevel(this.levelTarget <= -0.5 ? 0 : -1);
     }
 
+    /** 启动器请求一个离散的常规/搜索位置；路径固定回 n-h-t 线 */
+    requestLauncherLevel(target: number) {
+        if (this.overview) return;
+        this.cancelGesture();
+        if (this.launcherRoute === "direct") {
+            // 直连途中请求搜索：走完到 n，再折回 n-h-t 线
+            this.animateLevel(0, true, () => this.finishLevelSettle(0));
+            this.render(true);
+            return;
+        }
+        this.levelTarget = clampNumber(target, -1, 0);
+        this.render(true);
+    }
+
+    /** 当前稳定屏下标；离散位置，不使用动画中的小数 */
     private currentIndex() {
-        const index = this.screens.findIndex((s) => s.id === this.currentId);
-        return index >= 0 ? index : Math.max(0, this.screens.length - 1);
+        if (this.screens.length === 0) return 0;
+        return clampNumber(Math.round(this.focusTarget), 0, this.screens.length - 1);
     }
 
     private currentScreen() {
-        return this.screens.find((s) => s.id === this.currentId);
+        return this.screens[this.currentIndex()];
+    }
+
+    private get currentId() {
+        return this.currentScreen()?.id ?? "";
+    }
+
+    /** 所有结构变化都通过这里改 focus，避免下标随 splice 漂移 */
+    private setFocusById(id: string | undefined, animate = false) {
+        const index = id === undefined ? -1 : this.screens.findIndex((s) => s.id === id);
+        const target = clampNumber(index >= 0 ? index : this.currentIndex(), 0, Math.max(0, this.screens.length - 1));
+        this.focusTarget = target;
+        if (!animate) {
+            this.focusValue = target;
+            this.focusGear.moveTo({ v: target }, 0);
+            return;
+        }
+        const running = this.focusGear.getRunningAnimation();
+        if (running.isRunning && running.toValue.v === target) return;
+        if (!running.isRunning && Math.abs(this.focusValue - target) < 0.001) {
+            this.focusValue = target;
+            return;
+        }
+        this.focusGear.moveTo({ v: target }, SCREEN_TRANSITION);
+    }
+
+    private animateLevel(target: number, animate = true, onComplete?: () => void) {
+        this.levelTarget = target;
+        const running = this.levelGear.getRunningAnimation();
+        if (!animate) {
+            const same = Math.abs(this.levelValue - target) < 0.001;
+            this.levelValue = target;
+            this.levelGear.moveTo({ v: target }, 0);
+            // 已经在目标上的重算不算一次过渡，不能重置 tOrigin
+            if (!same) onComplete?.();
+            return;
+        }
+        if (running.isRunning && running.toValue.v === target) return;
+        // 已经在目标上就不要重新起一段 1→1 的动画；否则完成回调会重置 tOrigin
+        if (!running.isRunning && Math.abs(this.levelValue - target) < 0.001) {
+            this.levelValue = target;
+            return;
+        }
+        // moveTo 会把 onComplete 写进传入的 transition；克隆一份，避免污染共享的 SCREEN_TRANSITION
+        this.levelGear.moveTo({ v: target }, onComplete ? { ...SCREEN_TRANSITION, onComplete } : SCREEN_TRANSITION);
     }
 
     /** 只允许当前虚拟屏里的窗口接收指针，滚动同理 */
@@ -725,6 +781,8 @@ class ViewData {
             return;
         this.chromeInsets = { ...insets };
         this.launcher?.setTopInset(insets.top);
+        // 总览 grid 和搜索栏都依赖 insets；当前就在预览里时要立刻重排
+        this.applyAxes();
     }
 
     setStageSize(width: number, height: number) {
@@ -759,8 +817,8 @@ class ViewData {
         gear.setUpdateCallback((value) => {
             screen.visual = value;
             applyScreenTransform(el, value);
-            this.syncFocusPanelFrame(screen);
             this.refreshOverviewReparentedRaster(screen, value);
+            this.applyPanel();
         });
         el.on("pointerdown", (e) => this.beginOverviewCardDrag(e, screen));
         return screen;
@@ -792,8 +850,8 @@ class ViewData {
             this.screens.splice(launchpadIndex >= 0 ? launchpadIndex : this.screens.length, 0, screen);
         }
         screen.used = ++this.usedSeq;
-        this.currentId = screen.id;
-        this.setOverviewInternal(false);
+        this.setOverview(false, false);
+        this.setFocusById(screen.id, true);
         this.scheduleReorder();
         this.render(true);
         return screen;
@@ -806,8 +864,8 @@ class ViewData {
         if (!screen.winIds.includes(winid)) screen.winIds.push(winid);
         screen.used = ++this.usedSeq;
         this.win2Screen.set(winid, screen);
-        this.currentId = screen.id;
-        this.setOverviewInternal(false);
+        this.setOverview(false, false);
+        this.setFocusById(screen.id, true);
         this.scheduleReorder();
         this.render(true);
         return screen;
@@ -829,8 +887,8 @@ class ViewData {
         if (parentScreen) {
             this.win2Screen.set(winid, parentScreen);
             // 子窗口出现时把视图切到父窗口所在屏（它可能在其他虚拟屏上）
-            this.currentId = parentScreen.id;
-            this.setOverviewInternal(false);
+            this.setOverview(false, false);
+            this.setFocusById(parentScreen.id, true);
             this.render(true);
             return parentScreen;
         }
@@ -841,8 +899,8 @@ class ViewData {
         empty.used = ++this.usedSeq;
         this.win2Screen.set(winid, empty);
         this.createEmptyScreen();
-        this.currentId = empty.id;
-        this.setOverviewInternal(false);
+        this.setOverview(false, false);
+        this.setFocusById(empty.id, true);
         this.scheduleReorder();
         this.render(true);
         return empty;
@@ -902,10 +960,8 @@ class ViewData {
         if (source.winIds.length === 0 && !source.empty && !source.launchpad) {
             this.removeScreen(source, target);
         }
-        this.currentId = target.id;
+        this.setFocusById(target.id, !this.overview);
         if (this.overview) {
-            this.overviewFocusId = target.id;
-            this.focusPanelId = target.id;
             // 预览里屏幕还缩放着，窗口会在缩小状态下重新绘制；退出预览后要再挂一次
             overviewReparentedWindows.add(winid);
         }
@@ -1154,25 +1210,27 @@ class ViewData {
         this.cancelGesture();
         const index = this.screens.indexOf(screen);
         if (index < 0) return;
+        const wasCurrent = screen.id === this.currentId;
+        const anchor = this.currentId;
         for (const [other, mapped] of this.win2Screen) {
             if (mapped === screen) this.win2Screen.delete(other);
         }
-        const wasCurrent = screen.id === this.currentId;
         screen.gear.moveTo(screen.visual, 0);
         screen.el.remove();
         this.screens.splice(index, 1);
-        if (this.overviewFocusId === screen.id) this.overviewFocusId = undefined;
-        if (this.focusPanelId === screen.id) this.focusPanelId = undefined;
         if (wasCurrent) {
             const next = fallback ?? this.screens[Math.min(index, this.screens.length - 1)] ?? this.screens[0];
             if (next) {
-                this.currentId = next.id;
+                this.setFocusById(next.id, false);
                 const top = topWin(next);
                 if (top) this.focusWin(top);
                 else this.blurAll();
             }
+        } else {
+            // 删除的屏在当前屏左边时，当前屏下标会左移；按 id 重新对齐
+            this.setFocusById(anchor, false);
         }
-        this.render(false);
+        this.render(this.overview);
     }
 
     /**
@@ -1184,7 +1242,7 @@ class ViewData {
         const screen = this.screens.find((s) => s.id === id);
         if (!screen) return;
         this.cancelGesture();
-        this.currentId = screen.id;
+        this.setFocusById(screen.id, animate);
         const top = topWin(screen);
         if (top) this.focusWin(top);
         else this.blurAll();
@@ -1203,7 +1261,7 @@ class ViewData {
     jumpToWin(winid: MWinId) {
         const screen = this.win2Screen.get(winid);
         if (!screen) return;
-        this.setOverviewInternal(false);
+        this.setOverview(false);
         this.setCurrentScreen(screen.id, true);
     }
 
@@ -1261,7 +1319,7 @@ class ViewData {
     }
 
     switchScreen(id: string) {
-        this.setOverviewInternal(false);
+        this.setOverview(false);
         this.setCurrentScreen(id, true);
     }
 
@@ -1317,139 +1375,150 @@ class ViewData {
                 if (top) this.focusWin(top);
                 else this.blurAll();
             }
-            this.render(this.overview);
+            this.applyAxes();
             return undefined;
         }
 
         const index = this.screens.indexOf(screen);
         const wasCurrent = screen.id === this.currentId;
+        const anchor = this.currentId;
         screen.gear.moveTo(screen.visual, 0);
         screen.el.remove();
         this.screens.splice(index, 1);
-        if (this.overviewFocusId === screen.id) this.overviewFocusId = undefined;
-        if (this.focusPanelId === screen.id) this.focusPanelId = undefined;
 
         let next: ViewScreen | undefined;
         if (wasCurrent) {
             // 优先回上一个应用，没有就落到右边（通常是空桌面）
             next = this.screens[Math.min(index - 1, this.screens.length - 1)] ?? this.screens[0];
             if (next) {
-                this.currentId = next.id;
+                this.setFocusById(next.id, !this.overview);
                 const top = topWin(next);
                 if (top) this.focusWin(top);
                 else this.blurAll();
                 this.scheduleReorder();
             }
-        } else if (this.focusHandle === winid) {
-            this.blurAll();
+        } else {
+            // 屏在当前屏左边时下标会左移
+            this.setFocusById(anchor, false);
+            if (this.focusHandle === winid) this.blurAll();
         }
         this.render(this.overview || wasCurrent);
         return next;
     }
 
-    setOverview(on: boolean) {
-        if (this.overview === on && this.overviewProgress === (on ? 1 : 0)) return;
+    /**
+     * 进入/退出全局预览。离散命令只改纵轴目标：
+     * - 进入：搜索栏可见（稳定 n）走 n-t 直连，隐藏（h）走 n-h-t 线；
+     * - 退出：t 是从直连进来的走 t-n，否则 t-h。
+     */
+    setOverview(on: boolean, animate = true) {
+        if (this.overview === on) return;
         this.cancelGesture();
-        this.applyOverview(on);
+        if (on) {
+            if (this.launcherRoute === "line") {
+                const running = this.levelGear.getRunningAnimation();
+                if (!running.isRunning && Math.abs(this.levelValue + 1) < 0.001) {
+                    // 稳定在 n：切到直连，数值从 -1 映射到 0，搜索栏位置不变
+                    this.switchLauncherRoute("direct");
+                }
+            }
+            this.cancelReorder();
+            cursor.setLocalShape(undefined);
+            this.focusPanelGear.moveTo({ opacity: 1 }, animate ? FOCUS_PANEL_FADE : 0);
+            this.animateLevel(1, animate, () => this.finishLevelSettle(1));
+        } else {
+            if (this.launcherRoute === "line") {
+                const running = this.levelGear.getRunningAnimation();
+                if (this.tOrigin === "n" && !running.isRunning && Math.abs(this.levelValue - 1) < 0.001) {
+                    this.switchLauncherRoute("direct");
+                }
+            }
+            this.scheduleReorder();
+            this.focusPanelGear.moveTo({ opacity: 0 }, animate ? FOCUS_PANEL_FADE : 0);
+            this.animateLevel(0, animate, () => this.finishLevelSettle(0));
+        }
+        this.syncOverviewChrome();
+        this.render(animate);
     }
 
     toggleOverview() {
         this.setOverview(!this.overview);
     }
 
-    private applyOverview(on: boolean, updateLauncher = true) {
-        this.setOverviewInternal(on, updateLauncher);
-        if (on) {
-            cursor.setLocalShape(undefined);
+    /** 启动器路径切换时换算 level，保证搜索栏视觉不跳 */
+    private switchLauncherRoute(next: LauncherRoute) {
+        if (this.launcherRoute === next) return;
+        if (next === "direct") {
+            // 只从稳定 n（line -1）切过来；h(0) 不应走直连
+            this.levelValue = clampNumber(this.levelValue, 0, 1);
+            this.levelTarget = clampNumber(this.levelTarget, 0, 1);
         } else {
-            this.scheduleReorder();
+            // 直连只在 n/t 两个端点结算
+            this.levelValue = this.levelValue >= 0.5 ? 1 : -1;
+            this.levelTarget = this.levelTarget >= 0.5 ? 1 : -1;
         }
-        this.render(true);
+        this.launcherRoute = next;
+        this.levelGear.moveTo({ v: this.levelValue }, 0);
+        this.launcher?.setLevel(this.levelValue, next);
     }
 
-    private setOverviewInternal(on: boolean, updateLauncher = true) {
-        this.focusSettle = undefined;
-        const wasOverview = this.overview;
-        this.overview = on;
-        this.overviewProgress = on ? 1 : 0;
-        if (on) {
-            if (!wasOverview) {
-                // 手势进入预览时可能已经横滑选过窗口，保留有效选择；否则从当前屏开始
-                if (!this.screens.some((s) => s.id === this.overviewFocusId)) {
-                    this.overviewFocusId = this.screens.find((s) => s.id === this.currentId)?.id;
-                }
-                this.focusPanelId = this.overviewFocusId;
-                if (updateLauncher) this.launcher?.enterOverview();
+    /** 纵轴落定：直连的临时数值折回 n-h-t 线，稳定态永远在线上 */
+    private finishLevelSettle(target: number) {
+        if (this.launcherRoute === "direct") {
+            if (target >= 0.5) {
+                this.tOrigin = "n";
+                this.launcherRoute = "line";
+                this.levelValue = 1;
+                this.levelTarget = 1;
+            } else {
+                this.launcherRoute = "line";
+                this.levelValue = -1;
+                this.levelTarget = -1;
             }
-            this.cancelReorder();
-        } else if (wasOverview) {
-            this.overviewFocusId = undefined;
-            if (updateLauncher) this.launcher?.exitOverview();
+            this.levelGear.moveTo({ v: this.levelValue }, 0);
+            this.launcher?.setLevel(this.levelValue, this.launcherRoute);
+        } else {
+            this.levelValue = target;
+            this.levelTarget = target;
+            if (target >= 0.5) this.tOrigin = "h";
         }
-        windowEl.el.toggleAttribute("data-overview", on);
-        this.setOverviewCloseOpacity(on ? 1 : 0);
+        this.applyAxes();
     }
 
-    /** 关闭按钮透明度绑定预览进度；手势里每帧直接跟 level */
-    private setOverviewCloseOpacity(progress: number) {
-        windowEl.el.style.setProperty("--overview-close-opacity", `${clampNumber(progress, 0, 1)}`);
+    private syncOverviewChrome() {
+        windowEl.el.toggleAttribute("data-overview", this.overview);
     }
 
     private selectFromOverview(id: string) {
         if (performance.now() < this.suppressOverviewClickUntil) return;
         const screen = this.screens.find((s) => s.id === id);
         if (!screen) return;
-        // 点击的卡片就是退出时要跟随的焦点屏
-        this.focusPanelId = screen.id;
-        this.setOverviewInternal(false);
+        // 点击的卡片就是退出时要跟随的焦点屏；面板位置直接由 focus 连续过去
+        this.setOverview(false);
         this.setCurrentScreen(screen.id, true);
     }
 
     startGesture() {
         // 预览里也允许起手，用来识别三指下滑退出
         if (this.gesture || (!this.overview && this.screens.length < 2)) return;
-        this.settleAnimation();
-        this.launcher?.settle();
-        this.stopFocusSnap();
-        this.focusSettle = undefined;
-        this.setOverviewCloseOpacity(this.overview ? 1 : 0);
+        // 横轴以命令目标为基准：切屏动画没结束时起手，不把“当前屏”停在半路
+        this.focusValue = this.focusTarget;
+        this.focusGear.moveTo({ v: this.focusTarget }, 0);
+        // 纵轴从当前视觉接管：进行中的预览/搜索动画不跳到终点，手势沿当前路径继续
+        this.levelGear.moveTo({ v: this.levelValue }, 0);
         windowEl.el.toggleAttribute("data-gesture", true);
-        this.gestureFocusPanelTriggered = false;
-        // 从当前稳定状态起手：已经在预览就当作 grid，否则从线性跟手开始
-        for (const screen of this.screens) screen.pullMode = this.overview ? "grid" : "tracked";
-        this.focusVisual = this.currentIndex();
-        const launcherBinding: LauncherBinding = this.launcher?.getBinding() ?? {
-            kind: "line",
-            level: this.overview ? 1 : 0,
-        };
-        // N-T 直连也映射到 level：N=-1、T=+1，直连没有中间的 H
-        const startLevel =
-            launcherBinding.kind === "line"
-                ? launcherBinding.level
-                : launcherBinding.from === "n"
-                  ? -1 + 2 * launcherBinding.progress
-                  : 1 - 2 * launcherBinding.progress;
-        const gridProgress = launcherBinding.kind === "line" ? Math.max(0, startLevel) : (startLevel + 1) / 2;
-        const focusStart = this.overviewFocusPosOf(this.overviewFocusId ?? this.currentId, this.overviewFocusOrder());
         this.gesture = {
+            startLevel: this.levelValue,
+            startFocus: this.focusValue,
             totalX: 0,
             totalY: 0,
-            startLevel,
-            level: startLevel,
-            launcherBinding,
-            horizontalMode: gridProgress > 0 ? "overview" : "screens",
-            screenBaseX: 0,
-            overviewBaseX: 0,
-            focusPos: focusStart,
-            focusBase: focusStart,
-            offset: 0,
+            panelHold: this.overview,
         };
     }
 
-    /** 把纵向位移换算成连续模式坐标，跨过 0 后改用搜索栏的行程 */
-    private levelFromSwipe(startLevel: number, totalY: number) {
+    /** 把纵向位移换算成连续模式坐标，跨过 0 后改用搜索栏的行程；dy 已去死区 */
+    private levelFromSwipe(startLevel: number, dy: number) {
         let level = clampNumber(startLevel, -1, 1);
-        const dy = Math.sign(totalY) * Math.max(0, Math.abs(totalY) - GESTURE_AXIS_DEADZONE);
         let remain = -dy; // 正数向上
         const upDistance = this.overviewSwipeDistance();
         const downDistance = this.launcherSwipeDistance();
@@ -1475,11 +1544,10 @@ class ViewData {
         return clampNumber(level, -1, 1);
     }
 
-    /** 按钮 N-T 直连被手势接管时，直接用触控板累计 delta 推进 level，N=-1、T=+1 */
-    private levelFromDirectSwipe(startLevel: number, totalY: number) {
-        // 接管的是已经激活的路径，不额外加起手死区，否则第一次移动会跳一下
-        const travel = this.launcherSwipeDistance();
-        return clampNumber(startLevel - (totalY * 2) / travel, -1, 1);
+    /** 直连被手势接管时 level 直接是 0..1，不再有负半段 */
+    private levelFromDirectSwipe(startLevel: number, dy: number) {
+        const travel = this.overviewSwipeDistance();
+        return clampNumber(startLevel - dy / travel, 0, 1);
     }
 
     private overviewSwipeDistance() {
@@ -1490,142 +1558,44 @@ class ViewData {
         return Math.max(100, this.stageHeight * LAUNCHER_SWIPE_DISTANCE);
     }
 
-    /** 手势中把每个虚拟屏从常规位置插值到 grid：接力点前跟手线性，接力点后定时重排 */
-    private renderOverviewPull(progress: number, offset = 0) {
-        // 常规基准用连续焦点位置；进入 grid 前横滑可以改变它
-        const normal = this.normalTargets(offset, this.focusVisual);
-        const layout = this.overviewLayout();
-        const overview = layout.targets;
-        const hidden = { x: -this.stageWidth * 2, y: 0, scale: 1, opacity: 0, blur: 0 };
-        const p = clampNumber(progress, 0, 1);
-        const overviewVisual = p > 0;
-        const handoff = OVERVIEW_GRID_HANDOFF;
-        // 接力点之前线性缩放、加间距，这段时间直接跟手
-        const gridScale = layout.cards.length > 0 ? layout.cardWidth / this.stageWidth : 1;
-        const scaleProgress = Math.min(1, p / handoff);
-        const scale = 1 + (gridScale - 1) * scaleProgress;
-        const rowScale = p < handoff ? scale : gridScale;
-        const rowGap = OVERVIEW_GAP * (p < handoff ? Math.min(1, p * 4) : 1);
-        const centerX = this.stageWidth / 2;
-        const centerY = this.stageHeight / 2;
-        // grid 可见时层级跟着预览里的焦点走，焦点和当前屏分开管理
-        const activeId = overviewVisual ? (this.overviewFocusId ?? this.currentId) : this.currentId;
-        for (const screen of this.screens) {
-            const z = overviewVisual ? (screen.id === activeId ? "2" : "1") : screen.id === activeId ? "1" : "0";
-            screen.el.style({ zIndex: z });
-            const from = normal.get(screen.id) ?? hidden;
-            // 线性排布：整排围绕舞台中心缩放，槽位之间随进度增加间距
-            const linear = {
-                x: centerX + (from.x - centerX) * rowScale + (from.x / this.stageWidth) * rowGap,
-                y: centerY + (from.y - centerY) * rowScale,
-                scale: rowScale,
-                opacity: from.opacity,
-                blur: from.blur,
-            };
-            if (p >= handoff) {
-                // 过了接力点就不再跟 level：定时重排到 grid，手势继续移动也随它去
-                if (screen.pullMode !== "grid") {
-                    const target = overview.get(screen.id) ?? linear;
-                    screen.pullMode = "grid";
-                    screen.target = target;
-                    screen.gear.moveTo(target, OVERVIEW_GRID_TRANSITION);
-                }
-                continue;
-            }
-            if (screen.pullMode === "grid") {
-                // 从 grid 动画中途打断回线性：gear 从当前视觉接着走
-                screen.pullMode = "linear";
-                const running = screen.gear.getRunningAnimation();
-                const rest = running.isRunning ? running.remainingTime : OVERVIEW_GRID_TRANSITION.duration;
-                screen.target = linear;
-                screen.gear.moveTo(linear, rest);
-                continue;
-            }
-            if (screen.pullMode === "linear") {
-                // 手指已经在跟踪线性布局：每帧按上帧残留时间续接目标，收敛到 0 后完全绑定
-                const running = screen.gear.getRunningAnimation();
-                if (running.isRunning && running.remainingTime > 0) {
-                    screen.target = linear;
-                    screen.gear.moveTo(linear, running.remainingTime);
-                    continue;
-                }
-                screen.pullMode = "tracked";
-            }
-            // 完全跟手：线性布局直接绑定
-            screen.target = linear;
-            screen.gear.moveTo(linear, 0);
-        }
-        this.syncFocusPanelGesture();
-        // 只在这里跨过触发点：手势中一旦显示就保持到手势结束，不被后续移动反复打断
-        if (p > 0) this.gestureFocusPanelTriggered = true;
-        this.syncFocusPanelVisibility(true);
-    }
-
-    private gestureGridProgress(gesture: NonNullable<ViewData["gesture"]>) {
-        // 直连也走 level：N=-1、T=+1，grid 进度是 0..1
-        if (gesture.launcherBinding.kind === "direct") return (gesture.level + 1) / 2;
-        return clampNumber(gesture.level, 0, 1);
-    }
-
     moveGesture(dx: number, dy: number) {
         const gesture = this.gesture;
         if (!gesture) return;
         gesture.totalX += dx;
         gesture.totalY += dy;
-        if (gesture.launcherBinding.kind === "direct") {
-            gesture.level = this.levelFromDirectSwipe(gesture.startLevel, gesture.totalY);
-        } else {
-            gesture.level = this.levelFromSwipe(gesture.startLevel, gesture.totalY);
-        }
-        const gridProgress = this.gestureGridProgress(gesture);
+        const dX = Math.sign(gesture.totalX) * Math.max(0, Math.abs(gesture.totalX) - GESTURE_AXIS_DEADZONE);
+        const dY = Math.sign(gesture.totalY) * Math.max(0, Math.abs(gesture.totalY) - GESTURE_AXIS_DEADZONE);
 
-        if (gridProgress > 0) {
-            // grid 可见：横滑选窗会连续移动常规插值基准，越接近 grid 影响越小
-            if (this.overviewFocusId === undefined) this.overviewFocusId = this.currentId;
-            if (this.focusPanelId === undefined) this.focusPanelId = this.overviewFocusId;
-            if (gesture.horizontalMode !== "overview") {
-                gesture.horizontalMode = "overview";
-                gesture.overviewBaseX = gesture.totalX;
-                const order = this.overviewFocusOrder();
-                // 把常规行当前的连续视觉位置带进预览焦点，跨模式不丢已经滑过的一半
-                const visualIndex = this.focusVisual - gesture.offset / this.stageWidth;
-                const base = this.screenIndexToFocusPos(visualIndex, order);
-                gesture.focusBase = base;
-                gesture.focusPos = base;
-                this.focusVisual = this.focusPosToScreenIndex(base, order, visualIndex);
-                gesture.offset = 0;
+        const level =
+            this.launcherRoute === "direct"
+                ? this.levelFromDirectSwipe(gesture.startLevel, dY)
+                : this.levelFromSwipe(gesture.startLevel, dY);
+        const focus = clampNumber(
+            gesture.startFocus - (dX * gestureSwitchGain) / Math.max(1, this.stageWidth),
+            0,
+            Math.max(0, this.screens.length - 1),
+        );
+        this.levelValue = level;
+        this.focusValue = focus;
+
+        // 横轴在预览里实时改选中窗口；常规/搜索里松手才提交
+        if (level > 0) {
+            const nextIndex = clampNumber(Math.round(focus), 0, this.screens.length - 1);
+            if (nextIndex !== this.currentIndex()) {
+                this.focusTarget = nextIndex;
+                const top = topWin(this.screens[nextIndex]);
+                if (top) this.focusWin(top);
+                else this.blurAll();
             }
-            this.moveOverviewFocus(gesture);
-        } else {
-            // 常规或搜索叠加：横轴移动虚拟屏，搜索栏保持在上面
-            if (gesture.horizontalMode !== "screens") {
-                gesture.horizontalMode = "screens";
-                gesture.screenBaseX = gesture.totalX;
-                gesture.offset = 0;
+            if (!gesture.panelHold) {
+                gesture.panelHold = true;
+                this.focusPanelGear.moveTo({ opacity: 1 }, FOCUS_PANEL_FADE);
             }
-            const index = this.currentIndex();
-            const minOffset = -(this.screens.length - 1 - index) * this.stageWidth;
-            const maxOffset = index * this.stageWidth;
-            const rawDx = gesture.totalX - gesture.screenBaseX;
-            const dxFromStart = Math.sign(rawDx) * Math.max(0, Math.abs(rawDx) - GESTURE_AXIS_DEADZONE);
-            gesture.offset = clampNumber(dxFromStart * gestureSwitchGain, minOffset, maxOffset);
         }
 
-        this.renderGestureFrame(gesture);
-    }
-
-    /** 手势中的一帧：同一个连续坐标驱动线性排布、搜索栏和跟手切屏；grid 重排在接力点后改为定时动画 */
-    private renderGestureFrame(gesture: NonNullable<ViewData["gesture"]>) {
-        const progress = this.gestureGridProgress(gesture);
-        this.overviewProgress = progress;
-        this.setOverviewCloseOpacity(progress);
-        this.renderOverviewPull(progress, progress > 0 ? 0 : gesture.offset);
-        if (gesture.launcherBinding.kind === "direct") {
-            const progress = gesture.launcherBinding.from === "n" ? (gesture.level + 1) / 2 : (1 - gesture.level) / 2;
-            this.launcher?.setDirectProgress(progress);
-        } else {
-            this.launcher?.setLineLevel(gesture.level);
-        }
+        // 两个轴各自走 0 时长；applyAxes 会同时读到新值
+        this.levelGear.moveTo({ v: level }, 0);
+        this.focusGear.moveTo({ v: focus }, 0);
     }
 
     endGesture() {
@@ -1633,46 +1603,49 @@ class ViewData {
         if (!gesture) return;
         this.gesture = undefined;
         windowEl.el.toggleAttribute("data-gesture", false);
-        // 手势里直接写的是 visual；先把 gear 的内部值对齐，松手动画才不会从旧位置跳
-        for (const screen of this.screens) screen.gear.moveTo(screen.visual, 0);
 
-        // 常规/搜索：从连续视觉位置吸附到最近的虚拟屏
-        const settleScreens = () => {
-            const visualIndex = this.focusVisual - gesture.offset / this.stageWidth;
-            const targetIndex = clampNumber(Math.round(visualIndex), 0, this.screens.length - 1);
-            const target = this.screens[targetIndex];
-            if (!target) return;
-            if (target.id !== this.currentId) {
-                this.currentId = target.id;
-                const top = topWin(target);
-                if (top) this.focusWin(top);
-                else this.blurAll();
-            }
-            // 面板跟着窗口自己的吸附动画走，目标就是实际选中的窗口
-            if (this.focusPanelId !== undefined) this.focusPanelId = target.id;
-        };
-
-        if (gesture.horizontalMode === "screens") settleScreens();
-        // 松手时沿用和手势一样的连续重心位置
-        const focus = this.focusVisual - gesture.offset / this.stageWidth;
-
-        if (gesture.launcherBinding.kind === "line") {
-            const targetLevel = gesture.level >= 0.5 ? 1 : gesture.level <= -0.5 ? -1 : 0;
-            this.launcher?.animateLineTo(targetLevel);
-            this.applyOverview(targetLevel === 1, false);
-            if (targetLevel !== 1) this.overviewFocusId = undefined;
-            if (targetLevel === 1) this.settleFocusPanel(focus);
-            else this.beginFocusSettle(focus);
-            return;
+        // 横轴：松手按最近位置吸附；常规里 current 到这时才提交
+        const targetFocus = clampNumber(Math.round(this.focusValue), 0, this.screens.length - 1);
+        const targetScreen = this.screens[targetFocus];
+        const changed = targetFocus !== this.currentIndex();
+        this.focusTarget = targetFocus;
+        if (targetScreen && changed) {
+            const top = topWin(targetScreen);
+            if (top) this.focusWin(top);
+            else this.blurAll();
         }
 
-        const targetState = gesture.level >= 0 ? "t" : "n";
-        const targetProgress = targetState === gesture.launcherBinding.to ? 1 : 0;
-        this.launcher?.animateDirectTo(targetProgress);
-        this.applyOverview(targetState === "t", false);
-        if (targetState !== "t") this.overviewFocusId = undefined;
-        if (targetState === "t") this.settleFocusPanel(focus);
-        else this.beginFocusSettle(focus);
+        // 纵轴：直线按 ±0.5 吸附到 n/h/t；直连只回 n/t
+        const targetLevel =
+            this.launcherRoute === "direct"
+                ? this.levelValue >= 0.5
+                    ? 1
+                    : 0
+                : this.levelValue >= 0.5
+                  ? 1
+                  : this.levelValue <= -0.5
+                    ? -1
+                    : 0;
+        const wasOverview = this.overview;
+        this.levelTarget = targetLevel;
+        this.focusPanelGear.moveTo({ opacity: targetLevel >= 0.5 ? 1 : 0 }, FOCUS_PANEL_FADE);
+        if (targetLevel >= 0.5) {
+            if (!wasOverview) this.cancelReorder();
+        } else {
+            this.scheduleReorder();
+        }
+        this.syncOverviewChrome();
+
+        this.animateLevel(targetLevel, true, () => this.finishLevelSettle(targetLevel));
+        if (
+            this.launcherRoute === "direct" &&
+            !this.levelGear.getRunningAnimation().isRunning &&
+            Math.abs(this.levelValue - targetLevel) < 0.001
+        ) {
+            this.finishLevelSettle(targetLevel);
+        }
+        if (targetScreen) this.setFocusById(targetScreen.id, true);
+        this.applyAxes();
     }
 
     private cancelGesture() {
@@ -1680,19 +1653,12 @@ class ViewData {
         if (!gesture) return;
         this.gesture = undefined;
         windowEl.el.toggleAttribute("data-gesture", false);
-        this.setOverviewCloseOpacity(this.overview ? 1 : 0);
-        for (const screen of this.screens) screen.gear.moveTo(screen.visual, 0);
-        this.overviewProgress = this.overview ? 1 : 0;
-        this.launcher?.applyBinding(gesture.launcherBinding);
-        if (!this.overview) {
-            this.overviewFocusId = undefined;
-            this.syncFocusPanelVisibility(false);
-        }
-    }
-
-    private settleAnimation() {
-        for (const screen of this.screens) screen.gear.moveTo(screen.target, 0);
-        this.overviewProgress = this.overview ? 1 : 0;
+        // 停在当前视觉，不跳到命令目标；后续 render/命令会从这里继续吸附
+        this.levelGear.moveTo({ v: this.levelValue }, 0);
+        this.focusGear.moveTo({ v: this.focusValue }, 0);
+        this.focusPanelGear.moveTo({ opacity: this.overview ? 1 : 0 }, 0);
+        this.launcher?.setLevel(this.levelValue, this.launcherRoute);
+        this.applyAxes();
     }
 
     private scheduleReorder() {
@@ -1718,6 +1684,7 @@ class ViewData {
             return;
         }
         const current = this.currentScreen();
+        const anchor = this.currentId;
         if (current) current.used = ++this.usedSeq;
         const empty = this.screens.find((s) => s.empty);
         const launchpad = this.screens.find((s) => s.launchpad);
@@ -1726,15 +1693,16 @@ class ViewData {
         if (launchpad) ordered.push(launchpad);
         const changed = ordered.some((s, i) => s !== this.screens[i]);
         this.screens = ordered;
-        if (current) this.currentId = current.id;
+        // 重排会改所有屏的下标；按 id 把 focus 对齐回同一张屏
+        this.setFocusById(anchor, false);
         if (changed) this.render(false);
     }
 
-    private normalTargets(offset: number, center = this.currentIndex()) {
+    private normalTargets(focus = this.focusValue) {
         const targets = new Map<string, ViewTransform>();
         this.screens.forEach((screen, index) => {
             targets.set(screen.id, {
-                x: (index - center) * this.stageWidth + offset,
+                x: (index - focus) * this.stageWidth,
                 y: 0,
                 scale: 1,
                 opacity: 1,
@@ -1791,287 +1759,188 @@ class ViewData {
         return { cards, targets, cols, cardWidth, cardHeight, gap };
     }
 
-    private overviewTargets() {
-        return this.overviewLayout().targets;
-    }
-
-    /** 预览焦点顺序就是全部虚拟屏（含空桌面和启动台） */
-    private overviewFocusOrder() {
-        return this.screens;
-    }
-
-    private overviewFocusPosOf(id: string | undefined, order: ViewScreen[]) {
-        const index = id === undefined ? -1 : order.findIndex((s) => s.id === id);
-        return index >= 0 ? index : 0;
-    }
-
-    /** 连续焦点位置映射回常规插值用的屏序号；跨过空桌面/启动台时仍然连续 */
-    private focusPosToScreenIndex(pos: number, order: ViewScreen[], fallback = this.currentIndex()) {
-        if (order.length === 0) return fallback;
-        const p = clampNumber(pos, 0, order.length - 1);
-        const i0 = Math.floor(p);
-        const i1 = Math.min(order.length - 1, Math.ceil(p));
-        const t = p - i0;
-        const from = order[i0];
-        const to = order[i1];
-        if (!from || !to) return fallback;
-        const a = this.screens.indexOf(from);
-        const b = this.screens.indexOf(to);
-        if (a < 0 || b < 0) return fallback;
-        return a + (b - a) * t;
-    }
-
-    /** 反向映射：常规行的连续屏序号换成预览焦点列表的连续位置，跨模式时不丢横向位移 */
-    private screenIndexToFocusPos(visualIndex: number, order: ViewScreen[]) {
-        if (order.length === 0) return 0;
-        const indices = order.map((s) => this.screens.indexOf(s));
-        const firstIndex = indices[0];
-        if (firstIndex === undefined || visualIndex <= firstIndex) return 0;
-        const last = order.length - 1;
-        const lastIndex = indices[last];
-        if (lastIndex !== undefined && visualIndex >= lastIndex) return last;
-        for (let i = 0; i < last; i++) {
-            const a = indices[i];
-            const b = indices[i + 1];
-            if (a === undefined || b === undefined) continue;
-            if (visualIndex >= a && visualIndex <= b) {
-                return i + (visualIndex - a) / Math.max(1, b - a);
-            }
-        }
-        return last;
-    }
-
-    private setOverviewFocusIndex(pos: number, order: ViewScreen[]) {
-        const screen = order[clampNumber(Math.round(pos), 0, order.length - 1)];
-        if (!screen || this.overviewFocusId === screen.id) return;
-        this.overviewFocusId = screen.id;
-        this.focusPanelId = screen.id;
-        this.currentId = screen.id;
-        const top = topWin(screen);
-        if (top) this.focusWin(top);
-        else this.blurAll();
-        this.syncScreenZOrder();
-    }
-
-    private cancelFocusPanelTimer() {
-        if (this.focusPanelTimer !== undefined) {
-            clearTimeout(this.focusPanelTimer);
-            this.focusPanelTimer = undefined;
-        }
-    }
-
-    /** 位置每帧直接跟卡片视觉，transform 不走过渡；透明度用单独的短过渡 */
-    /** 以卡片中心为基准放大，保持面板和卡片同心 */
-    private focusPanelGeometry(value: { x: number; y: number; scale: number }) {
-        const scale = value.scale * FOCUS_PANEL_SCALE;
-        return {
-            x: value.x - (this.stageWidth * (scale - value.scale)) / 2,
-            y: value.y - (this.stageHeight * (scale - value.scale)) / 2,
-            scale,
-        };
-    }
-
-    private applyFocusPanelTransform(value: { x: number; y: number; scale: number }) {
-        if (!this.focusPanelEl) return;
-        const rect = this.focusPanelGeometry(value);
-        this.focusPanelEl.style({
-            transform: `translate3d(${rect.x}px, ${rect.y}px, 0) scale(${rect.scale})`,
-        });
-    }
-
-    /** 透明度用独立 gear 驱动，出现/消失各启动一次，互相打断时从当前值继续 */
-    private setFocusPanelOpacity(opacity: number, animate = true) {
-        this.focusPanelGear.moveTo({ opacity }, animate ? FOCUS_PANEL_FADE : 0);
-    }
-
-    /** 动画帧里让聚焦面板跟着选中的卡片自己的 gear 走，退出时也跟到最后 */
-    private syncFocusPanelFrame(screen: ViewScreen) {
-        if (!this.focusPanelEl) return;
-        // 手势中焦点可能落在两张卡片之间，按连续焦点重新插值，避免被单张卡片带偏
-        if (this.gesture) {
-            this.syncFocusPanelGesture();
+    /**
+     * 两轴到屏位置。0.8 之前线性跟手；跨过 0.8 后每张屏用固定 200ms 动画重排到 grid，
+     * 手势继续移动不再改写目标；拉回 0.8 以下时从当前视觉接着回线性（可打断）。
+     */
+    private applyScreenLayout(instant = false) {
+        // 按钮/快捷键不是跟手输入：直接朝停稳布局走固定时长，避免手势接力逻辑参与
+        if (!this.gesture) {
+            this.applyDirectScreenLayout(instant);
             return;
         }
-        // 回常规的松手收尾：直接复用连续焦点跟踪，进度取虚拟屏自己的吸附进度
-        if (this.focusSettle) {
-            const settle = this.focusSettle;
+        const p = clampNumber(this.levelValue, 0, 1);
+        const normal = this.normalTargets(this.focusValue);
+        const layout = this.overviewLayout();
+        const grid = layout.targets;
+        const hidden = { x: -this.stageWidth * 2, y: 0, scale: 1, opacity: 0, blur: 0 };
+        const handoff = OVERVIEW_GRID_HANDOFF;
+        const gridScale = layout.cards.length > 0 ? layout.cardWidth / this.stageWidth : 1;
+        const scale = 1 + (gridScale - 1) * Math.min(1, p / handoff);
+        const rowScale = p < handoff ? scale : gridScale;
+        const rowGap = OVERVIEW_GAP * (p < handoff ? Math.min(1, p * 4) : 1);
+        const centerX = this.stageWidth / 2;
+        const centerY = this.stageHeight / 2;
+
+        for (const screen of this.screens) {
+            const from = normal.get(screen.id) ?? hidden;
+            const linear = {
+                x: centerX + (from.x - centerX) * rowScale + (from.x / this.stageWidth) * rowGap,
+                y: centerY + (from.y - centerY) * rowScale,
+                scale: rowScale,
+                opacity: from.opacity,
+                blur: from.blur,
+            };
+
+            if (p >= handoff) {
+                const target = grid.get(screen.id) ?? linear;
+                if (instant) {
+                    screen.pullMode = "grid";
+                    screen.target = target;
+                    screen.gear.moveTo(target, 0);
+                    continue;
+                }
+                if (screen.pullMode !== "grid") {
+                    screen.pullMode = "grid";
+                    screen.target = target;
+                    screen.gear.moveTo(target, OVERVIEW_GRID_TRANSITION);
+                }
+                continue;
+            }
+
+            if (instant) {
+                screen.pullMode = "tracked";
+                screen.target = linear;
+                screen.gear.moveTo(linear, 0);
+                continue;
+            }
+            if (screen.pullMode === "grid") {
+                // 从 grid 动画中途打断回线性：按上一帧剩余时间续接
+                screen.pullMode = "linear";
+                const running = screen.gear.getRunningAnimation();
+                const rest = running.isRunning ? running.remainingTime : OVERVIEW_GRID_TRANSITION.duration;
+                screen.target = linear;
+                screen.gear.moveTo(linear, rest);
+                continue;
+            }
+            if (screen.pullMode === "linear") {
+                const running = screen.gear.getRunningAnimation();
+                if (running.isRunning && running.remainingTime > 0) {
+                    screen.target = linear;
+                    screen.gear.moveTo(linear, running.remainingTime);
+                    continue;
+                }
+                screen.pullMode = "tracked";
+            }
+            screen.target = linear;
+            screen.gear.moveTo(linear, 0);
+        }
+    }
+
+    /** 非手势的离散过渡：直接朝停稳布局走 320ms，不经过 0.8 的线性跟手段 */
+    private applyDirectScreenLayout(instant: boolean) {
+        const targets = this.overview ? this.overviewLayout().targets : this.normalTargets(this.focusTarget);
+        const hidden = { x: -this.stageWidth * 2, y: 0, scale: 1, opacity: 0, blur: 0 };
+        for (const screen of this.screens) {
+            const target = targets.get(screen.id) ?? hidden;
+            if (instant) {
+                screen.pullMode = "tracked";
+                screen.target = target;
+                screen.gear.moveTo(target, 0);
+                continue;
+            }
             const running = screen.gear.getRunningAnimation();
-            if (running.isRunning) {
-                const map = running.config.map ?? ((value: number) => value);
-                this.applyFocusPanelAtPos(settle.from + (settle.to - settle.from) * map(running.progress));
-                return;
+            if (sameTransform(screen.target, target)) {
+                if (running.isRunning || sameTransform(screen.visual, target)) continue;
             }
-            this.applyFocusPanelAtPos(settle.to);
-            this.focusSettle = undefined;
-            return;
+            screen.pullMode = "tracked";
+            screen.target = target;
+            screen.gear.moveTo(target, SCREEN_TRANSITION);
         }
-        // 吸附中：卡片每更新一帧，就用它最新的 visual 重新算一次重心
-        const snap = this.focusSnapGear.getRunningAnimation();
-        if (snap.isRunning) {
-            const map = snap.config.map ?? ((value: number) => value);
-            const pos = snap.fromValue.pos + (snap.toValue.pos - snap.fromValue.pos) * map(snap.progress);
-            this.applyFocusPanelAtPos(pos);
-            return;
-        }
-        if (this.focusPanelId !== screen.id) return;
-        this.applyFocusPanelTransform(screen.visual);
     }
 
-    /** 手势中聚焦面板按当前连续焦点取重心；常规滑屏的横向偏移也要算进去 */
-    private syncFocusPanelGesture() {
-        const gesture = this.gesture;
-        if (!gesture) return;
-        // 预览里 offset 恒为 0；退回常规后 offset 跟手移动，焦点下标要跟着补偿
-        this.applyFocusPanelAtPos(this.focusVisual - gesture.offset / this.stageWidth);
-    }
-
-    /** 按连续焦点位置在卡片之间插值面板位置；位置可能落在两张卡片之间 */
-    private applyFocusPanelAtPos(pos: number) {
-        const order = this.overviewFocusOrder();
-        if (order.length === 0) return;
-        const p = clampNumber(pos, 0, order.length - 1);
+    /** 聚焦面板位置从两张焦点卡片的当前视觉插值，跟着 grid 重排动画一起走 */
+    private applyPanel() {
+        if (!this.focusPanelEl || this.screens.length === 0) return;
+        const p = clampNumber(this.focusValue, 0, this.screens.length - 1);
         const i0 = Math.floor(p);
-        const i1 = Math.min(order.length - 1, Math.ceil(p));
+        const i1 = Math.min(this.screens.length - 1, Math.ceil(p));
         const t = p - i0;
-        const from = order[i0];
-        const to = order[i1];
-        if (!from || !to) return;
-        const a = from.visual;
-        const b = to.visual;
-        this.focusPanelPos = p;
-        this.applyFocusPanelTransform({
+        const a = this.screens[i0].visual;
+        const b = this.screens[i1].visual;
+        const value = {
             x: a.x + (b.x - a.x) * t,
             y: a.y + (b.y - a.y) * t,
             scale: a.scale + (b.scale - a.scale) * t,
+        };
+        const panelScale = value.scale * FOCUS_PANEL_SCALE;
+        this.focusPanelEl.style({
+            transform: `translate3d(${value.x - (this.stageWidth * (panelScale - value.scale)) / 2}px, ${
+                value.y - (this.stageHeight * (panelScale - value.scale)) / 2
+            }px, 0) scale(${panelScale})`,
         });
     }
 
-    /** 松手回常规：不新建动画，沿用连续焦点跟踪，进度跟虚拟屏吸附同步 */
-    private beginFocusSettle(from: number) {
-        if (this.focusPanelId === undefined) return;
-        const order = this.overviewFocusOrder();
-        const target = order.findIndex((screen) => screen.id === this.focusPanelId);
-        if (target < 0 || Math.abs(target - from) < 1e-3) return;
-        this.focusSettle = { from, to: target };
-        this.applyFocusPanelAtPos(from);
-    }
-
-    /** 停掉未完成的吸附，保留当前视觉位置 */
-    private stopFocusSnap() {
-        if (this.focusSnapGear.getRunningAnimation().isRunning) {
-            this.focusSnapGear.moveTo({ pos: this.focusPanelPos }, 0);
-        }
-    }
-
-    /** 松手后从连续焦点按重心插值吸附到实际聚焦屏 */
-    private settleFocusPanel(pos: number) {
-        if (this.focusPanelId === undefined) return;
-        const order = this.overviewFocusOrder();
-        if (order.length <= 1) return;
-        const from = clampNumber(pos, 0, order.length - 1);
-        const targetIndex = order.findIndex((screen) => screen.id === this.focusPanelId);
-        const to = targetIndex >= 0 ? targetIndex : Math.round(from);
-        if (Math.abs(to - from) < 1e-3) return;
-        // 先对齐当前连续位置，再和虚拟屏吸附用同一条过渡
-        this.focusSnapGear.moveTo({ pos: from }, 0);
-        this.focusSnapGear.moveTo({ pos: to }, SCREEN_TRANSITION);
-    }
-
-    /**
-     * 出现/消失由独立 gear 驱动：只在状态跨过触发点时启动一次，可互相打断，
-     * 不会被手势逐帧驱动。位置仍由卡片/手势连续更新。
-     */
-    private syncFocusPanelVisibility(animate: boolean) {
-        if (!this.focusPanelEl) return;
-        const visible =
-            this.focusPanelId !== undefined &&
-            (this.gesture ? this.overview || this.gestureFocusPanelTriggered : this.overview);
-        if (visible) {
-            this.cancelFocusPanelTimer();
-            if (!this.focusPanelVisible) {
-                this.focusPanelVisible = true;
-                this.setFocusPanelOpacity(1, animate);
-            }
-            return;
-        }
-        if (this.focusPanelVisible) {
-            this.focusPanelVisible = false;
-            this.setFocusPanelOpacity(0, animate);
-        }
-        if (this.focusPanelId === undefined) return;
-        if (!animate) {
-            this.cancelFocusPanelTimer();
-            this.focusPanelId = undefined;
-            return;
-        }
-        // 位置继续跟随退出动画；淡出结束后不再需要这块屏
-        if (this.focusPanelTimer !== undefined) return;
-        this.focusPanelTimer = window.setTimeout(() => {
-            this.focusPanelTimer = undefined;
-            if (this.focusPanelVisible) return;
-            this.focusPanelId = undefined;
-        }, SCREEN_TRANSITION.duration + FOCUS_PANEL_FADE);
-    }
-
-    /** 非手势状态下设置聚焦面板的初始位置，后续由卡片 gear 接管位置 */
-    private syncFocusPanelRender(animate: boolean) {
-        if (!this.overview) this.stopFocusSnap();
-        if (!this.focusPanelId) {
-            this.syncFocusPanelVisibility(animate);
-            return;
-        }
-        const screen = this.screens.find((s) => s.id === this.focusPanelId);
-        if (!screen) {
-            this.focusPanelId = undefined;
-            this.syncFocusPanelVisibility(animate);
-            return;
-        }
-        if (!this.focusSettle && !this.focusSnapGear.getRunningAnimation().isRunning) {
-            const value = animate ? screen.visual : screen.target;
-            this.applyFocusPanelTransform({ x: value.x, y: value.y, scale: value.scale });
-        }
-        this.syncFocusPanelVisibility(animate);
-    }
-
-    /** 预览里选中卡片要盖在其他卡片上；常规状态按当前屏决定层级 */
-    private syncScreenZOrder() {
-        const overview = this.overview || this.overviewProgress > 0;
-        const activeId = overview ? (this.overviewFocusId ?? this.currentId) : this.currentId;
+    /** 唯一的布局出口：两轴当前值 -> 屏 target -> DOM，启动器/面板/关闭按钮透明度一起更新 */
+    private applyAxes(instant = false) {
+        this.applyScreenLayout(instant);
+        const overviewVisual = this.overviewProgress > 0;
+        const activeId = this.currentId;
         for (const screen of this.screens) {
-            const z = overview ? (screen.id === activeId ? "2" : "1") : screen.id === activeId ? "1" : "0";
+            const z = overviewVisual ? (screen.id === activeId ? "2" : "1") : screen.id === activeId ? "1" : "0";
             screen.el.style({ zIndex: z });
         }
+        this.launcher?.setLevel(this.levelValue, this.launcherRoute);
+        this.applyPanel();
+        windowEl.el.toggleAttribute("data-overview", this.overview);
+        windowEl.el.style.setProperty("--overview-close-opacity", `${this.overviewProgress}`);
     }
 
-    /** 横轴在预览里连续移动焦点；和常规切屏同一套位移倍率，手指右移去左边的旧屏 */
-    private moveOverviewFocus(gesture: NonNullable<ViewData["gesture"]>) {
-        const order = this.overviewFocusOrder();
-        if (order.length === 0) return;
-        const raw = gesture.totalX - gesture.overviewBaseX;
-        const delta = Math.sign(raw) * Math.max(0, Math.abs(raw) - GESTURE_AXIS_DEADZONE);
-        const pos = clampNumber(gesture.focusBase - (delta * gestureSwitchGain) / this.stageWidth, 0, order.length - 1);
-        gesture.focusPos = pos;
-        this.focusVisual = this.focusPosToScreenIndex(pos, order);
-        this.setOverviewFocusIndex(pos, order);
+    /** 停稳后的屏位置：用命令目标算，不读动画中的当前值 */
+    committedScreenTransform(screen: ViewScreen) {
+        if (this.levelTarget >= 0.5) return this.overviewLayout().targets.get(screen.id);
+        return this.normalTargets(this.focusTarget).get(screen.id);
+    }
+
+    /** 屏和两轴都停稳了吗；启动动画用它决定什么时候嵌入虚拟屏 */
+    isScreenSettled(screen: ViewScreen) {
+        if (this.focusGear.getRunningAnimation().isRunning) return false;
+        if (this.levelGear.getRunningAnimation().isRunning) return false;
+        if (screen.gear.getRunningAnimation().isRunning) return false;
+        return (
+            Math.abs(screen.visual.x - screen.target.x) < 0.5 &&
+            Math.abs(screen.visual.y - screen.target.y) < 0.5 &&
+            Math.abs(screen.visual.scale - screen.target.scale) < 0.001
+        );
     }
 
     render(animate = true) {
-        // 手势跟手拖动时由 moveGesture 直接写样式，动画器只在松手/状态切换时接管
-        if (this.gesture) return;
-        // 先按当前屏的全屏状态决定工具栏是否隐藏
+        // 工具栏避让只随显式状态变化算一次，不跟两轴的每一帧
         this.chromeCallback?.();
-        const normal = this.normalTargets(0);
-        const overview = this.overview ? this.overviewTargets() : undefined;
-        const hidden = { x: -this.stageWidth * 2, y: 0, scale: 1, opacity: 0, blur: 0 };
-        for (const screen of this.screens) {
-            const target = overview ? (overview.get(screen.id) ?? hidden) : (normal.get(screen.id) ?? hidden);
-            screen.target = target;
-            screen.gear.moveTo(target, animate ? SCREEN_TRANSITION : 0);
-            const activeId = overview ? (this.overviewFocusId ?? this.currentId) : this.currentId;
-            const z = overview ? (screen.id === activeId ? "2" : "1") : screen.id === activeId ? "1" : "0";
-            screen.el.style({ zIndex: z });
+        // 手势中 moveGesture 直接写两轴；其它状态变化只重算布局，不再起新的轴动画
+        if (this.gesture) {
+            this.applyAxes(!animate);
+            return;
         }
-        this.syncFocusPanelRender(animate);
+        const target = this.levelTarget;
+        // 线路径的 tOrigin 由发起这次过渡的命令/手势负责；render 的补算不能改写它
+        const onComplete = this.launcherRoute === "direct" ? () => this.finishLevelSettle(target) : undefined;
+        this.animateLevel(target, animate, onComplete);
+        if (
+            this.launcherRoute === "direct" &&
+            !this.levelGear.getRunningAnimation().isRunning &&
+            Math.abs(this.levelValue - target) < 0.001
+        ) {
+            this.finishLevelSettle(target);
+        }
+        const running = this.focusGear.getRunningAnimation();
+        if (!animate) {
+            this.focusValue = this.focusTarget;
+            this.focusGear.moveTo({ v: this.focusTarget }, 0);
+        } else if (!(running.isRunning && running.toValue.v === this.focusTarget)) {
+            this.focusGear.moveTo({ v: this.focusTarget }, SCREEN_TRANSITION);
+        }
+        this.applyAxes(!animate);
     }
 
     focusWin(winid: MWinId) {
@@ -2182,6 +2051,17 @@ class ViewData {
         return this.focusHandle !== undefined && !isInternalWindow(this.focusHandle) ? this.focusHandle : undefined;
     }
 
+    private launcherBinding(): LauncherBinding {
+        if (this.launcherRoute === "line") {
+            return { kind: "line", level: clampNumber(this.levelValue, -1, 1) };
+        }
+        const towardT = this.levelTarget >= 0.5;
+        const progress = clampNumber(this.levelValue, 0, 1);
+        return towardT
+            ? { kind: "direct", from: "n", to: "t", progress }
+            : { kind: "direct", from: "t", to: "n", progress: 1 - progress };
+    }
+
     /** 只读状态快照：testMode 的 `__mydeTest.state()` 用，测试直接断言窗口管理结果 */
     snapshot() {
         return {
@@ -2199,24 +2079,31 @@ class ViewData {
             })),
             current: this.currentId,
             focus: this.focusHandle,
+            axis: {
+                level: this.levelValue,
+                levelTarget: this.levelTarget,
+                focus: this.focusValue,
+                focusTarget: this.focusTarget,
+                launcherRoute: this.launcherRoute,
+            },
             overview: this.overview,
             overviewProgress: this.overviewProgress,
-            overviewFocus: this.overviewFocusId,
+            overviewFocus: this.overview || this.overviewProgress > 0 ? this.currentId : undefined,
             gesture: this.gesture
                 ? {
-                      level: this.gesture.level,
+                      level: this.levelValue,
                       startLevel: this.gesture.startLevel,
                       totalX: this.gesture.totalX,
                       totalY: this.gesture.totalY,
-                      horizontalMode: this.gesture.horizontalMode,
-                      offset: this.gesture.offset,
-                      focusPos: this.gesture.focusPos,
-                      launcherBinding: this.gesture.launcherBinding,
+                      horizontalMode: this.overviewProgress > 0 ? ("overview" as const) : ("screens" as const),
+                      offset: (this.currentIndex() - this.focusValue) * this.stageWidth,
+                      focusPos: this.focusValue,
+                      launcherBinding: this.launcherBinding(),
                   }
                 : undefined,
             launcher: this.launcher
                 ? {
-                      binding: this.launcher.getBinding(),
+                      binding: this.launcherBinding(),
                       visible: this.launcher.isVisible(),
                       focused: isLauncherInputFocused(),
                   }
@@ -2241,10 +2128,17 @@ class ViewData {
     /** 测试复位：取消手势、退出预览、回到空桌面（窗口由调用方先关掉） */
     resetView() {
         this.cancelGesture();
-        this.setOverviewInternal(false);
+        this.setOverview(false, false);
         this.cancelReorder();
+        this.launcherRoute = "line";
+        this.tOrigin = "h";
+        this.levelValue = 0;
+        this.levelTarget = 0;
+        this.levelGear.moveTo({ v: 0 }, 0);
+        this.focusPanelGear.moveTo({ opacity: 0 }, 0);
         const empty = this.screens.find((screen) => screen.empty);
-        if (empty) this.setCurrentScreen(empty.id, false);
+        if (empty) this.setFocusById(empty.id, false);
+        this.render(false);
         this.cancelReorder();
     }
 
@@ -2267,7 +2161,7 @@ class ViewData {
             target.used = ++this.usedSeq;
         }
         setWindowPosition(winid, x, y);
-        this.currentId = target.id;
+        this.setFocusById(target.id, false);
         this.render(false);
         return true;
     }
@@ -4937,7 +4831,7 @@ function localRectOf(rect: LaunchRect, transform: { x: number; y: number; scale:
 /** 创屏滑动以外的操作（手势、总览、切屏按钮等）接管了虚拟屏时，面板才改为跟屏 */
 function launchScreenTakenOver(state: PendingLaunch) {
     if (viewData.gestureActive || viewData.overview) return true;
-    const target = state.screen?.target;
+    const target = state.screen ? viewData.committedScreenTransform(state.screen) : undefined;
     const base = state.flightTarget;
     if (!target || !base) return false;
     return (
@@ -4970,11 +4864,11 @@ function startLaunchFlight(state: PendingLaunch) {
     state.trackFrom = undefined;
     state.flightProgress = 0;
     state.flightSize = { width: state.startRect.width, height: state.startRect.height };
-    state.flightTarget = {
-        x: state.screen.target.x,
-        y: state.screen.target.y,
-        scale: state.screen.target.scale,
-    };
+    // 目标是屏停稳后的位置，不能读创屏滑动中的 target
+    const committed = viewData.committedScreenTransform(state.screen);
+    state.flightTarget = committed
+        ? { x: committed.x, y: committed.y, scale: committed.scale }
+        : { x: state.screen.target.x, y: state.screen.target.y, scale: state.screen.target.scale };
     const targetLocal = launchTargetLocalRect(state);
     const targetViewport = screenRectOf(state.flightTarget, targetLocal);
 
@@ -5078,9 +4972,11 @@ function waitForLaunchScreenSettled(state: PendingLaunch) {
         if (!screen || !pendingLaunches.has(state)) return;
         // 等待期间仍按 p=1 跟踪屏；期间被手势/总览接管也一样跟住
         renderLaunchGeometry(state);
-        const screenRunning = screen.gear.getRunningAnimation().isRunning;
+        // 创屏时屏由 focus/level 轴驱动，screen.gear 只做 0 时长跟随；
+        // 要等两轴都停稳，不能只看 screen.gear
+        const settled = viewData.isScreenSettled(screen);
         const sizeRunning = state.sizeGear?.getRunningAnimation().isRunning ?? false;
-        if (screenRunning || sizeRunning) {
+        if (!settled || sizeRunning) {
             requestAnimationFrame(tick);
             return;
         }
@@ -8345,15 +8241,6 @@ function createLauncher(): LauncherController {
     const hiddenTop = -LAUNCHER_SHELL_HEIGHT - 12;
     const normalTop = () => localStageHeight() / 3 - LAUNCHER_SHELL_HEIGHT / 2;
     const topTop = () => OVERVIEW_LAUNCHER_TOP + localTopInset();
-    const stateTop = (state: LauncherState) => (state === "h" ? hiddenTop : state === "n" ? normalTop() : topTop());
-    const stateOpacity = (state: LauncherState) => (state === "h" ? 0 : 1);
-    /** 当前视觉：N-H-T 线，或按钮触发的 N-T 直连 */
-    let path: { kind: "line" } | { kind: "direct"; from: "n" | "t"; to: "n" | "t" } = { kind: "line" };
-    let lineLevel = 0;
-    let directProgress = 0;
-    /** 从 T 离散退出时回到 N 还是 H；只有按钮直连进入 T 才记 n */
-    let tOrigin: "n" | "h" = "h";
-    let currentOpacity = 0;
     const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
     const search = new SearchEngine();
@@ -8448,10 +8335,11 @@ function createLauncher(): LauncherController {
     shell.add([inputPanel, resultsPanel]);
     shell.on("click", () => field.el.focus());
 
-    const gear = createAnimationGear({ value: 0 }, { transition: LAUNCHER_TRANSITION });
-    // 直连和 N-H-T 线用各自的动画器：直连的 progress 是 0..1，线的 level 是 -1..1，
-    // 共用一个值会出现“t→n 完成后最后一帧把 -1 写回 1”的问题。
-    const directGear = createAnimationGear({ value: 0 }, { transition: LAUNCHER_TRANSITION });
+    /** 由 ViewData 的纵轴驱动；这里只负责把 (level, route) 映射成搜索栏位置 */
+    let level = 0;
+    let route: LauncherRoute = "line";
+    let currentOpacity = 0;
+    let wasFullyVisible = false;
     const blurInput = () => {
         if (document.activeElement instanceof HTMLElement && document.activeElement.closest("[data-launcher-input]")) {
             document.activeElement.blur();
@@ -8459,15 +8347,12 @@ function createLauncher(): LauncherController {
     };
     const apply = () => {
         const top =
-            path.kind === "line"
-                ? lineLevel <= 0
-                    ? lerp(hiddenTop, normalTop(), -lineLevel)
-                    : lerp(hiddenTop, topTop(), lineLevel)
-                : lerp(stateTop(path.from), stateTop(path.to), directProgress);
-        const opacity =
-            path.kind === "line"
-                ? Math.abs(lineLevel)
-                : lerp(stateOpacity(path.from), stateOpacity(path.to), directProgress);
+            route === "line"
+                ? level <= 0
+                    ? lerp(hiddenTop, normalTop(), -level)
+                    : lerp(hiddenTop, topTop(), level)
+                : lerp(normalTop(), topTop(), clampNumber(level, 0, 1));
+        const opacity = route === "line" ? Math.abs(level) : 1;
         currentOpacity = opacity;
         shell.style({
             top: `${top}px`,
@@ -8475,109 +8360,20 @@ function createLauncher(): LauncherController {
             visibility: opacity > 0 ? "visible" : "hidden",
             pointerEvents: opacity > 0.5 ? "auto" : "none",
         });
-        if (opacity >= 1) {
+        // 只在“刚变成完全可见”时抢焦点；布局每帧都会调 setLevel，不能反复把焦点夺回来
+        const fullyVisible = opacity >= 1;
+        if (fullyVisible && !wasFullyVisible) {
             if (document.activeElement !== field.el) field.el.focus({ preventScroll: true });
         } else if (opacity <= 0.001) {
             blurInput();
         }
+        wasFullyVisible = fullyVisible;
     };
-    gear.setUpdateCallback(({ value }) => {
-        // 直连期间线动画器的残留帧不能再写 lineLevel；切回线时由 setLineLevel/settle 同步
-        if (path.kind !== "line") return;
-        lineLevel = clampNumber(value, -1, 1);
-        apply();
-    });
-    directGear.setUpdateCallback(({ value }) => {
-        if (path.kind !== "direct") return;
-        directProgress = clampNumber(value, 0, 1);
-        apply();
-    });
-    gear.moveTo({ value: 0 }, 0);
-    directGear.moveTo({ value: 0 }, 0);
 
-    const setLineLevel = (level: number) => {
-        path = { kind: "line" };
-        lineLevel = clampNumber(level, -1, 1);
-        gear.moveTo({ value: lineLevel }, 0);
+    const setLevel = (value: number, nextRoute: LauncherRoute) => {
+        route = nextRoute;
+        level = nextRoute === "line" ? clampNumber(value, -1, 1) : clampNumber(value, 0, 1);
         apply();
-    };
-    const setDirectProgress = (progress: number) => {
-        if (path.kind !== "direct") return;
-        directProgress = clampNumber(progress, 0, 1);
-        directGear.moveTo({ value: directProgress }, 0);
-        apply();
-    };
-    const animateLineTo = (target: number) => {
-        path = { kind: "line" };
-        gear.moveTo({ value: lineLevel }, 0);
-        // 每次给全新对象：moveTo 会把 onComplete 写到传入的 transition 上，
-        // 共用 LAUNCHER_TRANSITION 会让下一次无回调的 moveTo 继承旧回调
-        gear.moveTo({ value: clampNumber(target, -1, 1) }, { ...LAUNCHER_TRANSITION }, () => {
-            if (target === 1) tOrigin = "h";
-        });
-    };
-    const animateDirectTo = (target: number) => {
-        if (path.kind !== "direct") return;
-        const from = path.from;
-        const to = path.to;
-        directGear.moveTo({ value: directProgress }, 0);
-        directGear.moveTo({ value: target }, { ...LAUNCHER_TRANSITION }, () => {
-            const endState = target === 1 ? to : from;
-            if (endState === "t" && from === "n") tOrigin = "n";
-            path = { kind: "line" };
-            lineLevel = endState === "t" ? 1 : -1;
-            // 线动画器在直连期间没有动过，保持 idle；下一次线动画/吸附会先同步到 lineLevel
-            apply();
-        });
-    };
-    const settle = () => {
-        if (path.kind === "line") gear.moveTo({ value: lineLevel }, 0);
-        else directGear.moveTo({ value: directProgress }, 0);
-    };
-    const applyBinding = (binding: LauncherBinding) => {
-        if (binding.kind === "line") {
-            setLineLevel(binding.level);
-            return;
-        }
-        path = { kind: "direct", from: binding.from, to: binding.to };
-        directProgress = clampNumber(binding.progress, 0, 1);
-        directGear.moveTo({ value: directProgress }, 0);
-        apply();
-    };
-    const enterOverview = () => {
-        if (path.kind === "direct") {
-            animateDirectTo(path.to === "t" ? 1 : 0);
-            return;
-        }
-        // 只有稳定在 N 的按钮进入才走 N-T 直连；动画途中继续当前 N-H-T 线
-        if (!gear.getRunningAnimation().isRunning && Math.abs(lineLevel + 1) < 0.0001) {
-            path = { kind: "direct", from: "n", to: "t" };
-            directProgress = 0;
-            animateDirectTo(1);
-            return;
-        }
-        animateLineTo(1);
-    };
-    const exitOverview = () => {
-        if (path.kind === "direct") {
-            animateDirectTo(path.to === "n" ? 1 : 0);
-            return;
-        }
-        // 按钮 N-T 直连进入的 T，离散退出走 T-N 直连
-        if (!gear.getRunningAnimation().isRunning && lineLevel >= 0.9999 && tOrigin === "n") {
-            path = { kind: "direct", from: "t", to: "n" };
-            directProgress = 0;
-            animateDirectTo(1);
-            return;
-        }
-        animateLineTo(tOrigin === "n" ? -1 : 0);
-    };
-    const toggleNormal = () => {
-        if (path.kind === "direct") {
-            animateDirectTo(path.to === "n" ? 1 : 0);
-            return;
-        }
-        animateLineTo(lineLevel <= -0.5 ? 0 : -1);
     };
 
     // ── 搜索结果 ──────────────────────────────────────────────────────────────────────────────
@@ -8813,16 +8609,12 @@ function createLauncher(): LauncherController {
 
     function closeSearch() {
         clearSearch();
-        if (viewData.overview || (path.kind === "line" && lineLevel >= 0.9999)) {
+        if (viewData.overview || (route === "line" && level >= 0.9999)) {
             // 全局预览里搜索栏固定显示，不能收进工作区外
             blurInput();
             return;
         }
-        if (path.kind === "direct") {
-            animateDirectTo(path.to === "n" ? 1 : 0);
-            return;
-        }
-        animateLineTo(0);
+        viewData.requestLauncherLevel(0);
     }
 
     function openSearch() {
@@ -8830,11 +8622,7 @@ function createLauncher(): LauncherController {
             field.el.focus({ preventScroll: true });
             return;
         }
-        if (path.kind === "direct") {
-            animateDirectTo(path.to === "n" ? 1 : 0);
-            return;
-        }
-        animateLineTo(-1);
+        viewData.requestLauncherLevel(-1);
     }
 
     async function handToAi(text: string) {
@@ -8887,19 +8675,7 @@ function createLauncher(): LauncherController {
     });
 
     return {
-        getBinding: () =>
-            path.kind === "line"
-                ? { kind: "line", level: lineLevel }
-                : { kind: "direct", from: path.from, to: path.to, progress: directProgress },
-        setLineLevel,
-        setDirectProgress,
-        animateLineTo,
-        animateDirectTo,
-        applyBinding,
-        enterOverview,
-        exitOverview,
-        toggleNormal,
-        settle,
+        setLevel,
         isVisible: () => currentOpacity >= 0.5,
         blur: blurInput,
         open: openSearch,
@@ -11513,7 +11289,6 @@ if ((globalThis as { process?: { env?: Record<string, string | undefined> } }).p
             for (const frame of [...clientWindowFrames.values()]) closeClientFrameWithFade(frame.handle, frame);
             for (const state of [...pendingLaunches]) forceQuitLaunch(state);
             viewData.resetView();
-            launcher.applyBinding({ kind: "line", level: 0 });
             closeRequests.length = 0;
         },
         forceCloseWindow: (handle: WinHandle) => {

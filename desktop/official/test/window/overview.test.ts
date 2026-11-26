@@ -71,6 +71,25 @@ describe("全局预览", () => {
         expect(exited.launcher?.visible).toBe(false);
     });
 
+    run("快捷键进入预览也显示聚焦面板", { timeout: 30000 }, async () => {
+        await enterOverview();
+        await desktop.waitFor(
+            `(() => { const el = document.querySelector("[data-desktop-ui='focus-panel']"); return !!el && Number(getComputedStyle(el).opacity) >= 0.95; })()`,
+            5000,
+        );
+        const transform = await desktop.evaluate<string>(
+            `(() => { const el = document.querySelector("[data-desktop-ui='focus-panel']"); return el ? getComputedStyle(el).transform : "none"; })()`,
+        );
+        expect(transform).not.toBe("none");
+
+        await desktop.key("Tab", { modifiers: META });
+        await waitState(desktop, (value) => !value.overview);
+        await desktop.waitFor(
+            `(() => { const el = document.querySelector("[data-desktop-ui='focus-panel']"); return !!el && Number(getComputedStyle(el).opacity) <= 0.05; })()`,
+            5000,
+        );
+    });
+
     run("预览里 Esc 第一次只失焦，第二次退出", { timeout: 30000 }, async () => {
         await enterOverview();
         const focused = await waitState(desktop, (value) => value.launcher?.focused === true);
@@ -182,6 +201,11 @@ describe("全局预览", () => {
         await waitState(desktop, (value) => value.overview);
         await sleep(400);
 
+        const before = await state(desktop);
+        const anchor = before.screens.find((screen) => screen.empty);
+        expect(anchor, "应该有空桌面卡片").toBeTruthy();
+        await desktop.evaluate("__mydeTest.setAnimationSpeed(1)");
+
         const button = await elementBox(desktop, `[data-view-id='${win.screen}'] [data-desktop-ui='window-close']`);
         expect(button, "预览里应该有窗口关闭按钮").toBeTruthy();
         if (!button) return;
@@ -190,6 +214,23 @@ describe("全局预览", () => {
         await waitCloseRequest(desktop, win.handle);
         // 客户端退出后的 peer end 在测试环境里可能延迟，先确认请求再回收桌面侧窗口
         await forceCloseWindow(desktop, win.handle);
+
+        // 回收一张卡片后，其余卡片应该重新排布，而不是直接跳到新位置
+        const samples: { dx: number; ds: number }[] = [];
+        const deadline = Date.now() + 700;
+        while (Date.now() < deadline) {
+            const value = await state(desktop);
+            if (!value.windows.some((item) => item.handle === win.handle)) {
+                const card = anchor ? value.screens.find((screen) => screen.id === anchor.id) : undefined;
+                if (card)
+                    samples.push({ dx: card.visual.x - card.target.x, ds: card.visual.scale - card.target.scale });
+            }
+            await sleep(20);
+        }
+        expect(
+            samples.some((item) => Math.abs(item.dx) > 1 || Math.abs(item.ds) > 0.001),
+            "关窗回收屏后应该播放重新布局动画",
+        ).toBe(true);
 
         const closed = await waitState(desktop, (value) => !value.windows.some((item) => item.handle === win.handle));
         expect(closed.overview).toBe(true);

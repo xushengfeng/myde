@@ -38,6 +38,13 @@ export type DesktopState = {
     screens: ScreenState[];
     current: string;
     focus: string | undefined;
+    axis: {
+        level: number;
+        levelTarget: number;
+        focus: number;
+        focusTarget: number;
+        launcherRoute: "line" | "direct";
+    };
     overview: boolean;
     overviewProgress: number;
     overviewFocus: string | undefined;
