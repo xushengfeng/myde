@@ -11,6 +11,7 @@ import {
     mockAppPath,
     resetDesktop,
     screenById,
+    startFingerGesture,
     state,
     waitState,
     windowByAppid,
@@ -227,6 +228,60 @@ describe("虚拟屏与启动", () => {
         expect(fullWin.screen).not.toBe(win.screen);
         expect(fullscreen.current).toBe(fullWin.screen);
         expect(appScreens(fullscreen).length, "全屏换屏时回收原屏，不增加屏数").toBe(1);
+
+        // 全屏铺满整块输出，不能按可用区（工具栏内缩）居中
+        const fsSettled = await waitState(desktop, (value) => {
+            const win = windowByAppid(value, "screen-n");
+            return win?.fullscreen === true && !win.resizing;
+        });
+        const fsWin = windowByAppid(fsSettled, "screen-n");
+        expect(fsWin?.rect?.x).toBe(0);
+        expect(fsWin?.rect?.y).toBe(0);
+        expect(fsWin?.rect?.w).toBe(fsSettled.stage.width);
+        expect(fsWin?.rect?.h).toBe(fsSettled.stage.height);
+
+        // 全屏画面停稳后工具栏隐藏
+        await desktop.waitFor(
+            `document.querySelector('[data-desktop-ui="tools"]')?.hasAttribute("data-fullscreen-toolbars") === true`,
+            3000,
+        );
+
+        // 稍微进入全局预览：全屏被带偏，工具栏立即显示
+        await desktop.key("Tab", { modifiers: META });
+        await waitState(desktop, (value) => value.overview === true);
+        await desktop.waitFor(
+            `(() => {
+                const el = document.querySelector('[data-desktop-ui="tools"]');
+                return !!el && !el.hasAttribute("data-fullscreen-toolbars") && Number(getComputedStyle(el).opacity) > 0.9;
+            })()`,
+            3000,
+        );
+
+        // 退出预览、回到全屏屏并停稳后重新隐藏
+        await desktop.key("Tab", { modifiers: META });
+        await waitState(desktop, (value) => value.overview === false);
+        await desktop.waitFor(
+            `document.querySelector('[data-desktop-ui="tools"]')?.hasAttribute("data-fullscreen-toolbars") === true`,
+            3000,
+        );
+
+        // 触控板只是稍微往上滑、还没松手：overviewProgress 已经大于 0，工具栏应立即显示
+        const gestureState = await state(desktop);
+        const gesture = await startFingerGesture(desktop);
+        await gesture.move(0, -gestureState.stage.height * 0.08, 4);
+        await desktop.waitFor(
+            `(() => {
+                const el = document.querySelector('[data-desktop-ui="tools"]');
+                return !!el && !el.hasAttribute("data-fullscreen-toolbars") && Number(getComputedStyle(el).opacity) > 0.5;
+            })()`,
+            1500,
+        );
+        await gesture.end();
+        await waitState(desktop, (value) => value.overview === false);
+        await desktop.waitFor(
+            `document.querySelector('[data-desktop-ui="tools"]')?.hasAttribute("data-fullscreen-toolbars") === true`,
+            3000,
+        );
 
         await desktop.key("KeyF", { modifiers: META });
         const restored = await waitState(desktop, (value) => windowByAppid(value, "screen-n")?.fullscreen === false);

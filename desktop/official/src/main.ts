@@ -598,6 +598,8 @@ class ViewData {
     private nextId = 1;
     private reorderTimer: number | undefined;
     private chromeCallback?: () => void;
+    /** 手势中两轴实时变化时更轻量的工具栏回调：只算显示/隐藏，不重排窗口 */
+    private chromeProgressCallback?: () => void;
     private chromeInsets = { top: 0, bottom: 0, left: 0, right: 0 };
     private stageWidth = 1;
     private stageHeight = 1;
@@ -668,7 +670,8 @@ class ViewData {
         return this.levelTarget >= 0.5;
     }
 
-    private get overviewProgress() {
+    /** 0 = 常规，1 = 全局预览；手势途中取实时值 */
+    get overviewProgress() {
         return clampNumber(this.levelValue, 0, 1);
     }
 
@@ -726,7 +729,8 @@ class ViewData {
             this.focusValue = target;
             return;
         }
-        this.focusGear.moveTo({ v: target }, SCREEN_TRANSITION);
+        // 停稳后再同步一次工具栏：切到/切离全屏屏时，显示/隐藏发生在轴动画之后
+        this.focusGear.moveTo({ v: target }, { ...SCREEN_TRANSITION, onComplete: () => this.chromeCallback?.() });
     }
 
     private animateLevel(target: number, animate = true, onComplete?: () => void) {
@@ -767,6 +771,11 @@ class ViewData {
     /** 视图状态（当前屏/总览）变化后回调，用来同步全屏时工具栏的避让 */
     setChromeCallback(cb: () => void) {
         this.chromeCallback = cb;
+    }
+
+    /** 手势中两轴每帧变化时回调，不重排窗口，只让工具栏跟随偏移立刻显示/隐藏 */
+    setChromeProgressCallback(cb: () => void) {
+        this.chromeProgressCallback = cb;
     }
 
     /** 工具栏在 stage 内的占位；总览 grid 和搜索栏会用它避开工具栏 */
@@ -1474,6 +1483,8 @@ class ViewData {
             if (target >= 0.5) this.tOrigin = "h";
         }
         this.applyAxes();
+        // 纵轴落定后再算一次工具栏：进入/退出全局预览后全屏状态可能变了
+        this.chromeCallback?.();
     }
 
     private syncOverviewChrome() {
@@ -1587,6 +1598,8 @@ class ViewData {
         // 两个轴各自走 0 时长；applyAxes 会同时读到新值
         this.levelGear.moveTo({ v: level }, 0);
         this.focusGear.moveTo({ v: focus }, 0);
+        // 手势中 overviewProgress 已经变了：立刻让全屏工具栏响应，不等松手
+        this.chromeProgressCallback?.();
     }
 
     endGesture() {
@@ -3926,6 +3939,7 @@ function startFrameLayoutTransition(
     frame: ClientWindowFrame,
     target: { left: number; top: number; width: number; height: number },
     ghost: ClientWindowFrame["ghost"],
+    center = true,
 ) {
     const from = currentFrameBox(frame);
     if (!from) {
@@ -3934,7 +3948,8 @@ function startFrameLayoutTransition(
     }
     frame.ghost = ghost;
     frame.layoutTarget = { ...target };
-    frame.layoutCentered = windowCenterManager.willCenter(frame.handle);
+    // 全屏必须铺到 0,0：不能按窗口可用区（工具栏内缩）重新居中
+    frame.layoutCentered = center && windowCenterManager.willCenter(frame.handle);
     if (!windowCenterManager.isPaused(frame.handle)) {
         windowCenterManager.pauseCentering(frame.handle);
         frame.layoutPausedCentering = true;
@@ -4078,7 +4093,12 @@ function setClientFrameLayout(
             queueMicrotask(() => {
                 frame.layoutPendingPosition = false;
             });
-            startFrameLayoutTransition(frame, { left: from.left, top: from.top, width, height: height + bar }, ghost);
+            startFrameLayoutTransition(
+                frame,
+                { left: from.left, top: from.top, width, height: height + bar },
+                ghost,
+                !fullscreen,
+            );
             return;
         }
     }
@@ -6828,13 +6848,17 @@ server.server.on("window.changed", (info) => {
     if (applied.fullscreen !== info.states.fullscreen) {
         applied.fullscreen = info.states.fullscreen;
         if (info.states.fullscreen) {
+            // 屏幕轴还在移动也要立刻开始隐藏工具栏；先置位，
+            // 换屏过程里的 render 会先跑一次 sync，不能让它先播放显示动画
+            fullscreenChromeEntering = true;
+            fullscreenChromeSawOffset = false;
+            // 先暂停居中，再换屏：换屏里的 render 会立刻开始全屏过渡
+            pauseCenteringForFullscreen(info.handle);
             // 全屏总是换到新虚拟屏
             viewData.moveWindowToNewScreen(info.handle, true);
             // 最大化与全屏互斥；进入全屏时把本地最大化快照一起收敛，避免走恢复分支
             applied.maximized = info.states.maximized;
-            pauseCenteringForFullscreen(info.handle);
             syncFullscreenChrome();
-            syncFullscreenWindowBoxes();
             return;
         }
         // 退出全屏：恢复普通窗口尺寸；若同时切到最大化，下面的最大化分支会再覆盖成铺满
@@ -6994,6 +7018,7 @@ const windowElWarp = view().style({
 });
 
 const toolsEl = view()
+    .data({ "desktop-ui": "tools" })
     .style({
         position: "absolute",
         top: 0,
@@ -10789,6 +10814,12 @@ measureChromeInsets();
 
 /** 工具栏当前是否处于隐藏状态 */
 let fullscreenChromeHidden = false;
+/** 正在进入全屏：屏幕轴还在把窗口送到全屏屏上，也要立刻隐藏工具栏 */
+let fullscreenChromeEntering = false;
+/** 进入全屏后的第一次偏移（换屏动画）已经出现，等它停稳再结束“进入中” */
+let fullscreenChromeSawOffset = false;
+/** 全屏屏还在移动时的逐帧复核 */
+let fullscreenChromeRecheck: number | undefined;
 /** 全屏窗口最近一次下发的尺寸，避免重复 configure */
 const lastFullscreenBox = new Map<WinHandle, string>();
 
@@ -10840,19 +10871,74 @@ fullscreenChromeGear.setUpdateCallback(({ mix }) => {
 });
 fullscreenChromeGear.moveTo({ mix: 0 }, 0);
 
-/** 视图（当前屏 / 全局预览 / 手势）或窗口状态变化后，重新计算全屏模式 */
-function syncFullscreenChrome(animate = true) {
+/**
+ * 视图（当前屏 / 全局预览 / 手势）或窗口状态变化后，重新计算全屏模式。
+ * 进入全屏时不等窗口重排，先启动隐藏动画；全屏一旦被总览/手势/切屏带偏，
+ * 立即显示工具栏，等停稳回到全屏屏后再隐藏。
+ */
+function syncFullscreenChrome(animate = true, reflow = true) {
     const currentFullscreen = currentScreenFullscreen();
-    if (currentFullscreen) {
+    const winid = viewData.currentWinId();
+    const screen = winid === undefined ? undefined : viewData.screenOf(winid);
+    const overviewing = viewData.overview || viewData.overviewProgress > 0.001;
+    const gesturing = viewData.gestureActive;
+    // 只看这块屏的视觉位置：结构变化引起的 focus 齿轮不算“被带偏”
+    const atNormalView =
+        !!screen &&
+        Math.abs(screen.visual.x) < 0.5 &&
+        Math.abs(screen.visual.y) < 0.5 &&
+        Math.abs(screen.visual.scale - 1) < 0.001;
+
+    if (!currentFullscreen || overviewing || gesturing) {
+        fullscreenChromeEntering = false;
+        fullscreenChromeSawOffset = false;
+    } else if (fullscreenChromeEntering) {
+        // 进入全屏的换屏动画可能晚一帧才开始：先记住“已经偏移”，
+        // 等它真正停稳再结束，期间始终保持隐藏
+        if (!atNormalView) fullscreenChromeSawOffset = true;
+        if (atNormalView && fullscreenChromeSawOffset) {
+            fullscreenChromeEntering = false;
+            fullscreenChromeSawOffset = false;
+        }
+    }
+    const hide = currentFullscreen && !overviewing && !gesturing && (fullscreenChromeEntering || atNormalView);
+    if (currentFullscreen)
+        console.log(
+            "FS",
+            JSON.stringify({
+                atNormalView,
+                entering: fullscreenChromeEntering,
+                saw: fullscreenChromeSawOffset,
+                hide,
+                hidden: fullscreenChromeHidden,
+                overviewing,
+                gesturing,
+                vis: screen?.visual,
+            }),
+        );
+
+    if (fullscreenChromeHidden !== hide) {
+        fullscreenChromeHidden = hide;
+        // 动画一开始就不再让工具栏接收输入；恢复时立即重新可用
+        toolsEl.el.inert = hide;
+        fullscreenChromeGear.moveTo({ mix: hide ? 1 : 0 }, animate ? undefined : 0);
+    }
+    // 工具栏先动，窗口重排放在后面：隐藏动画不再等布局
+    if (currentFullscreen && reflow) {
         // 客户端后续的 set_window_geometry 可能把元素尺寸写回旧值，进入/停留全屏时都重新铺满
         syncFullscreenWindowBoxes();
     }
-    const hide = currentFullscreen && !viewData.overview && !viewData.gestureActive;
-    if (fullscreenChromeHidden === hide) return;
-    fullscreenChromeHidden = hide;
-    // 动画一开始就不再让工具栏接收输入；恢复时立即重新可用
-    toolsEl.el.inert = hide;
-    fullscreenChromeGear.moveTo({ mix: hide ? 1 : 0 }, animate ? undefined : 0);
+    // 全屏屏还在移动/手势中：逐帧复核，停稳后该隐藏的再隐藏（复核不重复重排窗口）
+    if (currentFullscreen && !overviewing && (!atNormalView || gesturing)) scheduleFullscreenChromeRecheck();
+}
+
+/** 全屏屏移动期间的轻量复核：只重算工具栏状态，不重复铺窗口 */
+function scheduleFullscreenChromeRecheck() {
+    if (fullscreenChromeRecheck !== undefined) return;
+    fullscreenChromeRecheck = requestAnimationFrame(() => {
+        fullscreenChromeRecheck = undefined;
+        syncFullscreenChrome(true, false);
+    });
 }
 
 /** 标题栏最大化/恢复按钮：桌面主动下发，窗口命令不会回 window.changed */
@@ -10908,21 +10994,24 @@ function toggleFullscreen(winid = viewData.focusHandle) {
     const frame = clientWindowFrames.get(winid);
 
     if (next) {
-        // 全屏总是换到新虚拟屏
-        viewData.moveWindowToNewScreen(winid, true);
+        // 先把全屏状态发给 server，再换屏：换屏里的 render 会按全屏状态直接开始隐藏工具栏
         const out = fullOutputSize();
+        fullscreenChromeEntering = true;
+        fullscreenChromeSawOffset = false;
         server.server.notify("window.fullscreen", winid, {
             width: Math.max(1, Math.floor(out.width / info.scale)),
             height: Math.max(1, Math.floor(out.height / info.scale)),
         });
+        // 先暂停居中，再换屏：换屏里的 render 会立刻开始全屏过渡
+        pauseCenteringForFullscreen(winid);
+        // 全屏总是换到新虚拟屏
+        viewData.moveWindowToNewScreen(winid, true);
         // 桌面命令不发 window.changed，这里自己更新本地快照
         if (applied) {
             applied.fullscreen = true;
             applied.maximized = false;
         }
-        pauseCenteringForFullscreen(winid);
         syncFullscreenChrome();
-        syncFullscreenWindowBoxes();
         return;
     }
 
@@ -10955,6 +11044,7 @@ function toggleFullscreen(winid = viewData.focusHandle) {
 }
 
 viewData.setChromeCallback(() => syncFullscreenChrome());
+viewData.setChromeProgressCallback(() => syncFullscreenChrome(true, false));
 syncFullscreenChrome(false);
 
 const body = pack(document.body);
