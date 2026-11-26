@@ -2148,8 +2148,10 @@ class ViewData {
                     fullscreen: info?.states.fullscreen ?? false,
                     parent: windowParents.get(handle),
                     modal: modalWindows.has(handle),
-                    /** 渲染轴的盒 resize 动画正在跑（可能发生在启动收尾之后） */
-                    resizing: frame?.boxGear?.getRunningAnimation().isRunning ?? false,
+                    /** 渲染轴的盒/整框动画正在跑（可能发生在启动收尾之后） */
+                    resizing:
+                        (frame?.boxGear?.getRunningAnimation().isRunning ?? false) ||
+                        (frame?.layoutGear?.getRunningAnimation().isRunning ?? false),
                     /** 已经拿到客户端首帧的真实 surface 尺寸（此前是占位尺寸） */
                     painted: frame?.painted ?? false,
                 };
@@ -2326,6 +2328,11 @@ class WindowCenterManager {
 
     isPaused(windowId: string): boolean {
         return this.pausedWindows.has(windowId);
+    }
+
+    /** 这个窗口的尺寸变化后是否会自动居中（可用区只有一个窗口时） */
+    willCenter(windowId: string) {
+        return this.shouldCenter ? this.shouldCenter(windowId) : true;
     }
 
     setEnabled(enabled: boolean) {
@@ -3097,12 +3104,13 @@ function beginWindowResize(
                         surfaceEl.style.removeProperty("--resize-preview-height");
                         const frame = clientWindowFrames.get(windowId);
                         if (frame) {
-                            if (frame.decorated) applyFrameSurfaceSize(frame);
+                            if (frame.decorated) applyFrameSurfaceSize(frame, undefined, undefined, false);
                             else
                                 setClientFrameLayout(
                                     frame,
                                     current.rect.w * current.scale,
                                     current.rect.h * current.scale,
+                                    { animate: false },
                                 );
                         } else
                             pack(surfaceEl).style({
@@ -3223,6 +3231,20 @@ type ClientWindowFrame = {
     boxGear?: AnimationGear<{ width: number; height: number }>;
     /** 真实目标外框（surface + 标题栏），盒动画的终点 */
     boxTarget?: { width: number; height: number };
+    /**
+     * 自动 resize 的整框动画：最大化/恢复/全屏/界面缩放/客户端自己改尺寸。
+     * 和 boxGear 分开：它同时写位置、尺寸和内容交叉淡化。
+     */
+    layoutGear?: AnimationGear<{ left: number; top: number; width: number; height: number; fade: number }>;
+    layoutTarget?: { left: number; top: number; width: number; height: number };
+    /** 自动 resize 结束后是否由居中管理器接管位置 */
+    layoutCentered?: boolean;
+    /** 这次自动 resize 自己加的居中暂停，结束时要还回去 */
+    layoutPausedCentering?: boolean;
+    /** setClientFrameLayout 之后紧跟的 setClientFramePosition 应该写进动画目标 */
+    layoutPendingPosition?: boolean;
+    /** 旧内容快照：和 content 一起拉伸，并随动画淡出 */
+    ghost?: { el: ElType<HTMLCanvasElement>; width: number; height: number };
 };
 
 const clientWindowFrames = new Map<WinHandle, ClientWindowFrame>();
@@ -3722,7 +3744,12 @@ function frameContentDisplaySize(frame: ClientWindowFrame) {
     };
 }
 
-function applyFrameSurfaceSize(frame: ClientWindowFrame, width?: number, height?: number) {
+/**
+ * 同步真实外框尺寸。启动和自动 resize 期间只更新目标、由动画写盒；
+ * 其余情况直接写，或者走一段整框过渡（最大化、全屏、客户端自己改尺寸等）。
+ * `allowAnimate=false` 用于手动缩放收尾，避免把手动结果再接一段自动动画。
+ */
+function applyFrameSurfaceSize(frame: ClientWindowFrame, width?: number, height?: number, allowAnimate = true) {
     if (width !== undefined) frame.surfaceWidth = Math.max(1, width);
     if (height !== undefined) frame.surfaceHeight = Math.max(1, height);
     if (width === undefined && height === undefined) {
@@ -3749,6 +3776,28 @@ function applyFrameSurfaceSize(frame: ClientWindowFrame, width?: number, height?
         const box = currentFrameBox(frame);
         if (box) writeFrameBox(frame, box.left, box.top, box.width, box.height);
         return;
+    }
+    // 整框过渡中：位置不动，只更新尺寸目标
+    if (frame.layoutGear) {
+        if (frame.layoutTarget) {
+            frame.layoutTarget = {
+                ...frame.layoutTarget,
+                width: frame.boxTarget.width,
+                height: frame.boxTarget.height,
+            };
+            retimeFrameLayout(frame);
+        }
+        const box = currentFrameBox(frame);
+        if (box) writeFrameBox(frame, box.left, box.top, box.width, box.height);
+        return;
+    }
+    const from = currentFrameBox(frame);
+    if (allowAnimate && from && canAnimateFrameLayout(frame)) {
+        const target = { left: from.left, top: from.top, width: frame.boxTarget.width, height: frame.boxTarget.height };
+        if (Math.abs(from.width - target.width) > 0.5 || Math.abs(from.height - target.height) > 0.5) {
+            startFrameLayoutTransition(frame, target, captureFrameGhost(frame));
+            return;
+        }
     }
     frame.el.style({
         width: `${frame.surfaceWidth}px`,
@@ -3792,6 +3841,15 @@ function writeFrameBox(frame: ClientWindowFrame, left: number, top: number, widt
     // 内容基准 left=0、top=bar；origin 在左上角，缩放后正好铺满盒
     frame.content.style.transformOrigin = "0 0";
     frame.content.style.transform = `scale(${w / cw}, ${Math.max(1, h - bar) / ch})`;
+    // 旧内容快照和 content 用同一块内容区，各自按自己的自然尺寸拉伸
+    const ghost = frame.ghost;
+    if (ghost) {
+        ghost.el.style({
+            top: `${bar}px`,
+            transformOrigin: "0 0",
+            transform: `scale(${w / ghost.width}, ${Math.max(1, h - bar) / ghost.height})`,
+        });
+    }
 }
 
 /**
@@ -3823,9 +3881,136 @@ function releaseFrameBox(frame: ClientWindowFrame) {
     frame.content.style.transformOrigin = "";
     frame.content.style.left = "0px";
     applyClientFrameChrome(frame);
-    applyFrameSurfaceSize(frame);
+    applyFrameSurfaceSize(frame, undefined, undefined, false);
     windowCenterManager.resumeCentering(frame.handle);
     windowCenterManager.centerWindow(frame.handle);
+}
+
+/** 自动 resize 是否该走动画：手动拖拽、启动和已有动画都交给原来的路径 */
+function canAnimateFrameLayout(frame: ClientWindowFrame) {
+    if (frame.pending || frame.launching || frame.boxGear || frame.layoutGear) return false;
+    if (resizingWindowId === frame.handle || resizeSettleTimers.has(frame.handle)) return false;
+    return clientWindowFrames.has(frame.handle);
+}
+
+/** 截一张当前内容快照，作为自动 resize 交叉淡出的旧层；没画过就跳过淡化 */
+function captureFrameGhost(frame: ClientWindowFrame): ClientWindowFrame["ghost"] | undefined {
+    const preview = server.server.windows.preview(frame.handle);
+    const size = frameContentDisplaySize(frame);
+    if (!preview || size.width <= 1 || size.height <= 1) return undefined;
+    const el = ele("canvas")
+        .attr({ width: preview.width, height: preview.height })
+        .style({
+            position: "absolute",
+            left: "0",
+            top: "0",
+            width: `${size.width}px`,
+            height: `${size.height}px`,
+            pointerEvents: "none",
+            zIndex: "5",
+            transformOrigin: "0 0",
+            opacity: "1",
+        });
+    const ctx = el.el.getContext("2d");
+    if (!ctx) {
+        el.remove();
+        return undefined;
+    }
+    ctx.drawImage(preview, 0, 0);
+    frame.el.add(el);
+    return { el, width: size.width, height: size.height };
+}
+
+/** 自动 resize：位置、尺寸和内容交叉淡化用同一段时长；结束前居中交给动画，结束后再还回去 */
+function startFrameLayoutTransition(
+    frame: ClientWindowFrame,
+    target: { left: number; top: number; width: number; height: number },
+    ghost: ClientWindowFrame["ghost"],
+) {
+    const from = currentFrameBox(frame);
+    if (!from) {
+        ghost?.el.remove();
+        return;
+    }
+    frame.ghost = ghost;
+    frame.layoutTarget = { ...target };
+    frame.layoutCentered = windowCenterManager.willCenter(frame.handle);
+    if (!windowCenterManager.isPaused(frame.handle)) {
+        windowCenterManager.pauseCentering(frame.handle);
+        frame.layoutPausedCentering = true;
+    }
+    if (ghost) {
+        frame.content.style.opacity = "0";
+        ghost.el.style({ opacity: "1" });
+    }
+    // 内容尺寸刚改过：先按当前盒拉伸，避免动画第一帧以自然尺寸溢出
+    writeFrameBox(frame, from.left, from.top, from.width, from.height);
+    const gear = createAnimationGear(
+        { left: from.left, top: from.top, width: from.width, height: from.height, fade: 0 },
+        { transition: { ...FRAME_LAYOUT_TRANSITION } },
+    );
+    frame.layoutGear = gear;
+    gear.setUpdateCallback((value) => {
+        if (frame.layoutGear !== gear) return;
+        // 会自动居中的窗口跟着当前尺寸居中，别的窗口按动画目标走
+        const position = frame.layoutCentered
+            ? windowCenterManager.centeredPosition(value.width, value.height)
+            : { left: value.left, top: value.top };
+        writeFrameBox(frame, position.left, position.top, value.width, value.height);
+        if (!frame.ghost) return;
+        frame.ghost.el.style({ opacity: `${1 - value.fade}` });
+        frame.content.style.opacity = `${value.fade}`;
+    });
+    retimeFrameLayout(frame, FRAME_LAYOUT_TRANSITION.duration);
+}
+
+/** 自动 resize 重新瞄准：位置/尺寸变了就按剩余时间走完 */
+function retimeFrameLayout(frame: ClientWindowFrame, duration?: number) {
+    const gear = frame.layoutGear;
+    const target = frame.layoutTarget;
+    if (!gear || !target) return;
+    const running = gear.getRunningAnimation();
+    const time =
+        duration ?? (running.isRunning ? Math.max(1, running.remainingTime) : FRAME_LAYOUT_TRANSITION.duration);
+    gear.moveTo(
+        { ...target, fade: 1 },
+        {
+            duration: time,
+            map: FRAME_LAYOUT_TRANSITION.map,
+            onComplete: () => finishFrameLayoutTransition(frame),
+        },
+    );
+}
+
+/** 取消自动 resize（关闭/回收时）：只清理状态，不写最终尺寸 */
+function cancelFrameLayoutTransition(frame: ClientWindowFrame) {
+    frame.layoutGear = undefined;
+    frame.layoutTarget = undefined;
+    frame.layoutPendingPosition = false;
+    frame.layoutPausedCentering = false;
+    frame.ghost?.el.remove();
+    frame.ghost = undefined;
+    frame.content.style.opacity = "";
+}
+
+/** 自动 resize 结束：撤掉快照，内容回到正常尺寸布局，位置交给居中管理器 */
+function finishFrameLayoutTransition(frame: ClientWindowFrame) {
+    if (!frame.layoutGear) return;
+    frame.layoutGear = undefined;
+    frame.layoutTarget = undefined;
+    frame.layoutPendingPosition = false;
+    frame.ghost?.el.remove();
+    frame.ghost = undefined;
+    frame.content.style.opacity = "";
+    frame.content.style.transform = "";
+    frame.content.style.transformOrigin = "";
+    frame.content.style.left = "0px";
+    applyClientFrameChrome(frame);
+    applyFrameSurfaceSize(frame, undefined, undefined, false);
+    if (frame.layoutPausedCentering) {
+        frame.layoutPausedCentering = false;
+        windowCenterManager.resumeCentering(frame.handle);
+    }
 }
 
 /**
@@ -3845,13 +4030,20 @@ function adoptBoxGearIntoFrame(state: PendingLaunch, frame: ClientWindowFrame): 
     return true;
 }
 
-/** 桌面主动设定内容尺寸（最大化/全屏），外框与内容在同一任务里对齐 */
+/**
+ * 桌面主动设定内容尺寸（最大化/恢复/全屏/界面缩放）。
+ * 自动 resize 时先截旧内容快照，再改内容尺寸，并起一段位置+尺寸+交叉淡化的整框过渡；
+ * 紧随其后的 setClientFramePosition 会把目标位置补进来。
+ */
 function setClientFrameLayout(
     frame: ClientWindowFrame,
     contentWidth: number,
     contentHeight: number,
-    fullscreen = false,
+    opts: { fullscreen?: boolean; animate?: boolean } = {},
 ) {
+    const fullscreen = opts.fullscreen ?? false;
+    const animate = opts.animate !== false && !frame.layoutGear && canAnimateFrameLayout(frame);
+    const ghost = animate ? captureFrameGhost(frame) : undefined;
     frame.fullscreen = fullscreen;
     const width = Math.max(1, contentWidth);
     const height = Math.max(1, contentHeight);
@@ -3859,10 +4051,49 @@ function setClientFrameLayout(
     frame.content.style.width = `${width}px`;
     frame.content.style.height = `${height}px`;
     applyClientFrameChrome(frame);
-    applyFrameSurfaceSize(frame, width, height);
+    const bar = titlebarPx(frame);
+    frame.surfaceWidth = width;
+    frame.surfaceHeight = height;
+    frame.boxTarget = { width, height: height + bar };
+
+    // 过渡中又改了布局：保留原快照，只更新目标尺寸
+    if (frame.layoutGear) {
+        if (frame.layoutTarget) {
+            frame.layoutTarget = { ...frame.layoutTarget, width, height: height + bar };
+            retimeFrameLayout(frame);
+        }
+        return;
+    }
+    // 启动阶段仍由 launch 的盒动画负责
+    if (frame.launching || frame.boxGear) {
+        ghost?.el.remove();
+        applyFrameSurfaceSize(frame, width, height, false);
+        return;
+    }
+    if (animate) {
+        const from = currentFrameBox(frame);
+        // 尺寸没变就不做整框过渡，避免重复布局时内容闪一下
+        if (from && (Math.abs(from.width - width) > 0.5 || Math.abs(from.height - (height + bar)) > 0.5)) {
+            frame.layoutPendingPosition = true;
+            queueMicrotask(() => {
+                frame.layoutPendingPosition = false;
+            });
+            startFrameLayoutTransition(frame, { left: from.left, top: from.top, width, height: height + bar }, ghost);
+            return;
+        }
+    }
+    ghost?.el.remove();
+    frame.el.style({ width: `${width}px`, height: `${height + bar}px` });
 }
 
 function setClientFramePosition(frame: ClientWindowFrame, left: number, top: number) {
+    // 紧跟布局设置的位置：补进整框动画目标，和尺寸一起走完
+    if (frame.layoutGear && frame.layoutPendingPosition && frame.layoutTarget) {
+        frame.layoutTarget = { ...frame.layoutTarget, left, top };
+        frame.layoutPendingPosition = false;
+        retimeFrameLayout(frame);
+        return;
+    }
     frame.el.style({ left: `${Math.round(left)}px`, top: `${Math.round(top)}px` });
 }
 
@@ -4781,6 +5012,8 @@ const LAUNCH_FLIGHT = { duration: 240, map: timingFunction.cubicBezier(0.16, 1, 
 const LAUNCH_CATCH_UP = { duration: SCREEN_TRANSITION.duration, map: timingFunction.easeOut };
 /** 首帧替换：mask 淡出和盒 resize 共用时长，同时开始、同时结束 */
 const LAUNCH_REVEAL = { duration: 180, map: timingFunction.easeInOut };
+/** 自动 resize（最大化/恢复/全屏/界面缩放/客户端改尺寸）沿用首帧替换的时长和曲线 */
+const FRAME_LAYOUT_TRANSITION = { duration: LAUNCH_REVEAL.duration, map: LAUNCH_REVEAL.map };
 /** 空槽取消按钮：不要突然盖在图标上，落地后透明+模糊淡入 */
 const LAUNCH_CANCEL_FADE = { duration: 220, map: timingFunction.easeOut };
 const CLOSE_FADE = { duration: 220, map: timingFunction.easeOut };
@@ -5612,6 +5845,7 @@ function notifyLaunchWindowClosed(winid: WinHandle) {
         if (state.winHandle !== winid) continue;
         state.intro?.remove();
         state.intro = undefined;
+        cancelFrameLayoutTransition(state.frame);
         const target = state.frame.el;
         removeWindowSlot(target.el);
         target.remove();
@@ -6367,6 +6601,9 @@ function resumeCenteringForFullscreen(handle: WinHandle) {
 
 /** 窗口关闭：先让外框透明度淡出，动画结束再回收虚拟屏并切换过去 */
 function closeClientFrameWithFade(wid: WinHandle, frame: ClientWindowFrame) {
+    // 关闭优先：停掉自动 resize，避免它继续写已经被搬到关闭层的盒子
+    cancelFrameLayoutTransition(frame);
+
     const connected = frame.el.el.isConnected;
     if (connected) {
         // 先按当前视觉矩形把外框移到关闭层，不再依赖它属于哪个屏/面板；
@@ -10573,7 +10810,7 @@ function syncFullscreenWindowBoxes() {
         if (!info.states.fullscreen) continue;
         const frame = clientWindowFrames.get(info.handle);
         if (!frame) continue;
-        setClientFrameLayout(frame, out.width, out.height, true);
+        setClientFrameLayout(frame, out.width, out.height, { fullscreen: true });
         setClientFramePosition(frame, 0, 0);
         const width = Math.max(1, Math.floor(out.width / info.scale));
         const height = Math.max(1, Math.floor(out.height / info.scale));

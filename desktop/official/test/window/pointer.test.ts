@@ -7,7 +7,6 @@ import {
     drag,
     elementBox,
     forceCloseWindow,
-    frameBox,
     launchMock,
     mockAppPath,
     resetDesktop,
@@ -246,7 +245,10 @@ describe("鼠标窗口操作", () => {
         const win = await launchDecorated("pointer-i");
 
         await clickControl(win.handle, "maximize");
-        const maximized = await waitState(desktop, (next) => windowByAppid(next, "pointer-i")?.maximized === true);
+        const maximized = await waitState(desktop, (next) => {
+            const win = windowByAppid(next, "pointer-i");
+            return win?.maximized === true && !win.resizing;
+        });
         const maxRect = windowByAppid(maximized, "pointer-i")?.rect;
         expect(maxRect).toBeTruthy();
         if (!maxRect) return;
@@ -256,13 +258,95 @@ describe("鼠标窗口操作", () => {
         expect(maxRect.h).toBe(maximized.available.height);
 
         await clickControl(win.handle, "maximize");
-        const restored = await waitState(desktop, (next) => windowByAppid(next, "pointer-i")?.maximized === false);
+        const restored = await waitState(desktop, (next) => {
+            const win = windowByAppid(next, "pointer-i");
+            return win?.maximized === false && !win.resizing;
+        });
         const rect = windowByAppid(restored, "pointer-i")?.rect;
-        expect(rect?.x).toBe(restored.available.x);
-        expect(rect?.y).toBe(restored.available.y);
+        // 动画结束后由居中管理器接管：800×600 在可用区里居中
+        expect(rect?.x).toBe(Math.round(restored.available.x + (restored.available.width - (rect?.w ?? 0)) / 2));
+        expect(rect?.y).toBe(Math.round(restored.available.y + (restored.available.height - (rect?.h ?? 0)) / 2));
         expect(Math.abs((rect?.w ?? 0) - 800)).toBeLessThanOrEqual(2);
         expect(rect?.h ?? 0).toBeGreaterThan(600);
         expect(rect?.h ?? 0).toBeLessThan(660);
+    });
+
+    run("最大化用整框过渡和内容淡化", { timeout: 30000 }, async () => {
+        const win = await launchDecorated("pointer-anim", 480, 360);
+        await desktop.evaluate("__mydeTest.setAnimationSpeed(1)");
+        await desktop.evaluate(`(() => {
+            const samples = [];
+            window.__autoResizeSamples = samples;
+            const started = performance.now();
+            const tick = () => {
+                const frame = document.querySelector("[data-client-frame]");
+                const content = frame
+                    ? [...frame.children].find(
+                          (el) => el.id && !el.hasAttribute("data-desktop-ui") && !el.hasAttribute("data-client-titlebar"),
+                      )
+                    : null;
+                const ghost = frame ? [...frame.children].filter((el) => el.tagName === "CANVAS").length : 0;
+                const rect = frame?.getBoundingClientRect();
+                samples.push({
+                    t: performance.now() - started,
+                    x: rect?.left ?? 0,
+                    w: rect?.width ?? 0,
+                    ghost,
+                    opacity: content ? Number(getComputedStyle(content).opacity) : null,
+                });
+                if (performance.now() - started < 900) requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+        })()`);
+        await clickControl(win.handle, "maximize");
+        await sleep(950);
+        const samples = await desktop.evaluate<
+            { t: number; x: number; w: number; ghost: number; opacity: number | null }[]
+        >("window.__autoResizeSamples ?? []");
+        const after = await state(desktop);
+        const target = after.available.width;
+
+        // 盒在一段动画里长到可用区：有中间宽度，不是瞬间切换
+        const widths = samples.map((sample) => sample.w);
+        expect(
+            widths.filter((width) => width > 500 && width < target - 4).length,
+            "应该有中间尺寸",
+        ).toBeGreaterThanOrEqual(2);
+        expect(Math.max(...widths) - Math.min(...widths), "尺寸应该真的在动画里变化").toBeGreaterThan(400);
+        expect(Math.max(...widths), "最终应该铺满可用区").toBeGreaterThanOrEqual(target - 2);
+
+        // 位置和尺寸一起走：过程中能看到中间 x
+        const xs = samples.map((sample) => sample.x);
+        expect(
+            xs.some((x) => x > after.available.x + 4 && x < 300),
+            "位置应该有中间值",
+        ).toBe(true);
+
+        // 旧内容快照在过渡里淡出，内容同时淡入
+        const fading = samples.filter((sample) => sample.ghost > 0 && sample.opacity !== null && sample.opacity < 0.99);
+        expect(fading.length, "应该有旧内容快照在淡出").toBeGreaterThan(0);
+        expect(
+            fading.some((sample) => (sample.opacity ?? 1) < 0.2),
+            "快照存在时内容应该接近透明",
+        ).toBe(true);
+
+        const final = await desktop.evaluate<{ ghost: number; opacity: number | null; w: number }>(`(() => {
+            const frame = document.querySelector("[data-client-frame]");
+            const content = frame
+                ? [...frame.children].find(
+                      (el) => el.id && !el.hasAttribute("data-desktop-ui") && !el.hasAttribute("data-client-titlebar"),
+                  )
+                : null;
+            return {
+                ghost: frame ? [...frame.children].filter((el) => el.tagName === "CANVAS").length : 0,
+                opacity: content ? Number(getComputedStyle(content).opacity) : null,
+                w: frame?.getBoundingClientRect().width ?? 0,
+            };
+        })()`);
+        expect(final.ghost, "结束后旧内容快照应移除").toBe(0);
+        expect(final.opacity, "结束后内容应恢复不透明").toBe(1);
+        expect(final.w, "结束后盒应铺满可用区").toBeGreaterThanOrEqual(target - 2);
+        await desktop.evaluate("__mydeTest.closeWindows();");
     });
 
     run("最大化时被同屏窗口大面积覆盖，会移到新虚拟屏", { timeout: 40000 }, async () => {
