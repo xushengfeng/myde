@@ -206,7 +206,10 @@ describe("全局预览", () => {
         expect(anchor, "应该有空桌面卡片").toBeTruthy();
         await desktop.evaluate("__mydeTest.setAnimationSpeed(1)");
 
-        const button = await elementBox(desktop, `[data-view-id='${win.screen}'] [data-desktop-ui='window-close']`);
+        const button = await elementBox(
+            desktop,
+            `[data-window-screen='${win.screen}'] [data-desktop-ui='window-close']`,
+        );
         expect(button, "预览里应该有窗口关闭按钮").toBeTruthy();
         if (!button) return;
         await desktop.evaluate("__mydeTest.clearCloseRequests()");

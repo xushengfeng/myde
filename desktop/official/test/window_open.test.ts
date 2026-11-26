@@ -36,7 +36,7 @@ type OpenCase = {
     sizeMode?: "fixed" | "configure";
     /** 最长记录时间（ms）；只有检查静止期的用例才录满，其余在最后一次可见变化后就停止 */
     wait: number;
-    /** 期望最终画面：窗口已替换面板 / 面板还是空占位 */
+    /** 期望最终画面：首帧已替换 mask / mask 还盖着 */
     expectPanel: "none" | "cover";
     /** 在这个时刻（相对 launchApp）检查空占位面板已经露出关闭按钮 */
     expectCloseAt?: number;
@@ -49,7 +49,7 @@ const CASES: OpenCase[] = [
     { name: "淡入结束后出首帧", create: 0, buffer: 900, wait: 2100, expectPanel: "none" },
     { name: "窗口先到、首帧很晚", create: 0, buffer: 2800, wait: 3600, expectPanel: "none" },
     { name: "永不建窗", create: "never", buffer: "never", wait: 2800, expectPanel: "cover", expectCloseAt: 1600 },
-    { name: "建窗但永不首帧", create: 0, buffer: "never", wait: 1600, expectPanel: "none" },
+    { name: "建窗但永不首帧", create: 0, buffer: "never", wait: 1600, expectPanel: "cover" },
     // 窗口创建晚于面板落地（xwayland 之类要先建连接再出窗口）
     {
         name: "窗口晚建（关闭按钮之后）",
@@ -165,14 +165,16 @@ const frameSnapshot = () =>
             const rect = frame ? frame.getBoundingClientRect() : null;
             return {
                 screens: document.querySelectorAll("[data-view-id]").length,
-                frames: document.querySelectorAll("[data-client-frame]").length,
-                panels: document.querySelectorAll("[data-desktop-ui='launch-panel']").length,
+                frames: document.querySelectorAll("[data-client-frame]:not([data-pending-frame])").length,
+                panels: document.querySelectorAll("[data-desktop-ui='pending-frame']").length,
                 frameRect: rect ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height } : null,
                 fullscreen: !!document.querySelector("[data-client-frame][data-fullscreen]"),
-                screenId: frame ? frame.closest("[data-view-id]")?.getAttribute("data-view-id") ?? null : null,
+                screenId: frame
+                    ? frame.closest("[data-window-slot]")?.getAttribute("data-window-screen") ?? null
+                    : null,
                 closeVisible: (() => {
                     const btn = document.querySelector(
-                        "[data-desktop-ui='launch-panel'] [data-desktop-ui='window-control']",
+                        "[data-desktop-ui='pending-frame'] [data-desktop-ui='window-control']",
                     );
                     if (!btn) return false;
                     const style = getComputedStyle(btn);
@@ -323,7 +325,7 @@ describe("official desktop window open animation", () => {
             await watchScreens();
 
             // 录到最后一次可见变化之后即可；只有需要检查“静止期”的用例才录满 wait。
-            // 首帧自己整块出现、面板替换发生在建窗时，之后的静止帧不参与断言。
+            // 首帧到达时 mask 才替换，之后的静止帧不参与断言。
             const needsQuiet = openCase.create === "never" || openCase.buffer === "never";
             const lastChange = Math.max(
                 750,
@@ -408,7 +410,7 @@ describe("official desktop window open animation", () => {
             const openingEnd = markAt + Math.min(openCase.wait, 750);
             const opening = motionStats(report, {
                 fromMs: markAt - 50,
-                // 覆盖按下、飞行、切屏和面板替换；首帧是客户端自己整块画的，只用于确认画上来了
+                // 覆盖按下、飞行、切屏和 mask 替换；首帧是客户端自己整块画的，只用于确认画上来了
                 toMs: openingEnd,
                 activeChangedRatio: 0.001,
             });
@@ -418,7 +420,7 @@ describe("official desktop window open animation", () => {
             expect(opening.activeFrames, "启动动画几乎没有中间帧").toBeGreaterThanOrEqual(6);
             expect(opening.spanMs, "启动动画持续时间太短").toBeGreaterThanOrEqual(250);
             expectNoStall(report, opening, "启动动画中间停顿过长");
-            // 面板在窗口创建时就换成窗口，之后整块出现的是客户端自己的首帧；
+            // 首帧到达时 mask 淡出、盒 resize，之后画面交给客户端自己的首帧；
             // 这里只要求桌面动画有足够中间帧、没有长时间停顿（单帧跳变由交互流畅度测试覆盖）
 
             // ── 首帧出现 ──
@@ -431,7 +433,7 @@ describe("official desktop window open animation", () => {
                     toMs: bufferRel + 500,
                     activeChangedRatio: 0.0005,
                 });
-                // 面板在窗口创建时就替换掉了；这里只看客户端自己的首帧确实画上来了
+                // mask 在首帧时开始替换；这里只看客户端自己的首帧确实画上来了
                 expect(appearance.activeFrames, "首帧出现时画面没有变化").toBeGreaterThanOrEqual(1);
             }
 
@@ -490,7 +492,7 @@ describe("official desktop window open animation", () => {
 
             // ── 静止期 ──
             if (openCase.create === "never" || openCase.buffer === "never") {
-                // 关闭按钮露出、窗口替换面板都是可见变化，静止期从它们之后算
+                // 关闭按钮露出、mask 替换都是可见变化，静止期从它们之后算
                 const quietStart =
                     markAt +
                     Math.max(
@@ -516,7 +518,7 @@ describe("official desktop window open animation", () => {
 
     const closeSampleExpr = `
     (() => {
-        const panel = document.querySelector("[data-desktop-ui='launch-panel']");
+        const panel = document.querySelector("[data-desktop-ui='pending-frame']");
         if (!panel) return null;
         const p = panel.getBoundingClientRect();
         const btn = panel.querySelector("[data-desktop-ui='window-control']");
@@ -618,7 +620,7 @@ describe("official desktop window open animation", () => {
         `);
         await desktop.waitFor(
             `document.querySelectorAll("[data-client-frame]").length === 1 &&
-             !document.querySelector("[data-desktop-ui='launch-panel']")`,
+             __mydeTest.state().launches.some((launch) => launch.phase === "embedded")`,
             5000,
         );
         const beforeRect = (await frameSnapshot()).frameRect;

@@ -131,7 +131,7 @@ console.log(formatReport(report));
 
 官方桌面在 `testMode` 下还提供：
 
-- `__mydeTest.state()`：只读快照，含 `stage`、`available`（窗口可用区）、`screens`（顺序/窗口/used/current/visual）、`current`、`focus`、`axis`（`level`/`levelTarget`/`focus`/`focusTarget`/`launcherRoute`）、`overview`、`overviewProgress`、手势的 `level`/`horizontalMode`、启动器 binding，以及窗口的屏归属、`appid`、`rect`、`maximized`/`fullscreen`/`parent`/`modal`。断言窗口管理结果时用它，不要从 transform 或截图像素反推当前屏。
+- `__mydeTest.state()`：只读快照，含 `stage`、`available`（窗口可用区）、`screens`（顺序/窗口/used/current/visual）、`current`、`focus`、`axis`（`level`/`levelTarget`/`focus`/`focusTarget`/`launcherRoute`）、`overview`、`overviewProgress`、`launches`（pending 启动的 appid/屏/阶段/frame/替换状态）、手势的 `level`/`horizontalMode`、启动器 binding，以及窗口的屏归属、`appid`、`rect`、`maximized`/`fullscreen`/`parent`/`modal`、`resizing`（渲染轴的盒 resize 动画是否还在跑，可能晚于启动收尾）、`painted`（是否已拿到客户端首帧的真实 surface 尺寸，此前用的是占位尺寸）。断言窗口管理结果时用它，不要从 transform 或截图像素反推当前屏。
 - `__mydeTest.setApps(apps)`：替换桌面看到的应用列表（启动台、搜索、开始菜单、窗口图标反查）。`apps` 是 `.desktop` 条目的形状，`undefined` 恢复真实的 `MSysApi` 扫描；启动台立即重建，开始菜单在首次展开时读取。把 `exec` 指向 `test/simple_app` 里的 mock 客户端，就能让假应用走真实的启动动画、窗口创建和 appid 认领（示例见 `desktop/official/test/mock_apps.test.ts`）。
 - `__mydeTest.touchpadFeed(events)`：把原始 evdev 事件送进真实的 `useEvdevDevice → TouchpadInput → ViewData` 链路。事件是 `{ type: "abs"|"rel"|"key", code, value }` 或 `{ type: "sync" }`；第一次调用时挂一台纯 TS 假触摸板（MT-B、4000 单位量程），之后按帧喂入即可。`touchpadDetach()` 拆掉假触摸板。
 - `__mydeTest.setReorderDelay(ms)`：重排缓冲时长，窗口管理测试不必等 3 秒。

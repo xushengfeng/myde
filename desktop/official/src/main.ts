@@ -817,7 +817,8 @@ class ViewData {
         gear.setUpdateCallback((value) => {
             screen.visual = value;
             applyScreenTransform(el, value);
-            this.refreshOverviewReparentedRaster(screen, value);
+            this.renderWindowSlots();
+            this.refreshOverviewReparentedRaster(value);
             this.applyPanel();
         });
         el.on("pointerdown", (e) => this.beginOverviewCardDrag(e, screen));
@@ -989,8 +990,7 @@ class ViewData {
     }
 
     private moveWindowStackToScreen(winid: MWinId, target: ViewScreen) {
-        const el = windowElement(winid);
-        if (el) target.el.add(el);
+        // DOM 不搬：每个窗口的舞台槽自己换屏，这里只同步逻辑归属
         for (const [child, parent] of windowParents) {
             if (parent !== winid) continue;
             this.win2Screen.set(child, target);
@@ -1068,7 +1068,7 @@ class ViewData {
         return bestScore === 0 ? bestIndex : undefined;
     }
 
-    /** 把窗口放到指定的层序位置，并同步 DOM 顺序 */
+    /** 把窗口放到指定的层序位置，并同步舞台槽层序 */
     applyWinOrder(winid: MWinId, index: number) {
         const screen = this.win2Screen.get(winid);
         if (!screen) return;
@@ -1076,35 +1076,26 @@ class ViewData {
         const next = [...others.slice(0, index), winid, ...others.slice(index)];
         if (next.every((id, i) => screen.winIds[i] === id)) return;
         screen.winIds = next;
-        this.applyScreenDomOrder(screen);
-    }
-
-    private applyScreenDomOrder(screen: ViewScreen) {
-        const append = (id: MWinId) => {
-            const el = windowElement(id);
-            if (!el || el.parentElement !== screen.el.el) return;
-            screen.el.el.appendChild(el);
-            for (const [child, parent] of windowParents) {
-                if (parent === id) append(child);
-            }
-        };
-        for (const id of screen.winIds) append(id);
+        this.renderWindowSlots();
     }
 
     /**
      * 预览把屏缩小后，期间搬到这张屏的窗口是按缩小尺寸绘制/栅格化的；
      * 屏回到 1x 后重新挂一次元素，让它们按当前缩放重新栅格化（否则顶栏文字会发虚）。
      */
-    private refreshOverviewReparentedRaster(screen: ViewScreen, value: ViewTransform) {
+    private refreshOverviewReparentedRaster(value: ViewTransform) {
         if (this.overview || Math.abs(value.scale - 1) > 0.001) return;
         let dirty = false;
         for (const winid of overviewReparentedWindows) {
             const el = windowElement(winid);
-            if (!el || el.parentElement !== screen.el.el) continue;
+            const slot = el ? windowSlots.get(el) : undefined;
+            if (!el || !slot) continue;
+            // 重新 append 一次，让缩小期间栅格化的内容按 1x 重新绘制
+            slot.add(el);
             overviewReparentedWindows.delete(winid);
             dirty = true;
         }
-        if (dirty) this.applyScreenDomOrder(screen);
+        if (dirty) this.renderWindowSlots();
     }
 
     private suppressOverviewClickUntil = 0;
@@ -1881,15 +1872,54 @@ class ViewData {
         });
     }
 
+    /**
+     * 窗口的舞台槽：每个窗口独立拿屏的 transform，不再继承屏 DOM。
+     * 屏内坐标仍是布局真相，这里只把它们映射到舞台，并按屏分组分配 z。
+     */
+    renderWindowSlots() {
+        const overviewVisual = this.overviewProgress > 0;
+        const activeId = this.currentId;
+        for (const screen of this.screens) {
+            const base = overviewVisual ? (screen.id === activeId ? 2000 : 1000) : screen.id === activeId ? 1000 : 0;
+            let order = 0;
+            for (const id of screen.winIds) {
+                for (const stackId of windowStackOrder(id)) {
+                    const el = windowElement(stackId);
+                    const slot = el ? windowSlots.get(el) : undefined;
+                    if (!slot) continue;
+                    // 启动动画还没收尾：这段 transform 归 launch 所有
+                    if (clientWindowFrames.get(stackId)?.launching) {
+                        order++;
+                        continue;
+                    }
+                    if (slot.el.dataset.windowScreen !== screen.id) slot.data({ "window-screen": screen.id });
+                    applyScreenTransform(slot, screen.visual);
+                    slot.style({ zIndex: `${base + 1 + order}` });
+                    order++;
+                }
+            }
+        }
+        // 还没有真实窗口的启动外壳：槽由屏的 visual 驱动，overview/切屏都能精确跟随
+        for (const state of pendingLaunches) {
+            if (!state.screen || !this.screens.includes(state.screen)) continue;
+            // 已经嵌入/停稳后，外壳或正在淡出的 frame 都跟着屏走，总览缩放精确继承
+            if (!state.slotFollowsView && state.phase !== "embedded") continue;
+            applyScreenTransform(state.slot, state.screen.visual);
+            state.slot.style({ zIndex: "5000" });
+        }
+    }
+
     /** 唯一的布局出口：两轴当前值 -> 屏 target -> DOM，启动器/面板/关闭按钮透明度一起更新 */
     private applyAxes(instant = false) {
         this.applyScreenLayout(instant);
         const overviewVisual = this.overviewProgress > 0;
         const activeId = this.currentId;
         for (const screen of this.screens) {
-            const z = overviewVisual ? (screen.id === activeId ? "2" : "1") : screen.id === activeId ? "1" : "0";
-            screen.el.style({ zIndex: z });
+            // 卡片按组排序；窗口槽的 z 在 renderWindowSlots 里跟着同一组 base 分配
+            const base = overviewVisual ? (screen.id === activeId ? 2000 : 1000) : screen.id === activeId ? 1000 : 0;
+            screen.el.style({ zIndex: `${base}` });
         }
+        this.renderWindowSlots();
         this.launcher?.setLevel(this.levelValue, this.launcherRoute);
         this.applyPanel();
         windowEl.el.toggleAttribute("data-overview", this.overview);
@@ -1996,14 +2026,12 @@ class ViewData {
                 screen.winIds.splice(index, 1);
                 screen.winIds.push(id);
             }
-            const el = windowElement(id);
-            // 启动动画期间窗口还在面板里，别把它抢回屏
-            if (el && el.parentElement === screen.el.el) screen.el.add(el);
             const children = [...windowParents].flatMap(([child, parent]) => (parent === id ? [child] : []));
             children.sort((a, b) => Number(focusPath.has(a)) - Number(focusPath.has(b)));
             for (const child of children) raise(child);
         };
         raise(root);
+        this.renderWindowSlots();
     }
 
     /** 把顶层窗口按到屏内最下层；子窗口仍在它上面 */
@@ -2018,16 +2046,7 @@ class ViewData {
             screen.winIds.unshift(root);
         }
         // 整个窗口栈一起沉到最底：父窗口在前，子窗口依次跟在它后面
-        const rootEl = windowElement(root);
-        if (!rootEl || rootEl.parentElement !== screen.el.el) return;
-        screen.el.el.insertBefore(rootEl, screen.el.el.firstChild);
-        let anchor: Node = rootEl;
-        for (const id of windowStackOrder(root).slice(1)) {
-            const el = windowElement(id);
-            if (!el || el.parentElement !== screen.el.el) continue;
-            screen.el.el.insertBefore(el, anchor.nextSibling);
-            anchor = el;
-        }
+        this.renderWindowSlots();
     }
 
     /** 沿模态子窗口链往下找：焦点落在最内层的模态对话框上 */
@@ -2088,6 +2107,14 @@ class ViewData {
             },
             overview: this.overview,
             overviewProgress: this.overviewProgress,
+            launches: [...pendingLaunches].map((state) => ({
+                appid: state.appid,
+                screen: state.screen?.id,
+                phase: state.phase,
+                frame: state.winHandle,
+                replacing: state.replacing,
+                revealed: state.revealed,
+            })),
             overviewFocus: this.overview || this.overviewProgress > 0 ? this.currentId : undefined,
             gesture: this.gesture
                 ? {
@@ -2111,15 +2138,20 @@ class ViewData {
             windows: [...this.win2Screen].map(([handle, screen]) => {
                 const info = server.server.windows.get(handle);
                 const rect = windowLocalRect(handle);
+                const frame = clientWindowFrames.get(handle);
                 return {
                     handle,
                     screen: screen.id,
-                    appid: clientWindowFrames.get(handle)?.appid ?? info?.appid ?? "",
+                    appid: frame?.appid ?? info?.appid ?? "",
                     rect: rect ? { ...rect } : undefined,
                     maximized: info?.states.maximized ?? false,
                     fullscreen: info?.states.fullscreen ?? false,
                     parent: windowParents.get(handle),
                     modal: modalWindows.has(handle),
+                    /** 渲染轴的盒 resize 动画正在跑（可能发生在启动收尾之后） */
+                    resizing: frame?.boxGear?.getRunningAnimation().isRunning ?? false,
+                    /** 已经拿到客户端首帧的真实 surface 尺寸（此前是占位尺寸） */
+                    painted: frame?.painted ?? false,
                 };
             }),
         };
@@ -2204,10 +2236,12 @@ function createScreenEl(id: string, onClick: () => void) {
 }
 
 function applyScreenTransform(el: ElType<HTMLElement>, value: ViewTransform) {
+    // 停稳在当前屏时不要留一个恒等 transform，避免每个窗口槽都常驻合成层
+    const identity = Math.abs(value.x) < 0.001 && Math.abs(value.y) < 0.001 && Math.abs(value.scale - 1) < 0.0001;
     el.style({
         // 屏幕内容整体被预览缩放；覆盖层用倒数抵消，保持固定视觉尺寸
         "--view-inv-scale": `${1 / Math.max(value.scale, 0.0001)}`,
-        transform: `translate3d(${value.x}px, ${value.y}px, 0) scale(${value.scale})`,
+        transform: identity ? "none" : `translate3d(${value.x}px, ${value.y}px, 0) scale(${value.scale})`,
         opacity: `${value.opacity}`,
         filter: value.blur > 0 ? `blur(${value.blur}px)` : "none",
     });
@@ -2724,7 +2758,14 @@ addStyle({
     "[data-client-frame][data-maximized] [data-desktop-ui='resize-handle']": {
         display: "none",
     },
-    // 总览里内容不再接收指针，点击整张卡片只用于切换
+    // 舞台槽本身透明，只有窗口接收指针；overview 里连窗口也关掉，点击整张卡片只用于切换
+    "[data-window-slot] > *": {
+        pointerEvents: "auto",
+    },
+    "[data-overview] [data-window-slot] > *": {
+        pointerEvents: "none",
+    },
+    // 总览里卡片上的内容不再接收指针（启动面板等仍挂在卡片里）
     "[data-overview] [data-view-id] > *": {
         pointerEvents: "none",
     },
@@ -2744,6 +2785,9 @@ addStyle({
         transition: "none",
     },
     "[data-overview] [data-view-id] [data-desktop-ui='window-close']": {
+        pointerEvents: "auto",
+    },
+    "[data-overview] [data-window-slot] [data-desktop-ui='window-close']": {
         pointerEvents: "auto",
     },
 });
@@ -3117,7 +3161,9 @@ function beginWindowResize(
  * 不参与视口居中，也不跟随视口变化重排。
  */
 function addWindow(screen: ViewScreen, el: HTMLElement, windowId?: string, center = true) {
-    screen.el.add(el);
+    const slot = ensureWindowSlot(el);
+    slot.data({ "window-screen": screen.id });
+    slot.add(el);
 
     pack(el).style({
         position: "absolute",
@@ -3127,6 +3173,7 @@ function addWindow(screen: ViewScreen, el: HTMLElement, windowId?: string, cente
         if (center) windowCenterManager.addWindow(windowId, el);
         else el.setAttribute("data-window-id", windowId);
     }
+    if (viewData) viewData.renderWindowSlots();
 }
 
 // ── 服务端装饰（xdg-decoration）────────────────────────────────────────────────
@@ -3157,6 +3204,25 @@ type ClientWindowFrame = {
     /** 最近一次实际提交的 surface 显示尺寸（CSS px） */
     surfaceWidth: number;
     surfaceHeight: number;
+    /** 启动动画期间由 launch 驱动舞台槽，view 暂不写 transform */
+    launching?: boolean;
+    /** 已经收到首帧尺寸，启动过渡白底可以撤掉 */
+    painted?: boolean;
+    /** 还在等客户端窗口：元素已经是 frame，但 handle/content 还没填 */
+    pending?: boolean;
+    /** 启动遮罩（白底 + 图标 + 取消按钮）；窗口内容在它下面，替换时它淡出 */
+    mask?: ElType<HTMLElement>;
+    maskSetIcon?: (src: string | undefined) => void;
+    /** 没有窗口时的 kill 按钮和窗口出现后的 close 按钮，都在遮罩里 */
+    killBtn?: ElType<HTMLElement>;
+    closeBtn?: ElType<HTMLElement>;
+    /**
+     * 盒 resize 动画（渲染轴）。运行期间只有它写外框位置/尺寸，
+     * 其它尺寸回调只更新目标并重新瞄准。与启动动画完全独立，可以跨过支配和预览。
+     */
+    boxGear?: AnimationGear<{ width: number; height: number }>;
+    /** 真实目标外框（surface + 标题栏），盒动画的终点 */
+    boxTarget?: { width: number; height: number };
 };
 
 const clientWindowFrames = new Map<WinHandle, ClientWindowFrame>();
@@ -3229,6 +3295,40 @@ function windowsTopFirst() {
 /** 客户端窗口与内部窗口共用的 DOM 取得方式 */
 function windowElement(winid: MWinId): HTMLElement | undefined {
     return clientWindowFrames.get(winid)?.el.el ?? internalWindows.get(winid)?.el.el;
+}
+
+/**
+ * 每个窗口一个舞台坐标槽：槽本身铺满舞台，只做屏的 transform/裁剪，
+ * 窗口仍在槽里用屏内坐标布局。这样窗口不再继承卡片 DOM，但布局代码不用换坐标系。
+ */
+const windowSlots = new Map<HTMLElement, ElType<HTMLElement>>();
+
+function ensureWindowSlot(el: HTMLElement) {
+    let slot = windowSlots.get(el);
+    if (slot) return slot;
+    slot = view()
+        .style({
+            position: "absolute",
+            left: "0",
+            top: "0",
+            width: "100%",
+            height: "100%",
+            transformOrigin: "0 0",
+            overflow: "hidden",
+            pointerEvents: "none",
+        })
+        .data({ "window-slot": "" })
+        .addInto(windowEl);
+    windowSlots.set(el, slot);
+    return slot;
+}
+
+function removeWindowSlot(el: HTMLElement) {
+    const slot = windowSlots.get(el);
+    if (!slot) return;
+    windowSlots.delete(el);
+    if (el.parentElement === slot.el) el.remove();
+    slot.remove();
 }
 
 function setWindowPosition(winid: MWinId, left: number, top: number): void {
@@ -3534,8 +3634,11 @@ function applyWindowParent(winid: MWinId, parent: MWinId | undefined): void {
     if (!frame || !screen) return;
     // 子窗口不参与视口居中，元素搬到父窗口所在的屏（同屏时是空操作）
     windowCenterManager.removeWindow(winid);
-    screen.el.add(frame.el.el);
+    const slot = ensureWindowSlot(frame.el.el);
+    slot.data({ "window-screen": screen.id });
+    slot.add(frame.el.el);
     frame.el.style({ position: "absolute" });
+    viewData.renderWindowSlots();
     // 已经按 800×600 映射过的窗口重发一次 configure 0×0，让客户端回到自己的固有尺寸
     const applied = appliedState.get(winid);
     server.server.notify(
@@ -3631,10 +3734,115 @@ function applyFrameSurfaceSize(frame: ClientWindowFrame, width?: number, height?
         }
     }
     const bar = titlebarPx(frame);
+    // 真实目标外框；盒动画的终点总是它
+    frame.boxTarget = { width: frame.surfaceWidth, height: frame.surfaceHeight + bar };
+    // 启动/盒动画期间由盒动画写外框，这里只更新目标并重新瞄准
+    if (frame.launching || frame.boxGear) {
+        if (frame.boxGear) {
+            retimeFrameBox(frame);
+        } else {
+            const launch = launchStateForFrame(frame);
+            if (launch) retimeLaunchSize(launch);
+        }
+        // 内容的真实尺寸可能刚在同一个任务里更新：立刻按当前盒重算拉伸，
+        // 不等下一次动画回调，避免中间一帧按旧尺寸溢出或留边
+        const box = currentFrameBox(frame);
+        if (box) writeFrameBox(frame, box.left, box.top, box.width, box.height);
+        return;
+    }
     frame.el.style({
         width: `${frame.surfaceWidth}px`,
         height: `${frame.surfaceHeight + bar}px`,
     });
+}
+
+/** 正在进行的启动状态（按 frame 反查），用于尺寸回调重新瞄准 */
+function launchStateForFrame(frame: ClientWindowFrame): PendingLaunch | undefined {
+    for (const state of pendingLaunches) {
+        if (state.frame === frame) return state;
+    }
+    return undefined;
+}
+
+/** 盒动画当前写进外框的内联矩形；没有动画时也能读到最后一次布局 */
+function currentFrameBox(frame: ClientWindowFrame): LaunchRect | undefined {
+    const style = frame.el.el.style;
+    const left = Number.parseFloat(style.left);
+    const top = Number.parseFloat(style.top);
+    const width = Number.parseFloat(style.width);
+    const height = Number.parseFloat(style.height);
+    if (![left, top, width, height].every((value) => Number.isFinite(value))) return undefined;
+    return { left, top, width, height };
+}
+
+/**
+ * 盒动画写当前外框，内容非等比拉伸到盒内：宽按盒宽、高按盒高减标题栏。
+ * 用 transform 缩放（GPU），不重排、不重栅格大 buffer，也不需要裁切/溢出处理。
+ */
+function writeFrameBox(frame: ClientWindowFrame, left: number, top: number, width: number, height: number) {
+    const w = Math.max(1, width);
+    const h = Math.max(1, height);
+    frame.el.style({ left: `${left}px`, top: `${top}px`, width: `${w}px`, height: `${h}px` });
+    // 还没有客户端内容时遮罩铺满 frame，本身就是盒的尺寸，不需要拉伸
+    if (frame.pending) return;
+    const bar = titlebarPx(frame);
+    const natural = frameContentDisplaySize(frame);
+    const cw = Math.max(1, natural.width || frame.surfaceWidth);
+    const ch = Math.max(1, natural.height || frame.surfaceHeight);
+    // 内容基准 left=0、top=bar；origin 在左上角，缩放后正好铺满盒
+    frame.content.style.transformOrigin = "0 0";
+    frame.content.style.transform = `scale(${w / cw}, ${Math.max(1, h - bar) / ch})`;
+}
+
+/**
+ * 盒 resize 重新瞄准：运行中的动画用剩余时间，已经停下就用完整时长。
+ * resize 和启动动画互相独立，它可以在支配之后、甚至预览阶段继续跑。
+ * 首帧替换时要指定时长，让盒和 mask 淡出同时结束。
+ */
+function retimeFrameBox(frame: ClientWindowFrame, duration?: number) {
+    const gear = frame.boxGear;
+    const target = frame.boxTarget;
+    if (!gear || !target) return;
+    const running = gear.getRunningAnimation();
+    const time = duration ?? (running.isRunning ? Math.max(1, running.remainingTime) : LAUNCH_FLIGHT.duration);
+    gear.moveTo(target, { duration: time, map: LAUNCH_FLIGHT.map }, () => {
+        if (frame.boxGear !== gear) return;
+        // 启动还没收尾时保持预览，收尾后由 releaseFrameBox 一次性交还真实尺寸
+        if (frame.launching) return;
+        releaseFrameBox(frame);
+    });
+}
+
+/** 结束盒动画：撤掉预览，回到真实尺寸并恢复自动居中 */
+function releaseFrameBox(frame: ClientWindowFrame) {
+    frame.boxGear = undefined;
+    frame.content.removeAttribute("data-resize-preview");
+    frame.content.style.removeProperty("--resize-preview-width");
+    frame.content.style.removeProperty("--resize-preview-height");
+    frame.content.style.transform = "";
+    frame.content.style.transformOrigin = "";
+    frame.content.style.left = "0px";
+    applyClientFrameChrome(frame);
+    applyFrameSurfaceSize(frame);
+    windowCenterManager.resumeCentering(frame.handle);
+    windowCenterManager.centerWindow(frame.handle);
+}
+
+/**
+ * 把启动中还在跑的 resize 交给 frame：之后它只按自己的时钟走，
+ * 与启动收尾、支配、预览都无关。返回 false 表示当前没有在跑的 resize。
+ */
+function adoptBoxGearIntoFrame(state: PendingLaunch, frame: ClientWindowFrame): boolean {
+    const gear = state.sizeGear;
+    if (!gear?.getRunningAnimation().isRunning) return false;
+    const center = launchCenterLocal(state);
+    frame.boxGear = gear;
+    gear.setUpdateCallback((value) => {
+        if (!clientWindowFrames.has(frame.handle)) return;
+        writeFrameBox(frame, center.x - value.width / 2, center.y - value.height / 2, value.width, value.height);
+    });
+    retimeFrameBox(frame);
+    return true;
 }
 
 /** 桌面主动设定内容尺寸（最大化/全屏），外框与内容在同一任务里对齐 */
@@ -3807,7 +4015,8 @@ function createTitlebarControl(content: ElType<HTMLElement> | { el: HTMLElement 
     return btn;
 }
 
-function createClientWindowFrame(info: WindowInfo, content: HTMLElement): ClientWindowFrame {
+/** 标题栏、图标、窗口按钮：挂到已有的 frame 元素上，窗口的 handle 由调用方决定 */
+function buildFrameChrome(frame: ClientWindowFrame, handle: string) {
     const title = txt("").style({
         flex: "1",
         minWidth: "0",
@@ -3828,7 +4037,7 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
         overflow: "hidden",
     });
     const close = createTitlebarControl(getIconXEl("cross", { size: 12 }), () =>
-        server.server.notify("window.close", info.handle),
+        server.server.notify("window.close", handle),
     ).data({ "client-titlebar-close": "", "client-control": "close" });
 
     const maximizeIcon = createMaximizeGlyph();
@@ -3839,8 +4048,8 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
             .style({ display: "flex", alignItems: "center", justifyContent: "center" })
             .add([maximizeIcon, restoreIcon]),
         () => {
-            viewData.focusWin(info.handle);
-            toggleMaximizeWindow(info.handle);
+            viewData.focusWin(handle);
+            toggleMaximizeWindow(handle);
         },
     ).data({ "client-control": "maximize" });
 
@@ -3874,9 +4083,19 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
         if (e.button !== 0) return;
         if ((e.target as HTMLElement).closest("button, input, select, textarea")) return;
         e.stopPropagation();
-        beginClientFrameMove(frame, info.handle, e);
+        beginClientFrameMove(frame, handle, e);
     });
 
+    frame.header = header;
+    frame.icon = icon;
+    frame.title = title;
+    frame.controls = [maximize, close];
+    frame.maximizeIcon = maximizeIcon;
+    frame.restoreIcon = restoreIcon;
+    frame.el.add(header);
+}
+
+function createClientWindowFrame(info: WindowInfo, content: HTMLElement): ClientWindowFrame {
     const el = view().data({ "client-frame": "", "client-window": info.handle }).style({
         position: "absolute",
         boxSizing: "border-box",
@@ -3885,18 +4104,16 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
         // 避免窗口成为 backdrop root 后标题栏的 backdrop-filter 看不到后面的桌面。
         zIndex: "0",
     });
-    el.add([header, content]);
-
     const frame: ClientWindowFrame = {
         handle: info.handle,
         el,
-        header,
-        icon,
-        title,
+        header: view(),
+        icon: view(),
+        title: txt(""),
         content,
-        controls: [maximize, close],
-        maximizeIcon,
-        restoreIcon,
+        controls: [],
+        maximizeIcon: view(),
+        restoreIcon: view(),
         decorated: info.decorated,
         fullscreen: false,
         maximized: false,
@@ -3905,11 +4122,71 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
         surfaceWidth: 1,
         surfaceHeight: 1,
     };
+    buildFrameChrome(frame, info.handle);
+    el.add(content);
     updateClientFrameInfo(frame, info);
     applyClientFrameChrome(frame);
     syncClientFrameMaximized(frame, info.states.maximized);
     clientFrameByRenderId.set(info.renderId, frame);
     applyFrameSurfaceSize(frame);
+    return frame;
+}
+
+/**
+ * 从启动第一帧就存在的 frame 元素和 mask；标题栏、窗口按钮等客户端到达后再补。
+ * 窗口到达只填 content/handle，元素不换，渲染轴因此从头到尾是同一个。
+ */
+function createPendingWindowFrame(
+    name: string,
+    appid: string | undefined,
+    iconSrc: string | undefined,
+    onCancel: () => void,
+): ClientWindowFrame & { killBtn: ElType<HTMLElement>; closeBtn: ElType<HTMLElement> } {
+    const el = view().data({ "client-frame": "", "pending-frame": "" }).style({
+        position: "absolute",
+        boxSizing: "border-box",
+        zIndex: "0",
+        // 回弹结束后才出现；此前只显示 intro 图标。按整帧缩放，mask 始终铺满，不会露出顶栏
+        opacity: "0",
+        transformOrigin: "50% 50%",
+        transform: "scale(0.86)",
+    });
+    const mask = createLaunchPanel(name, iconSrc, onCancel, onCancel);
+    mask.panel.data({ "desktop-ui": "pending-frame" });
+    mask.panel.style({
+        position: "absolute",
+        left: "0",
+        top: "0",
+        width: "100%",
+        height: "100%",
+        zIndex: "7",
+        opacity: "1",
+    });
+    el.add(mask.panel);
+    const frame = {
+        handle: "",
+        el,
+        header: view(),
+        icon: view(),
+        title: txt(name || appid || ""),
+        content: mask.panel.el,
+        controls: [],
+        maximizeIcon: view(),
+        restoreIcon: view(),
+        decorated: false,
+        fullscreen: false,
+        maximized: false,
+        appid: appid ?? "",
+        renderId: "",
+        surfaceWidth: 1,
+        surfaceHeight: 1,
+        launching: true,
+        pending: true,
+        mask: mask.panel,
+        maskSetIcon: mask.setIcon,
+        killBtn: mask.killBtn,
+        closeBtn: mask.closeBtn,
+    };
     return frame;
 }
 
@@ -4034,6 +4311,7 @@ function openInternalWindow(op: InternalWindowOptions) {
         windowCenterManager.removeWindow(op.id);
         removeResizeHandles(op.id);
         entry.dispose?.();
+        removeWindowSlot(entry.el.el);
         entry.el.remove();
         op.onClosed?.();
     }
@@ -4436,28 +4714,30 @@ type PendingLaunch = {
     exec: string;
     appid?: string;
     child?: ReturnType<typeof server.runApp>;
-    panel: ElType<HTMLElement>;
-    /** 面板的白色底和图标层；窗口淡入时一起淡出 */
-    cover: ElType<HTMLElement>;
-    iconImg: ElType<HTMLImageElement>;
-    iconLetter: ElType<HTMLElement>;
-    closeBtn: ElType<HTMLElement>;
-    /** 按下时先缩小的图标；透明后移除，面板这时才出现 */
+    /** 从启动第一帧就存在的 frame；窗口创建后只填 content/handle，元素不换 */
+    frame: ClientWindowFrame;
+    /** 启动阶段由 launch 驱动的舞台槽；支配后由 view 写 */
+    slot: ElType<HTMLElement>;
+    /** 支配后由 view 的屏 transform 接管 */
+    slotFollowsView: boolean;
+    /** 还没有窗口时的取消按钮：结束进程树 */
+    killBtn: ElType<HTMLElement>;
+    /** 按下时先缩小的图标；透明后移除，mask 这时才出现 */
     intro?: ElType<HTMLElement>;
     introSetIcon?: (src: string | undefined) => void;
     startRect: LaunchRect;
     phase: LaunchPhase;
     screen?: ViewScreen;
-    /** 飞入起点是真实屏幕，不跟虚拟屏；只有被手势/总览/切屏接管后才跟屏 */
+    /** 飞入默认固定在视口坐标；屏幕被其他操作接管后才改为跟随屏 */
     trackScreen: boolean;
+    /** 接管瞬间的局部中心与进度，之后继续插值到目标中心 */
     trackFrom?: { p: number; centerX: number; centerY: number };
     flightTarget?: { x: number; y: number; scale: number };
     flightProgress: number;
-    /** 飞入过程中面板的视口尺寸；单独用 gear 改尺寸，不等同于位置进度 */
+    /** 当前盒尺寸（渲染轴）；起飞时是图标大小，之后由 resize 独立驱动 */
     flightSize: { width: number; height: number };
-    /** 跟屏时尺寸目标对应的 visual.scale，缩放变化时重新瞄准尺寸 */
-    sizeScale?: number;
-    frame?: ClientWindowFrame;
+    /** 当前盒矩形；固定阶段是视口坐标，接管后是屏内坐标 */
+    currentRect?: LaunchRect;
     winHandle?: WinHandle;
     /** 默认窗口尺寸（已乘输出缩放）；窗口出现后换成真实尺寸 */
     targetWidth: number;
@@ -4467,14 +4747,18 @@ type PendingLaunch = {
     windowHeight?: number;
     replacing: boolean;
     revealed: boolean;
-    claiming: boolean;
+    claimed: boolean;
     closing: boolean;
     arrivedAt: number;
     /** 取消按钮是否已经开始淡入 */
     cancelShown: boolean;
     flightGear?: AnimationGear<{ p: number }>;
     sizeGear?: AnimationGear<{ width: number; height: number }>;
-    cancelGear?: AnimationGear<{ p: number }>;
+    /** 接管后的追平进度：从当前局部中心走到目标中心 */
+    catchGear?: AnimationGear<{ p: number }>;
+    catchProgress: number;
+    /** 每帧推进：接管检测 + 支配判定 */
+    tickHandle?: number;
 };
 
 const pendingLaunches = new Set<PendingLaunch>();
@@ -4493,7 +4777,10 @@ const LAUNCH_PRESS_IN = { duration: 130, map: timingFunction.easeIn };
 const LAUNCH_PRESS_OUT = { duration: 180, map: timingFunction.easeOut };
 /** 面板飞入按真实屏幕的终点走直线；快进慢停，不跟虚拟屏自己的滑动曲线 */
 const LAUNCH_FLIGHT = { duration: 240, map: timingFunction.cubicBezier(0.16, 1, 0.3, 1) };
-const LAUNCH_REPLACE_FADE = { duration: 180, map: timingFunction.easeInOut };
+/** 屏幕被接管后的追平时长：用屏幕自己的过渡时长，手势中也有界 */
+const LAUNCH_CATCH_UP = { duration: SCREEN_TRANSITION.duration, map: timingFunction.easeOut };
+/** 首帧替换：mask 淡出和盒 resize 共用时长，同时开始、同时结束 */
+const LAUNCH_REVEAL = { duration: 180, map: timingFunction.easeInOut };
 /** 空槽取消按钮：不要突然盖在图标上，落地后透明+模糊淡入 */
 const LAUNCH_CANCEL_FADE = { duration: 220, map: timingFunction.easeOut };
 const CLOSE_FADE = { duration: 220, map: timingFunction.easeOut };
@@ -4526,6 +4813,15 @@ function fullStageSize() {
 function elementRect(el: HTMLElement): LaunchRect {
     const rect = el.getBoundingClientRect();
     return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+}
+
+/**
+ * 唯一写盒几何的地方：外壳或 frame 的外框。
+ * 固定阶段坐标就是视口坐标；屏幕接管后是屏内坐标，槽的 transform 由屏幕轴提供。
+ */
+function setLaunchVisual(state: PendingLaunch, rect: LaunchRect) {
+    state.currentRect = rect;
+    writeFrameBox(state.frame, rect.left, rect.top, rect.width, rect.height);
 }
 
 function sourceIconSrc(el: HTMLElement | undefined) {
@@ -4570,42 +4866,28 @@ function launchFrameOuterSize(frame: ClientWindowFrame, state?: PendingLaunch) {
     };
 }
 
-/** 面板尺寸变化时，把里面的真实窗口按比例缩放并居中，动画里看到的是缩小的应用 */
-function layoutLaunchFrameInPanel(state: PendingLaunch, panelWidth: number, panelHeight: number) {
-    const frame = state.frame;
-    if (!frame || frame.el.el.parentElement !== state.panel.el) return;
-    // 用内部 surface DOM 的真实尺寸（再补服务端装饰标题栏），外壳尺寸可能不准
-    const { width: windowWidth, height: windowHeight } = launchFrameOuterSize(frame, state);
-    const scale = Math.max(0.0001, Math.min(panelWidth / windowWidth, panelHeight / windowHeight));
-    frame.el.style({
-        left: `${(panelWidth - windowWidth * scale) / 2}px`,
-        top: `${(panelHeight - windowHeight * scale) / 2}px`,
-        transform: `scale(${scale})`,
-        transformOrigin: "0 0",
-    });
-}
-
-function setLaunchPanelRect(state: PendingLaunch, rect: LaunchRect) {
-    setPanelRect(state.panel, rect);
-    layoutLaunchFrameInPanel(state, rect.width, rect.height);
-}
-
 /** 面板在虚拟屏里的目标矩形：真实窗口出现后贴住窗口，否则居中 800×600（乘输出缩放） */
 function launchTargetLocalRect(state: PendingLaunch): LaunchRect {
     const frame = state.frame;
-    if (frame) {
-        // 和 WindowCenterManager 的 ResizeObserver 用同一套外框尺寸/可用区/取整方式
-        const width = Math.max(1, frame.el.el.offsetWidth || state.windowWidth || state.targetWidth);
-        const height = Math.max(1, frame.el.el.offsetHeight || state.windowHeight || state.targetHeight);
+    if (!frame.pending) {
+        // 盒动画期间不能读 offsetWidth（那是动画中的值）；用真实目标外框
+        const target = frame.boxTarget ?? {
+            width: frame.surfaceWidth,
+            height: frame.surfaceHeight + titlebarPx(frame),
+        };
+        const width = Math.max(1, target.width);
+        const height = Math.max(1, target.height);
         const position = windowCenterManager.centeredPosition(width, height);
         return { left: position.left, top: position.top, width, height };
     }
     const available = availableStageSize();
+    const width = Math.max(1, state.windowWidth ?? state.targetWidth);
+    const height = Math.max(1, state.windowHeight ?? state.targetHeight);
     return {
-        left: Math.round(available.x + (available.width - state.targetWidth) / 2),
-        top: Math.round(available.y + (available.height - state.targetHeight) / 2),
-        width: state.targetWidth,
-        height: state.targetHeight,
+        left: Math.round(available.x + (available.width - width) / 2),
+        top: Math.round(available.y + (available.height - height) / 2),
+        width,
+        height,
     };
 }
 
@@ -4628,20 +4910,20 @@ function prepareLaunchWindowSize(state: PendingLaunch, frame: ClientWindowFrame,
     applyFrameSurfaceSize(frame);
     state.windowWidth = frame.surfaceWidth;
     state.windowHeight = frame.surfaceHeight + titlebarPx(frame);
-    // 首帧提交前面板是白色，窗口也用白底过渡，交叉淡入时不会露出透明空洞
-    frame.el.el.style.background = "#fff";
-    frame.el.el.style.borderRadius = "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))";
+    if (!frame.painted) {
+        // 首帧提交前面板是白色，窗口也用白底过渡，交叉淡入时不会露出透明空洞
+        frame.el.el.style.background = "#fff";
+        frame.el.el.style.borderRadius = "calc(var(--window-radius, 18px) * var(--desktop-ui-scale, 1))";
+    }
 }
 
 function setLaunchIcon(state: PendingLaunch, src: string | undefined) {
     if (!src || !pendingLaunches.has(state)) return;
-    state.iconImg.attr({ src });
-    state.iconImg.style({ display: "block" });
-    state.iconLetter.style({ display: "none" });
+    state.frame.maskSetIcon?.(src);
     state.introSetIcon?.(src);
 }
 
-function createLaunchPanel(name: string, iconSrc: string | undefined, onClose: () => void) {
+function createLaunchPanel(name: string, iconSrc: string | undefined, onKill: () => void, onClose: () => void) {
     const iconLetter = txt((name.trim()[0] || "?").toUpperCase()).style({
         ...gTextStyle.display,
         fontSize: "28px",
@@ -4675,7 +4957,6 @@ function createLaunchPanel(name: string, iconSrc: string | undefined, onClose: (
     cover.add(iconBox);
 
     const panel = view()
-        .data({ "desktop-ui": "launch-panel" })
         .style({
             position: "absolute",
             boxSizing: "border-box",
@@ -4686,6 +4967,15 @@ function createLaunchPanel(name: string, iconSrc: string | undefined, onClose: (
         })
         .add(cover);
 
+    // 两个固定 DOM，各自绑定事件，不按状态重新指派：
+    // 窗口还没出现时是 kill，窗口出现后换成 close（发给客户端）
+    const killBtn = createWindowCloseButton({ size: 26, onClick: onKill }).style({
+        position: "absolute",
+        top: "10px",
+        right: "10px",
+        display: "none",
+        pointerEvents: "auto",
+    });
     const closeBtn = createWindowCloseButton({ size: 26, onClick: onClose }).style({
         position: "absolute",
         top: "10px",
@@ -4693,7 +4983,7 @@ function createLaunchPanel(name: string, iconSrc: string | undefined, onClose: (
         display: "none",
         pointerEvents: "auto",
     });
-    panel.add(closeBtn);
+    panel.add([killBtn, closeBtn]);
 
     const setIcon = (src: string | undefined) => {
         if (!src) return;
@@ -4703,7 +4993,7 @@ function createLaunchPanel(name: string, iconSrc: string | undefined, onClose: (
     };
     setIcon(iconSrc);
 
-    return { panel, cover, iconImg, iconLetter, closeBtn, setIcon };
+    return { panel, cover, iconImg, iconLetter, killBtn, closeBtn, setIcon };
 }
 
 /** 启动入口：所有应用启动都经过这里。source 用于让动画从点击的图标开始 */
@@ -4719,32 +5009,44 @@ function launchApp(req: AppLaunchRequest) {
     const initialIcon = req.iconSrc ?? sourceIconSrc(req.sourceEl);
     const scale = screenManager.getScale();
     let state!: PendingLaunch;
-    const { panel, cover, iconImg, iconLetter, closeBtn } = createLaunchPanel(
+    // 渲染轴从第一帧就存在：frame 元素和遮罩先建好，窗口到达只换 content
+    const frame = createPendingWindowFrame(req.name, req.appid, initialIcon, () => void cancelLaunch(state));
+    const intro = createLaunchPanel(
         req.name,
         initialIcon,
-        () => void forceQuitLaunch(state),
+        () => {},
+        () => {},
     );
-    const intro = createLaunchPanel(req.name, initialIcon, () => {});
+    const slot = ensureWindowSlot(frame.el.el);
+    slot.style({ zIndex: "5000" });
+    slot.add(frame.el.el);
+    frame.el.style({
+        left: `${rect.left}px`,
+        top: `${rect.top}px`,
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+    });
     state = {
         exec: req.exec,
         appid: req.appid,
-        panel,
-        cover,
-        iconImg,
-        iconLetter,
-        closeBtn,
+        frame,
+        slot,
+        slotFollowsView: false,
+        killBtn: frame.killBtn,
         intro: intro.panel,
         introSetIcon: intro.setIcon,
         startRect: rect,
         phase: "press",
         trackScreen: false,
         flightProgress: 0,
+        catchProgress: 0,
         flightSize: { width: rect.width, height: rect.height },
+        currentRect: rect,
         targetWidth: 800 * scale,
         targetHeight: 600 * scale,
         replacing: false,
         revealed: false,
-        claiming: false,
+        claimed: false,
         closing: false,
         arrivedAt: Date.now(),
         cancelShown: false,
@@ -4778,7 +5080,8 @@ function launchApp(req: AppLaunchRequest) {
 
 function startLaunchPress(state: PendingLaunch) {
     const intro = state.intro;
-    if (!intro) {
+    const mask = state.frame.mask;
+    if (!intro || !mask) {
         startLaunchFlight(state);
         return;
     }
@@ -4793,16 +5096,13 @@ function startLaunchPress(state: PendingLaunch) {
         state.introSetIcon = undefined;
         if (!pendingLaunches.has(state) || state.closing) return;
 
-        ensureLaunchLayer().add(state.panel);
-        setLaunchPanelRect(state, state.startRect);
-        state.panel.style({ opacity: "0", transform: "scale(0.86)" });
         const back = createAnimationGear({ p: 0 }, { transition: LAUNCH_PRESS_OUT });
         back.setUpdateCallback(({ p }) => {
-            state.panel.style({ opacity: `${p}`, transform: `scale(${0.86 + 0.14 * p})` });
+            state.frame.el.style({ opacity: `${p}`, transform: `scale(${0.86 + 0.14 * p})` });
         });
         back.moveTo({ p: 1 }, LAUNCH_PRESS_OUT, () => {
             if (!pendingLaunches.has(state) || state.phase !== "press") return;
-            state.panel.style({ opacity: "1", transform: "none" });
+            state.frame.el.style({ opacity: "1", transform: "none", transformOrigin: "" });
             startLaunchFlight(state);
         });
     });
@@ -4818,7 +5118,8 @@ function screenRectOf(transform: { x: number; y: number; scale: number }, local:
     };
 }
 
-function localRectOf(rect: LaunchRect, transform: { x: number; y: number; scale: number }): LaunchRect {
+/** 屏幕（视口）矩形 → 虚拟屏局部矩形 */
+function localRectOf(transform: { x: number; y: number; scale: number }, rect: LaunchRect): LaunchRect {
     const scale = Math.max(0.0001, transform.scale);
     return {
         left: (rect.left - transform.x) / scale,
@@ -4844,173 +5145,226 @@ function launchScreenTakenOver(state: PendingLaunch) {
 function startLaunchFlight(state: PendingLaunch) {
     if (!pendingLaunches.has(state)) return;
     state.phase = "flying";
-    // 回弹后从工具栏层级降到虚拟屏附近：仍在窗口层之上，但不再盖住工具栏
-    windowElWarp.add(state.panel);
-    state.panel.style({ zIndex: "3", transform: "none" });
-    // 按下期间先不切屏。现在才把窗口放进新建的虚拟屏（或补一个空屏）。
-    if (!state.screen) {
-        if (state.frame) {
-            state.screen = viewData.addWindowScreen(state.frame.handle);
-            addWindow(state.screen, state.frame.el.el, state.frame.handle, true);
-            // 焦点等启动收尾时再给：创建阶段客户端还没初始化完，激活会被丢掉
-        } else {
-            state.screen = viewData.addPendingAppScreen();
-        }
-    } else {
-        viewData.setCurrentScreen(state.screen.id, true);
-    }
+    state.frame.el.style({ opacity: "1", transform: "none", transformOrigin: "" });
+    // 首帧提前到达时 mask 可能已经在淡出，不要把它拉回不透明
+    if (!state.replacing) state.frame.mask?.style({ opacity: "1" });
+    // 按下期间先不切屏。窗口已经创建就用它自己的屏，否则补一个占位应用屏。
+    if (!state.screen) state.screen = viewData.addPendingAppScreen();
+    else viewData.setCurrentScreen(state.screen.id, true);
 
     state.trackScreen = false;
     state.trackFrom = undefined;
     state.flightProgress = 0;
-    state.flightSize = { width: state.startRect.width, height: state.startRect.height };
+    state.catchProgress = 0;
+    state.catchGear = undefined;
     // 目标是屏停稳后的位置，不能读创屏滑动中的 target
     const committed = viewData.committedScreenTransform(state.screen);
     state.flightTarget = committed
         ? { x: committed.x, y: committed.y, scale: committed.scale }
         : { x: state.screen.target.x, y: state.screen.target.y, scale: state.screen.target.scale };
-    const targetLocal = launchTargetLocalRect(state);
-    const targetViewport = screenRectOf(state.flightTarget, targetLocal);
 
-    // 位置按中心直线走；尺寸单独用 gear。窗口尺寸中途变化时只重新瞄准尺寸，不改变中心轨迹。
+    // 飞行默认固定在视口坐标：盒从图标本身的矩形开始，槽保持恒等，屏在后面滑。
+    // 盒不必保持目标比例：内容会非等比拉伸填满，mask 里的图标由 DOM 居中。
+    const targetLocal = launchTargetLocalRect(state);
+    state.flightSize = {
+        width: Math.max(1, state.startRect.width),
+        height: Math.max(1, state.startRect.height),
+    };
+    setLaunchVisual(state, {
+        left: state.startRect.left + (state.startRect.width - state.flightSize.width) / 2,
+        top: state.startRect.top + (state.startRect.height - state.flightSize.height) / 2,
+        width: state.flightSize.width,
+        height: state.flightSize.height,
+    });
+    state.slotFollowsView = false;
+    applyScreenTransform(state.slot, { x: 0, y: 0, scale: 1, opacity: 1, blur: 0 });
+    state.slot.style({ zIndex: "5000" });
+
     const gear = createAnimationGear({ p: 0 }, { transition: LAUNCH_FLIGHT });
     state.flightGear = gear;
     gear.setUpdateCallback(({ p }) => {
         state.flightProgress = p;
-        renderLaunchGeometry(state);
     });
     const sizeGear = createAnimationGear(
-        { width: state.startRect.width, height: state.startRect.height },
+        { width: state.flightSize.width, height: state.flightSize.height },
         { transition: LAUNCH_FLIGHT },
     );
     state.sizeGear = sizeGear;
     sizeGear.setUpdateCallback((value) => {
         if (!pendingLaunches.has(state)) return;
         state.flightSize = value;
-        renderLaunchGeometry(state);
     });
-    sizeGear.moveTo({ width: targetViewport.width, height: targetViewport.height }, LAUNCH_FLIGHT);
-    gear.moveTo({ p: 1 }, LAUNCH_FLIGHT, () => finishLaunchFlight(state));
-    // 窗口已经建好就直接开始替换；晚到的窗口在 attachWindowToLaunch 里开始
-    if (state.frame) beginLaunchReplacement(state);
+    sizeGear.moveTo(
+        { width: targetLocal.width, height: targetLocal.height },
+        { ...LAUNCH_FLIGHT, onComplete: () => finishLaunchIfReady(state) },
+    );
+    gear.moveTo({ p: 1 }, LAUNCH_FLIGHT);
+    startLaunchTick(state);
 }
 
+/** 启动盒的中心（屏内坐标）：窗口最终位置的中心 */
+function launchCenterLocal(state: PendingLaunch): { x: number; y: number } {
+    const box = launchTargetLocalRect(state);
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+}
+
+/** 中心来自飞入（固定或接管后追平），尺寸来自独立的 resize；这里只组合出盒矩形 */
 function renderLaunchGeometry(state: PendingLaunch) {
     const screen = state.screen;
     if (!screen || !pendingLaunches.has(state)) return;
-    const p = state.flightProgress;
-    const targetLocal = launchTargetLocalRect(state);
-    const targetTransform = state.flightTarget ?? screen.target;
-    const targetViewport = screenRectOf(targetTransform, targetLocal);
-    const startX = state.startRect.left + state.startRect.width / 2;
-    const startY = state.startRect.top + state.startRect.height / 2;
-    const targetX = targetViewport.left + targetViewport.width / 2;
-    const targetY = targetViewport.top + targetViewport.height / 2;
-    const baseX = startX + (targetX - startX) * p;
-    const baseY = startY + (targetY - startY) * p;
     const size = state.flightSize;
-
-    if (!state.trackScreen && launchScreenTakenOver(state)) {
-        state.trackScreen = true;
-        const scale = Math.max(0.0001, screen.visual.scale);
-        state.sizeScale = scale;
-        state.trackFrom = {
-            p,
-            centerX: (baseX - screen.visual.x) / scale,
-            centerY: (baseY - screen.visual.y) / scale,
-        };
-        // 跟屏后尺寸目标和位置方向都变了，用飞入自己的剩余时间重新瞄准
-        retimeLaunchFlight(state);
-        retimeLaunchSize(state);
-    }
-
+    let centerX: number;
+    let centerY: number;
     if (state.trackScreen && state.trackFrom) {
-        const visual = screen.visual;
-        const scale = Math.max(0.0001, visual.scale);
-        if (Math.abs(scale - (state.sizeScale ?? scale)) > 0.005) {
-            state.sizeScale = scale;
-            retimeLaunchSize(state);
-        }
-        const from = state.trackFrom;
-        const t = p <= from.p ? 0 : clampNumber((p - from.p) / Math.max(0.0001, 1 - from.p), 0, 1);
-        const targetCenterX = targetLocal.left + targetLocal.width / 2;
-        const targetCenterY = targetLocal.top + targetLocal.height / 2;
-        const centerX = from.centerX + (targetCenterX - from.centerX) * t;
-        const centerY = from.centerY + (targetCenterY - from.centerY) * t;
-        const localWidth = size.width / scale;
-        const localHeight = size.height / scale;
-        setLaunchPanelRect(
-            state,
-            screenRectOf(visual, {
-                left: centerX - localWidth / 2,
-                top: centerY - localHeight / 2,
-                width: localWidth,
-                height: localHeight,
-            }),
-        );
-        return;
+        const target = launchCenterLocal(state);
+        const t = clampNumber(state.catchProgress, 0, 1);
+        centerX = state.trackFrom.centerX + (target.x - state.trackFrom.centerX) * t;
+        centerY = state.trackFrom.centerY + (target.y - state.trackFrom.centerY) * t;
+    } else {
+        const targetLocal = launchTargetLocalRect(state);
+        const targetViewport = screenRectOf(state.flightTarget ?? screen.target, targetLocal);
+        const startX = state.startRect.left + state.startRect.width / 2;
+        const startY = state.startRect.top + state.startRect.height / 2;
+        const targetX = targetViewport.left + targetViewport.width / 2;
+        const targetY = targetViewport.top + targetViewport.height / 2;
+        const p = state.flightProgress;
+        centerX = startX + (targetX - startX) * p;
+        centerY = startY + (targetY - startY) * p;
     }
-
-    setLaunchPanelRect(state, {
-        left: baseX - size.width / 2,
-        top: baseY - size.height / 2,
+    setLaunchVisual(state, {
+        left: centerX - size.width / 2,
+        top: centerY - size.height / 2,
         width: size.width,
         height: size.height,
     });
 }
 
-/** 飞入结束后不急着嵌入：等虚拟屏自己的创屏滑动停稳，再让面板成为屏的子元素 */
-function finishLaunchFlight(state: PendingLaunch) {
-    if (!state.screen || !pendingLaunches.has(state)) return;
-    state.flightGear = undefined;
-    waitForLaunchScreenSettled(state);
+/** 屏幕被手势/总览/切屏接管：把位置从「视口固定」切到「跟随屏幕」，之后屏幕自己带着盒子走 */
+function trackScreenChange(state: PendingLaunch) {
+    const screen = state.screen;
+    const rect = state.currentRect;
+    if (!screen || !rect || state.trackScreen) return;
+    const visual = screen.visual;
+    // 视口矩形 -> 屏内矩形：切换这一瞬间视觉位置不变
+    const local = localRectOf(visual, rect);
+    state.trackScreen = true;
+    state.flightSize = { width: local.width, height: local.height };
+    state.currentRect = local;
+    state.trackFrom = {
+        p: 0,
+        centerX: local.left + local.width / 2,
+        centerY: local.top + local.height / 2,
+    };
+    state.catchProgress = 0;
+    applyScreenTransform(state.slot, visual);
+
+    // 飞行还没结束就沿用它的剩余时间，已经结束就用理论追平时长；手势中也有界
+    const running = state.flightGear?.getRunningAnimation();
+    const duration = running?.isRunning ? Math.max(1, running.remainingTime) : LAUNCH_CATCH_UP.duration;
+    const catchGear = createAnimationGear({ p: 0 }, { transition: { duration, map: LAUNCH_CATCH_UP.map } });
+    state.catchGear = catchGear;
+    catchGear.setUpdateCallback(({ p }) => {
+        state.catchProgress = p;
+    });
+    catchGear.moveTo({ p: 1 }, { duration, map: LAUNCH_CATCH_UP.map });
+
+    // 尺寸也换到屏内单位；旧的尺寸齿轮停写，新的从当前值瞄准最终盒
+    state.sizeGear?.setUpdateCallback(() => {});
+    const target = launchTargetLocalRect(state);
+    const sizeGear = createAnimationGear(
+        { width: local.width, height: local.height },
+        { transition: { duration, map: LAUNCH_FLIGHT.map } },
+    );
+    state.sizeGear = sizeGear;
+    sizeGear.setUpdateCallback((value) => {
+        if (!pendingLaunches.has(state)) return;
+        state.flightSize = value;
+    });
+    sizeGear.moveTo(
+        { width: target.width, height: target.height },
+        { duration, map: LAUNCH_FLIGHT.map, onComplete: () => finishLaunchIfReady(state) },
+    );
 }
 
-function waitForLaunchScreenSettled(state: PendingLaunch) {
-    const tick = () => {
+/** 支配条件：飞行结束；固定坐标阶段还要等屏停稳（停稳后固定位置和屏幕位置重合） */
+function launchCanDominate(state: PendingLaunch): boolean {
+    if (state.phase !== "flying") return false;
+    const gear = state.trackScreen ? state.catchGear : state.flightGear;
+    if (gear?.getRunningAnimation().isRunning) return false;
+    if (!state.trackScreen && state.screen && !viewData.isScreenSettled(state.screen)) return false;
+    return true;
+}
+
+/** 每帧推进：检测接管、写盒、判定支配 */
+function startLaunchTick(state: PendingLaunch) {
+    if (state.tickHandle !== undefined) return;
+    const step = () => {
+        state.tickHandle = undefined;
+        if (!pendingLaunches.has(state) || state.closing) return;
+        if (state.phase !== "flying") return;
         const screen = state.screen;
-        if (!screen || !pendingLaunches.has(state)) return;
-        // 等待期间仍按 p=1 跟踪屏；期间被手势/总览接管也一样跟住
+        if (!screen) return;
+        if (!state.trackScreen && launchScreenTakenOver(state)) trackScreenChange(state);
         renderLaunchGeometry(state);
-        // 创屏时屏由 focus/level 轴驱动，screen.gear 只做 0 时长跟随；
-        // 要等两轴都停稳，不能只看 screen.gear
-        const settled = viewData.isScreenSettled(screen);
-        const sizeRunning = state.sizeGear?.getRunningAnimation().isRunning ?? false;
-        if (!settled || sizeRunning) {
-            requestAnimationFrame(tick);
+        if (launchCanDominate(state)) {
+            dominateLaunch(state);
             return;
         }
-        embedLaunchPanel(state);
+        state.tickHandle = requestAnimationFrame(step);
     };
-    requestAnimationFrame(tick);
+    state.tickHandle = requestAnimationFrame(step);
 }
 
-function embedLaunchPanel(state: PendingLaunch) {
-    const screen = state.screen;
+/** 支配：槽交给屏幕，盒保持当前值；resize 若没结束就继续挂在 frame 上跑 */
+function dominateLaunch(state: PendingLaunch) {
+    const frame = state.frame;
+    // 启动过程中窗口可能已经被移到别的屏（全屏/手势）；以它当前的屏为准
+    const screen = (frame ? viewData.screenOf(frame.handle) : undefined) ?? state.screen;
     if (!screen || !pendingLaunches.has(state)) return;
-    // 面板当前还是视口坐标。按虚拟屏此刻的 visual 换成屏内坐标再 append，
-    // 避免因为屏的中心/缩放/滑动而在嵌入这一帧跳一下。
-    const current = elementRect(state.panel.el);
-    const local = localRectOf(current, screen.visual);
-    screen.el.add(state.panel);
-    setLaunchPanelRect(state, local);
+    state.screen = screen;
     state.phase = "embedded";
-    state.trackFrom = undefined;
-    state.flightTarget = undefined;
-    state.sizeScale = undefined;
-    state.sizeGear = undefined;
-    state.panel.style({ transform: "none", zIndex: "100" });
-    if (state.frame) {
-        if (!state.replacing) beginLaunchReplacement(state);
-        finishLaunchReplacementIfReady(state);
-    } else showLaunchCancel(state);
+    state.flightGear = undefined;
+    state.catchGear = undefined;
+    state.flightProgress = 1;
+    state.catchProgress = 1;
+    if (state.tickHandle !== undefined) {
+        cancelAnimationFrame(state.tickHandle);
+        state.tickHandle = undefined;
+    }
+    if (!state.trackScreen) {
+        // 停稳的当前屏 transform 是恒等，视口坐标就是屏内坐标；写一次保证之后不跳
+        state.trackScreen = true;
+        const visual = screen.visual;
+        const rect = state.currentRect;
+        if (rect) {
+            const local = localRectOf(visual, rect);
+            state.flightSize = { width: local.width, height: local.height };
+            setLaunchVisual(state, local);
+        }
+    }
+    state.slot.data({ "window-screen": screen.id });
+    applyScreenTransform(state.slot, screen.visual);
+    if (frame.pending) {
+        // 还没有客户端窗口：mask 留在槽里，后续由 view 的屏 transform 接管
+        state.slotFollowsView = true;
+        showLaunchCancel(state);
+    } else if (state.revealed) {
+        // mask 已经替换完：正常把窗口交给屏幕
+        state.slotFollowsView = false;
+        frame.launching = false;
+        // resize 独立：支配后继续由它写盒，和 view 的槽互不冲突
+        if (!adoptBoxGearIntoFrame(state, frame)) releaseFrameBox(frame);
+    } else {
+        // 首帧还没出来：mask 继续盖着，盒也留给首帧的 resize；
+        // 槽由 pending 循环带着跟随屏，等替换完成后再交给窗口。
+        // 首帧的 resize 可能已经起跑但飞入已结束，这里把它交给 frame 继续写盒。
+        state.slotFollowsView = true;
+        adoptBoxGearIntoFrame(state, frame);
+    }
+    finishLaunchIfReady(state);
 }
 
-/**
- * 面板已经落到屏里但还是空占位（没有窗口）：露出关闭按钮，随时可以取消这次启动。
- * 进程可能很早就退出（单实例交接、启动失败），但按钮不能在小图标旁边立刻出现，
- * 否则会压住启动图标；先记下来，等面板落地成全尺寸空槽后再透明+模糊淡入。
- */
+/** 空槽（还没有窗口）落地后露出取消按钮，不必等超时 */
 function showLaunchCancel(state: PendingLaunch) {
     if (!pendingLaunches.has(state) || state.replacing || state.closing) return;
     if (state.phase !== "embedded") return;
@@ -5020,90 +5374,140 @@ function showLaunchCancel(state: PendingLaunch) {
 function revealLaunchCancel(state: PendingLaunch) {
     if (!pendingLaunches.has(state) || state.cancelShown || state.replacing || state.closing) return;
     state.cancelShown = true;
-    state.panel.style({ pointerEvents: "auto" });
-    state.closeBtn.style({
+    state.killBtn.style({
         display: "flex",
         opacity: "0",
         filter: "blur(4px)",
         pointerEvents: "none",
     });
     const gear = createAnimationGear({ p: 0 }, { transition: LAUNCH_CANCEL_FADE });
-    state.cancelGear = gear;
     gear.setUpdateCallback(({ p }) => {
         if (!pendingLaunches.has(state) || state.replacing || state.closing) return;
-        state.closeBtn.style({ opacity: `${p}`, filter: p >= 1 ? "none" : `blur(${(1 - p) * 4}px)` });
+        state.killBtn.style({ opacity: `${p}`, filter: p >= 1 ? "none" : `blur(${(1 - p) * 4}px)` });
     });
     gear.moveTo({ p: 1 }, LAUNCH_CANCEL_FADE, () => {
         if (!pendingLaunches.has(state) || state.replacing || state.closing) return;
-        state.closeBtn.style({ pointerEvents: "auto", filter: "none" });
+        state.killBtn.style({ pointerEvents: "auto", filter: "none" });
     });
 }
 
-/** 面板已经嵌入并停稳后，把真实窗口放进面板内部淡入，完成后再移回虚拟屏 */
-function beginLaunchReplacement(state: PendingLaunch) {
+/** 首帧到达：盒 resize 和 mask 替换用同一段时长，同时开始、同时结束 */
+function revealLaunch(state: PendingLaunch) {
+    const duration = LAUNCH_REVEAL.duration;
+    resizeLaunchBox(state, duration);
+    beginLaunchReplacement(state, duration);
+}
+
+/** 外壳/真实窗口的封面淡出，窗口本身已经在槽里；时长与首帧 resize 相同 */
+function beginLaunchReplacement(state: PendingLaunch, duration: number) {
     const frame = state.frame;
-    if (!frame || !pendingLaunches.has(state) || state.replacing || state.closing) return;
+    if (!frame || frame.pending || !pendingLaunches.has(state) || state.replacing || state.closing) return;
     state.replacing = true;
-    state.closeBtn.style({ display: "none", pointerEvents: "none" });
-    state.panel.style({ pointerEvents: "none" });
-    // 窗口已经挂在面板内部；面板 overflow 裁掉它，动画不会漏到外面
-    mountLaunchFrameInPanel(state);
-    frame.el.style({ opacity: "0", pointerEvents: "none" });
+    state.killBtn.style({ display: "none", pointerEvents: "none" });
+    frame.el.style({ pointerEvents: "none" });
 
-    const gear = createAnimationGear({ fade: 0 }, { transition: LAUNCH_REPLACE_FADE });
+    const mask = frame.mask;
+    const transition = { duration, map: LAUNCH_REVEAL.map };
+    const gear = createAnimationGear({ fade: 0 }, { transition });
     gear.setUpdateCallback(({ fade }) => {
-        if (!pendingLaunches.has(state)) return;
-        state.cover.style({ opacity: `${1 - fade}` });
-        frame.el.style({ opacity: `${fade}` });
+        if (!pendingLaunches.has(state) || !mask) return;
+        mask.style({ opacity: `${1 - fade}` });
     });
-    gear.moveTo({ fade: 1 }, LAUNCH_REPLACE_FADE, () => {
+    gear.moveTo({ fade: 1 }, transition, () => {
         if (!pendingLaunches.has(state)) return;
+        mask?.remove();
+        frame.mask = undefined;
+        // 内容已经露出来，关闭交给窗口自己的标题栏或应用 UI
+        frame.closeBtn?.style({ display: "none", pointerEvents: "none" });
         state.revealed = true;
-        finishLaunchReplacementIfReady(state);
+        finishLaunchIfReady(state);
     });
 }
 
-/** 面板已经嵌入后，窗口也淡入完，才把窗口移回虚拟屏并撤掉面板 */
-function finishLaunchReplacementIfReady(state: PendingLaunch) {
+/** 支配并且封面淡完后收尾：撤掉启动状态，焦点交给窗口 */
+function finishLaunchIfReady(state: PendingLaunch) {
+    if (!pendingLaunches.has(state)) return;
+    if (state.phase !== "embedded" || !state.revealed) return;
     const frame = state.frame;
-    if (!frame || !pendingLaunches.has(state)) return;
-    if (!state.revealed || state.phase !== "embedded") return;
+    // 还没有客户端窗口：占位 frame 留在槽里等窗口或取消
+    if (frame.pending) return;
     // 启动过程中窗口可能已经被移到别的屏（全屏/最大化）；以它当前的屏为准
     const screen = viewData.screenOf(frame.handle) ?? state.screen;
-    if (!screen) return;
-    if (frame.el.el.parentElement !== screen.el.el) {
-        if (screen === state.screen) addWindow(screen, frame.el.el, frame.handle, true);
-        else screen.el.add(frame.el.el);
+    if (screen) {
+        state.slot.data({ "window-screen": screen.id });
+        applyScreenTransform(state.slot, screen.visual);
     }
-    if (screen === state.screen) {
-        const final = launchTargetLocalRect(state);
-        setClientFramePosition(frame, final.left, final.top);
-    }
-    frame.el.style({ opacity: "1", pointerEvents: "auto", transform: "none", transformOrigin: "" });
+    frame.launching = false;
+    // 没有在跑的 resize 就把预览还回真实尺寸；在跑的话由它自己结束
+    if (!frame.boxGear?.getRunningAnimation().isRunning) releaseFrameBox(frame);
+    // pointer-events 交给样式表按层/预览状态控制；这里清掉启动期间的内联 none
+    frame.el.el.style.removeProperty("pointer-events");
+    frame.el.style({ opacity: "1", transform: "none", transformOrigin: "" });
+    frame.closeBtn?.style({ display: "none", pointerEvents: "none" });
     // 窗口这时才真正接管屏幕；到这里再激活，客户端已经完成初始化，不会丢掉焦点事件
     viewData.focusWin(frame.handle);
-    state.panel.remove();
+    if (state.tickHandle !== undefined) cancelAnimationFrame(state.tickHandle);
     pendingLaunches.delete(state);
-    state.flightGear = undefined;
-    state.sizeGear = undefined;
+    viewData.renderWindowSlots();
 }
 
-/** 目标尺寸在飞入途中变了：用飞入自己的剩余时间把剩余进度走完 */
-function retimeLaunchFlight(state: PendingLaunch) {
-    const gear = state.flightGear;
-    if (!gear) return;
-    const running = gear.getRunningAnimation();
-    if (!running.isRunning) return;
-    gear.moveTo({ p: 1 }, { duration: Math.max(1, running.remainingTime), map: LAUNCH_FLIGHT.map });
-}
-
-/** 目标尺寸变化只重新瞄准尺寸，中心直线不变；每次 resize 使用同样时长 */
-function retimeLaunchSize(state: PendingLaunch) {
+/** 目标尺寸变化只重新瞄准盒尺寸；用剩余时间，不拉长结束时刻 */
+function retimeLaunchSize(state: PendingLaunch, duration?: number) {
     const gear = state.sizeGear;
     if (!gear) return;
-    const targetLocal = launchTargetLocalRect(state);
-    const scale = state.trackScreen ? (state.screen?.visual.scale ?? 1) : (state.flightTarget?.scale ?? 1);
-    gear.moveTo({ width: targetLocal.width * scale, height: targetLocal.height * scale }, LAUNCH_FLIGHT);
+    const target = launchTargetLocalRect(state);
+    const running = gear.getRunningAnimation();
+    const time = duration ?? (running.isRunning ? Math.max(1, running.remainingTime) : LAUNCH_FLIGHT.duration);
+    gear.moveTo(
+        { width: target.width, height: target.height },
+        { duration: time, map: LAUNCH_FLIGHT.map, onComplete: () => finishLaunchIfReady(state) },
+    );
+}
+
+/**
+ * 首帧到达时把盒 resize 到真实目标，时长和 mask 替换一致。
+ * 飞行中仍由飞入的尺寸齿轮写盒；支配后尺寸齿轮已经停写，改用 frame 自己的盒齿轮。
+ */
+function resizeLaunchBox(state: PendingLaunch, duration: number) {
+    const frame = state.frame;
+    // 按下阶段还没起飞：飞入的尺寸齿轮马上会从图标直接长到真实目标
+    if (state.phase === "press") return;
+    const target = launchTargetLocalRect(state);
+    if (state.phase === "flying" && !frame.boxGear) {
+        retimeLaunchSize(state, duration);
+        return;
+    }
+    if (frame.boxGear) {
+        retimeFrameBox(frame, duration);
+        return;
+    }
+    const current = currentFrameBox(frame) ?? {
+        left: 0,
+        top: 0,
+        width: Math.max(1, frame.surfaceWidth),
+        height: Math.max(1, frame.surfaceHeight + titlebarPx(frame)),
+    };
+    // 立即按当前盒重算一次拉伸，替换期间内容不会以自然尺寸溢出
+    writeFrameBox(frame, current.left, current.top, current.width, current.height);
+    const center = { x: target.left + target.width / 2, y: target.top + target.height / 2 };
+    const transition = { duration, map: LAUNCH_FLIGHT.map };
+    const gear = createAnimationGear({ width: current.width, height: current.height }, { transition });
+    frame.boxGear = gear;
+    gear.setUpdateCallback((value) => {
+        if (frame.boxGear !== gear || !clientWindowFrames.has(frame.handle)) return;
+        writeFrameBox(frame, center.x - value.width / 2, center.y - value.height / 2, value.width, value.height);
+    });
+    gear.moveTo(
+        { width: target.width, height: target.height },
+        {
+            ...transition,
+            onComplete: () => {
+                if (frame.boxGear !== gear) return;
+                if (frame.launching) return;
+                releaseFrameBox(frame);
+            },
+        },
+    );
 }
 
 function claimPendingLaunch(info: WindowInfo) {
@@ -5112,7 +5516,7 @@ function claimPendingLaunch(info: WindowInfo) {
     let candidates = 0;
     const appid = info.appid.toLowerCase().replace(/\.desktop$/, "");
     for (const state of pendingLaunches) {
-        if (state.frame || state.claiming || state.phase === "replaced") continue;
+        if (state.claimed || state.phase === "replaced") continue;
         const age = Date.now() - state.arrivedAt;
         let score = appid ? 5 : 10;
         const target = state.appid?.toLowerCase().replace(/\.desktop$/, "");
@@ -5138,59 +5542,69 @@ function claimPendingLaunch(info: WindowInfo) {
     if (!best) return undefined;
     // 有明确匹配才在多任务并发时认领；只剩一个待启动项时允许按时间兜底
     if (bestScore >= 40 || (candidates === 1 && bestScore > 0)) {
-        best.claiming = true;
+        best.claimed = true;
         return best;
     }
     return undefined;
 }
 
-/** 把真实窗口放进面板内部；面板裁掉超出部分，窗口随面板一起变换 */
-function mountLaunchFrameInPanel(state: PendingLaunch) {
+/** 客户端窗口到达：填进从启动就存在的 frame，只换 content，元素和盒都不换 */
+function attachWindowToLaunch(state: PendingLaunch, info: WindowInfo, winEl: HTMLElement) {
     const frame = state.frame;
-    if (!frame || frame.el.el.parentElement === state.panel.el) return;
-    windowCenterManager.removeWindow(frame.handle);
-    frame.el.el.remove();
-    state.panel.add(frame.el);
-    frame.el.style({ opacity: "0", pointerEvents: "none" });
-    layoutLaunchFrameInPanel(
-        state,
-        state.panel.el.offsetWidth || state.startRect.width,
-        state.panel.el.offsetHeight || state.startRect.height,
-    );
+    state.winHandle = info.handle;
+    frame.handle = info.handle;
+    frame.renderId = info.renderId;
+    frame.decorated = info.decorated;
+    frame.pending = false;
+    frame.el.data({ "client-window": info.handle });
+    frame.el.el.removeAttribute("data-pending-frame");
+    clientWindowFrames.set(info.handle, frame);
+    clientFrameByRenderId.set(info.renderId, frame);
+
+    frame.content = winEl;
+    buildFrameChrome(frame, info.handle);
+    frame.el.add(winEl);
+    updateClientFrameInfo(frame, info);
+    applyClientFrameChrome(frame);
+    syncClientFrameMaximized(frame, info.states.maximized);
+    prepareLaunchWindowSize(state, frame, info);
+    // kill 换成 close：两个固定 DOM 各自绑定，不重新指派事件
+    frame.killBtn?.style({ display: "none", pointerEvents: "none" });
+    frame.closeBtn?.style({ display: "flex", pointerEvents: "auto" });
+    windowCenterManager.addWindow(frame.handle, frame.el.el);
+    // 启动期间外框由盒动画写，别让自动居中按动画尺寸不停改位置
+    windowCenterManager.pauseCentering(frame.handle);
+    // 内容刚填进来时盒可能还在飞行：立刻按当前盒拉伸，避免第一帧以自然尺寸溢出
+    const rect = state.currentRect;
+    if (rect && frame.launching) writeFrameBox(frame, rect.left, rect.top, rect.width, rect.height);
+
+    if (state.phase === "press") return;
+    // 窗口晚到、外壳已经停稳：在跑的 resize 直接交给 frame；替换仍等首帧
+    if (state.phase === "embedded") adoptBoxGearIntoFrame(state, frame);
 }
 
-function attachWindowToLaunch(state: PendingLaunch, frame: ClientWindowFrame) {
-    state.frame = frame;
-    state.winHandle = frame.handle;
-    state.claiming = false;
-    frame.el.style({ opacity: "0", pointerEvents: "none" });
-    // 面板是占位槽：第一个窗口建好就放进面板并开始替换，不等首帧
-    mountLaunchFrameInPanel(state);
-    beginLaunchReplacement(state);
-}
-
-/** 渲染层报告首帧尺寸：更新真实外框并去掉过渡白底；飞行中则按剩余时间重新瞄尺寸 */
+/** 渲染层报告首帧尺寸：更新真实外框并去掉过渡白底；尺寸归 resize，独立重新瞄准 */
 function notifyLaunchWindowSized(frame: ClientWindowFrame) {
-    for (const state of pendingLaunches) {
-        if (state.frame !== frame) continue;
-        if (frame.surfaceWidth <= 1 || frame.surfaceHeight <= 1) return;
-        const outer = launchFrameOuterSize(frame, state);
-        state.windowWidth = outer.width;
-        state.windowHeight = outer.height;
-        frame.el.el.style.background = "";
-        frame.el.el.style.borderRadius = "";
-        if (state.replacing && state.phase === "embedded") {
-            const target = launchTargetLocalRect(state);
-            if (frame.el.el.parentElement === state.panel.el) {
-                // 已经在面板内部：面板跟着真实外框变，窗口在面板里保持 0,0
-                setLaunchPanelRect(state, target);
-            } else {
-                setClientFramePosition(frame, target.left, target.top);
-            }
-        }
-        retimeLaunchSize(state);
+    const state = launchStateForFrame(frame);
+    if (!state) return;
+    if (frame.surfaceWidth <= 1 || frame.surfaceHeight <= 1) return;
+    const firstFrame = !frame.painted;
+    // 首帧到了就撤掉启动过渡白底；即使窗口还没有从外壳接管槽也要清，
+    // 否则 attach 之后不会再有尺寸回调，白底会一直留着
+    frame.painted = true;
+    frame.el.el.style.background = "";
+    frame.el.el.style.borderRadius = "";
+    const outer = launchFrameOuterSize(frame, state);
+    state.windowWidth = outer.width;
+    state.windowHeight = outer.height;
+    // 首帧：mask 替换和盒 resize 同时开始、用同一段时长、同时结束
+    if (firstFrame && !state.replacing) {
+        revealLaunch(state);
         return;
     }
+    // 后续尺寸变化：位置完全不受影响，盒围绕目标中心重新瞄准
+    if (frame.boxGear) retimeFrameBox(frame);
+    else retimeLaunchSize(state);
 }
 
 function notifyLaunchWindowClosed(winid: WinHandle) {
@@ -5198,7 +5612,9 @@ function notifyLaunchWindowClosed(winid: WinHandle) {
         if (state.winHandle !== winid) continue;
         state.intro?.remove();
         state.intro = undefined;
-        state.panel.remove();
+        const target = state.frame.el;
+        removeWindowSlot(target.el);
+        target.remove();
         pendingLaunches.delete(state);
         return;
     }
@@ -5221,14 +5637,25 @@ async function killProcessTree(pid: number) {
     }
 }
 
-/** 托盘面板的关闭按钮：强制退出启动出来的进程树 */
+/** 取消启动：窗口还没出现就结束进程树，已经出现就发 close，不杀进程 */
+function cancelLaunch(state: PendingLaunch) {
+    const frame = state.frame;
+    // 已经有客户端窗口就发 close，不杀进程；还没有才 kill
+    if (!frame.pending) {
+        server.server.notify("window.close", frame.handle);
+        return;
+    }
+    forceQuitLaunch(state);
+}
+
+/** 强制退出启动出来的进程树（只用于还没有窗口的阶段） */
 function forceQuitLaunch(state: PendingLaunch) {
     if (!pendingLaunches.has(state) || state.closing) return;
     state.closing = true;
     state.intro?.remove();
     state.intro = undefined;
-    state.closeBtn.style({ display: "none" });
-    state.panel.style({ pointerEvents: "none" });
+    state.killBtn.style({ display: "none" });
+    state.frame.el.style({ pointerEvents: "none" });
 
     const pid = state.child?.pid;
     if (pid !== undefined) {
@@ -5241,11 +5668,13 @@ function forceQuitLaunch(state: PendingLaunch) {
         });
     }
 
+    const target = state.frame.el;
     const gear = createAnimationGear({ opacity: 1 }, { transition: CLOSE_FADE });
-    gear.setUpdateCallback(({ opacity }) => state.panel.style({ opacity: `${opacity}` }));
+    gear.setUpdateCallback(({ opacity }) => target.style({ opacity: `${opacity}` }));
     gear.moveTo({ opacity: 0 }, CLOSE_FADE, () => {
         if (!pendingLaunches.has(state)) return;
-        state.panel.remove();
+        removeWindowSlot(target.el);
+        target.remove();
         pendingLaunches.delete(state);
         if (state.screen) viewData.discardPendingScreen(state.screen);
     });
@@ -5947,6 +6376,7 @@ function closeClientFrameWithFade(wid: WinHandle, frame: ClientWindowFrame) {
         const layoutHeight = Math.max(1, frame.el.el.offsetHeight);
         const scale = Math.max(0.0001, rect.width / layoutWidth);
         ensureCloseLayer().add(frame.el);
+        removeWindowSlot(frame.el.el);
         frame.el.style({
             left: `${rect.left}px`,
             top: `${rect.top}px`,
@@ -5966,6 +6396,7 @@ function closeClientFrameWithFade(wid: WinHandle, frame: ClientWindowFrame) {
     const raw = frame.el.el.style.opacity;
     const from = raw === "" ? 1 : Number(raw);
     if (!connected || !(from > 0.01)) {
+        removeWindowSlot(frame.el.el);
         frame.el.el.remove();
         return;
     }
@@ -6003,16 +6434,20 @@ server.server.on("window.created", (info) => {
     if (pending) pending.screen = screen;
     // biome-ignore lint/style/noNonNullAssertion: 刚刚创建的，一定有
     const winEl = render.getXdgSurfaceEle(info.renderId)!;
-    const frame = createClientWindowFrame(info, winEl);
-    clientWindowFrames.set(wid, frame);
-    if (pending) prepareLaunchWindowSize(pending, frame, info);
-    else if (info.rect.w > 0 && info.rect.h > 0) applyFrameSurfaceSize(frame);
-    // 还没有客户端几何时先用默认尺寸占位，否则首帧之前会缩成 1×1，多个窗口全叠在正中
-    else prepareWindowSizeFallback(frame, info);
-    setClientFramePosition(frame, wino.l, wino.t);
-    addWindow(screen, frame.el.el, wid, parent === undefined);
-    addResizeHandles(frame.el.el, wid, true, winEl);
-    if (pending) attachWindowToLaunch(pending, frame);
+    const frame = pending?.frame ?? createClientWindowFrame(info, winEl);
+    if (pending) {
+        // 启动 frame 从第一帧就存在：只把 content/handle 填进去，元素和盒都不换
+        attachWindowToLaunch(pending, info, winEl);
+        addResizeHandles(frame.el.el, wid, true, winEl);
+    } else {
+        clientWindowFrames.set(wid, frame);
+        if (info.rect.w > 0 && info.rect.h > 0) applyFrameSurfaceSize(frame);
+        // 还没有客户端几何时先用默认尺寸占位，否则首帧之前会缩成 1×1，多个窗口全叠在正中
+        else prepareWindowSizeFallback(frame, info);
+        setClientFramePosition(frame, wino.l, wino.t);
+        addWindow(screen, frame.el.el, wid, parent === undefined);
+        addResizeHandles(frame.el.el, wid, true, winEl);
+    }
     // 子窗口不在总览里单独成卡，关闭按钮由父窗口那张卡负责
     if (parent === undefined) {
         createOverviewWindowCloseButton(() => server.server.notify("window.close", wid)).addInto(frame.el);

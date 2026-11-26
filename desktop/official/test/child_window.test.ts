@@ -17,7 +17,7 @@ type FrameInfo = {
     handle: string | null;
     maximized: boolean;
     rect: { x: number; y: number; width: number; height: number };
-    domIndex: number;
+    stackIndex: number;
 };
 
 type Snapshot = {
@@ -35,7 +35,7 @@ const snapshotExpr = `
                 handle: f.getAttribute("data-client-window"),
                 maximized: f.hasAttribute("data-maximized"),
                 rect: { x: r.left, y: r.top, width: r.width, height: r.height },
-                domIndex: [...(f.parentElement?.children ?? [])].indexOf(f),
+                stackIndex: Number(f.closest("[data-window-slot]")?.style.zIndex ?? 0),
             };
         });
         const child = list.find((f) => !f.maximized);
@@ -104,7 +104,7 @@ function expectChildOnTop(snapshot: Snapshot) {
     expect(parent, "应该有一个最大化父窗口").toBeTruthy();
     if (!child) throw new Error("没有子窗口");
     expect(snapshot.topAtChild, "子窗口中心最上层应该是子窗口").toBe(child.handle);
-    if (parent) expect(child.domIndex, "子窗口的 DOM 顺序应该在父窗口之后").toBeGreaterThan(parent.domIndex);
+    if (parent) expect(child.stackIndex, "子窗口的层叠顺序应该在父窗口之后").toBeGreaterThan(parent.stackIndex);
     return child;
 }
 
@@ -142,7 +142,7 @@ describe("父窗口的弹窗子窗口层叠", () => {
         if (!child) return;
         expect(snapshot.topAtChild, "子窗口中心最上层应该是子窗口").toBe(child.handle);
         const parent = snapshot.frames.find((f) => f !== child);
-        if (parent) expect(child.domIndex, "子窗口的 DOM 顺序应该在父窗口之后").toBeGreaterThan(parent.domIndex);
+        if (parent) expect(child.stackIndex, "子窗口的层叠顺序应该在父窗口之后").toBeGreaterThan(parent.stackIndex);
         const rgb = await centerPixel(snapshot, child);
         expect(rgb[0], "子窗口中心应该是子窗口的红色内容").toBeGreaterThan(150);
         await closeTestWindows();

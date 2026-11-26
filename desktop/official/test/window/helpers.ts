@@ -26,6 +26,8 @@ export type WindowState = {
     fullscreen: boolean;
     parent?: string;
     modal: boolean;
+    resizing: boolean;
+    painted: boolean;
 };
 
 export type LauncherBinding =
@@ -47,6 +49,14 @@ export type DesktopState = {
     };
     overview: boolean;
     overviewProgress: number;
+    launches: {
+        appid?: string;
+        screen?: string;
+        phase: "press" | "flying" | "embedded" | "replaced";
+        frame?: string;
+        replacing: boolean;
+        revealed: boolean;
+    }[];
     overviewFocus: string | undefined;
     gesture:
         | {
@@ -130,8 +140,8 @@ export async function launchMock(desktop: DesktopRunner, spec: MockWindowSpec): 
         15000,
         `启动 ${spec.appid}`,
     );
-    // 启动面板收起、pendingLaunch 删除后才算启动收尾完成；全屏/换屏会检查这个状态
-    await desktop.waitFor("document.querySelectorAll(\"[data-desktop-ui='launch-panel']\").length === 0", 15000);
+    // pendingLaunch 删除后才算启动收尾完成；frame 从第一帧就存在，窗口创建只填 content
+    await desktop.waitFor("__mydeTest.state().launches.length === 0", 15000);
     const win = windowByAppid(opened, spec.appid);
     if (!win) throw new Error(`没有找到 ${spec.appid} 的窗口`);
     return win;

@@ -27,12 +27,12 @@ let desktop: DesktopRunner;
 const frames = () =>
     desktop.evaluate<FrameState[]>(`
         [...document.querySelectorAll("[data-client-frame]")].map((f) => {
-            const screen = f.closest("[data-view-id]");
+            const screen = f.closest("[data-window-slot]");
             const tb = f.querySelector("[data-client-titlebar]");
             const t = tb ? tb.getBoundingClientRect() : null;
             return {
                 handle: f.getAttribute("data-client-window"),
-                screen: screen?.getAttribute("data-view-id") ?? null,
+                screen: screen?.getAttribute("data-window-screen") ?? null,
                 styleLeft: f.style.left,
                 styleTop: f.style.top,
                 titlebar: t ? { x: t.left, y: t.top, width: t.width, height: t.height } : null,
