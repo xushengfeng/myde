@@ -154,14 +154,10 @@ function rippleAt(phase: number) {
     return { scale: 0.06 + 0.94 * p, opacity: RIPPLE_OPACITY };
 }
 
-type RippleRing = {
-    gear: AnimationGear<{ scale: number; opacity: number }>;
-    current: { scale: number; opacity: number };
-};
-
 /**
  * 同心细线水波：从 L2 的底部中间向上，或从左边中间向右扩散。
- * 每圈从自己的相位开始循环，形成连续外扩的水波。
+ * 所有圆环共用同一个循环相位，每圈相位按 (phase + i / count) % 1 求模偏移，
+ * 间距始终均匀，不会因为各自的补间误差而叠成一圈。
  */
 export function attachRippleFx(
     row: ElType<HTMLElement>,
@@ -174,7 +170,7 @@ export function attachRippleFx(
     const cycleMs = (op.duration ?? 3) * 1000;
     const origin = op.from === "bottom" ? { left: "50%", bottom: "0" } : { left: "0", top: "50%" };
     const translateY = op.from === "bottom" ? "50%" : "-50%";
-    const rings: RippleRing[] = [];
+    const rings: ElType<HTMLElement>[] = [];
     for (let i = 0; i < count; i++) {
         const el = view().style({
             position: "absolute",
@@ -186,12 +182,13 @@ export function attachRippleFx(
             opacity: "0",
             ...origin,
         });
-        const phase = i / count;
-        const current = rippleAt(phase);
-        const gear = new AnimationGear(current, { transition: { duration: cycleMs, map: timingFunction.linear } });
-        const ring: RippleRing = { gear, current };
-        gear.setUpdateCallback((value) => {
-            ring.current = value;
+        layer.add(el);
+        rings.push(el);
+    }
+
+    const render = (phase: number) => {
+        rings.forEach((el, i) => {
+            const value = rippleAt((phase + i / count) % 1);
             // 用宽高而不是 scale 缩放，边框不会跟着变大变细
             el.style({
                 opacity: `${value.opacity}`,
@@ -200,38 +197,41 @@ export function attachRippleFx(
                 transform: `translate(-50%, ${translateY})`,
             });
         });
-        gear.moveTo(current, 0);
-        layer.add(el);
-        rings.push(ring);
-    }
+    };
+    render(0);
 
+    let phase = 0;
     let running = false;
-    const runRing = (ring: RippleRing, fromPhase: number) => {
-        ring.gear.moveTo(
-            { scale: 1, opacity: RIPPLE_OPACITY },
+    const gear = new AnimationGear({ phase: 0 }, { transition: { duration: cycleMs, map: timingFunction.linear } });
+    gear.setUpdateCallback((value) => {
+        phase = value.phase;
+        render(phase);
+    });
+    gear.moveTo({ phase: 0 }, 0);
+
+    const runFrom = (from: number) => {
+        if (!running) return;
+        gear.moveTo({ phase: from }, 0);
+        gear.moveTo(
+            { phase: 1 },
             {
-                duration: (1 - fromPhase) * cycleMs,
+                duration: (1 - from) * cycleMs,
                 map: timingFunction.linear,
                 onComplete: () => {
                     if (!running) return;
-                    const start = rippleAt(0);
-                    ring.gear.moveTo(start, 0);
-                    runRing(ring, 0);
+                    runFrom(0);
                 },
             },
         );
     };
     const start = () => {
         running = true;
-        for (const ring of rings) {
-            // 从当前半径反推循环进度，退出遮罩还没收完就重新进入时接着走，不回到起点
-            const progress = (ring.current.scale - 0.06) / 0.94;
-            runRing(ring, Math.min(1, Math.max(0, progress)));
-        }
+        // 接着暂停时的相位继续，遮罩还没收完就重新进入也不会跳回起点
+        runFrom(phase % 1);
     };
     const pause = () => {
         running = false;
-        for (const ring of rings) ring.gear.moveTo(ring.current, 0);
+        gear.moveTo({ phase }, 0);
     };
 
     return { el: layer, ...createActivity(row, layer, { start, pause }) };
