@@ -7480,6 +7480,16 @@ const windowEl = view()
     .addInto(windowElWarp);
 
 viewData = new ViewData();
+/** 滚轮切屏/移动预览焦点；Super+滚轮和工具栏预览按钮共用，120ms 节流 */
+let screenWheelAt = 0;
+function stepScreenByWheel(delta: number) {
+    if (state.getState() !== "normal" || delta === 0) return false;
+    const now = performance.now();
+    if (now - screenWheelAt < 120) return false;
+    screenWheelAt = now;
+    viewData.moveOverviewFocus(delta > 0 ? 1 : -1);
+    return true;
+}
 // 一屏多窗口时不再自动居中，否则 ResizeObserver 会把它们叠到一起
 windowCenterManager.setShouldCenter((id) => (viewData.screenOf(id)?.winIds.length ?? 0) <= 1);
 const launcher = createLauncher();
@@ -8746,9 +8756,18 @@ tools.registerTool("blank", () => {
     return view().style({ flexGrow: 1 });
 });
 tools.registerTool("showAllView", () => {
-    const showAllViewBtn = button(getIconXEl("mutiWinView", { size: 20, width: 24, height: 24 })).on("click", () => {
-        viewData.toggleOverview();
-    });
+    const showAllViewBtn = button(getIconXEl("mutiWinView", { size: 20, width: 24, height: 24 }))
+        .data({ tool: "overview" })
+        .on("click", () => {
+            viewData.toggleOverview();
+        })
+        // 滚轮在按钮上等同 Super+←/→：常规切屏，全局预览里移动聚焦面板
+        .on("wheel", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+            stepScreenByWheel(delta);
+        });
     return showAllViewBtn;
 });
 tools.registerTool("search", () => {
@@ -10871,6 +10890,12 @@ function dispatchInput(e: UniInputEvent) {
     // 滚轮/触摸板：先按窗口几何命中转发给 Wayland 客户端，再模拟 DOM 事件给桌面 UI。
     // 源信息（触摸板连续滚动、高精度刻度）随统一事件带下来，不能等模拟成 DOM WheelEvent 再取。
     if (e.kind === "pointer" && e.type === "wheel") {
+        // Super+滚轮等同 Super+←/→，不转发给客户端，也不进入 DOM wheel
+        if (exitModifiers.meta && !polkitDialog?.isOpen()) {
+            const delta = Math.abs(e.deltaX ?? 0) > Math.abs(e.deltaY ?? 0) ? (e.deltaX ?? 0) : (e.deltaY ?? 0);
+            stepScreenByWheel(delta);
+            return;
+        }
         if (isHostPinch(e)) {
             handleHostPinch(e);
             return;
@@ -10921,6 +10946,12 @@ function domInputEvent(e: Event) {
         return;
     }
     if (e instanceof WheelEvent) {
+        // DOM wheel 直接带修饰键状态：Super+滚轮在进入 Wayland 转发前就切屏
+        if (e.metaKey && state.getState() === "normal" && !polkitDialog?.isOpen()) {
+            const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+            stepScreenByWheel(delta);
+            return;
+        }
         dispatchInput({
             kind: "pointer",
             type: "wheel",
