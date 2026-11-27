@@ -151,7 +151,12 @@ type Plant = {
 const TOAST_WIDTH = sSize(5);
 const TOAST_NOTIFICATION_WIDTH = sSize(6);
 
-type ShowTip = (op?: { state?: "show" | "hide" | "toggle"; anchorEl?: HTMLElement }) => void;
+type ShowTip = (op?: {
+    state?: "show" | "hide" | "toggle";
+    anchorEl?: HTMLElement;
+    /** 已经展开时把锚点位置平滑移过去，不再瞬移 */
+    animate?: boolean;
+}) => void;
 type ShowToast = (op?: { duration?: number; anchorEl?: HTMLElement }) => void;
 
 type ToolsItem = {
@@ -227,6 +232,7 @@ class Tools {
         el: ElType<HTMLElement>,
         anchorEl: HTMLElement | ElType<HTMLElement>,
         showA: "left" | "right" | "top" | "bottom",
+        animate = false,
     ) {
         const anchorNode = anchorEl instanceof HTMLElement ? anchorEl : anchorEl.el;
         const probe = this.getAnchorProbe(el);
@@ -235,6 +241,9 @@ class Tools {
             const rect = anchorNode.getBoundingClientRect();
             const tipRect = this.tipEl.getBoundingClientRect();
             const scale = uiScale > 0 ? uiScale : 1;
+            // 锚点替身自己带过渡，弹窗跟着它连续移动；首次出现时直接落到目标位置
+            probe.style.transition =
+                animate && el.el.style.display !== "none" ? "left 180ms ease-out, top 180ms ease-out" : "none";
             probe.style.left = `${(rect.left - tipRect.left) / scale}px`;
             probe.style.top = `${(rect.top - tipRect.top) / scale}px`;
             probe.style.width = `${Math.max(1, rect.width / scale)}px`;
@@ -243,8 +252,10 @@ class Tools {
         const anchorname = `--${crypto.randomUUID()}`;
         probe.style.setProperty("anchor-name", anchorname);
         // 先写名字再挂进 DOM，锚点才能在当前帧内被解析；弹窗必须在替身之后
-        probe.remove();
-        this.tipEl.insertBefore(probe, el.el);
+        if (probe.parentElement !== this.tipEl || probe.nextSibling !== el.el) {
+            probe.remove();
+            this.tipEl.insertBefore(probe, el.el);
+        }
         // 上一次关闭可能把弹窗锁定在固定坐标，重新打开时交回锚点定位
         for (const key of ["left", "top", "right", "bottom"]) el.el.style.removeProperty(key);
         el.style({
@@ -483,7 +494,7 @@ class Tools {
                         if (next) {
                             this.hideActiveToastNow();
                             this.openTip = tipToken;
-                            this.place(tipel, anchorEl, showA);
+                            this.place(tipel, anchorEl, showA, s?.animate === true && tipVisible);
                             setTipVisible(true);
                             this.setOrigin(tipel, showA);
                         } else {
@@ -9947,7 +9958,7 @@ tools.registerTool(
     { selfBackground: true },
 );
 
-tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
+tools.registerTool("apps", ({ tipEl, showA, showTip, onTipVisibleChange }) => {
     const appsEl = view().style({
         display: "flex",
         flexDirection: "inherit",
@@ -10014,15 +10025,6 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
     const pendingApps = new Set<string>();
     /** handle → appid：`window.closed` 时窗口已从表里移除，靠它定位是哪个应用没了窗口 */
     const handleAppid = new Map<WinHandle, string>();
-    const preview = view()
-        .style({ display: "flex" })
-        .on("pointerenter", () => {
-            autoHide.moveTo("reset");
-        })
-        .on("pointerleave", () => {
-            autoHide.moveTo("hide");
-        })
-        .addInto(tipEl);
     const autoHide = createAnimationGear({ v: 0 }, { transition: { duration: 400 } });
     autoHide.setUpdateCallback((v) => {
         if (v.v === 1) {
@@ -10031,6 +10033,232 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
     });
     autoHide.addState("reset", { v: 0 }, ["hide"]);
     autoHide.addState("hide", { v: 1 }, ["reset"]);
+
+    // ── 悬浮预览 ──────────────────────────────────────────────────────────────
+    // 卡片统一尺寸：窗口缩略图按比例放进固定区域，不同窗口不会再把弹窗撑成不同大小
+    const PREVIEW_CARD_WIDTH = 200;
+    const PREVIEW_CARD_HEIGHT = 150;
+    const PREVIEW_HEADER_HEIGHT = 24;
+    const PREVIEW_GAP = 6;
+    const PREVIEW_CARD_GAP = 8;
+    const PREVIEW_THUMB_HEIGHT = PREVIEW_CARD_HEIGHT - PREVIEW_HEADER_HEIGHT - PREVIEW_GAP;
+    const previewColumn = a === "left" || a === "right";
+
+    type PreviewLayer = { el: ElType<HTMLElement>; width: number; height: number };
+    type PreviewAnim = {
+        from?: PreviewLayer;
+        to?: PreviewLayer;
+        fromW: number;
+        fromH: number;
+        toW: number;
+        toH: number;
+    };
+
+    const preview = view()
+        .style({ position: "relative", display: "block", flexShrink: "0", overflow: "hidden" })
+        .on("pointerenter", () => {
+            autoHide.moveTo("reset");
+        })
+        .on("pointerleave", () => {
+            autoHide.moveTo("hide");
+        })
+        .addInto(tipEl);
+
+    let currentPreviewAppid: string | undefined;
+    let currentPreviewLayer: PreviewLayer | undefined;
+    let previewAnim: PreviewAnim | undefined;
+    let previewVisible = false;
+    onTipVisibleChange((visible) => {
+        previewVisible = visible;
+    });
+
+    /** 卡片数量决定弹窗内容尺寸；一排窗口越宽，弹窗跟着变宽 */
+    function previewSize(count: number) {
+        const n = Math.max(1, count);
+        return previewColumn
+            ? { width: PREVIEW_CARD_WIDTH, height: n * PREVIEW_CARD_HEIGHT + (n - 1) * PREVIEW_CARD_GAP }
+            : { width: n * PREVIEW_CARD_WIDTH + (n - 1) * PREVIEW_CARD_GAP, height: PREVIEW_CARD_HEIGHT };
+    }
+
+    /** 切换 icon 时旧层淡出、新层淡入，同时插值容器尺寸，避免弹窗瞬移和跳变 */
+    const previewGear = createAnimationGear({ p: 1 }, { transition: { duration: 180, map: timingFunction.easeOut } });
+    previewGear.setUpdateCallback(({ p }) => {
+        const anim = previewAnim;
+        if (!anim) return;
+        preview.style({
+            width: `${anim.fromW + (anim.toW - anim.fromW) * p}px`,
+            height: `${anim.fromH + (anim.toH - anim.fromH) * p}px`,
+        });
+        anim.from?.el.style({ opacity: `${1 - p}` });
+        anim.to?.el.style({ opacity: `${p}`, scale: `${0.98 + 0.02 * p}` });
+    });
+    function finishPreviewAnim() {
+        const anim = previewAnim;
+        if (!anim) return;
+        previewAnim = undefined;
+        anim.from?.el.remove();
+        anim.to?.el.style({ opacity: "1", scale: "1" });
+        preview.style({ width: `${anim.toW}px`, height: `${anim.toH}px` });
+        if (anim.to) currentPreviewLayer = anim.to;
+    }
+    function runPreviewAnim(anim: PreviewAnim) {
+        // 打断上一段时先落到它的目标，再从当前画面继续，避免两个旧层叠在一起
+        finishPreviewAnim();
+        previewAnim = anim;
+        previewGear.moveTo({ p: 0 }, 0);
+        previewGear.moveTo({ p: 1 }, { duration: 180, map: timingFunction.easeOut }, finishPreviewAnim);
+    }
+    function setPreviewLayer(layer: PreviewLayer, animate: boolean) {
+        finishPreviewAnim();
+        const from = currentPreviewLayer;
+        if (!animate || !from || !previewVisible) {
+            from?.el.remove();
+            layer.el.style({ opacity: "1", scale: "1" });
+            preview.style({ width: `${layer.width}px`, height: `${layer.height}px` });
+            currentPreviewLayer = layer;
+            return;
+        }
+        runPreviewAnim({
+            from,
+            to: layer,
+            fromW: from.width,
+            fromH: from.height,
+            toW: layer.width,
+            toH: layer.height,
+        });
+    }
+    function animatePreviewSize(width: number, height: number) {
+        finishPreviewAnim();
+        const layer = currentPreviewLayer;
+        if (!layer) {
+            preview.style({ width: `${width}px`, height: `${height}px` });
+            return;
+        }
+        const fromW = layer.width;
+        const fromH = layer.height;
+        layer.width = width;
+        layer.height = height;
+        runPreviewAnim({ fromW, fromH, toW: width, toH: height });
+    }
+
+    function createPreviewCard(info: WindowInfo, layerEl: ElType<HTMLElement>) {
+        const card = view("y").style({
+            width: `${PREVIEW_CARD_WIDTH}px`,
+            height: `${PREVIEW_CARD_HEIGHT}px`,
+            flexShrink: "0",
+            borderRadius: `${gRadius.item}px`,
+            overflow: "hidden",
+            background: "#ffffff",
+            cursor: "pointer",
+            position: "relative",
+            boxSizing: "border-box",
+        });
+        const header = view("x").style({
+            width: "100%",
+            height: `${PREVIEW_HEADER_HEIGHT}px`,
+            flexShrink: "0",
+            alignItems: "center",
+            gap: "4px",
+            padding: "0 4px 0 8px",
+            boxSizing: "border-box",
+        });
+        header.add(
+            aLineText()
+                .sv(info.title || "未命名窗口")
+                .style({
+                    ...gTextStyle.captionStrong,
+                    color: gTextStyle.color.primary,
+                    flex: "1",
+                    minWidth: "0",
+                    width: "auto",
+                }),
+        );
+        header.add(
+            createWindowCloseButton({
+                size: 20,
+                onClick: () => {
+                    server.server.notify("window.close", info.handle);
+                    // 立刻从预览里拿掉，不用等 window.closed 回来
+                    card.remove();
+                    finishPreviewAnim();
+                    const count = layerEl.el.children.length;
+                    if (count === 0) {
+                        if (currentPreviewAppid === info.appid) {
+                            currentPreviewAppid = undefined;
+                            finishPreviewAnim();
+                            currentPreviewLayer?.el.remove();
+                            currentPreviewLayer = undefined;
+                        }
+                        showTip({ state: "hide" });
+                        return;
+                    }
+                    if (currentPreviewLayer?.el === layerEl) {
+                        const size = previewSize(count);
+                        animatePreviewSize(size.width, size.height);
+                    }
+                },
+            }).style({ flexShrink: "0" }),
+        );
+        const thumb = view().style({
+            width: "100%",
+            height: `${PREVIEW_THUMB_HEIGHT}px`,
+            marginTop: `${PREVIEW_GAP}px`,
+            flexShrink: "0",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            overflow: "hidden",
+            background: "#f0f0f2",
+        });
+        const rawCanvas = server.server.windows.preview(info.handle);
+        if (rawCanvas && rawCanvas.width > 1 && rawCanvas.height > 1) {
+            const fit = fitRect({ w: rawCanvas.width, h: rawCanvas.height }, PREVIEW_CARD_WIDTH, PREVIEW_THUMB_HEIGHT);
+            const canvas = ele("canvas")
+                .style({ width: `${fit.w}px`, height: `${fit.h}px`, display: "block" })
+                .attr({ width: fit.w, height: fit.h });
+            const ctx = canvas.el.getContext("2d");
+            if (ctx) {
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = "high";
+                ctx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, fit.w, fit.h);
+            }
+            thumb.add(canvas);
+        } else {
+            thumb.add(
+                txt("暂无预览").style({
+                    ...gTextStyle.caption,
+                    color: gTextStyle.color.muted,
+                }),
+            );
+        }
+        card.add([header, thumb]);
+        card.on("click", () => {
+            jump2Win(info.handle);
+        });
+        return card;
+    }
+
+    function buildPreviewLayer(appid: string): PreviewLayer {
+        const allWin = server.server.windows.list().filter((w) => w.appid === appid);
+        const size = previewSize(allWin.length);
+        const el = view().style({
+            position: "absolute",
+            left: "0",
+            top: "0",
+            width: `${size.width}px`,
+            height: `${size.height}px`,
+            display: "flex",
+            gap: `${PREVIEW_CARD_GAP}px`,
+            flexDirection: previewColumn ? "column" : "row",
+            transformOrigin: "center",
+            opacity: "1",
+            scale: "1",
+        });
+        for (const info of allWin) el.add(createPreviewCard(info, el));
+        preview.add(el);
+        return { el, width: size.width, height: size.height };
+    }
+
     async function addAppIcon(appid: string) {
         if (!appid) return;
         // window.changed 会连发多次，await 期间不能放第二个进来（否则图标重复）
@@ -10058,44 +10286,13 @@ tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
                 .on("pointerenter", () => {
                     if (!nowApps.has(appid)) return;
                     autoHide.moveTo("reset");
-                    preview.clear();
-                    if (a === "left" || a === "right") {
-                        preview.style({ flexDirection: "column" });
-                    } else {
-                        preview.style({ flexDirection: "row" });
+                    const switching = previewVisible && currentPreviewAppid !== appid;
+                    if (!previewVisible || currentPreviewAppid !== appid) {
+                        const layer = buildPreviewLayer(appid);
+                        currentPreviewAppid = appid;
+                        setPreviewLayer(layer, previewVisible);
                     }
-                    const allWin = server.server.windows.list().filter((w) => w.appid === appid);
-
-                    preview.clear().add(
-                        allWin.map((info) => {
-                            const el = view().style({ position: "relative" });
-                            el.add(txt(info.title || ""));
-                            const canvas = ele("canvas").addInto(el);
-                            const rawCanvas = server.server.windows.preview(info.handle);
-                            if (!rawCanvas) return undefined;
-                            const { w, h } = fitRect({ w: rawCanvas.width, h: rawCanvas.height }, 200, 150);
-                            canvas.attr({ width: w, height: h });
-                            // biome-ignore lint/style/noNonNullAssertion: ---
-                            const ctx = canvas.el.getContext("2d")!;
-                            ctx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, w, h);
-                            el.add(
-                                createWindowCloseButton({
-                                    size: 20,
-                                    onClick: () => {
-                                        server.server.notify("window.close", info.handle);
-                                        // 立刻从预览里拿掉，不用等 window.closed 回来
-                                        el.remove();
-                                        if (preview.el.children.length === 0) showTip({ state: "hide" });
-                                    },
-                                }).style({ position: "absolute", top: "2px", right: "2px" }),
-                            );
-                            el.on("click", () => {
-                                jump2Win(info.handle);
-                            });
-                            return el;
-                        }),
-                    );
-                    showTip({ state: "show", anchorEl: appEl.el });
+                    showTip({ state: "show", anchorEl: appEl.el, animate: switching });
                 })
                 .on("pointerleave", () => {
                     autoHide.moveTo("hide");
