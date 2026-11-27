@@ -33,6 +33,8 @@ export function dynamicScrollList<T>(options: {
     itemSize: number;
     /** 相邻项之间的间距，默认 0 */
     gap?: number;
+    /** 内容小于容器时沿主轴对齐，默认 start */
+    align?: "start" | "center" | "end";
     /** 主轴尺寸；传 `{ min, max }` 时按内容自动撑开 */
     containerSize: ScrollListSize;
     direction: Direction;
@@ -51,6 +53,7 @@ export function dynamicScrollList<T>(options: {
     const {
         itemSize,
         gap: gapOption = 0,
+        align = "start",
         containerSize: containerSizeOption,
         direction,
         renderItem,
@@ -90,9 +93,19 @@ export function dynamicScrollList<T>(options: {
         { transition: { duration: 0, map: timingFunction.linear }, time },
     );
 
+    /** 内容小于容器时的主轴偏移 */
+    function alignOffset() {
+        const spare = containerSize - contentSize();
+        if (spare <= 0) return 0;
+        if (align === "center") return spare / 2;
+        if (align === "end") return spare;
+        return 0;
+    }
+
     function getVisibleRange() {
-        const start = Math.floor(currentScroll / stride);
-        const end = Math.ceil((currentScroll + containerSize) / stride);
+        const offset = alignOffset();
+        const start = Math.floor((currentScroll - offset) / stride);
+        const end = Math.ceil((currentScroll + containerSize - offset) / stride);
         return {
             start: Math.max(0, start - bufferSize),
             end: end + bufferSize,
@@ -111,7 +124,7 @@ export function dynamicScrollList<T>(options: {
             [vertical ? "left" : "top"]: "0",
             [vertical ? "width" : "height"]: "100%",
             [vertical ? "height" : "width"]: `${itemSize}px`,
-            [vertical ? "top" : "left"]: `${index * stride - currentScroll}px`,
+            [vertical ? "top" : "left"]: `${alignOffset() + index * stride - currentScroll}px`,
         });
 
         gear.setUpdateCallback((state) => {
@@ -123,7 +136,7 @@ export function dynamicScrollList<T>(options: {
         gear.moveTo({ show: 0 }, 0);
 
         const moveGear = new AnimationGear<{ pos: number }>(
-            { pos: index * stride - currentScroll },
+            { pos: alignOffset() + index * stride - currentScroll },
             { transition: { duration: animationDuration, map: timingFunction.easeInOut }, time },
         );
 
@@ -149,7 +162,7 @@ export function dynamicScrollList<T>(options: {
     }
 
     function animateMove(item: AnimatedElement<T>, newIndex: number) {
-        const targetPosition = newIndex * stride - currentScroll;
+        const targetPosition = alignOffset() + newIndex * stride - currentScroll;
         const currentPosition = parseFloat(item.el.el.style[vertical ? "top" : "left"]) || 0;
         const distance = targetPosition - currentPosition;
 
@@ -267,16 +280,22 @@ export function dynamicScrollList<T>(options: {
         }
     }
 
+    function updateItemPositions() {
+        const offset = alignOffset();
+        const renderedArray = Array.from(renderedEls.values());
+        for (const item of renderedArray) {
+            const pos = offset + item.index * stride - currentScroll;
+            if (item.moveGear.getRunningAnimation().isRunning) {
+                item.moveGear.moveTo({ pos });
+            } else item.moveGear.moveTo({ pos }, 0);
+        }
+    }
+
     scrollGear.setUpdateCallback((state) => {
         currentScroll = state.scroll;
 
         // 更新所有元素位置（仅对非动画中的元素）
-        const renderedArray = Array.from(renderedEls.values());
-        for (const item of renderedArray) {
-            if (item.moveGear.getRunningAnimation().isRunning) {
-                item.moveGear.moveTo({ pos: item.index * stride - currentScroll });
-            } else item.moveGear.moveTo({ pos: item.index * stride - currentScroll }, 0);
-        }
+        updateItemPositions();
 
         // 更新可见元素
         updateVisibleItems();
@@ -304,6 +323,8 @@ export function dynamicScrollList<T>(options: {
         if (currentScroll > maxScroll) {
             scrollGear.moveTo({ scroll: maxScroll }, 0);
         } else {
+            // 对齐偏移随容器尺寸变化
+            updateItemPositions();
             updateVisibleItems();
         }
 

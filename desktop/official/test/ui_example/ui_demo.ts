@@ -1399,6 +1399,40 @@ view("x", "wrap")
         button("恢复自动").on("click", () => resizeList.setList(resizeItems(6))),
     ]);
 
+// 主轴对齐：内容小于容器时 start / center / end
+const alignDemo = view("x", "wrap").style({ gap: "12px", marginTop: "4px" }).addInto(resizeListDemo);
+for (const align of ["start", "center", "end"] as const) {
+    const col = view("y").style({ gap: "4px" }).addInto(alignDemo);
+    col.add(
+        aLineText()
+            .sv(align)
+            .style({ ...gTextStyle.caption, color: gTextStyle.color.secondary }),
+    );
+
+    const list = uScrollList<string>({
+        itemSize: 30,
+        gap: 6,
+        align,
+        containerSize: 160,
+        direction: "down",
+        crossSize: 100,
+        keyExtractor: (item) => item,
+        renderItem: (item) =>
+            view("x")
+                .style({
+                    height: "30px",
+                    alignItems: "center",
+                    padding: "0 8px",
+                    background: "#f5f5f5",
+                    borderRadius: px(gRadius.item),
+                })
+                .add(aLineText().sv(item)),
+        empty: "没有内容",
+    });
+    list.setList(["项目 1", "项目 2"], true);
+    list.el.addInto(col);
+}
+
 // Carousel测试（垂直，带指示器）
 const carouselDemo = view()
     .style({

@@ -158,6 +158,7 @@ interface Setup {
 function setup(options?: {
     itemSize?: number;
     gap?: number;
+    align?: "start" | "center" | "end";
     containerSize?: number | { min?: number; max?: number };
     bufferSize?: number;
 }): Setup {
@@ -172,6 +173,7 @@ function setup(options?: {
     const list = dynamicScrollList<string>({
         itemSize,
         gap,
+        align: options?.align,
         containerSize: containerSizeOption,
         direction: "down",
         bufferSize: options?.bufferSize ?? 2,
@@ -252,6 +254,12 @@ function insertItem(items: string[], key: string, index: number) {
     const next = items.slice();
     next.splice(Math.max(0, Math.min(index, next.length)), 0, key);
     return next;
+}
+
+function topOf(s: Setup, key: string) {
+    const el = s.container.children.find((child) => s.keyByEl.get(child) === key);
+    expect(el, `找不到 key=${key}`).toBeDefined();
+    return Number.parseFloat(String(el?.style.top));
 }
 
 describe("dynamicScrollList", () => {
@@ -506,5 +514,32 @@ describe("dynamicScrollList", () => {
             true,
         );
         expect(Number.parseFloat(String(s.container.style.height))).toBe(200);
+    });
+
+    it("内容小于容器时按 align 沿主轴对齐", () => {
+        // 3 项、itemSize 50、gap 10：内容 170，容器 300，剩余 130
+        const offsets = { start: 0, center: 65, end: 130 } as const;
+        for (const align of ["start", "center", "end"] as const) {
+            const s = setup({ itemSize: 50, gap: 10, containerSize: 300, align });
+            const items = ["k0", "k1", "k2"];
+            s.list.setList(items, true);
+            s.time.settle();
+            assertLayout(s, items);
+
+            expect(topOf(s, "k0")).toBeCloseTo(offsets[align], 6);
+            expect(topOf(s, "k2")).toBeCloseTo(offsets[align] + 2 * 60, 6);
+        }
+    });
+
+    it("align 跟随容器尺寸变化", () => {
+        const s = setup({ itemSize: 50, gap: 10, containerSize: 300, align: "center" });
+        s.list.setList(["k0", "k1"], true);
+        // 内容 110，剩余 190，居中偏移 95
+        expect(topOf(s, "k0")).toBeCloseTo(95, 6);
+
+        s.list.setSize(200, false);
+        // 剩余 90，居中偏移 45
+        expect(topOf(s, "k0")).toBeCloseTo(45, 6);
+        assertLayout(s, ["k0", "k1"]);
     });
 });
