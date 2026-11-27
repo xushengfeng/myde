@@ -26,6 +26,10 @@ interface AnimatedElement<T> {
     index: number;
     gear: AnimationGear<{ show: number }>;
     moveGear: AnimationGear<{ pos: number }>;
+    /** 固定对齐偏移：进场时锁定最终位置，退出时停在原位 */
+    fixedAlignOffset?: number;
+    /** 是否仍在进场动画中 */
+    entering?: boolean;
     data: T;
 }
 
@@ -93,13 +97,22 @@ export function dynamicScrollList<T>(options: {
         { transition: { duration: 0, map: timingFunction.linear }, time },
     );
 
-    /** 内容小于容器时的主轴偏移 */
-    function alignOffset() {
+    /** 内容小于容器时的主轴偏移（目标值） */
+    function targetAlignOffset() {
+        if (items.length === 0) return 0;
         const spare = containerSize - contentSize();
         if (spare <= 0) return 0;
         if (align === "center") return spare / 2;
         if (align === "end") return spare;
         return 0;
+    }
+
+    let alignmentOffset = 0;
+    let alignTarget = 0;
+
+    /** 当前显示的主轴偏移，随对齐动画变化 */
+    function alignOffset() {
+        return alignmentOffset;
     }
 
     function getVisibleRange() {
@@ -150,10 +163,25 @@ export function dynamicScrollList<T>(options: {
     }
 
     function animateEnter(item: AnimatedElement<T>, noAnimation?: boolean) {
-        item.gear.moveTo({ show: 1 }, { duration: noAnimation ? 0 : animationDuration, map: timingFunction.easeOut });
+        // 新项直接出现在最终对齐位置，只做淡入/模糊，不从旧偏移滑入
+        item.entering = true;
+        item.fixedAlignOffset = targetAlignOffset();
+        item.moveGear.moveTo({ pos: item.fixedAlignOffset + item.index * stride - currentScroll }, 0);
+        item.gear.moveTo(
+            { show: 1 },
+            { duration: noAnimation ? 0 : animationDuration, map: timingFunction.easeOut },
+            () => {
+                item.entering = false;
+                item.fixedAlignOffset = undefined;
+                updateItemPositions();
+            },
+        );
     }
 
     function animateExit(item: AnimatedElement<T>, onComplete: () => void, noAnimation?: boolean) {
+        // 退出项停在原位淡出，不跟随剩余项的对齐偏移移动
+        item.entering = false;
+        item.fixedAlignOffset ??= alignOffset();
         item.gear.moveTo(
             { show: 0 },
             { duration: noAnimation ? 0 : animationDuration, map: timingFunction.easeIn },
@@ -162,7 +190,7 @@ export function dynamicScrollList<T>(options: {
     }
 
     function animateMove(item: AnimatedElement<T>, newIndex: number) {
-        const targetPosition = alignOffset() + newIndex * stride - currentScroll;
+        const targetPosition = (item.fixedAlignOffset ?? alignOffset()) + newIndex * stride - currentScroll;
         const currentPosition = parseFloat(item.el.el.style[vertical ? "top" : "left"]) || 0;
         const distance = targetPosition - currentPosition;
 
@@ -281,9 +309,9 @@ export function dynamicScrollList<T>(options: {
     }
 
     function updateItemPositions() {
-        const offset = alignOffset();
         const renderedArray = Array.from(renderedEls.values());
         for (const item of renderedArray) {
+            const offset = item.fixedAlignOffset ?? alignOffset();
             const pos = offset + item.index * stride - currentScroll;
             if (item.moveGear.getRunningAnimation().isRunning) {
                 item.moveGear.moveTo({ pos });
@@ -309,6 +337,34 @@ export function dynamicScrollList<T>(options: {
         }
     });
 
+    const alignGear = new AnimationGear(
+        { offset: 0 },
+        { transition: { duration: 0, map: timingFunction.linear }, time },
+    );
+
+    alignGear.setUpdateCallback((state) => {
+        alignmentOffset = state.offset;
+        updateItemPositions();
+    });
+
+    function updateAlign(animate: boolean) {
+        const target = targetAlignOffset();
+        if (target === alignTarget) return;
+        alignTarget = target;
+
+        // 正在进场的新项直接保持新的最终对齐位置，不参与旧偏移的滑动
+        for (const item of renderedEls.values()) {
+            if (!item.entering || item.fixedAlignOffset === undefined) continue;
+            item.fixedAlignOffset = target;
+            item.moveGear.moveTo({ pos: target + item.index * stride - currentScroll }, 0);
+        }
+
+        alignGear.moveTo(
+            { offset: target },
+            animate ? { duration: animationDuration, map: timingFunction.easeInOut } : 0,
+        );
+    }
+
     const sizeGear = new AnimationGear(
         { size: containerSize },
         { transition: { duration: 0, map: timingFunction.linear }, time },
@@ -318,13 +374,14 @@ export function dynamicScrollList<T>(options: {
         containerSize = state.size;
         container.style({ [vertical ? "height" : "width"]: `${state.size}px` });
 
+        // 容器尺寸变化时对齐偏移直接跟随；尺寸本身已经带动画
+        updateAlign(false);
+
         // 尺寸变大时最大滚动距离会变小，需要把当前位置收回来
         const maxScroll = getMaxScroll();
         if (currentScroll > maxScroll) {
             scrollGear.moveTo({ scroll: maxScroll }, 0);
         } else {
-            // 对齐偏移随容器尺寸变化
-            updateItemPositions();
             updateVisibleItems();
         }
 
@@ -356,9 +413,11 @@ export function dynamicScrollList<T>(options: {
         return Math.max(0, contentSize() - containerSize);
     }
 
-    function scrollTo(val: number, animate = false) {
+    function scrollTo(val: number, animate: boolean | number = false) {
         const target = Math.max(0, Math.min(val, getMaxScroll()));
-        if (animate) {
+        if (typeof animate === "number") {
+            scrollGear.moveTo({ scroll: target }, { duration: animate, map: timingFunction.easeInOut });
+        } else if (animate) {
             scrollGear.moveTo({ scroll: target }, { duration: 400, map: timingFunction.easeInOut });
         } else {
             scrollGear.moveTo({ scroll: target }, 0);
@@ -425,6 +484,9 @@ export function dynamicScrollList<T>(options: {
 
         // 自动尺寸：内容变化后撑开 / 收缩
         applyAutoSize(!disableAnimation);
+
+        // 内容变化后重新计算居中 / 末尾对齐
+        updateAlign(!disableAnimation);
 
         // 更新滚动位置
         if (snap) {
@@ -571,7 +633,7 @@ export function dynamicScrollList<T>(options: {
         setList,
         setSize,
         getSize,
-        scrollTo: (val: number) => scrollTo(val, false),
+        scrollTo: (val: number, animate: boolean | number = false) => scrollTo(val, animate),
         scrollToPage,
         nextPage,
         prevPage,

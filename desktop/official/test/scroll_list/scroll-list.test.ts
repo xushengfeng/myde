@@ -542,4 +542,60 @@ describe("dynamicScrollList", () => {
         expect(topOf(s, "k0")).toBeCloseTo(45, 6);
         assertLayout(s, ["k0", "k1"]);
     });
+
+    it("align 偏移在内容变化时带动画", () => {
+        const s = setup({ itemSize: 50, gap: 10, containerSize: 300, align: "center" });
+        s.list.setList(["k0"], true);
+        // 内容 50，剩余 250，居中偏移 125
+        expect(topOf(s, "k0")).toBeCloseTo(125, 6);
+
+        s.list.setList(["k0", "k1", "k2"]);
+        s.time.tick();
+        // 目标偏移 65，动画中应仍在 65 和 125 之间
+        const midTop = topOf(s, "k0");
+        expect(midTop).toBeGreaterThan(65);
+        expect(midTop).toBeLessThan(125);
+
+        s.time.settle();
+        expect(topOf(s, "k0")).toBeCloseTo(65, 6);
+        assertLayout(s, ["k0", "k1", "k2"]);
+    });
+
+    it("居中时新项直接出现在最终对齐位置", () => {
+        const s = setup({ itemSize: 50, gap: 10, containerSize: 300, align: "center" });
+
+        // 第一个项：内容 50，居中偏移 125
+        s.list.setList(["k0"]);
+        expect(topOf(s, "k0")).toBeCloseTo(125, 6);
+        s.time.tick();
+        expect(topOf(s, "k0")).toBeCloseTo(125, 6);
+        s.time.settle();
+        expect(topOf(s, "k0")).toBeCloseTo(125, 6);
+
+        // 第二个项目标偏移 95，新项应在 95 + 60，已有项从 125 动画过去
+        s.list.setList(["k0", "k1"]);
+        expect(topOf(s, "k1")).toBeCloseTo(155, 6);
+        s.time.tick();
+        expect(topOf(s, "k1")).toBeCloseTo(155, 6);
+        const k0Top = topOf(s, "k0");
+        expect(k0Top).toBeGreaterThan(95);
+        expect(k0Top).toBeLessThan(125);
+        s.time.settle();
+        expect(topOf(s, "k0")).toBeCloseTo(95, 6);
+        assertLayout(s, ["k0", "k1"]);
+    });
+
+    it("移除最后一个项时停在原位淡出", () => {
+        const s = setup({ itemSize: 50, gap: 10, containerSize: 300, align: "center" });
+        s.list.setList(["k0"], true);
+        expect(topOf(s, "k0")).toBeCloseTo(125, 6);
+
+        s.list.setList([]);
+        s.time.tick();
+        // 对齐目标虽然变成 0，退出项仍应留在居中位置
+        expect(topOf(s, "k0")).toBeCloseTo(125, 6);
+
+        s.time.settle();
+        expect(s.container.children).toHaveLength(0);
+    });
 });

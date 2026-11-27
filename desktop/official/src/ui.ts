@@ -272,52 +272,68 @@ export function uStatusToast(op: { icon: string; title: string; detail?: string;
 }
 
 export function uPasswdInput() {
-    const pd: { rm: () => void; k: string; el: ReturnType<typeof view> }[] = [];
-    let placeholderText = "";
-    const placeholderEl = view().style({ color: gTextStyle.color.muted, pointerEvents: "none" });
+    /** 每个字符一个稳定 id，滚动列表用它做进出动画 */
+    const keys: number[] = [];
+    const chars = new Map<number, string>();
+    let nextId = 0;
+    const dotSize = sSize2.paddingx;
+    const dotGap = 4;
+
     const textEl = view("x")
         .style({
-            whiteSpace: "nowrap",
+            position: "relative",
             overflow: "hidden",
             width: "100%",
             cursor: "text",
             height: "100%",
             alignItems: "center",
-            justifyContent: "center",
         })
         .attr({ tabIndex: 0 });
 
-    const contentEl = view("x").style({
-        alignItems: "center",
-        flexShrink: 0,
+    const field = uScrollList<number>({
+        itemSize: dotSize,
+        gap: dotGap,
+        align: "center",
+        containerSize: 0,
+        crossSize: "100%",
+        listCrossSize: dotSize,
+        direction: "right",
+        bufferSize: 2,
+        animationDuration: 200,
+        keyExtractor: (id) => id.toString(),
+        renderItem: () =>
+            view().style({
+                background: "#000",
+                borderRadius: "50%",
+            }),
+        empty: "",
     });
-    textEl.add(contentEl);
-    textEl.add(placeholderEl);
+    // 密码框不响应滚轮/拖拽，只跟随输入滚动到最新字符
+    field.el.style({ display: "flex", alignItems: "center", pointerEvents: "none" });
+    textEl.add(field.el);
 
     const wrapEl = view().style({
         overflowX: "hidden",
     });
     wrapEl.add(textEl);
 
-    function updatePlaceholder() {
-        if (pd.length === 0 && placeholderText) {
-            placeholderEl.el.style.display = "";
-            placeholderEl.clear().add(placeholderText);
-        } else {
-            placeholderEl.el.style.display = "none";
+    /** 输入框宽度由布局决定，用 ResizeObserver 同步给滚动列表 */
+    let listWidth = 0;
+    function syncWidth() {
+        const width = textEl.el.clientWidth;
+        if (width > 0 && Math.abs(width - listWidth) > 0.5) {
+            listWidth = width;
+            field.setSize(width, false);
         }
     }
+    const resizeObserver = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(syncWidth);
+    resizeObserver?.observe(textEl.el);
+    requestAnimationFrame(syncWidth);
 
-    function updateAlignment() {
-        requestAnimationFrame(() => {
-            const containerWidth = textEl.el.clientWidth;
-            const contentWidth = contentEl.el.scrollWidth;
-            if (contentWidth > containerWidth) {
-                textEl.style({ justifyContent: "flex-end" });
-            } else {
-                textEl.style({ justifyContent: "center" });
-            }
-        });
+    function setKeys() {
+        field.setList(keys.slice());
+        // 内容变化时让列表滚动 / 对齐动画接管，最新字符保持可见
+        field.scrollTo(Number.MAX_SAFE_INTEGER, 200);
     }
 
     textEl.el.addEventListener("click", () => {
@@ -337,52 +353,25 @@ export function uPasswdInput() {
         }
 
         if (e.key === "Backspace") {
-            if (pd.length > 0) {
-                const lastPd = pd.pop();
-                if (lastPd) {
-                    lastPd.rm();
-                }
-                updateAlignment();
-                updatePlaceholder();
+            const id = keys.pop();
+            if (id !== undefined) {
+                chars.delete(id);
+                setKeys();
             }
             return;
         }
 
         if (e.key.length !== 1) return;
 
-        const kEl = view();
-        const isFirst = pd.length === 0;
-        const g = new AnimationGear({ v: 0 });
-        g.addState("init", { v: 0 }, ["x"]);
-        g.addState("x", { v: 1 }, ["init"]);
-        g.setUpdateCallback((v) => {
-            if (v.v === 0) {
-                kEl.remove();
-                // clear() 之后动画才结束：此时补上被隐藏的占位文本（如“认证中…”）
-                updatePlaceholder();
-            } else if (0 < v.v && v.v <= 1) {
-                if (kEl.el.innerText === "") {
-                    contentEl.add(kEl);
-                }
-                kEl.style({ width: `${v.v}ch`, height: `${v.v}ch`, borderRadius: "8px", background: "#000" });
-                if (!isFirst) kEl.style({ marginLeft: `${v.v * 4}px` });
-                if (v.v === 1) {
-                    updateAlignment();
-                }
-            }
-        });
-        g.moveTo("init", 0);
-        g.moveTo("x", { duration: 200 });
-        pd.push({ k: e.key, rm: () => g.moveTo("init", 100), el: kEl });
-        updateAlignment();
-        updatePlaceholder();
+        const id = nextId++;
+        chars.set(id, e.key);
+        keys.push(id);
+        setKeys();
         wrapEl.el.dispatchEvent(new Event("input"));
     });
 
-    updatePlaceholder();
-
     return {
-        el: wrapEl.bindGet(() => pd.map((i) => i.k).join("")),
+        el: wrapEl.bindGet(() => keys.map((id) => chars.get(id) ?? "").join("")),
         focus: () => textEl.el.focus(),
         disable: (d: boolean) => {
             if (d) {
@@ -394,16 +383,12 @@ export function uPasswdInput() {
             }
         },
         placeholder: (t: string) => {
-            placeholderText = t;
-            updatePlaceholder();
+            field.setEmpty(t);
         },
         clear: () => {
-            for (const i of pd) {
-                i.rm();
-            }
-            pd.length = 0;
-            updateAlignment();
-            updatePlaceholder();
+            keys.length = 0;
+            chars.clear();
+            setKeys();
         },
         inputKey: (k: string) => {
             textEl.el.dispatchEvent(new KeyboardEvent("keydown", { key: k }));
@@ -458,6 +443,8 @@ export function uScrollList<T>(op: {
     direction: "up" | "down" | "left" | "right";
     /** 垂直列表的宽度 / 水平列表的高度；缺省为 itemSize */
     crossSize?: number | string;
+    /** 列表本身在交叉轴上的尺寸；缺省填满 crossSize（100%） */
+    listCrossSize?: number | string;
     renderItem: (item: T, index: number, list: T[]) => ReturnType<typeof view>;
     keyExtractor: (item: T, index: number) => string;
     snap?: boolean;
@@ -470,6 +457,8 @@ export function uScrollList<T>(op: {
 }) {
     const vertical = op.direction === "up" || op.direction === "down";
     const crossSize = op.crossSize ?? op.itemSize;
+    const listCrossSize = op.listCrossSize ?? "100%";
+    const listCross = typeof listCrossSize === "number" ? px(listCrossSize) : listCrossSize;
     const duration = op.animationDuration ?? 300;
 
     const wrap = view();
@@ -479,7 +468,7 @@ export function uScrollList<T>(op: {
             wrap.style({ [vertical ? "height" : "width"]: px(size) });
         },
     });
-    list.el.style(vertical ? { width: "100%" } : { height: "100%" });
+    list.el.style(vertical ? { width: listCross } : { height: listCross });
 
     const emptyEl = view("x").style({
         position: "absolute",
