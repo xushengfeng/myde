@@ -30,6 +30,8 @@ const l = [
     "media.pause.fill",
     "cross",
     "mutiWinView",
+    "search",
+    "launcher",
     "notification",
     "speaker",
     "mic",

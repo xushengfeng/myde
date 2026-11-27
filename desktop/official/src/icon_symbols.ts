@@ -2436,6 +2436,82 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             ],
         };
     },
+    search: (env) => {
+        const { size } = buildZb(256);
+        const r = 88;
+        const w = 24;
+        /** 圆心让圆的外缘正好落在 0；手柄用线元素，端帽留出自身半径避免被视口裁掉 */
+        const center = { x: 100, y: 100 };
+        const handleStart = p(center, 45, r + w / 2);
+        const handleEnd = { x: 244, y: 244 };
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "arc",
+                            data: {
+                                center,
+                                r,
+                                width: w,
+                                fromAngle: 0,
+                                endAngle: 0,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: handleStart, ro: w / 2, ri: 0 },
+                                    { p: handleEnd, ro: w / 2, ri: 0 },
+                                ],
+                                width: w,
+                                extendNode: "both",
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
+    launcher: (env) => {
+        const { size } = buildZb(256);
+        /** 3×3 填满整个 256 视口；用闭合线元素画圆角方块，图标自身不留边距 */
+        const cell = 68;
+        const gap = 26;
+        const radius = 16;
+        const start = (size - (cell * 3 + gap * 2)) / 2;
+        const shapes: Icon["layout"][number]["shapes"] = [];
+        for (let row = 0; row < 3; row++) {
+            for (let col = 0; col < 3; col++) {
+                const x = start + col * (cell + gap);
+                const y = start + row * (cell + gap);
+                shapes.push({
+                    type: "zline",
+                    data: {
+                        ps: [
+                            { p: { x, y }, ro: radius, ri: 0 },
+                            { p: { x: x + cell, y }, ro: radius, ri: 0 },
+                            { p: { x: x + cell, y: y + cell }, ro: radius, ri: 0 },
+                            { p: { x, y: y + cell }, ro: radius, ri: 0 },
+                        ],
+                        close: true,
+                        fill: true,
+                        width: 0,
+                        color: env.color,
+                    },
+                });
+            }
+        }
+        return {
+            size,
+            layout: [{ name: "base", shapes }],
+        };
+    },
     "font.space": () => {
         const { center, size } = buildZb(256);
         return {

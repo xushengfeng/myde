@@ -2497,6 +2497,8 @@ const planteData: Plant[] = [
         posi: "top",
         items: [
             { id: "showAllView" },
+            { id: "search" },
+            { id: "launchpad" },
             { id: "blank" },
             { id: "mediaControl" },
             { id: "tray" },
@@ -8749,6 +8751,24 @@ tools.registerTool("showAllView", () => {
     });
     return showAllViewBtn;
 });
+tools.registerTool("search", () => {
+    const searchBtn = button(getIconXEl("search", { size: 20, width: 24, height: 24 }))
+        .data({ tool: "search" })
+        .on("click", () => {
+            if (launcher.isVisible()) launcher.close();
+            else launcher.open();
+        });
+    return searchBtn;
+});
+tools.registerTool("launchpad", () => {
+    const launchpadBtn = button(getIconXEl("launcher", { size: 20, width: 24, height: 24 }))
+        .data({ tool: "launchpad" })
+        .on("click", () => {
+            const screen = viewData.launchpadScreen;
+            if (screen) viewData.switchScreen(screen.id);
+        });
+    return launchpadBtn;
+});
 
 type DesktopApp = Awaited<ReturnType<typeof MSysApi.getDesktopEntries>>[number];
 
@@ -11302,7 +11322,9 @@ window.addEventListener(
     (e) => {
         if (e.isTrusted) return;
         const target = e.target as HTMLElement | null;
-        if (!target?.closest("[data-launcher-input]")) {
+        // 搜索按钮自己负责开关搜索栏，不能被“点击外部隐藏”先关掉再重新打开
+        const isSearchToggle = !!target?.closest('[data-tool="search"]');
+        if (!isSearchToggle && !target?.closest("[data-launcher-input]")) {
             if (launcher.isVisible()) launcher.close();
             else launcher.blur();
         }
