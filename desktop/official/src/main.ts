@@ -388,6 +388,7 @@ class Tools {
             if (state.show === 0) {
                 tipel.style({ display: "none" });
             } else {
+                // 工具下拉用缩放 + 透明度即可；加了 blur 反而让层级不明显，合成开销也高
                 tipel.style({ display: "block", opacity: `${state.show}`, scale: `${state.show}` });
             }
         });
@@ -9355,7 +9356,7 @@ function createLauncher(): LauncherController {
             transform: "translateX(-50%)",
             visibility: "hidden",
             pointerEvents: "none",
-            willChange: "top, opacity",
+            willChange: "top, opacity, filter",
         })
         .data({ "desktop-ui": "launcher", "launcher-input": "" })
         .addInto(layer);
@@ -9432,9 +9433,12 @@ function createLauncher(): LauncherController {
                 : lerp(normalTop(), topTop(), clampNumber(level, 0, 1));
         const opacity = route === "line" ? Math.abs(level) : 1;
         currentOpacity = opacity;
+        // 隐藏态保持透明 + 模糊：位置轴直接驱动，和淡入淡出同步变清晰
+        const blur = (1 - clampNumber(opacity, 0, 1)) * 10;
         shell.style({
             top: `${top}px`,
             opacity: `${opacity}`,
+            filter: blur > 0.01 ? `blur(${blur}px)` : "none",
             visibility: opacity > 0 ? "visible" : "hidden",
             pointerEvents: opacity > 0.5 ? "auto" : "none",
         });
