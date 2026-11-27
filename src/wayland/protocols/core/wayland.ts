@@ -186,6 +186,8 @@ declare module "../../module" {
                 sourceId: WaylandObjectId2<"wl_data_source">;
                 seatName: string;
                 surface: SurfaceId;
+                /** `start_drag` 的 icon surface；提交新帧时转发给桌面 */
+                iconSurface?: SurfaceId;
                 offerId?: WaylandObjectId2<"wl_data_offer">;
                 /** 桌面已通过 `dnd.move` 接管目标，本地同 client 目标不再处理指针 */
                 remoteDriven?: boolean;
@@ -448,6 +450,41 @@ function schedulePresent(ctx: ModuleCtx, surfaceId: SurfaceId): void {
 }
 
 /**
+ * 复制 surface 工作画布：桌面事件持有的是独立快照，不会被下一帧改写。
+ * 纯 node 环境没有 OffscreenCanvas（协议单测），此时直接透传。
+ */
+function snapshotCanvas(canvas: OffscreenCanvas): OffscreenCanvas {
+    if (typeof OffscreenCanvas === "undefined") return canvas;
+    const copy = new OffscreenCanvas(canvas.width, canvas.height);
+    copy.getContext("2d")?.drawImage(canvas, 0, 0);
+    return copy;
+}
+
+/**
+ * 拖拽图标 surface 的新帧或撤销：只在它仍属于当前拖拽会话时上报。
+ * 图标只是源客户端的一张 surface，桌面把它叠在光标下，不影响光标本身。
+ */
+function updateDragIcon(
+    ctx: ModuleCtx,
+    surfaceId: SurfaceId,
+    frame: OffscreenCanvas | undefined,
+    size: { width: number; height: number },
+): void {
+    const drag = ctx.domain.dataDevice.drag;
+    if (drag?.iconSurface !== surfaceId) return;
+    if (frame === undefined) {
+        ctx.transfer.dragIcon(drag.sourceId, null);
+        return;
+    }
+    const icon = ctx.core.surface.getWlSurface(surfaceId);
+    ctx.transfer.dragIcon(drag.sourceId, {
+        canvas: snapshotCanvas(frame),
+        size,
+        offset: icon?.offset ?? { x: 0, y: 0 },
+    });
+}
+
+/**
  * 把待呈现帧交给桌面：viewporter 裁剪 → DOM canvas → 光标。
  *
  * VideoFrame/导入资源的释放放到这一帧之后（见 pendingReleases）：Canvas2D 没有
@@ -464,6 +501,7 @@ function presentSurface(ctx: ModuleCtx, surfaceId: SurfaceId): void {
             const fcanvas = ctx.notify.frame(surfaceId, pending.canvas, pending.data);
             ctx.core.surface.renderWlSurface(surfaceId, fcanvas);
             ctx.cursor.updateFrame(surfaceId, fcanvas, { width: pending.width, height: pending.height });
+            updateDragIcon(ctx, surfaceId, fcanvas, { width: pending.width, height: pending.height });
             // 本帧已经上屏，下一帧再解锁（同一帧里更晚的提交合并到下一帧）
             surface.data.presentedThisFrame = true;
             surface.data.presentToken = (surface.data.presentToken ?? 0) + 1;
@@ -687,8 +725,10 @@ export class wlSurfaceData {
     private wl_surface: Record<
         WaylandObjectId2<"wl_surface">,
         {
-            role: "subsurface" | "toplevel" | "popup" | "cursor" | undefined;
+            role: "subsurface" | "toplevel" | "popup" | "cursor" | "dnd_icon" | undefined;
             size: { w: number; h: number };
+            /** `wl_surface.offset` 的当前值（surface 逻辑坐标） */
+            offset: { x: number; y: number };
             // 最近一次合成输出的画布，可能与surface画布共用，取用时需要复制
             frame?: OffscreenCanvas;
         }
@@ -703,7 +743,7 @@ export class wlSurfaceData {
     }
 
     addWlSurface(id: WaylandObjectId2<"wl_surface">) {
-        this.wl_surface[id] = { role: undefined, size: { w: 0, h: 0 } };
+        this.wl_surface[id] = { role: undefined, size: { w: 0, h: 0 }, offset: { x: 0, y: 0 } };
         this.render.bindCanvas(this.idScope(id));
     }
     getWlSurface(id: WaylandObjectId2<"wl_surface">) {
@@ -725,7 +765,10 @@ export class wlSurfaceData {
         this.render.destroyCanvas(this.idScope(id));
     }
 
-    setWlSurfaceRole(id: WaylandObjectId2<"wl_surface">, role: "subsurface" | "toplevel" | "popup" | "cursor") {
+    setWlSurfaceRole(
+        id: WaylandObjectId2<"wl_surface">,
+        role: "subsurface" | "toplevel" | "popup" | "cursor" | "dnd_icon",
+    ) {
         const oldRole = this.wl_surface[id].role;
         if (oldRole !== undefined && oldRole !== role) {
             throw new WaylandSurfaceRoleError();
@@ -736,6 +779,7 @@ export class wlSurfaceData {
         this.wl_surface[id].size = { w, h };
     }
     setWlSurfaceOffset(id: WaylandObjectId2<"wl_surface">, x: number, y: number) {
+        this.wl_surface[id].offset = { x, y };
         this.render.setBufferOffset(this.idScope(id), x, y);
     }
 }
@@ -1663,6 +1707,7 @@ async function applySurfaceState(ctx: ModuleCtx, surfaceId: SurfaceId, data: Way
             ctx.core.endPointerGrabForSurfaces([surfaceId]);
             unmapSurface(ctx, surfaceId);
             ctx.cursor.hide(surfaceId);
+            updateDragIcon(ctx, surfaceId, undefined, { width: 0, height: 0 });
             ctx.notify.commit(surfaceId, false);
             // 没有新 buffer 的提交也可能请求了 frame callback（Firefox 的 vsync
             // source 会这样取节拍）；不回复会让它退回 60Hz 软件定时器。
@@ -2279,11 +2324,26 @@ export const waylandCoreModule = defineModule({
                 : { x: touch?.x ?? 0, y: touch?.y ?? 0 };
             const previousFinish = ctx.domain.dataDevice.dragFinish;
             if (previousFinish) finishDragSource(ctx, previousFinish.sourceId);
+            // icon 是可选的普通 surface；协议要求它获得 drag-and-drop icon 角色，
+            // 已有其它角色时是协议错误
+            const iconId = waylandObjectId(x.args.icon, "wl_surface");
+            let iconSurface: WaylandObjectId2<"wl_surface"> | undefined;
+            if (iconId && ctx.objects.has(iconId)) {
+                try {
+                    ctx.core.surface.setWlSurfaceRole(iconId, "dnd_icon");
+                    iconSurface = iconId;
+                } catch (error) {
+                    if (!(error instanceof WaylandSurfaceRoleError)) throw error;
+                    ctx.postError("wl_data_device", x.id, "role", "Icon surface already has another role");
+                    return;
+                }
+            }
             const drag = {
                 dataDeviceId: x.id,
                 sourceId,
                 seatName,
                 surface,
+                iconSurface,
                 touch: !pointerDrag,
                 offerId: undefined as WaylandObjectId2<"wl_data_offer"> | undefined,
             };
@@ -2297,6 +2357,10 @@ export const waylandCoreModule = defineModule({
                     [...src.data.offers],
                     dndActionNames(src.data.actions ?? DND_ACTION_COPY),
                 );
+                // 客户端通常在 start_drag 前已经提交过图标；没有的话等它 commit 再上报
+                const icon = iconSurface ? ctx.core.surface.getWlSurface(iconSurface) : undefined;
+                if (iconSurface && icon?.frame)
+                    updateDragIcon(ctx, iconSurface, icon.frame, { width: icon.size.w, height: icon.size.h });
             }
         },
         "wl_data_device.release": (x, ctx) => {
@@ -2574,6 +2638,12 @@ export const waylandCoreModule = defineModule({
             ctx.domain.commitPacing.pending.delete(surfaceId);
             // 光标surface销毁后隐藏光标
             ctx.cursor.hide(surfaceId);
+            // 拖拽图标销毁：通知桌面移除，并清掉引用（对象 id 可能被复用）
+            const drag = ctx.domain.dataDevice.drag;
+            if (drag?.iconSurface === surfaceId) {
+                ctx.transfer.dragIcon(drag.sourceId, null);
+                drag.iconSurface = undefined;
+            }
             ctx.notify.destroy(surfaceId);
             // 焦点悬挂修复：该 surface 若持有某把 seat 的焦点就**静默清槽**——
             // 不能向已销毁的对象发 leave（客户端已释放该 id，引用死对象会把连接打死）；
@@ -2614,6 +2684,11 @@ export const waylandCoreModule = defineModule({
             // wl_subsurface 文档要求子 surface 忽略 wl_surface.offset，移动用 set_position
             if (ctx.core.surface.getRole(x.id) === "subsurface") return;
             ctx.core.surface.setWlSurfaceOffset(x.id, x.args.x, x.args.y);
+            // 拖拽图标可能只改偏移不换 buffer：也要把新位置发给桌面
+            const drag = ctx.domain.dataDevice.drag;
+            if (drag?.iconSurface !== x.id) return;
+            const icon = ctx.core.surface.getWlSurface(x.id);
+            if (icon?.frame) updateDragIcon(ctx, x.id, icon.frame, { width: icon.size.w, height: icon.size.h });
         },
         "wl_seat.get_pointer": (x, ctx) => {
             const pointerId = x.args.id;

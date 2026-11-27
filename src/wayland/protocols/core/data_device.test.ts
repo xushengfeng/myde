@@ -19,6 +19,18 @@ function makeCtx() {
         actions?: string[];
         reason?: string;
     }[] = [];
+    const dragIcons: {
+        sourceId: number;
+        icon: {
+            canvas: unknown;
+            size: { width: number; height: number };
+            offset: { x: number; y: number };
+        } | null;
+    }[] = [];
+    const surfaces: Record<
+        number,
+        { frame?: unknown; size: { w: number; h: number }; offset?: { x: number; y: number } }
+    > = {};
     const objectData = new Map<number, unknown>();
     let nextId = 100;
     let serial = 1;
@@ -116,6 +128,14 @@ function makeCtx() {
             forward: (token: string, mime: string, fd: number) => forwards.push({ token, mime, fd }),
             dragStarted: (_seat: string, sourceId: number, mimes: string[], actions: ("copy" | "move")[]) =>
                 drags.push({ kind: "start", sourceId, mimes, actions }),
+            dragIcon: (
+                sourceId: number,
+                icon: {
+                    canvas: unknown;
+                    size: { width: number; height: number };
+                    offset: { x: number; y: number };
+                } | null,
+            ) => dragIcons.push({ sourceId, icon }),
             dragFinished: (sourceId: number, reason: string) => drags.push({ kind: "finish", sourceId, reason }),
         },
         dnd: {
@@ -126,7 +146,13 @@ function makeCtx() {
             targetGone: () => {},
             sourceActions: () => {},
         },
-        core: {},
+        core: {
+            surface: {
+                getRole: () => undefined,
+                setWlSurfaceRole: () => {},
+                getWlSurface: (id: number) => surfaces[id],
+            },
+        },
         cursor: {},
         notify: {},
         scene: {},
@@ -137,7 +163,7 @@ function makeCtx() {
     objectData.set(11, { seatName: "seat0" });
     objectData.set(12, { offers: ["text/plain;charset=utf-8"] });
 
-    return { ctx, sent, selections, forwards, drags, objectData, seat };
+    return { ctx, sent, selections, forwards, drags, dragIcons, surfaces, objectData, seat };
 }
 
 function request(ctx: ModuleCtx, key: string, id: number, args: Record<string, unknown>) {
@@ -201,6 +227,24 @@ describe("wl_data_device drag-and-drop", () => {
         expect(events(sent, "wl_data_source.cancelled")).toHaveLength(1);
         expect(events(sent, "wl_data_device.enter")).toHaveLength(0);
         expect(ctx.domain.dataDevice.drag).toBeUndefined();
+    });
+
+    it("start_drag 的 icon surface 已有帧时交给 transfer.dragIcon", () => {
+        const { ctx, dragIcons, objectData, surfaces } = makeCtx();
+        objectData.set(13, {});
+        surfaces[13] = {
+            frame: { width: 24, height: 24 } as OffscreenCanvas,
+            size: { w: 24, h: 24 },
+            offset: { x: -8, y: -8 },
+        };
+
+        request(ctx, "wl_data_device.start_drag", 11, { source: 12, origin: 10, icon: 13, serial: 1 });
+
+        expect(dragIcons).toHaveLength(1);
+        expect(dragIcons[0].sourceId).toBe(12);
+        expect(dragIcons[0].icon?.size).toEqual({ width: 24, height: 24 });
+        expect(dragIcons[0].icon?.offset).toEqual({ x: -8, y: -8 });
+        expect(ctx.domain.dataDevice.drag?.iconSurface).toBe(13);
     });
 });
 

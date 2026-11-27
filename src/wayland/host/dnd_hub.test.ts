@@ -49,17 +49,19 @@ function makePeer(clientId: string) {
 
 function makeHub() {
     const started: string[] = [];
+    const icons: { token: string; icon: unknown }[] = [];
     const finished: { token: string; reason: string }[] = [];
     const requests: { id: string; mime: string }[] = [];
     const hub = new DndHub({
         started: (info) => started.push(info.token),
+        icon: (token, icon) => icons.push({ token, icon }),
         finished: (token, reason) => finished.push({ token, reason }),
         requestData: async (id, mime) => {
             requests.push({ id, mime });
             return new TextEncoder().encode("desktop");
         },
     });
-    return { hub, started, finished, requests };
+    return { hub, started, icons, finished, requests };
 }
 
 function events(sent: Sent[], name: string) {
@@ -147,5 +149,27 @@ describe("DndHub", () => {
         expect(events(a.sent, "wl_data_source.dnd_finished")).toHaveLength(1);
         expect(events(a.sent, "wl_data_source.cancelled")).toHaveLength(0);
         expect(finished).toEqual([{ token, reason: "finished" }]);
+    });
+
+    it("源图标按 source 映射到会话，会话结束后丢弃", () => {
+        const { hub, icons } = makeHub();
+        const a = makePeer("A");
+        hub.attach(a.peer);
+
+        const token = hub.startClient("A", "app", "seat0", 12, ["text/plain"], 1);
+        const icon = {
+            canvas: { width: 16, height: 16 } as OffscreenCanvas,
+            size: { width: 16, height: 16 },
+            offset: { x: 0, y: 0 },
+        };
+        hub.icon("A", 12, icon);
+        expect(icons).toEqual([{ token, icon }]);
+
+        hub.icon("A", 999, icon);
+        expect(icons).toHaveLength(1);
+
+        hub.cancel(token);
+        hub.icon("A", 12, icon);
+        expect(icons).toHaveLength(1);
     });
 });

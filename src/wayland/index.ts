@@ -25,6 +25,7 @@ export type {
     CursorState,
     DesktopClipboard,
     DragEndReason,
+    DragIcon,
     DragStartInfo,
     GestureCommand,
     OutputInfo,

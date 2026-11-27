@@ -231,6 +231,7 @@ class WaylandServer {
 
         this.dnd = new DndHub({
             started: (info) => this.emitEvent("dnd.started", info),
+            icon: (token, icon) => this.emitEvent("dnd.icon", token, icon),
             finished: (token, reason) => this.emitEvent("dnd.finished", token, reason),
             requestData: (id, mime) => this.requestDndData(id, mime),
         });
@@ -571,6 +572,7 @@ class WaylandServer {
                 const appid = this.rawClients.get(clientId)?.getAppid() ?? "";
                 this.dnd.startClient(clientId, appid, seat, sourceId, mimes, mask);
             },
+            dragIcon: (sourceId, icon) => this.dnd.icon(clientId, sourceId, icon),
             dragFinished: (sourceId, reason) => this.dnd.sourceFinished(clientId, sourceId, reason),
         };
         const host: ClientHost = {

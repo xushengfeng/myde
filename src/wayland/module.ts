@@ -771,6 +771,16 @@ export interface ClientApi {
     output(): OutputInfo;
 }
 
+/** 拖拽图标 surface 的一帧（`wl_data_device.start_drag` 的 icon） */
+export interface DragIconFrame {
+    /** 从 surface 工作画布复制的快照，桌面可以持有 */
+    canvas: OffscreenCanvas;
+    /** surface-local 逻辑尺寸；桌面显示尺寸 = size × 输出 scale */
+    size: { width: number; height: number };
+    /** `wl_surface.offset`：图标相对指针热点的位移，桌面按输出缩放 */
+    offset: { x: number; y: number };
+}
+
 /**
  * 数据中转：剪贴板 / 拖拽的 fd 与字节都经这里。
  *
@@ -791,6 +801,8 @@ export interface TransferApi {
     forward(token: string, mime: string, fd: number): void;
     /** 客户端开始拖拽；server 建一个只读 token 并通知桌面 */
     dragStarted(seat: string, sourceId: number, mimes: string[], actions: ("copy" | "move")[]): void;
+    /** 拖拽图标 surface 提交了新帧；`null` 表示图标被解绑/销毁 */
+    dragIcon(sourceId: number, icon: DragIconFrame | null): void;
     /** 拖拽结束（正常 drop 或取消）；token 失效 */
     dragFinished(sourceId: number, reason: "finished" | "cancelled"): void;
 }
@@ -842,6 +854,8 @@ export interface DndHubApi {
     drop(token: string, target: { clientId: string; winId: WaylandWinId; x: number; y: number } | null): void;
     cancel(token: string): void;
     startDesktop(itemId: string, mimes: string[], actions?: number): string;
+    /** 源图标 surface 的新帧/撤销，按源查当前会话后发 `dnd.icon` */
+    icon(clientId: string, sourceId: number, icon: DragIconFrame | null): void;
 }
 
 // ───────────────────────── handler 运行时上下文 ─────────────────────────

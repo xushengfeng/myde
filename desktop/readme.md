@@ -972,6 +972,19 @@ server.notify("dnd.cancel", drag.token);                  // 取消（Esc / 源�
 server.on("dnd.finished", (token, reason) => {});         // reason: finished | cancelled
 ```
 
+源客户端通过 `start_drag` 提供的图标 surface 走 `dnd.icon`：`canvas` 是已复制的帧，`size` 是
+surface 逻辑尺寸，`offset` 是 `wl_surface.offset`（相对指针热点）。桌面应把它按输出缩放叠在
+指针下、光标图层之下，而不是替换光标；`dnd.icon(token, null)` 表示图标被解绑/销毁，
+`dnd.finished` 时也要移除。
+
+```typescript
+server.on("dnd.icon", (token, icon) => {
+    // 显示位置 = 指针 + offset × scale，尺寸 = size × scale
+    if (icon) showDragIcon(icon.canvas, icon.size, icon.offset);
+    else hideDragIcon();
+});
+```
+
 `dnd.move` 第一次到达时 server 会撤掉源客户端自己的本地目标，之后由全局会话跨客户端发
 `enter/motion/leave/drop`；目标 `receive` 的 fd 直接转给源客户端的 `wl_data_source.send`。
 桌面不实现 `dnd.move` 时，同一客户端内的拖拽仍按本地路径工作。

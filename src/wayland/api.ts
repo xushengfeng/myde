@@ -8,7 +8,7 @@
  * 与 `module.ts` 的分工：module.ts 是**协议模块**的契约（handler / ctx），
  * 本文件是**桌面**的契约（事件 / 查询 / 控制），两边互不 import 实现。
  */
-import type { SurfaceId } from "./module";
+import type { DragIconFrame, SurfaceId } from "./module";
 
 // ───────────────────────── 窗口身份 ─────────────────────────
 
@@ -216,6 +216,12 @@ export interface DragStartInfo {
 
 export type DragEndReason = "finished" | "cancelled";
 
+/**
+ * 拖拽图标（`wl_data_device.start_drag` 的 icon surface）最近一帧。
+ * 图标由源客户端提交；桌面把它叠在光标下显示，而不是替换光标本身。
+ */
+export type DragIcon = DragIconFrame;
+
 // ───────────────────────── 客户端 ─────────────────────────
 
 export interface ClientLogConfig {
@@ -330,6 +336,8 @@ export type ServerEvents = {
     "clipboard.changed": [change: ClipboardChange | null, reason?: ClipboardClearReason, seat?: string];
     /** 客户端开始拖拽（`wl_data_device.start_drag`）；桌面可据此弹出中转站 */
     "dnd.started": [drag: DragStartInfo];
+    /** 拖拽图标 surface 的新帧；`null` 表示图标被解绑/销毁，桌面应移除图标 */
+    "dnd.icon": [token: string, icon: DragIcon | null];
     /** 拖拽结束；`reason` 区分正常 drop 与取消 */
     "dnd.finished": [token: string, reason: DragEndReason];
     "client.opened": [clientId: string];

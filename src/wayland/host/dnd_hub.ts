@@ -1,5 +1,5 @@
 import type { DragEndReason, DragStartInfo } from "../api";
-import type { DndHubApi, DndPeer, HitTestResult, WaylandObjectId2, WaylandWinId } from "../module";
+import type { DndHubApi, DndPeer, DragIconFrame, HitTestResult, WaylandObjectId2, WaylandWinId } from "../module";
 
 const fs = require("node:fs") as typeof import("node:fs");
 
@@ -68,6 +68,8 @@ export class DndHub implements DndHubApi {
     constructor(
         private op: {
             started(info: DragStartInfo): void;
+            /** 源图标新帧/撤销；token 是该会话的只读 token */
+            icon(token: string, icon: DragIconFrame | null): void;
             finished(token: string, reason: DragEndReason): void;
             requestData(id: string, mime: string): Promise<Uint8Array | null>;
         },
@@ -155,6 +157,13 @@ export class DndHub implements DndHubApi {
         if (!target) return;
         this.send(target.clientId, target.offerId, "wl_data_offer.source_actions", { source_actions: actions });
         this.negotiate(session);
+    }
+
+    /** 源图标 surface 的新帧（或解绑）；只在会话仍存在时转给桌面 */
+    icon(clientId: string, sourceId: number, icon: DragIconFrame | null): void {
+        const session = this.sessionOfSource(clientId, sourceId);
+        if (!session) return;
+        this.op.icon(session.id, icon);
     }
 
     sourceFinished(clientId: string, sourceId: number, reason: DragEndReason): void {

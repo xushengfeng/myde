@@ -153,7 +153,7 @@ commit」的，被丢掉的提交不会有人再补画。所以像素链路分�
 `WinHandle` / `CursorState` …）。
 
 - **事件**：`server.on("window.created" | "window.changed" | "window.closed" | "window.startMove" |
-  "cursor.changed" | "clipboard.changed" | "dnd.started" | "dnd.finished" | "client.opened" | "client.closed", …)`
+  "cursor.changed" | "clipboard.changed" | "dnd.started" | "dnd.icon" | "dnd.finished" | "client.opened" | "client.closed", …)`
   ——`window.changed` 覆盖 rect / states / title / appid / decorated / `parent` / `modal`
 - **查询**：`server.windows.list() / get() / preview() / hitTest() / lookupExport()`、`server.cursor.get(clientId)`、`await server.request(…)`
   （`hitTest(handle, p)` 走 xdg 域的完整几何，含 popup/subsurface/input region，供桌面决定指针事件发给哪个窗口；
@@ -253,6 +253,10 @@ receive / finish 由 core 转给全局会话；`receive` 的 fd 直接转给源�
 桌面可以在拖拽进行中用 `dnd.read(token, mime)` 取数据（例如中转站收下拖拽内容），再用
 `dnd.cancel(token)` 结束会话。桌面作为源时用 `dnd.start` 建会话，目标 `receive` 时 server 用
 `dnd.requestData(id, mime)` 向桌面要字节。
+
+`start_drag` 的 icon surface 由 server 跟踪，每次提交后发 `dnd.icon(token, { canvas, size, offset })`：
+`canvas` 是独立快照，`size` 是 surface 逻辑尺寸，`offset` 是相对指针热点的位移，桌面按输出缩放把它放在指针下；
+图标被 `attach(nil)` 或销毁时发 `dnd.icon(token, null)`。图标只负责拖拽提示，不改变光标本身。
 
 注意 `dnd.drop(token, null)` 和 `dnd.cancel` 的区别：前者是“在窗口外释放”，给源发
 `action=none` + `dnd_drop_performed` + `dnd_finished`，GTK/Firefox 的标签撕出依赖这个结果；

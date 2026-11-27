@@ -21,6 +21,7 @@ import { createAnimationGear, setAnimationSpeed } from "./animation_time";
 import { type ClipboardItem, type ClipboardStation, initClipboard } from "./clipboard";
 import { clipboardPreview, clipboardTime, createClipboardStationTool } from "./clipboard_tool";
 import { Cursor } from "./cursor";
+import { DragIcon } from "./drag_icon";
 import { createFileChooserContent, fileChooserHeaderIcon, fileChooserTitle } from "./file_chooser";
 import { getIconX, getIconXEl } from "./icon";
 import { ImeController } from "./ime/ime";
@@ -2701,6 +2702,7 @@ function mouseMove(x: number, y: number, p?: PointerEvent) {
     mousePos.x = x;
     mousePos.y = y;
     cursor.move(x, y);
+    dragIcon.move(x, y);
     // 保留指针身份，按下时的归属才能按 pointerId 对上（触屏多指各自独立）
     const target = sendPointerEvent(
         "move",
@@ -6566,14 +6568,36 @@ const server = MSysApi.server({ render });
 // 剪贴板字节、历史、持久化都在桌面；server 只发事件、按需要数据
 clipboard = initClipboard(server.server);
 // 客户端开始拖拽 → 自动展开中转站弹窗，作为拖拽落点；结束时收起拖拽态
+let dragIconToken: string | undefined;
 server.server.on("dnd.started", (drag) => {
     activeDrag = drag;
     stationHoverAt = 0;
     stationWasHover = false;
+    // 新会话先收起上一次可能残留的图标；本次的图标会随后通过 dnd.icon 到达
+    if (dragIconToken !== drag.token) {
+        dragIconToken = undefined;
+        dragIcon.clear();
+    }
     clipboardStationTool?.setDragActive(true);
     showClipboardTip?.({ state: "show", anchorEl: clipboardToolEl });
 });
+// 源客户端的拖拽图标：叠在光标下显示，不改变光标本身
+server.server.on("dnd.icon", (token, icon) => {
+    if (!icon) {
+        if (dragIconToken === token) {
+            dragIconToken = undefined;
+            dragIcon.clear();
+        }
+        return;
+    }
+    dragIconToken = token;
+    dragIcon.show(icon.canvas, icon.size, icon.offset, mousePos.x, mousePos.y);
+});
 server.server.on("dnd.finished", (token) => {
+    if (dragIconToken === token) {
+        dragIconToken = undefined;
+        dragIcon.clear();
+    }
     if (activeDrag?.token !== token) return;
     activeDrag = undefined;
     stationHoverAt = 0;
@@ -11287,7 +11311,9 @@ body.on("keyup", (e) => {
 });
 
 const cursor = new Cursor(cursorEl);
+const dragIcon = new DragIcon(mainEl);
 cursor.setScale(uiScale);
+dragIcon.setScale(uiScale);
 
 /** 桌面 UI 跟随屏幕缩放；窗口模式/winit 下 screenManager 固定 1x，宿主 DPR 负责缩放 */
 function applyUiScale(scale: number) {
@@ -11298,6 +11324,7 @@ function applyUiScale(scale: number) {
     // 先更新带 zoom 的子树，再按视觉尺寸重新测量工具栏占位
     launcher.setUiScale(value);
     cursor.setScale(value);
+    dragIcon.setScale(value);
     ime?.setUiScale(value);
     vkb?.setUiScale(value);
     measureChromeInsets();
