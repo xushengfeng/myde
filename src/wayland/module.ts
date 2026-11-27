@@ -305,6 +305,8 @@ export interface SubSurfaceApi {
     applyPending(parent: SurfaceId): SurfaceId[];
     /** 销毁前取关系：拿到 child surface 用于撤掉最后一帧 */
     getSubSurface(id: SubSurfaceId): { parent: SurfaceId; surface: SurfaceId; posi: { x: number; y: number } };
+    /** child surface 的父 surface；不是 subsurface 或关系不存在时 undefined */
+    getParent(child: SurfaceId): SurfaceId | undefined;
     destroySubSurface(id: SubSurfaceId): void;
     getChildrenDeep(parent: SurfaceId): {
         id: SurfaceId;
@@ -584,6 +586,11 @@ export interface WindowRecord {
      * 只在本模块内部使用，不进 WindowInfo。
      */
     fullscreenRestoreMaximized: boolean;
+    /**
+     * 桌面通过 `window.setFrameRate` 下发的帧率上限（Hz）；`undefined` 跟随输出刷新率。
+     * 只影响该窗口的 `wl_surface.frame` 回调节奏，不进 WindowInfo。
+     */
+    frameRate?: number;
 }
 
 export interface WindowsApi {

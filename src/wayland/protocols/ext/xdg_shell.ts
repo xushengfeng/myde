@@ -138,6 +138,24 @@ function surfaceInToplevel(ctx: ModuleCtx, surface: SurfaceId, winId: WaylandWin
 }
 
 /**
+ * 把窗口的帧率上限同步到它自己的 xdg surface（主 surface + 全部 popup）。
+ * wl_subsurface 没有 xdg_surface，由 core 在回 frame callback 时沿父链继承。
+ */
+function applyWindowFrameRate(ctx: ModuleCtx, winId: WaylandWinId): void {
+    const win = ctx.domain.windows.get(winId);
+    const root = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId);
+    if (win === undefined || root === undefined) return;
+    const pacing = ctx.domain.commitPacing;
+    const apply = (xdgSurfaceId: WaylandObjectId2<"xdg_surface">) => {
+        const surface = ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
+        if (win.frameRate === undefined) pacing.limits.delete(surface);
+        else pacing.limits.set(surface, win.frameRate);
+    };
+    apply(root);
+    for (const popup of ctx.domain.xdgSurface.getChildenDeepOnlyPopup(root)) apply(popup.id);
+}
+
+/**
  * 未 ack 的 configure serial 上限：正常客户端只会留最后一个；客户端长期不 ack 时丢掉最旧的，
  * 避免无界增长（被丢掉的旧 serial 再 ack 会按 invalid_serial 处理）。
  */
@@ -301,6 +319,15 @@ function onSurfaceCommit(ctx: ModuleCtx, surfaceId: SurfaceId): void {
     const role = s.xdg_role;
     if (ctx.objects.get(role).protocol.name === "xdg_toplevel") {
         syncToplevelSize(ctx, xdgSurfaceId, role as WaylandObjectId2<"xdg_toplevel">);
+    }
+    // popup 可能在窗口被限速之后才创建：它的首次 commit 也按根窗口的上限走，
+    // 否则这个 popup 会按刷新率一直重绘。
+    const rootRole = xdg.getXdgSurface(xdg.rootXdgSurface(xdgSurfaceId)).xdg_role;
+    if (rootRole !== undefined && ctx.objects.get(rootRole).protocol.name === "xdg_toplevel") {
+        const fps = ctx.domain.windows.get(rootRole as WaylandWinId)?.frameRate;
+        const pacing = ctx.domain.commitPacing;
+        if (fps === undefined) pacing.limits.delete(surfaceId);
+        else pacing.limits.set(surfaceId, fps);
     }
     if (!s.initialCommitDone) {
         s.initialCommitDone = true;
@@ -1339,6 +1366,14 @@ export const xdgShellModule = defineModule({
         "window.close": (msg, ctx) => {
             if (ctx.domain.windows.get(msg.winId) === undefined) return;
             ctx.sendNow(msg.winId, "xdg_toplevel.close", {});
+        },
+        /** 限制窗口的 frame callback 节奏；`null` 恢复跟随输出刷新率 */
+        "window.setFrameRate": (msg, ctx) => {
+            const win = ctx.domain.windows.get(msg.winId);
+            if (win === undefined) return;
+            const fps = msg.args[0];
+            win.frameRate = fps !== null && Number.isFinite(fps) && fps > 0 ? fps : undefined;
+            applyWindowFrameRate(ctx, msg.winId);
         },
         /** 只记录桌面配置的盒子，不发 configure */
         "window.setBox": (msg, ctx) => {

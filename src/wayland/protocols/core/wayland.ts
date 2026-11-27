@@ -219,6 +219,13 @@ declare module "../../module" {
             raf: boolean;
             /** 没有待发回调后继续跑 rAF 的帧数，防止稀疏 rAF 被宿主排到 60Hz */
             idleFrames: number;
+            /**
+             * surface → 帧率上限（Hz）。没有条目就跟随桌面 rAF；
+             * 子 surface 沿父链继承最近的上限（见 `surfaceFrameRate`）。
+             */
+            limits: Map<SurfaceId, number>;
+            /** surface → 还要跳过几次 rAF 才回 done；用于把帧率压到输出刷新率的整数因数 */
+            skips: Map<SurfaceId, number>;
         };
     }
 }
@@ -315,10 +322,33 @@ function releaseVideoFrameLater(frame: VideoFrame, onClose?: () => void) {
 }
 
 /**
+ * 目标帧率对应输出刷新率的整数因数：`refresh / divisor` 是最接近目标、且能按 rAF 均匀
+ * 分频的帧率（例如 120Hz → 30Hz、144Hz → 28.8Hz、165Hz → 27.5Hz）。
+ */
+export function frameRateDivisor(refreshMhz: number, fps: number): number {
+    const refresh = Number.isFinite(refreshMhz) && refreshMhz > 0 ? refreshMhz / 1000 : 60;
+    return Math.max(1, Math.round(refresh / fps));
+}
+
+/** surface 的帧率上限；子 surface 沿父链继承最近的上限。 */
+function surfaceFrameRate(ctx: ModuleCtx, surfaceId: SurfaceId): number | undefined {
+    let current: SurfaceId | undefined = surfaceId;
+    for (let depth = 0; depth < 64 && current !== undefined; depth++) {
+        const fps = ctx.domain.commitPacing.limits.get(current);
+        if (fps !== undefined) return fps;
+        current = ctx.core.subsurface.getParent(current);
+    }
+    return undefined;
+}
+
+/**
  * 帧回调按桌面 rAF 排队：同一 surface 每次 rAF 只发一个 done。
  *
  * 立即回 done 会让客户端一路跑超刷新率（实测能到 200+ commit/s）；等一个 rAF
  * 再回则是把每个 surface 的更新节拍钉在桌面刷新率上，Chrome 会按 120Hz 稳定出帧。
+ *
+ * 有 `window.setFrameRate` 上限时按输出刷新率的整数因数跳帧（每 N 次 rAF 回一个），
+ * 客户端据此把该窗口的渲染降到目标帧率；没有上限的 surface 不受影响。
  *
  * 只在有回调时注册下一帧还不够：客户端拿到 done 后 commit，可能落在两次 rAF
  * 之间，上一轮链已结束，宿主会把新的孤立 rAF 排到 60Hz（KDE 宽容，wrap/winit
@@ -339,6 +369,21 @@ function scheduleFrameDone(ctx: ModuleCtx, surfaceId: SurfaceId, callback: Wayla
         pacing.raf = false;
         let sent = 0;
         for (const [sid, q] of pacing.pending) {
+            if (q.length === 0) {
+                pacing.pending.delete(sid);
+                continue;
+            }
+            const fps = surfaceFrameRate(ctx, sid);
+            if (fps !== undefined) {
+                const skip = pacing.skips.get(sid) ?? 0;
+                if (skip > 0) {
+                    pacing.skips.set(sid, skip - 1);
+                    continue;
+                }
+                pacing.skips.set(sid, frameRateDivisor(ctx.client.output().mode.refresh, fps) - 1);
+            } else {
+                pacing.skips.delete(sid);
+            }
             const cb = q.shift();
             if (cb !== undefined) {
                 // 必须和 presentation 的 CLOCK_MONOTONIC 同基准且单调；Date.now()
@@ -348,9 +393,14 @@ function scheduleFrameDone(ctx: ModuleCtx, surfaceId: SurfaceId, callback: Wayla
                 ctx.sendNow(ctx.client.displayId, "wl_display.delete_id", { id: cb });
                 sent++;
             }
-            if (q.length === 0) pacing.pending.delete(sid);
+            if (q.length === 0) {
+                // 只清空队列，保留跳帧计数：客户端拿到 done 后才提交下一帧，
+                // 中间这段空档不能把分频相位重置，否则又会在下一次 rAF 立刻回 done。
+                pacing.pending.delete(sid);
+            }
         }
-        pacing.idleFrames = sent > 0 ? 0 : pacing.idleFrames + 1;
+        // 还有回调在排队时必须继续跑 rAF：限速的 surface 可能这几次都要跳过。
+        pacing.idleFrames = sent > 0 || pacing.pending.size > 0 ? 0 : pacing.idleFrames + 1;
         if (pacing.idleFrames < PACING_KEEPALIVE_FRAMES) {
             pacing.raf = true;
             requestAnimationFrame(drain);
@@ -843,6 +893,10 @@ export class wlSubSurfaceData {
             surface: this.wl_subsurface[id].child,
             posi: this.wl_subsurface[id].posi,
         };
+    }
+    getParent(child: WaylandObjectId2<"wl_surface">) {
+        const relation = this.surface2subsurface.get(child);
+        return relation === undefined ? undefined : this.wl_subsurface[relation]?.parent;
     }
     getChildrenDeep(parent: WaylandObjectId2<"wl_surface">) {
         const surfaces: {
@@ -2007,7 +2061,7 @@ export const waylandCoreModule = defineModule({
         /** 输入设备记录（原 `state/seat_store.ts`，host 已不持有）：只有 core 读写 */
         seat: () => new SeatStore(),
         output: () => ({ outputs: new Set(), surfaces: new Set() }),
-        commitPacing: () => ({ pending: new Map(), raf: false, idleFrames: 0 }),
+        commitPacing: () => ({ pending: new Map(), raf: false, idleFrames: 0, limits: new Map(), skips: new Map() }),
     },
     hooks: {
         /** 桌面改了输出/缩放：重发 wl_output 状态和 surface 的整数缩放偏好。 */
@@ -2470,6 +2524,10 @@ export const waylandCoreModule = defineModule({
             discardQueuedStates(ctx, surfaceId);
             discardPendingPresent(ctx, surfaceId);
             ctx.domain.output.surfaces.delete(surfaceId);
+            // 对象 id 可以由客户端复用，限速状态不能跟着旧 surface 留下来
+            ctx.domain.commitPacing.limits.delete(surfaceId);
+            ctx.domain.commitPacing.skips.delete(surfaceId);
+            ctx.domain.commitPacing.pending.delete(surfaceId);
             // 光标surface销毁后隐藏光标
             ctx.cursor.hide(surfaceId);
             ctx.notify.destroy(surfaceId);

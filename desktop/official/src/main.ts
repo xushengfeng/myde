@@ -453,6 +453,8 @@ type OverviewLayout = {
 };
 
 const SCREEN_TRANSITION = { duration: 320, map: timingFunction.easeOut };
+/** 不在聚焦虚拟屏上的窗口目标帧率；server 按输出刷新率取最接近的整数因数 */
+const BACKGROUND_WINDOW_FPS = 30;
 /** 三指横滑位移倍率默认值；设置窗口可调 */
 const DEFAULT_GESTURE_GAIN = 4;
 /** 切屏后重排新旧顺序的延迟默认值（毫秒）；设置窗口可调 */
@@ -566,6 +568,8 @@ class ViewData {
     /** 所有虚拟屏，从左到右；空桌面永远在最后（最右） */
     private screens: ViewScreen[] = [];
     private win2Screen = new Map<MWinId, ViewScreen>();
+    /** 已下发的窗口帧率上限，避免每次布局都重复 notify */
+    private appliedFrameRates = new Map<MWinId, number | null>();
     /** 当前聚焦的窗口 handle，键盘按它反查客户端下发 */
     focusHandle: MWinId | undefined;
 
@@ -757,6 +761,25 @@ class ViewData {
     /** 只允许当前虚拟屏里的窗口接收指针，滚动同理 */
     isCurrentWin(winid: MWinId) {
         return this.win2Screen.get(winid)?.id === this.currentId;
+    }
+
+    /**
+     * 只有聚焦虚拟屏上的窗口跟随输出刷新率，其余屏上的窗口压到接近 30Hz。
+     * 屏幕切换、窗口增删/移动都会经过 applyAxes，这里只做差分下发。
+     */
+    private syncWindowFrameRates() {
+        const current = this.currentId;
+        for (const [handle, screen] of this.win2Screen) {
+            // 桌面内部窗口没有 Wayland surface，不需要也不能下发帧率
+            if (internalWindows.has(handle) || !server.server.windows.get(handle)) continue;
+            const fps = screen.id === current ? null : BACKGROUND_WINDOW_FPS;
+            if (this.appliedFrameRates.get(handle) === fps) continue;
+            this.appliedFrameRates.set(handle, fps);
+            server.server.notify("window.setFrameRate", handle, fps);
+        }
+        for (const handle of this.appliedFrameRates.keys()) {
+            if (!this.win2Screen.has(handle)) this.appliedFrameRates.delete(handle);
+        }
     }
 
     screenOf(winid: MWinId) {
@@ -1933,6 +1956,7 @@ class ViewData {
             screen.el.style({ zIndex: `${base}` });
         }
         this.renderWindowSlots();
+        this.syncWindowFrameRates();
         this.launcher?.setLevel(this.levelValue, this.launcherRoute);
         this.applyPanel();
         windowEl.el.toggleAttribute("data-overview", this.overview);

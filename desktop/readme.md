@@ -803,6 +803,8 @@ server.notify("window.unmaximize", handle, { width, height });
 server.notify("window.fullscreen", handle, { width, height });
 server.notify("window.unfullscreen", handle, { width, height });
 server.notify("window.minimize", handle);
+// 限制该窗口的渲染帧率；null 恢复跟随输出刷新率
+server.notify("window.setFrameRate", handle, 30);
 ```
 
 `window.maximize` 与 `window.fullscreen` 互斥（进入一个会清掉另一个），分别对应
@@ -811,6 +813,22 @@ server.notify("window.minimize", handle);
 `set_fullscreen` / `unset_fullscreen` 时，桌面会收到 `window.changed`（看 `states.fullscreen`），
 再由桌面用 `window.fullscreen` / `window.unfullscreen` 下发最终盒子。`wm_capabilities` 已声明
 `minimize` / `maximize` / `fullscreen`。
+
+`window.setFrameRate` 只限制客户端 `wl_surface.frame` 的回调节奏，不改合成与上屏频率：
+
+```typescript
+server.notify("window.setFrameRate", handle, 30); // 目标约 30Hz
+server.notify("window.setFrameRate", handle, null); // 恢复跟随输出刷新率
+```
+
+server 按输出刷新率取整数因数 `round(refresh / fps)`，实际帧率是 `refresh / 因数`，
+因此按桌面 rAF 均匀分频：120Hz 下传 30 得到 30Hz，144Hz 下得到 28.8Hz，165Hz 下得到 27.5Hz；
+`fps` 不小于输出刷新率（或传 `null`）时不限速。限制作用在窗口的主 surface、之后创建的
+popup 以及它们的 subsurface 上；同一个客户端里的其他窗口互不影响。
+
+官方桌面默认把**不在聚焦虚拟屏上的窗口**压到 30Hz（按上面的因数换算到最接近的输出分频），
+聚焦虚拟屏上的窗口保持跟随输出刷新率。切换虚拟屏、窗口在屏间移动或窗口关闭时，
+`ViewData.applyAxes` 会差分下发新的上限。
 
 官方桌面（`desktop/official`）对全屏的处理：舞台（`windowElWarp`/`windowEl`）始终铺满视口，
 工具栏占位只体现为窗口可用区（最大化尺寸、普通窗口居中、`surfaceBounds`）的内缩，不再限制

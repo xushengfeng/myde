@@ -349,6 +349,14 @@ export type ServerNotifyMap = {
     "window.focus": [handle: WinHandle];
     "window.blur": [handle: WinHandle];
     "window.close": [handle: WinHandle];
+    /**
+     * 限制该窗口的渲染帧率（Hz），`null` 恢复跟随输出刷新率。
+     *
+     * server 只按输出刷新率的整数因数下发 frame callback：实际帧率 = refresh / round(refresh / fps)，
+     * 例如 120Hz 下传 30 就是 30Hz、144Hz 下是 28.8Hz。`fps` 不小于输出刷新率时不限速。
+     * 限制只作用于客户端的 `wl_surface.frame` 节奏，不改变合成与上屏频率。
+     */
+    "window.setFrameRate": [handle: WinHandle, fps: number | null];
     /** 只记录桌面配置的盒子，不发 configure */
     "window.setBox": [handle: WinHandle, size: Size];
     "window.setSize": [handle: WinHandle, size: Size];
