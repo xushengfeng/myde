@@ -284,6 +284,8 @@ describe("全屏动画", () => {
             })()`,
             5000,
         );
+        // 启动飞行动画结束前窗口还不能接自动 resize；否则这次最大化不会产生旧内容快照
+        await desktop.waitFor("__mydeTest.state().launches.length === 0", 5000);
 
         await desktop.evaluate(`
             (() => {

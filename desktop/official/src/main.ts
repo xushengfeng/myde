@@ -2782,23 +2782,7 @@ class WindowCenterManager {
     };
     private windowElements = new Map<string, HTMLElement>();
     private pausedWindows = new Set<string>();
-    private resizeObserver: ResizeObserver | null = null;
     private shouldCenter?: (windowId: string) => boolean;
-
-    constructor() {
-        this.initResizeObserver();
-    }
-
-    private initResizeObserver() {
-        this.resizeObserver = new ResizeObserver((entries) => {
-            for (const entry of entries) {
-                const windowId = entry.target.getAttribute("data-window-id");
-                if (windowId && !this.pausedWindows.has(windowId)) {
-                    this.centerWindow(windowId);
-                }
-            }
-        });
-    }
 
     setViewport(x: number, y: number, width: number, height: number, recenter = true) {
         this.config.viewport = { x, y, width, height };
@@ -2813,17 +2797,13 @@ class WindowCenterManager {
     addWindow(windowId: string, element: HTMLElement) {
         element.setAttribute("data-window-id", windowId);
         this.windowElements.set(windowId, element);
-        this.resizeObserver?.observe(element);
         if (this.config.enabled) {
             this.centerWindow(windowId);
         }
     }
 
     removeWindow(windowId: string) {
-        const element = this.windowElements.get(windowId);
-        if (element) {
-            this.resizeObserver?.unobserve(element);
-            this.windowElements.delete(windowId);
+        if (this.windowElements.delete(windowId)) {
             this.pausedWindows.delete(windowId);
         }
     }
@@ -2879,6 +2859,12 @@ class WindowCenterManager {
         const position = this.centeredPosition(element.offsetWidth, element.offsetHeight);
         element.style.left = `${position.left}px`;
         element.style.top = `${position.top}px`;
+    }
+
+    /** 尺寸变化后自动居中；用户拖动/缩放过的窗口保持原位置 */
+    centerWindowIfAuto(windowId: string) {
+        if (!this.config.enabled || this.pausedWindows.has(windowId)) return;
+        this.centerWindow(windowId);
     }
 
     private recenterAll() {
@@ -3845,6 +3831,8 @@ type ClientWindowFrame = {
     ghost?: { el: ElType<HTMLCanvasElement>; width: number; height: number; alpha: number };
     /** 图像淡化状态机；盒动画结束后可以继续等待/淡化 */
     image?: ClientImageTransition;
+    /** 最大化/全屏前的位置：退出时回到这里，不重新居中 */
+    restorePosition?: { left: number; top: number };
 };
 
 const clientWindowFrames = new Map<WinHandle, ClientWindowFrame>();
@@ -4420,6 +4408,8 @@ function applyFrameSurfaceSize(frame: ClientWindowFrame, width?: number, height?
         height: `${frame.surfaceHeight + bar}px`,
     });
     settleFrameContentStretch(frame);
+    // 自动 resize 不靠 ResizeObserver 发现尺寸变化：写完盒就自己判断要不要居中
+    windowCenterManager.centerWindowIfAuto(frame.handle);
 }
 
 /** 正在进行的启动状态（按 frame 反查），用于尺寸回调重新瞄准 */
@@ -4467,6 +4457,68 @@ function writeFrameBox(frame: ClientWindowFrame, left: number, top: number, widt
             transform: `scale(${w / ghost.width}, ${Math.max(1, h - bar) / ghost.height})`,
         });
     }
+}
+
+/** 当前盒的目标位置：动画中取目标，静止时取已经写进 DOM 的矩形 */
+function currentFrameTargetPosition(frame: ClientWindowFrame) {
+    if (frame.layoutTarget) return { left: frame.layoutTarget.left, top: frame.layoutTarget.top };
+    const box = currentFrameBox(frame);
+    return box ? { left: box.left, top: box.top } : undefined;
+}
+
+/**
+ * 进入最大化/全屏前记下位置，恢复时不用再猜。
+ * 只记用户摆过的窗口（已暂停居中）；仍自动居中的窗口恢复后继续交给居中管理器，
+ * 避免用旧的左上角把恢复出来的新尺寸放偏。
+ */
+function rememberFramePosition(frame: ClientWindowFrame) {
+    // 启动动画里的位置不代表用户意图；等窗口稳定后再次最大化时再记
+    if (frame.pending || frame.launching || frame.boxGear || !windowCenterManager.isPaused(frame.handle)) {
+        frame.restorePosition = undefined;
+        return;
+    }
+    const position = currentFrameTargetPosition(frame);
+    if (position) frame.restorePosition = position;
+}
+
+/**
+ * 恢复后是否交给居中管理器。只看本窗口和同屏窗口数：
+ * 桌面主动最大化时 server 里的 maximized 要等命令下发才更新，不能拿它判断动画目标。
+ */
+function frameWillAutoCenter(frame: ClientWindowFrame) {
+    if (frame.maximized || frame.fullscreen || !windowCenterManager.isEnabled()) return false;
+    const screen = viewData.screenOf(frame.handle);
+    return (screen?.winIds.length ?? 0) <= 1;
+}
+
+/** 退出最大化/全屏：有记忆就回到原位置并固定住；没有则保持原来的恢复后居中 */
+function restoreFramePosition(frame: ClientWindowFrame) {
+    const saved = frame.restorePosition;
+    frame.restorePosition = undefined;
+    const width = frame.boxTarget?.width ?? frame.el.el.offsetWidth;
+    const height = frame.boxTarget?.height ?? frame.el.el.offsetHeight;
+    if (!saved) {
+        // 一直自动居中的窗口：动画目标也按恢复后的尺寸居中，避免先缩在左上角再跳到中间
+        const centered = frameWillAutoCenter(frame);
+        if (frame.layoutGear && frame.layoutTarget) frame.layoutCentered = centered;
+        const position = centered ? windowCenterManager.centeredPosition(width, height) : { left: wino.l, top: wino.t };
+        setClientFramePosition(frame, position.left, position.top);
+        return;
+    }
+    const available = availableStageSize();
+    // 记忆位置是显式位置：像用户手动摆过一样固定住，后续尺寸变化也不再自动居中
+    windowCenterManager.pauseCentering(frame.handle);
+    // 正在跑的整框动画按这个位置走；结束后也不把居中交还回去
+    frame.layoutCentered = false;
+    frame.layoutPausedCentering = false;
+    // 恢复后的窗口可能比原来大，位置贴边时收回可用区
+    const maxLeft = Math.max(available.x, available.x + available.width - width);
+    const maxTop = Math.max(available.y, available.y + available.height - height);
+    setClientFramePosition(
+        frame,
+        Math.min(Math.max(available.x, saved.left), maxLeft),
+        Math.min(Math.max(available.y, saved.top), maxTop),
+    );
 }
 
 /**
@@ -4719,8 +4771,10 @@ function startFrameLayoutTransition(
         startImageTransition(frame, ghost);
     }
     frame.layoutTarget = { ...target };
-    // 全屏必须铺到 0,0：不能按窗口可用区（工具栏内缩）重新居中
-    frame.layoutCentered = center && windowCenterManager.willCenter(frame.handle);
+    // 全屏必须铺到 0,0：不能按窗口可用区（工具栏内缩）重新居中；
+    // 已暂停居中的窗口（用户摆过、刚从最大化/全屏恢复）也按目标位置走
+    frame.layoutCentered =
+        center && !windowCenterManager.isPaused(frame.handle) && windowCenterManager.willCenter(frame.handle);
     if (!windowCenterManager.isPaused(frame.handle)) {
         windowCenterManager.pauseCentering(frame.handle);
         frame.layoutPausedCentering = true;
@@ -4864,6 +4918,7 @@ function setClientFrameLayout(
     ghost?.el.remove();
     frame.el.style({ width: `${width}px`, height: `${height + bar}px` });
     settleFrameContentStretch(frame);
+    windowCenterManager.centerWindowIfAuto(frame.handle);
 }
 
 function setClientFramePosition(frame: ClientWindowFrame, left: number, top: number) {
@@ -7408,7 +7463,7 @@ const appliedState = new Map<
 /** 全屏时临时暂停居中的窗口；退出时只恢复这些，不打断用户手动拖动后的状态 */
 const fullscreenCenteringPaused = new Set<WinHandle>();
 
-/** 进入全屏：暂停自动居中，避免 ResizeObserver 用旧 viewport 把铺满的窗口移到偏移位置 */
+/** 进入全屏：暂停自动居中，避免可用区变化时把铺满的窗口移到偏移位置 */
 function pauseCenteringForFullscreen(handle: WinHandle) {
     if (windowCenterManager.isPaused(handle)) return;
     windowCenterManager.pauseCentering(handle);
@@ -7651,6 +7706,8 @@ server.server.on("window.changed", (info) => {
     if (applied.fullscreen !== info.states.fullscreen) {
         applied.fullscreen = info.states.fullscreen;
         if (info.states.fullscreen) {
+            // 从普通窗口进全屏才记位置；从最大化进入全屏时沿用最大化前记下的位置
+            if (frame && !applied.maximized) rememberFramePosition(frame);
             // 屏幕轴还在移动也要立刻开始隐藏工具栏；先置位，
             // 换屏过程里的 render 会先跑一次 sync，不能让它先播放显示动画
             fullscreenChromeEntering = true;
@@ -7672,7 +7729,7 @@ server.server.on("window.changed", (info) => {
             const height = 600;
             if (frame) {
                 setClientFrameLayout(frame, width * info.scale, height * info.scale);
-                setClientFramePosition(frame, wino.l, wino.t);
+                restoreFramePosition(frame);
             }
             server.server.notify("window.unfullscreen", info.handle, { width, height });
         } else {
@@ -7724,10 +7781,12 @@ server.server.on("window.changed", (info) => {
 
     // 最大化状态变化（由客户端发起）
     if (applied.maximized !== info.states.maximized) {
+        const wasMaximized = applied.maximized;
         applied.maximized = info.states.maximized;
         if (info.states.fullscreen) return;
         if (!frame) return;
         if (info.states.maximized) {
+            if (!wasMaximized) rememberFramePosition(frame);
             // 最大化按最底层算，被上层盖住才换屏
             viewData.sendWinToBottom(info.handle);
             if (maximizeCoveredByOthers(info.handle)) viewData.moveWindowToNewScreen(info.handle);
@@ -7744,7 +7803,7 @@ server.server.on("window.changed", (info) => {
             const width = 800;
             const height = 600;
             setClientFrameLayout(frame, width * info.scale, height * info.scale);
-            setClientFramePosition(frame, wino.l, wino.t);
+            restoreFramePosition(frame);
             server.server.notify("window.unmaximize", info.handle, { width, height });
         }
     }
@@ -8242,7 +8301,7 @@ function handleScreenWheel(e: ScreenWheelEvent) {
     return true;
 }
 
-// 一屏多窗口时不再自动居中，否则 ResizeObserver 会把它们叠到一起
+// 一屏多窗口时不再自动居中，否则尺寸变化会把它们叠到一起
 windowCenterManager.setShouldCenter((id) => {
     // 最大化/全屏的位置由布局明确给出，不能按可用区居中（否则退出全屏时旧尺寸会被顶到负坐标）
     const frame = clientWindowFrames.get(id);
@@ -12249,6 +12308,7 @@ function toggleMaximizeWindow(winid = viewData.focusHandle) {
 
     syncClientFrameMaximized(frame, maximized);
     if (maximized) {
+        rememberFramePosition(frame);
         // 桌面命令不会回 window.changed；最大化按最底层算，被上层盖住才换屏
         viewData.sendWinToBottom(winid);
         if (maximizeCoveredByOthers(winid)) viewData.moveWindowToNewScreen(winid);
@@ -12270,7 +12330,7 @@ function toggleMaximizeWindow(winid = viewData.focusHandle) {
         const width = 800;
         const height = 600;
         setClientFrameLayout(frame, width * info.scale, height * info.scale);
-        setClientFramePosition(frame, wino.l, wino.t);
+        restoreFramePosition(frame);
         if (applied) {
             applied.maximized = false;
             applied.w = width;
@@ -12291,6 +12351,8 @@ function toggleFullscreen(winid = viewData.focusHandle) {
     const frame = clientWindowFrames.get(winid);
 
     if (next) {
+        // 从普通窗口进全屏才记位置；从最大化进全屏时沿用最大化前记下的位置
+        if (frame && !info.states.maximized) rememberFramePosition(frame);
         // 先把全屏状态发给 server，再换屏：换屏里的 render 会按全屏状态直接开始隐藏工具栏
         const out = fullOutputSize();
         fullscreenChromeEntering = true;
@@ -12337,7 +12399,7 @@ function toggleFullscreen(winid = viewData.focusHandle) {
             });
         } else {
             setClientFrameLayout(frame, 800 * info.scale, 600 * info.scale);
-            setClientFramePosition(frame, wino.l, wino.t);
+            restoreFramePosition(frame);
         }
     }
 }

@@ -263,12 +263,122 @@ describe("鼠标窗口操作", () => {
             return win?.maximized === false && !win.resizing;
         });
         const rect = windowByAppid(restored, "pointer-i")?.rect;
-        // 动画结束后由居中管理器接管：800×600 在可用区里居中
+        // 没被用户摆过：恢复后仍由居中管理器按 800×600 居中
         expect(rect?.x).toBe(Math.round(restored.available.x + (restored.available.width - (rect?.w ?? 0)) / 2));
         expect(rect?.y).toBe(Math.round(restored.available.y + (restored.available.height - (rect?.h ?? 0)) / 2));
         expect(Math.abs((rect?.w ?? 0) - 800)).toBeLessThanOrEqual(2);
         expect(rect?.h ?? 0).toBeGreaterThan(600);
         expect(rect?.h ?? 0).toBeLessThan(660);
+    });
+
+    run("最大化和全屏退出后回到进入前的位置", { timeout: 40000 }, async () => {
+        const win = await launchDecorated("pointer-pos");
+        await sleep(150);
+        const beforeDrag = windowByAppid(await state(desktop), "pointer-pos")?.rect;
+        const from = await titlebarPoint(desktop, win.handle);
+        // 拖到非居中位置：用户摆过的窗口在最大化/全屏后应回到这里
+        // （留出恢复成 800×600 后的高度，避免贴边时被夹到可用区内）
+        await drag(desktop, from, { x: from.x - 140, y: from.y - 180 });
+        const moved = await waitState(desktop, (next) => {
+            const current = windowByAppid(next, "pointer-pos")?.rect;
+            return !!current && (current.x !== beforeDrag?.x || current.y !== beforeDrag?.y);
+        });
+        const placed = windowByAppid(moved, "pointer-pos")?.rect;
+        if (!placed) throw new Error("拖动后没有窗口矩形");
+
+        await desktop.evaluate(`__mydeTest.toggleMaximize(${JSON.stringify(win.handle)})`);
+        await waitState(desktop, (next) => {
+            const current = windowByAppid(next, "pointer-pos");
+            return current?.maximized === true && !current.resizing;
+        });
+        await desktop.evaluate(`__mydeTest.toggleMaximize(${JSON.stringify(win.handle)})`);
+        const restored = await waitState(desktop, (next) => {
+            const current = windowByAppid(next, "pointer-pos");
+            return current?.maximized === false && !current.resizing;
+        });
+        const restoredRect = windowByAppid(restored, "pointer-pos")?.rect;
+        expect(restoredRect?.x, "最大化恢复应回到拖动后的位置").toBe(placed.x);
+        expect(restoredRect?.y, "最大化恢复应回到拖动后的位置").toBe(placed.y);
+
+        await desktop.evaluate(`__mydeTest.toggleFullscreen(${JSON.stringify(win.handle)})`);
+        await waitState(desktop, (next) => {
+            const current = windowByAppid(next, "pointer-pos");
+            return current?.fullscreen === true && !current.resizing;
+        });
+        await desktop.evaluate(`__mydeTest.toggleFullscreen(${JSON.stringify(win.handle)})`);
+        const unfull = await waitState(desktop, (next) => {
+            const current = windowByAppid(next, "pointer-pos");
+            return current?.fullscreen === false && !current.resizing;
+        });
+        const fullRect = windowByAppid(unfull, "pointer-pos")?.rect;
+        expect(fullRect?.x, "全屏退出应回到进入前的位置").toBe(placed.x);
+        expect(fullRect?.y, "全屏退出应回到进入前的位置").toBe(placed.y);
+
+        // 最大化 → 全屏 → 退出全屏（回到最大化）→ 恢复：仍要用最初的拖动位置
+        await desktop.evaluate(`__mydeTest.toggleMaximize(${JSON.stringify(win.handle)})`);
+        await waitState(desktop, (next) => {
+            const current = windowByAppid(next, "pointer-pos");
+            return current?.maximized === true && !current.resizing;
+        });
+        await desktop.evaluate(`__mydeTest.toggleFullscreen(${JSON.stringify(win.handle)})`);
+        await waitState(desktop, (next) => {
+            const current = windowByAppid(next, "pointer-pos");
+            return current?.fullscreen === true && !current.resizing;
+        });
+        await desktop.evaluate(`__mydeTest.toggleFullscreen(${JSON.stringify(win.handle)})`);
+        await waitState(desktop, (next) => {
+            const current = windowByAppid(next, "pointer-pos");
+            return current?.fullscreen === false && current.maximized === true && !current.resizing;
+        });
+        await desktop.evaluate(`__mydeTest.toggleMaximize(${JSON.stringify(win.handle)})`);
+        const chained = await waitState(desktop, (next) => {
+            const current = windowByAppid(next, "pointer-pos");
+            return current?.maximized === false && !current.resizing;
+        });
+        const chainedRect = windowByAppid(chained, "pointer-pos")?.rect;
+        expect(chainedRect?.x, "从全屏回到最大化后恢复，仍应记得最初的位置").toBe(placed.x);
+        expect(chainedRect?.y, "从全屏回到最大化后恢复，仍应记得最初的位置").toBe(placed.y);
+    });
+
+    run("没被摆过的窗口退出最大化时向中间收缩", { timeout: 30000 }, async () => {
+        const win = await launchDecorated("pointer-center", 480, 360);
+        await desktop.evaluate("__mydeTest.setAnimationSpeed(1)");
+        await desktop.evaluate(`__mydeTest.toggleMaximize(${JSON.stringify(win.handle)})`);
+        await waitState(desktop, (next) => {
+            const current = windowByAppid(next, "pointer-center");
+            return current?.maximized === true && !current.resizing;
+        });
+        const before = await state(desktop);
+        await desktop.evaluate(`(() => {
+            const samples = (window.__unmaxSamples = []);
+            const started = performance.now();
+            const tick = () => {
+                const frame = document.querySelector("[data-client-window='${win.handle}']");
+                const rect = frame?.getBoundingClientRect();
+                if (rect) samples.push({ t: performance.now() - started, x: rect.left, w: rect.width });
+                if (performance.now() - started < 700) requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+        })()`);
+        await desktop.evaluate(`__mydeTest.toggleMaximize(${JSON.stringify(win.handle)})`);
+        await waitState(desktop, (next) => {
+            const current = windowByAppid(next, "pointer-center");
+            return current?.maximized === false && !current.resizing;
+        });
+        await sleep(150);
+
+        const samples = await desktop.evaluate<{ t: number; x: number; w: number }[]>("window.__unmaxSamples ?? []");
+        const shrinking = samples.filter((sample) => sample.w < before.available.width - 30 && sample.w > 900);
+        expect(shrinking.length, "没有采到缩小中的帧").toBeGreaterThan(0);
+        for (const sample of shrinking) {
+            const centeredX = before.available.x + (before.available.width - sample.w) / 2;
+            expect(
+                Math.abs(sample.x - centeredX),
+                `@${sample.t.toFixed(0)}ms 窗口左边应随宽度一起向中间收`,
+            ).toBeLessThanOrEqual(2);
+        }
+        const final = windowByAppid(await state(desktop), "pointer-center")?.rect;
+        expect(final?.x).toBe(Math.round(before.available.x + (before.available.width - (final?.w ?? 0)) / 2));
     });
 
     run("最大化用整框过渡和内容淡化", { timeout: 30000 }, async () => {
