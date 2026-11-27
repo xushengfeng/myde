@@ -4,6 +4,19 @@ import type { SemanticWheelEvent } from "../../../src/desktop-api";
 
 type Direction = "up" | "down" | "left" | "right";
 
+/**
+ * 列表主轴尺寸：
+ * - 数字：固定尺寸
+ * - `{ min, max }`：按内容自动撑开，并限制在最小 / 最大尺寸之间
+ */
+export type ScrollListSize = number | { min?: number; max?: number };
+
+function sizeFromContent(contentSize: number, range: { min?: number; max?: number }) {
+    const min = Math.max(0, range.min ?? 0);
+    const max = Math.max(min, range.max ?? Number.POSITIVE_INFINITY);
+    return Math.max(min, Math.min(contentSize, max));
+}
+
 function isVertical(dir: Direction) {
     return dir === "up" || dir === "down";
 }
@@ -18,7 +31,8 @@ interface AnimatedElement<T> {
 
 export function dynamicScrollList<T>(options: {
     itemSize: number;
-    containerSize: number;
+    /** 主轴尺寸；传 `{ min, max }` 时按内容自动撑开 */
+    containerSize: ScrollListSize;
     direction: Direction;
     renderItem: (item: T, index: number, list: T[]) => ReturnType<typeof view>;
     keyExtractor: (item: T, index: number) => string;
@@ -27,12 +41,14 @@ export function dynamicScrollList<T>(options: {
     bufferSize?: number;
     animationDuration?: number;
     dragByMouse?: boolean;
+    /** 容器主轴尺寸变化时回调，便于外层同步尺寸（uScrollList 使用） */
+    onContainerSizeChange?: (size: number) => void;
     /** 注入时间源，便于测试时手动推进动画帧 */
     time?: Time;
 }) {
     const {
         itemSize,
-        containerSize,
+        containerSize: containerSizeOption,
         direction,
         renderItem,
         keyExtractor,
@@ -41,10 +57,16 @@ export function dynamicScrollList<T>(options: {
         bufferSize = 5,
         animationDuration = 300,
         dragByMouse: dragbymouse = false,
+        onContainerSizeChange,
         time,
     } = options;
 
     const vertical = isVertical(direction);
+    const sizeRange = typeof containerSizeOption === "number" ? undefined : containerSizeOption;
+    let containerSize =
+        typeof containerSizeOption === "number"
+            ? Math.max(0, containerSizeOption)
+            : sizeFromContent(0, containerSizeOption);
 
     let items: T[] = [];
     const renderedEls = new Map<string, AnimatedElement<T>>();
@@ -263,6 +285,42 @@ export function dynamicScrollList<T>(options: {
         }
     });
 
+    const sizeGear = new AnimationGear(
+        { size: containerSize },
+        { transition: { duration: 0, map: timingFunction.linear }, time },
+    );
+
+    sizeGear.setUpdateCallback((state) => {
+        containerSize = state.size;
+        container.style({ [vertical ? "height" : "width"]: `${state.size}px` });
+
+        // 尺寸变大时最大滚动距离会变小，需要把当前位置收回来
+        const maxScroll = getMaxScroll();
+        if (currentScroll > maxScroll) {
+            scrollGear.moveTo({ scroll: maxScroll }, 0);
+        } else {
+            updateVisibleItems();
+        }
+
+        onContainerSizeChange?.(state.size);
+    });
+
+    function setSize(size: number, animate = true) {
+        if (!Number.isFinite(size)) return;
+        const target = Math.max(0, size);
+        sizeGear.moveTo({ size: target }, animate ? { duration: animationDuration, map: timingFunction.easeInOut } : 0);
+    }
+
+    function getSize() {
+        return containerSize;
+    }
+
+    /** 自动尺寸模式下按内容重新计算目标尺寸 */
+    function applyAutoSize(animate: boolean) {
+        if (!sizeRange) return;
+        setSize(sizeFromContent(items.length * itemSize, sizeRange), animate);
+    }
+
     function getMaxScroll() {
         return Math.max(0, items.length * itemSize - containerSize);
     }
@@ -333,6 +391,9 @@ export function dynamicScrollList<T>(options: {
 
         // 使用 diff 算法更新可见元素
         diffAndUpdateVisibleItems(oldItems, Boolean(disableAnimation));
+
+        // 自动尺寸：内容变化后撑开 / 收缩
+        applyAutoSize(!disableAnimation);
 
         // 更新滚动位置
         if (snap) {
@@ -477,6 +538,8 @@ export function dynamicScrollList<T>(options: {
     return {
         el: container,
         setList,
+        setSize,
+        getSize,
         scrollTo: (val: number) => scrollTo(val, false),
         scrollToPage,
         nextPage,

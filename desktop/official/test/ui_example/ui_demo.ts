@@ -1352,6 +1352,52 @@ view("x")
         ),
     ]);
 
+// 滚动列表尺寸动画与自动撑开
+const resizeListDemo = view("y").style({ marginTop: "20px", gap: "8px" }).addInto();
+resizeListDemo.add(
+    aLineText()
+        .sv("滚动列表尺寸动画（自动撑开 36–180，宽 260–360）")
+        .style({ ...gTextStyle.title, color: gTextStyle.color.primary }),
+);
+
+const resizeItems = (count: number) => Array.from({ length: count }, (_, index) => `项目 ${index + 1}`);
+
+const resizeList = uScrollList<string>({
+    itemSize: 36,
+    containerSize: { min: 36, max: 180 },
+    direction: "down",
+    crossSize: 260,
+    keyExtractor: (item) => item,
+    renderItem: (item) =>
+        view("x")
+            .style({
+                height: "36px",
+                alignItems: "center",
+                padding: "0 10px",
+                background: "#f5f5f5",
+                borderRadius: px(gRadius.item),
+            })
+            .add(aLineText().sv(item)),
+    empty: "没有内容（最小高度）",
+});
+resizeList.setList(resizeItems(3), true);
+resizeList.el.addInto(resizeListDemo);
+
+view("x", "wrap")
+    .style({ gap: "8px" })
+    .addInto(resizeListDemo)
+    .add([
+        button("1 项").on("click", () => resizeList.setList(resizeItems(1))),
+        button("3 项").on("click", () => resizeList.setList(resizeItems(3))),
+        button("10 项").on("click", () => resizeList.setList(resizeItems(10))),
+        button("清空").on("click", () => resizeList.setList([])),
+        button("宽 360").on("click", () => resizeList.setCrossSize(360)),
+        button("宽 260（无动画）").on("click", () => resizeList.setCrossSize(260, false)),
+        button("高 90").on("click", () => resizeList.setSize(90)),
+        button("宽 320 / 高 120（无动画）").on("click", () => resizeList.setSize({ width: 320, height: 120 }, false)),
+        button("恢复自动").on("click", () => resizeList.setList(resizeItems(6))),
+    ]);
+
 // Carousel测试（垂直，带指示器）
 const carouselDemo = view()
     .style({

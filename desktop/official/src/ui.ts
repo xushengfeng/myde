@@ -1,11 +1,11 @@
 import { button, type ElType, image, pack, spacer, trackPoint, txt, view } from "dkh-ui";
-import { AnimationGear } from "myde-ui";
+import { AnimationGear, timingFunction } from "myde-ui";
 import type { ImComposeState } from "../../../src/sys_api/input_method";
 import type { MenuItem } from "../../../src/sys_api/menu";
 import { throttle } from "../../../src/utils/throttle";
 import { getIconXEl } from "./icon";
 import type { BindingSource } from "./registry";
-import { carousel, dynamicScrollList } from "./scroll-list";
+import { carousel, dynamicScrollList, type ScrollListSize } from "./scroll-list";
 
 export function sSize(s: 1 | 1.5 | 2 | 2.5 | 3 | 3.5 | 4 | 4.5 | 5 | 5.5 | 6 | 6.5 | 7 | 7.7 | 8 | 9 | 10 | 11 | 12) {
     const baseSize = 12;
@@ -449,7 +449,8 @@ export function sourceTag(text: string) {
  */
 export function uScrollList<T>(op: {
     itemSize: number;
-    containerSize: number;
+    /** 主轴尺寸；传 `{ min, max }` 时按内容自动撑开 */
+    containerSize: ScrollListSize;
     direction: "up" | "down" | "left" | "right";
     /** 垂直列表的宽度 / 水平列表的高度；缺省为 itemSize */
     crossSize?: number | string;
@@ -465,7 +466,15 @@ export function uScrollList<T>(op: {
 }) {
     const vertical = op.direction === "up" || op.direction === "down";
     const crossSize = op.crossSize ?? op.itemSize;
-    const list = dynamicScrollList<T>(op);
+    const duration = op.animationDuration ?? 300;
+
+    const wrap = view();
+    const list = dynamicScrollList<T>({
+        ...op,
+        onContainerSizeChange: (size) => {
+            wrap.style({ [vertical ? "height" : "width"]: px(size) });
+        },
+    });
     list.el.style(vertical ? { width: "100%" } : { height: "100%" });
 
     const emptyEl = view("x").style({
@@ -486,13 +495,49 @@ export function uScrollList<T>(op: {
         });
     emptyEl.add(emptyText);
 
-    const wrap = view().style({
+    wrap.style({
         position: "relative",
         [vertical ? "width" : "height"]: typeof crossSize === "number" ? px(crossSize) : crossSize,
-        [vertical ? "height" : "width"]: px(op.containerSize),
+        [vertical ? "height" : "width"]: px(list.getSize()),
         overflow: "hidden",
     });
     wrap.add([list.el, emptyEl]);
+
+    const crossGear = new AnimationGear(
+        { size: typeof crossSize === "number" ? crossSize : 0 },
+        { transition: { duration: 0, map: timingFunction.linear } },
+    );
+    crossGear.setUpdateCallback((state) => {
+        wrap.style({ [vertical ? "width" : "height"]: px(state.size) });
+    });
+
+    /** 设置交叉轴尺寸（垂直列表的宽 / 水平列表的高）；数字可动画 */
+    function setCrossSize(size: number | string, animate = true) {
+        if (typeof size === "string") {
+            wrap.style({ [vertical ? "width" : "height"]: size });
+            return;
+        }
+        if (!Number.isFinite(size)) return;
+        crossGear.moveTo({ size: Math.max(0, size) }, animate ? { duration, map: timingFunction.easeInOut } : 0);
+    }
+
+    /**
+     * 设置尺寸：数字表示主轴尺寸，对象可同时设置宽高。
+     * 主轴尺寸走列表内部计算，交叉轴尺寸走外层容器。
+     */
+    function setSize(size: number | { width?: number; height?: number }, animate = true) {
+        if (typeof size === "number") {
+            list.setSize(size, animate);
+            return;
+        }
+        if (vertical) {
+            if (size.height !== undefined) list.setSize(size.height, animate);
+            if (size.width !== undefined) setCrossSize(size.width, animate);
+        } else {
+            if (size.width !== undefined) list.setSize(size.width, animate);
+            if (size.height !== undefined) setCrossSize(size.height, animate);
+        }
+    }
 
     const setList = (items: T[], disableAnimation?: boolean) => {
         list.setList(items, disableAnimation);
@@ -503,6 +548,8 @@ export function uScrollList<T>(op: {
         ...list,
         el: wrap,
         setList,
+        setSize,
+        setCrossSize,
         setEmpty: (text: string) => emptyText.sv(text),
     };
 }

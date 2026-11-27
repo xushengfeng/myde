@@ -154,15 +154,21 @@ interface Setup {
     containerSize: number;
 }
 
-function setup(options?: { itemSize?: number; containerSize?: number; bufferSize?: number }): Setup {
+function setup(options?: {
+    itemSize?: number;
+    containerSize?: number | { min?: number; max?: number };
+    bufferSize?: number;
+}): Setup {
     const itemSize = options?.itemSize ?? 100;
-    const containerSize = options?.containerSize ?? 300;
+    const containerSizeOption = options?.containerSize ?? 300;
+    const containerSize =
+        typeof containerSizeOption === "number" ? containerSizeOption : Math.max(0, containerSizeOption.min ?? 0);
     const time = new FakeTime();
     const keyByEl = new WeakMap<FakeElement, string>();
 
     const list = dynamicScrollList<string>({
         itemSize,
-        containerSize,
+        containerSize: containerSizeOption,
         direction: "down",
         bufferSize: options?.bufferSize ?? 2,
         animationDuration: 100,
@@ -400,5 +406,67 @@ describe("dynamicScrollList", () => {
 
         s.time.settle();
         assertLayout(s, items);
+    });
+
+    it("setSize 带动画修改容器尺寸", () => {
+        const s = setup();
+        const items = Array.from({ length: 20 }, (_, i) => `k${i}`);
+        s.list.setList(items, true);
+        s.time.settle();
+        assertLayout(s, items);
+
+        s.list.setSize(500);
+        s.time.tick();
+        const midSize = Number.parseFloat(String(s.container.style.height));
+        expect(midSize).toBeGreaterThan(300);
+        expect(midSize).toBeLessThan(500);
+
+        s.time.settle();
+        expect(Number.parseFloat(String(s.container.style.height))).toBeCloseTo(500, 6);
+        s.containerSize = 500;
+        assertLayout(s, items);
+    });
+
+    it("setSize 无动画时立即生效", () => {
+        const s = setup();
+        const items = Array.from({ length: 20 }, (_, i) => `k${i}`);
+        s.list.setList(items, true);
+        s.time.settle();
+
+        s.list.setSize(150, false);
+        expect(Number.parseFloat(String(s.container.style.height))).toBe(150);
+        s.containerSize = 150;
+        assertLayout(s, items);
+    });
+
+    it("containerSize 为 min/max 时按内容自动撑开", () => {
+        const s = setup({ itemSize: 50, containerSize: { min: 100, max: 250 } });
+        const heights: number[] = [];
+
+        for (const count of [0, 1, 3, 10]) {
+            const items = Array.from({ length: count }, (_, i) => `k${i}`);
+            s.list.setList(items, true);
+            const height = Number.parseFloat(String(s.container.style.height));
+            heights.push(height);
+            s.containerSize = height;
+            assertLayout(s, items);
+        }
+
+        expect(heights).toEqual([100, 100, 150, 250]);
+    });
+
+    it("自动撑开默认带动画", () => {
+        const s = setup({ itemSize: 50, containerSize: { min: 100, max: 250 } });
+        s.list.setList(["k0"], true);
+        expect(Number.parseFloat(String(s.container.style.height))).toBe(100);
+
+        s.list.setList(["k0", "k1", "k2"]);
+        s.time.tick();
+        const midSize = Number.parseFloat(String(s.container.style.height));
+        expect(midSize).toBeGreaterThan(100);
+        expect(midSize).toBeLessThan(150);
+
+        s.time.settle();
+        expect(Number.parseFloat(String(s.container.style.height))).toBeCloseTo(150, 6);
     });
 });
