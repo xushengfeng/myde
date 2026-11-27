@@ -284,16 +284,20 @@ class Tools {
         node.style.opacity = "0";
         const rect = node.getBoundingClientRect();
         const anchorRect = probe.getBoundingClientRect();
-        const anchorX = anchorRect.left + anchorRect.width / 2 - rect.left;
-        const anchorY = anchorRect.top + anchorRect.height / 2 - rect.top;
+        // transform-origin 用元素的局部坐标，祖先 zoom 不会作用到这里；先换回局部尺寸
+        const scale = uiScale > 0 ? uiScale : 1;
+        const width = rect.width / scale;
+        const height = rect.height / scale;
+        const anchorX = (anchorRect.left + anchorRect.width / 2 - rect.left) / scale;
+        const anchorY = (anchorRect.top + anchorRect.height / 2 - rect.top) / scale;
         const origin =
             showA === "bottom"
                 ? `${anchorX}px 0px`
                 : showA === "top"
-                  ? `${anchorX}px ${rect.height}px`
+                  ? `${anchorX}px ${height}px`
                   : showA === "right"
                     ? `0px ${anchorY}px`
-                    : `${rect.width}px ${anchorY}px`;
+                    : `${width}px ${anchorY}px`;
         node.style.transformOrigin = origin;
         node.style.display = prevDisplay;
         node.style.scale = prevScale;
@@ -314,8 +318,11 @@ class Tools {
         node.style.removeProperty("position-area");
         node.style.removeProperty("right");
         node.style.removeProperty("bottom");
-        node.style.left = `${rect.left}px`;
-        node.style.top = `${rect.top}px`;
+        // 弹窗在带 zoom 的工具栏层里，left/top 也要换回局部坐标
+        const tipRect = this.tipEl.getBoundingClientRect();
+        const scale = uiScale > 0 ? uiScale : 1;
+        node.style.left = `${(rect.left - tipRect.left) / scale}px`;
+        node.style.top = `${(rect.top - tipRect.top) / scale}px`;
     }
     /** 打开下拉弹窗前收起提示，避免两个浮层同时出现 */
     private hideActiveToastNow() {
