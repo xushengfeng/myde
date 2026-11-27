@@ -10606,6 +10606,61 @@ tools.registerTool(
             showToast(uStatusToast({ icon: "battery", title, detail }), { duration: 3000, key: "power" });
         };
 
+        // UPower 新增电池设备（耳机、鼠标、键盘等）或电源设备时提示电量
+        const knownPowerPaths = new Set(MSysApi.power.getDevices().map((device) => device.path));
+        const powerTypeLabels: Record<string, string> = {
+            "Line Power": "交流电源",
+            Battery: "电池",
+            Ups: "UPS",
+            Monitor: "显示器",
+            Mouse: "鼠标",
+            Keyboard: "键盘",
+            Pda: "掌上设备",
+            Phone: "手机",
+            "Media Player": "播放器",
+            Tablet: "平板",
+            Computer: "电脑",
+            "Gaming Input": "游戏手柄",
+            Pen: "触控笔",
+            Touchpad: "触摸板",
+            Modem: "调制解调器",
+            Network: "网络设备",
+            Headset: "耳机",
+            Speakers: "音箱",
+            Headphones: "耳机",
+            Video: "视频设备",
+            "Other Audio": "音频设备",
+            "Remote Control": "遥控器",
+            Printer: "打印机",
+            Scanner: "扫描仪",
+            Camera: "相机",
+            Wearable: "穿戴设备",
+            Toy: "玩具",
+            "Bluetooth Generic": "蓝牙设备",
+        };
+        MSysApi.power.on("device-added", async (device) => {
+            if (knownPowerPaths.has(device.path)) return;
+            knownPowerPaths.add(device.path);
+            try {
+                const type = await device.getType();
+                const label = powerTypeLabels[type] ?? "设备";
+                if (type === "Line Power") {
+                    notify("电源已接入", label);
+                    return;
+                }
+                const percentage = Math.round(await device.getPercentage());
+                const model = (await device.getModel()).trim();
+                const name = model && model !== "Unknown" ? model : "";
+                const title = type === "Battery" || type === "Ups" ? `发现${label}` : `${label}已连接`;
+                notify(title, name ? `${name} · ${percentage}%` : `${percentage}%`);
+            } catch {
+                // 设备在读取过程中移除时忽略
+            }
+        });
+        MSysApi.power.on("device-removed", (path) => {
+            knownPowerPaths.delete(path);
+        });
+
         // 充电状态变化：插拔电源、充满后停止充电
         let lastCharging: boolean | undefined;
         rawRegistry.get("power.battery.charging").getAndSubscribe((charging) => {
