@@ -1,5 +1,8 @@
 import type { Icon, Point } from "./icon";
 
+/** 普通圆弧端帽的小圆角半径 */
+const arcCapRadius = 6;
+
 function buildZb(size: number) {
     return {
         size,
@@ -497,6 +500,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                 width: w,
                                 fromAngle: -45,
                                 endAngle: -90 - 45,
+                                capRadius: arcCapRadius,
                             },
                         },
                         {
@@ -537,6 +541,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                 width: w,
                                 fromAngle: xAngle,
                                 endAngle: xAngle - 30,
+                                capRadius: arcCapRadius,
                             },
                         },
                         {
@@ -580,6 +585,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                 width: w,
                                 fromAngle: 30,
                                 endAngle: -90 - 30,
+                                capRadius: arcCapRadius,
                             },
                         },
                         {
@@ -1265,6 +1271,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                 r: size - wr.x - padding - wd * 2,
                                 width: w,
                                 color: env.color,
+                                capRadius: arcCapRadius,
                             },
                         },
                         {
@@ -1276,6 +1283,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                 r: size - wr.x - padding - wd * 1,
                                 width: w,
                                 color: env.color,
+                                capRadius: arcCapRadius,
                             },
                         },
                         {
@@ -1287,6 +1295,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                 r: size - wr.x - padding,
                                 width: w,
                                 color: env.color,
+                                capRadius: arcCapRadius,
                             },
                         },
                     ],
@@ -1368,6 +1377,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                 endAngle: -180,
                                 r: dr,
                                 width: w,
+                                capRadius: arcCapRadius,
                             },
                         },
                         {
@@ -1520,6 +1530,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                 r: d2 / 2 - padding,
                                 width: w,
                                 color: env.color,
+                                capRadius: w / 2,
                             },
                         },
                         {
@@ -1588,6 +1599,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                 r: d2 / 2 - padding,
                                 width: w,
                                 color: env.color,
+                                capRadius: w / 2,
                             },
                         },
                     ],
@@ -1668,6 +1680,7 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
                                 r: d2 / 2 - padding,
                                 width: w,
                                 color: env.color,
+                                capRadius: w / 2,
                             },
                         },
                     ],

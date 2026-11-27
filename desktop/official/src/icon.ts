@@ -19,7 +19,16 @@ type zLine = {
     color: string;
 };
 type dot = { p: Point; sizeWidth: number; color: string };
-type aArc = { center: Point; r: number; width: number; fromAngle: number; endAngle: number; color: string };
+type aArc = {
+    center: Point;
+    r: number;
+    width: number;
+    fromAngle: number;
+    endAngle: number;
+    color: string;
+    /** 端帽圆角半径，0 为平直端帽，最大取线宽一半 */
+    capRadius?: number;
+};
 type pPath = {
     ps: { p: Point; c1: Point; c2: Point }[];
     width: number;
@@ -358,9 +367,12 @@ function renderZLine(zline: zLine): string {
     return `<path d="${path}" fill="${zline.color}"/>`;
 }
 
+function arcSweep(from: Point, to: Point, center: Point) {
+    return vecCross(vecSub(from, center), vecSub(to, center)) > 0 ? 1 : 0;
+}
+
 function renderArc(arc: aArc) {
     const { center, r, width, fromAngle, endAngle, color } = arc;
-    const hw = width / 2;
 
     if (fromAngle === endAngle) {
         return `<circle cx="${n(center.x)}" cy="${n(center.y)}" r="${n(r)}" fill="none" stroke="${color}" stroke-width="${width}"/>`;
@@ -368,25 +380,61 @@ function renderArc(arc: aArc) {
 
     const fromRad = (fromAngle / 180) * Math.PI;
     const endRad = (endAngle / 180) * Math.PI;
+    const hw = width / 2;
+    const cap = Math.max(0, Math.min(arc.capRadius ?? 0, hw));
 
-    const cos = Math.cos;
-    const sin = Math.sin;
-    const R = r + hw;
-    const Ri = r - hw;
+    if (cap === 0) {
+        const R = r + hw;
+        const Ri = r - hw;
+        const sx = center.x + R * Math.cos(fromRad);
+        const sy = center.y + R * Math.sin(fromRad);
+        const ex = center.x + R * Math.cos(endRad);
+        const ey = center.y + R * Math.sin(endRad);
+        const sxi = center.x + Ri * Math.cos(endRad);
+        const syi = center.y + Ri * Math.sin(endRad);
+        const exi = center.x + Ri * Math.cos(fromRad);
+        const eyi = center.y + Ri * Math.sin(fromRad);
+        const diff = (endAngle - fromAngle + 360) % 360;
+        const largeArc = diff > 180 ? 1 : 0;
+        const d = `M ${n(sx)} ${n(sy)} A ${R} ${R} 0 ${largeArc} 1 ${n(ex)} ${n(ey)} L ${n(sxi)} ${n(syi)} A ${Ri} ${Ri} 0 ${largeArc} 0 ${n(exi)} ${n(eyi)}`;
+        return `<path d="${d}" fill="${color}"/>`;
+    }
 
-    const sx = center.x + R * cos(fromRad);
-    const sy = center.y + R * sin(fromRad);
-    const ex = center.x + R * cos(endRad);
-    const ey = center.y + R * sin(endRad);
-    const sxi = center.x + Ri * cos(endRad);
-    const syi = center.y + Ri * sin(endRad);
-    const exi = center.x + Ri * cos(fromRad);
-    const eyi = center.y + Ri * sin(fromRad);
-
+    const Ro = r + hw;
+    const Ri = Math.max(0, r - hw);
     const diff = (endAngle - fromAngle + 360) % 360;
     const largeArc = diff > 180 ? 1 : 0;
 
-    const d = `M ${n(sx)} ${n(sy)} A ${R} ${R} 0 ${largeArc} 1 ${n(ex)} ${n(ey)} L ${n(sxi)} ${n(syi)} A ${Ri} ${Ri} 0 ${largeArc} 0 ${n(exi)} ${n(eyi)}`;
+    const u0 = { x: Math.cos(fromRad), y: Math.sin(fromRad) };
+    const t0 = { x: -u0.y, y: u0.x };
+    const b0 = { x: -t0.x, y: -t0.y };
+    const u1 = { x: Math.cos(endRad), y: Math.sin(endRad) };
+    const t1 = { x: -u1.y, y: u1.x };
+    const b1 = t1;
+
+    const O0 = vecAdd(center, vecScale(u0, Ro));
+    const K0 = vecAdd(center, vecScale(u0, Ro - cap));
+    const A0 = vecAdd(K0, vecScale(b0, cap));
+    const I0 = vecAdd(center, vecScale(u0, Ri));
+    const L0 = vecAdd(center, vecScale(u0, Ri + cap));
+    const B0 = vecAdd(L0, vecScale(b0, cap));
+
+    const O1 = vecAdd(center, vecScale(u1, Ro));
+    const K1 = vecAdd(center, vecScale(u1, Ro - cap));
+    const A1 = vecAdd(K1, vecScale(b1, cap));
+    const I1 = vecAdd(center, vecScale(u1, Ri));
+    const L1 = vecAdd(center, vecScale(u1, Ri + cap));
+    const B1 = vecAdd(L1, vecScale(b1, cap));
+
+    let d = `M ${n(O0.x)} ${n(O0.y)}`;
+    d += ` A ${n(cap)} ${n(cap)} 0 0 ${arcSweep(O0, A0, K0)} ${n(A0.x)} ${n(A0.y)}`;
+    d += ` L ${n(B0.x)} ${n(B0.y)}`;
+    d += ` A ${n(cap)} ${n(cap)} 0 0 ${arcSweep(B0, I0, L0)} ${n(I0.x)} ${n(I0.y)}`;
+    if (Ri > 0) d += ` A ${n(Ri)} ${n(Ri)} 0 ${largeArc} 1 ${n(I1.x)} ${n(I1.y)}`;
+    d += ` A ${n(cap)} ${n(cap)} 0 0 ${arcSweep(I1, B1, L1)} ${n(B1.x)} ${n(B1.y)}`;
+    d += ` L ${n(A1.x)} ${n(A1.y)}`;
+    d += ` A ${n(cap)} ${n(cap)} 0 0 ${arcSweep(A1, O1, K1)} ${n(O1.x)} ${n(O1.y)}`;
+    d += ` A ${n(Ro)} ${n(Ro)} 0 ${largeArc} 0 ${n(O0.x)} ${n(O0.y)} Z`;
 
     return `<path d="${d}" fill="${color}"/>`;
 }
