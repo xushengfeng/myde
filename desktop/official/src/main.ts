@@ -839,6 +839,11 @@ class ViewData {
         this.render(false);
     }
 
+    /** 三指横滑/触摸板滚轮切到相邻虚拟屏所需的位移（CSS px），与手势共用倍率设置 */
+    get screenSwitchDistance() {
+        return Math.max(1, this.stageWidth) / (2 * gestureSwitchGain);
+    }
+
     private createScreen(kind: "empty" | "launchpad" | "app") {
         const id = `view-${this.nextId++}`;
         const el = createScreenEl(id, () => {
@@ -7490,23 +7495,30 @@ type ScreenWheelEvent = WheelEventSemantics & {
     deltaX?: number;
     deltaY?: number;
 };
-/** 一屏 = 鼠标滚轮一格 / 触摸板滚动 100px */
+/** 窗口模式没有设备信息，沿用 100px 一屏累计 */
 const SCREEN_WHEEL_STEP = WHEEL_STEP;
 /** 没有 wheelStart/wheelEnd 的来源（窗口模式），间隔这么久视为新序列 */
 const SCREEN_WHEEL_GAP = 200;
 let screenWheelAccum = 0;
 let screenWheelAxis: "x" | "y" | undefined;
+/** 触摸板本轮序列还剩多少起点死区，与三指手势一致 */
+let screenWheelDeadzone = 0;
 let screenWheelAt = 0;
 
 function resetScreenWheel() {
     screenWheelAccum = 0;
     screenWheelAxis = undefined;
+    screenWheelDeadzone = 0;
+}
+
+function isTouchpadWheel(e: ScreenWheelEvent) {
+    return e.wheelDevice === "touchpad" || (e.wheelSource !== undefined && e.wheelSource !== "wheel");
 }
 
 /**
  * 滚轮切屏/移动预览焦点，等同 Super+←/→。
- * 原生 evdev 下鼠标按滚轮格数（wheelSteps）累计，触摸板按 deltaX/deltaY 距离累计；
- * 两者都换算成一屏一份，反向滚动立即换向。
+ * 鼠标一个 wheel 事件切一屏；触摸板按三指手势的换算累计位移，
+ * 一屏 = `stageWidth / (2 * switchGestureGain)`，并扣掉同样的起点死区。
  */
 function handleScreenWheel(e: ScreenWheelEvent) {
     if (state.getState() !== "normal") return false;
@@ -7515,22 +7527,37 @@ function handleScreenWheel(e: ScreenWheelEvent) {
         return false;
     }
     const now = performance.now();
-    if (e.wheelStart === true || now - screenWheelAt > SCREEN_WHEEL_GAP) resetScreenWheel();
+    if (e.wheelStart === true || now - screenWheelAt > SCREEN_WHEEL_GAP) {
+        resetScreenWheel();
+        if (isTouchpadWheel(e)) screenWheelDeadzone = GESTURE_AXIS_DEADZONE;
+    }
     screenWheelAt = now;
 
     const dx = e.deltaX ?? 0;
     const dy = e.deltaY ?? 0;
     if (dx === 0 && dy === 0) return false;
     screenWheelAxis ??= Math.abs(dx) >= Math.abs(dy) ? "x" : "y";
-    const touchpad = e.wheelDevice === "touchpad" || (e.wheelSource !== undefined && e.wheelSource !== "wheel");
-    const amount =
-        screenWheelAxis === "x"
-            ? touchpad
-                ? dx / SCREEN_WHEEL_STEP
-                : (e.wheelStepsX ?? dx / SCREEN_WHEEL_STEP)
-            : touchpad
-              ? dy / SCREEN_WHEEL_STEP
-              : (e.wheelStepsY ?? dy / SCREEN_WHEEL_STEP);
+    const delta = screenWheelAxis === "x" ? dx : dy;
+    if (delta === 0) return false;
+
+    const touchpad = isTouchpadWheel(e);
+    // 鼠标一个事件切一屏，不累计距离
+    if (!touchpad && (e.wheelDevice === "mouse" || e.wheelSource === "wheel")) {
+        screenWheelAccum = 0;
+        viewData.moveOverviewFocus(delta > 0 ? 1 : -1);
+        return true;
+    }
+
+    let amount: number;
+    if (touchpad) {
+        // 与三指手势一致：先扣起点死区，再按手势的切屏距离换算
+        const abs = Math.abs(delta);
+        const skip = Math.min(screenWheelDeadzone, abs);
+        screenWheelDeadzone -= skip;
+        amount = (Math.sign(delta) * (abs - skip)) / viewData.screenSwitchDistance;
+    } else {
+        amount = delta / SCREEN_WHEEL_STEP;
+    }
     if (amount === 0) return false;
     // 反向滚动立即换向，不把上一方向没走完的零头算进来
     if (screenWheelAccum !== 0 && Math.sign(amount) !== Math.sign(screenWheelAccum)) screenWheelAccum = 0;
