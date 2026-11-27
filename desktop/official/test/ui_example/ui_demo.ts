@@ -8,6 +8,7 @@ import type { RegistrySchema } from "../../src/registry_schema";
 import { carousel, dynamicScrollList } from "../../src/scroll-list";
 import {
     createBluePanel,
+    createClockPanel,
     createConnectPanel,
     createPowerPanel,
     createWifiPanel,
@@ -823,6 +824,19 @@ demoRegistry.setData("power.battery", batteryPercentage);
 demoRegistry.setData("power.battery.charging", batteryCharging);
 demoRegistry.setData("power.devices", powerDeviceIds);
 
+function syncDemoTime() {
+    const now = new Date();
+    demoRegistry.setData("time.second", now.getSeconds());
+    demoRegistry.setData("time.minute", now.getMinutes());
+    demoRegistry.setData("time.hour", now.getHours());
+    demoRegistry.setData("time.day", now.getDate());
+    demoRegistry.setData("time.month", now.getMonth() + 1);
+    demoRegistry.setData("time.weekday", now.getDay());
+    demoRegistry.setData("time.year", now.getFullYear());
+}
+syncDemoTime();
+setInterval(syncDemoTime, 1000);
+
 // 开关写回：关掉时清空列表，打开时恢复，和真实系统里的表现一致
 demoRegistry.setSetCallback("wifi.enabled", async (enabled) => {
     demoRegistry.setData("wifi.enabled", enabled);
@@ -979,6 +993,9 @@ popupRow.add(
         }),
     ]),
 );
+
+const clockPanel = createClockPanel(demoRegistry);
+popupRow.add(popupColumn("时钟", clockPanel.el));
 
 // 电源各模式 × 电量：观察条纹配色、分界线与文字 / 图标位置
 function batteryBar(percentage: number, charging = false) {

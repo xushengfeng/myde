@@ -49,7 +49,7 @@ import type { id, RegistrySchema } from "./registry_schema";
 import { ScreenManager } from "./screen";
 import { type SearchAiHandler, SearchEngine, type SearchProvider, type SearchResult, scoreLatin } from "./search";
 import { createSettingsContent, type ImePanelPreeditMode } from "./settings";
-import { createBluePanel, createConnectPanel, createPowerPanel, createWifiPanel } from "./tool_panel";
+import { createBluePanel, createClockPanel, createConnectPanel, createPowerPanel, createWifiPanel } from "./tool_panel";
 import {
     aLineText,
     gGlassStyle,
@@ -8171,18 +8171,31 @@ function createConnectPairing() {
     return connect.startPairing();
 }
 
-function updateTime() {
-    const now = new Date();
-    rawRegistry.setData("time.second", now.getSeconds());
-    rawRegistry.setData("time.minute", now.getMinutes());
-    rawRegistry.setData("time.hour", now.getHours());
-    rawRegistry.setData("time.day", now.getDate());
-    rawRegistry.setData("time.month", now.getMonth() + 1);
-    rawRegistry.setData("time.weekday", now.getDay());
-    rawRegistry.setData("time.year", now.getFullYear());
+/** 上一次写入的时间值；秒级刷新时只在值变化时通知订阅者 */
+const lastTimeValues = new Map<string, unknown>();
+function setTimeValue<K extends keyof RegistrySchema & string>(key: K, value: RegistrySchema[K]) {
+    if (lastTimeValues.get(key) === value) return;
+    lastTimeValues.set(key, value);
+    rawRegistry.setData(key, value);
 }
-updateTime();
-setInterval(updateTime, 6000);
+
+function updateTime(now = new Date()) {
+    setTimeValue("time.second", now.getSeconds());
+    setTimeValue("time.minute", now.getMinutes());
+    setTimeValue("time.hour", now.getHours());
+    setTimeValue("time.day", now.getDate());
+    setTimeValue("time.month", now.getMonth() + 1);
+    setTimeValue("time.weekday", now.getDay());
+    setTimeValue("time.year", now.getFullYear());
+}
+
+/** 对齐到整秒刷新：秒数跳变不会因为 setInterval 漂移而偶尔重复或跳过 */
+function scheduleTimeUpdate() {
+    const now = new Date();
+    updateTime(now);
+    setTimeout(scheduleTimeUpdate, 1000 - now.getMilliseconds());
+}
+scheduleTimeUpdate();
 
 MSysApi.power
     .init()
@@ -9814,19 +9827,31 @@ tools.registerTool("startMenuFullScreen", ({ tipEl, showTip }) => createStartMen
     selfBackground: true,
 });
 
-tools.registerTool("clock", () => {
-    const clockEl = view("x").style({ alignItems: "center" });
-    const hh = view();
-    const mm = view();
-    clockEl.add([hh, nNumber(":"), mm]);
-    rawRegistry.get("time.hour").getAndSubscribe((v) => {
-        hh.clear().add(nNumber(v.toString().padStart(2, "0")));
-    });
-    rawRegistry.get("time.minute").getAndSubscribe((v) => {
-        mm.clear().add(nNumber(v.toString().padStart(2, "0")));
-    });
-    return clockEl;
-});
+tools.registerTool(
+    "clock",
+    ({ tipEl, showTip }) => {
+        const clockEl = view("x")
+            .style({ alignItems: "center", padding: `0 ${px(sSize2.paddingx)}`, cursor: "pointer" })
+            .data({ tool: "clock" });
+        const hh = view();
+        const mm = view();
+        clockEl.add([hh, nNumber(":"), mm]);
+        rawRegistry.get("time.hour").getAndSubscribe((v) => {
+            hh.clear().add(nNumber(v.toString().padStart(2, "0")));
+        });
+        rawRegistry.get("time.minute").getAndSubscribe((v) => {
+            mm.clear().add(nNumber(v.toString().padStart(2, "0")));
+        });
+
+        const panel = createClockPanel(rawRegistry);
+        panel.el.addInto(tipEl);
+        clockEl.on("click", () => {
+            showTip({ state: "show", anchorEl: clockEl.el });
+        });
+        return clockEl;
+    },
+    { selfBackground: true },
+);
 
 tools.registerTool("apps", ({ tipEl, showA, showTip }) => {
     const appsEl = view().style({

@@ -4,7 +4,7 @@ import type { Registry } from "./registry";
 import type { RegistrySchema } from "./registry_schema";
 import { attachBatteryFx, attachOrbitFx, attachRippleFx } from "./tool_fx";
 import { createToolPool, type ToolPoolOptions } from "./tool_pool";
-import { aLineText, gTextStyle, px, sSize, sSize2, ui, uToggleRow } from "./ui";
+import { aLineText, aNumberText, gTextStyle, px, sSize, sSize2, ui, uToggleRow } from "./ui";
 
 /**
  * 工具栏弹窗的装配：外层 L1 宽度、固定高度列表、L2 信息行，以及网络 / 蓝牙 / 互联 / 电源的弹窗结构。
@@ -28,6 +28,107 @@ export function tListPanel(rows: ElType<HTMLElement> | ElType<HTMLElement>[], he
         .barItem()
         .style({ height: px(height) })
         .add(rows);
+}
+
+const weekdayNames = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"] as const;
+
+function pad2(value: number) {
+    return value.toString().padStart(2, "0");
+}
+
+/** 本地时区相对 UTC 的偏移，例如 UTC+08:00 */
+function utcOffsetLabel(date: Date) {
+    const total = -date.getTimezoneOffset();
+    const sign = total < 0 ? "-" : "+";
+    const minutes = Math.abs(total);
+    return `UTC${sign}${pad2(Math.floor(minutes / 60))}:${pad2(minutes % 60)}`;
+}
+
+/**
+ * 时钟弹窗：大号时分秒 + 日期星期 + 时区。
+ * 时间来自 registry 的 `time.*`，由 main.ts 每秒对齐刷新。
+ */
+export function createClockPanel(registry: Registry<RegistrySchema>) {
+    const timeText = aNumberText({ fontSize: 36, lineHeight: 40 });
+    const dateText = aLineText().style({
+        ...gTextStyle.body,
+        color: gTextStyle.color.primary,
+        width: "100%",
+        textAlign: "center",
+    });
+    const zoneText = aLineText().style({
+        ...gTextStyle.caption,
+        color: gTextStyle.color.secondary,
+        width: "100%",
+        textAlign: "center",
+    });
+
+    const timeRow = tInfoRow(timeText.el).style({ justifyContent: "center", height: px(sSize(1.5)) });
+    const infoRow = ui
+        .barItem()
+        .style({
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: px(2),
+            padding: `${px(6)} ${px(sSize2.paddingx)}`,
+            boxSizing: "border-box",
+        })
+        .add([dateText, zoneText]);
+
+    const el = tPanel([timeRow, infoRow]);
+
+    let hour = 0;
+    let minute = 0;
+    let second = 0;
+    const renderTime = () => timeText.sv(`${pad2(hour)}:${pad2(minute)}:${pad2(second)}`);
+
+    let year = 0;
+    let month = 1;
+    let day = 1;
+    let weekday = 0;
+    const renderDate = () => {
+        dateText.sv(`${year}年${month}月${day}日 ${weekdayNames[weekday] ?? ""}`);
+        zoneText.sv(utcOffsetLabel(new Date()));
+    };
+
+    const unsubs = [
+        registry.get("time.hour").getAndSubscribe((v) => {
+            hour = v;
+            renderTime();
+        }),
+        registry.get("time.minute").getAndSubscribe((v) => {
+            minute = v;
+            renderTime();
+        }),
+        registry.get("time.second").getAndSubscribe((v) => {
+            second = v;
+            renderTime();
+        }),
+        registry.get("time.year").getAndSubscribe((v) => {
+            year = v;
+            renderDate();
+        }),
+        registry.get("time.month").getAndSubscribe((v) => {
+            month = v;
+            renderDate();
+        }),
+        registry.get("time.day").getAndSubscribe((v) => {
+            day = v;
+            renderDate();
+        }),
+        registry.get("time.weekday").getAndSubscribe((v) => {
+            weekday = v;
+            renderDate();
+        }),
+    ];
+
+    return {
+        el,
+        unmount: () => {
+            for (const unsub of unsubs) unsub();
+        },
+    };
 }
 
 /** 单行 L2 信息条：垂直居中，左右留 paddingx */
