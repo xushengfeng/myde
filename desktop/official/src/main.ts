@@ -677,6 +677,8 @@ type ViewScreen = {
     empty: boolean;
     /** 启动台：固定在最右的应用图标屏，和空桌面一样不参与全局预览 */
     launchpad: boolean;
+    /** 全局置顶窗口的专用屏：窗口在常规模式固定覆盖在所有屏之上 */
+    pinned?: boolean;
     /** 最近一次停留满缓冲期、成为当前屏的顺序，重排时从小到大（旧的到新的） */
     used: number;
     el: ElType<HTMLElement>;
@@ -852,6 +854,10 @@ class ViewData {
     /** 预览里的聚焦面板；位置由 focus 连续插值，透明度独立淡入淡出 */
     private readonly focusPanelEl: ElType<HTMLElement>;
     private readonly focusPanelGear: AnimationGear<{ opacity: number }>;
+    /** 置顶窗口从“跟随聚焦面板”过渡到自己的屏卡片：0 面板，1 卡片 */
+    private readonly pinnedCardGear: AnimationGear<{ v: number }>;
+    private pinnedCardMix = 0;
+    private pinnedCardTarget = false;
     private launcher?: LauncherController;
 
     private usedSeq = 0;
@@ -904,6 +910,11 @@ class ViewData {
         this.focusPanelGear.setUpdateCallback((value) => {
             this.focusPanelEl.style({ opacity: `${value.opacity}` });
         });
+        this.pinnedCardGear = createAnimationGear({ v: 0 }, { transition: OVERVIEW_GRID_TRANSITION });
+        this.pinnedCardGear.setUpdateCallback(({ v }) => {
+            this.pinnedCardMix = v;
+            this.renderWindowSlots();
+        });
         this.levelGear = createAnimationGear({ v: 0 }, { transition: SCREEN_TRANSITION });
         this.levelGear.setUpdateCallback(({ v }) => {
             this.levelValue = v;
@@ -919,6 +930,17 @@ class ViewData {
 
     get launchpadScreen() {
         return this.screens.find((s) => s.launchpad);
+    }
+
+    /** 全局置顶窗口共用的专用屏；没有置顶窗口时不存在 */
+    get pinnedScreen() {
+        return this.screens.find((s) => s.pinned);
+    }
+
+    /** 是否属于置顶窗口栈（子窗口跟随父窗口一起置顶） */
+    isPinnedWindow(winid: MWinId) {
+        const screen = this.win2Screen.get(rootWindow(winid));
+        return screen?.pinned === true;
     }
 
     get gestureActive() {
@@ -1015,13 +1037,15 @@ class ViewData {
         this.levelGear.moveTo({ v: target }, onComplete ? { ...transition, onComplete } : transition);
     }
 
-    /** 只允许当前虚拟屏里的窗口接收指针，滚动同理 */
+    /** 只允许当前虚拟屏里的窗口接收指针，滚动同理；置顶窗口在所有屏都接收 */
     isCurrentWin(winid: MWinId) {
+        if (this.isPinnedWindow(winid)) return true;
         return this.win2Screen.get(winid)?.id === this.currentId;
     }
 
     /**
      * 只有聚焦虚拟屏上的窗口跟随输出刷新率，其余屏上的窗口压到接近 30Hz。
+     * 置顶窗口在所有屏都可见，始终跟随输出刷新率。
      * 屏幕切换、窗口增删/移动都会经过 applyAxes，这里只做差分下发。
      */
     private syncWindowFrameRates() {
@@ -1029,7 +1053,7 @@ class ViewData {
         for (const [handle, screen] of this.win2Screen) {
             // 桌面内部窗口没有 Wayland surface，不需要也不能下发帧率
             if (internalWindows.has(handle) || !server.server.windows.get(handle)) continue;
-            const fps = screen.id === current ? null : BACKGROUND_WINDOW_FPS;
+            const fps = screen.id === current || screen.pinned ? null : BACKGROUND_WINDOW_FPS;
             if (this.appliedFrameRates.get(handle) === fps) continue;
             this.appliedFrameRates.set(handle, fps);
             server.server.notify("window.setFrameRate", handle, fps);
@@ -1089,18 +1113,19 @@ class ViewData {
         return Math.max(1, this.stageWidth) / (2 * gestureSwitchGain);
     }
 
-    private createScreen(kind: "empty" | "launchpad" | "app") {
+    private createScreen(kind: "empty" | "launchpad" | "app" | "pinned", startFrom?: ViewTransform) {
         const id = `view-${this.nextId++}`;
         const el = createScreenEl(id, () => {
             if (this.overview) this.selectFromOverview(id);
         });
-        const start = { x: this.stageWidth, y: 0, scale: 1, opacity: 1, blur: 0 };
+        const start = startFrom ? { ...startFrom } : { x: this.stageWidth, y: 0, scale: 1, opacity: 1, blur: 0 };
         const gear = createAnimationGear<ViewTransform>(start, { transition: SCREEN_TRANSITION });
         const screen: ViewScreen = {
             id,
             winIds: [],
             empty: kind === "empty",
             launchpad: kind === "launchpad",
+            pinned: kind === "pinned",
             used: 0,
             el,
             gear,
@@ -1108,6 +1133,8 @@ class ViewData {
             target: { ...start },
             pullMode: "tracked",
         };
+        // 从指定位置出现时先把 DOM 放到那里，避免第一帧从错误位置闪一下
+        applyScreenTransform(el, start);
         gear.setUpdateCallback((value) => {
             screen.visual = value;
             applyScreenTransform(el, value);
@@ -1201,22 +1228,75 @@ class ViewData {
         return empty;
     }
 
-    /** 在空桌面左边插一张新的应用屏 */
-    private createAppScreen() {
-        const screen = this.createScreen("app");
+    /** 在空桌面左边插一张新的应用屏；`atIndex` 用于退出置顶时原地换成普通屏 */
+    private createAppScreen(startFrom?: ViewTransform, atIndex?: number) {
+        const screen = this.createScreen("app", startFrom);
+        let index = atIndex === undefined ? this.screens.length : Math.max(0, Math.min(atIndex, this.screens.length));
+        if (atIndex === undefined) {
+            const emptyIndex = this.screens.findIndex((s) => s.empty);
+            if (emptyIndex >= 0) index = emptyIndex;
+        }
+        this.screens.splice(index, 0, screen);
+        screen.used = ++this.usedSeq;
+        return screen;
+    }
+
+    /** 在空桌面左边插一张置顶窗口专用屏 */
+    private createPinnedScreen(startFrom?: ViewTransform) {
+        const screen = this.createScreen("pinned", startFrom);
         const emptyIndex = this.screens.findIndex((s) => s.empty);
         this.screens.splice(emptyIndex >= 0 ? emptyIndex : this.screens.length, 0, screen);
         screen.used = ++this.usedSeq;
         return screen;
     }
 
+    /** 全局模式下切换窗口的置顶状态；进入/退出都不退出预览 */
+    togglePinnedWindow(winid: MWinId) {
+        if (!this.overview) return;
+        const screen = this.win2Screen.get(winid);
+        if (!screen) return;
+        if (screen.pinned) this.unpinWindow(winid);
+        else this.pinWindow(winid);
+    }
+
+    /** 把窗口放进共用的置顶屏；放不下（覆盖超限）时不加入 */
+    private pinWindow(winid: MWinId) {
+        const source = this.win2Screen.get(winid);
+        if (!source) return;
+        this.cancelGesture();
+        let target = this.pinnedScreen;
+        const created = target === undefined;
+        if (!target) target = this.createPinnedScreen(source.visual);
+        if (!this.moveWindowToScreen(winid, target, undefined, true)) {
+            if (created) this.removeScreen(target);
+            return;
+        }
+        this.render(true);
+    }
+
+    /** 退出置顶：窗口原地换成新的应用屏，置顶屏回收，预览保持打开 */
+    private unpinWindow(winid: MWinId) {
+        const source = this.win2Screen.get(winid);
+        if (!source?.pinned) return;
+        this.cancelGesture();
+        const sourceIndex = this.screens.indexOf(source);
+        const target = this.createAppScreen(source.visual, sourceIndex >= 0 ? sourceIndex : undefined);
+        if (!this.moveWindowToScreen(winid, target)) {
+            this.removeScreen(target);
+            return;
+        }
+        this.render(true);
+    }
+
     /**
      * 把窗口移到另一张虚拟屏。目标屏放不下（覆盖超限）时返回 false，窗口留在原屏。
      * 目标屏是空桌面时，它会变成应用屏，并在右边补一个新的空桌面。
+     * `allowPinned` 只给置顶流程用：普通移动/拖放不能把窗口放进置顶屏。
      */
-    moveWindowToScreen(winid: MWinId, target: ViewScreen, at?: { x: number; y: number }): boolean {
+    moveWindowToScreen(winid: MWinId, target: ViewScreen, at?: { x: number; y: number }, allowPinned = false): boolean {
         const source = this.win2Screen.get(winid);
         if (!source || source === target || target.launchpad) return false;
+        if (target.pinned && !allowPinned) return false;
         const el = windowElement(winid);
         const width = el?.offsetWidth ?? 0;
         const height = el?.offsetHeight ?? 0;
@@ -1396,8 +1476,13 @@ class ViewData {
 
     /** 全局预览里拖动卡片：把这张屏最上层的窗口拖到指针下的另一张屏 */
     private beginOverviewCardDrag(e: PointerEvent, source: ViewScreen) {
-        if (!this.overview || e.button !== 0 || source.launchpad || source.winIds.length === 0) return;
-        if ((e.target as HTMLElement | null)?.closest("[data-desktop-ui='window-close']")) return;
+        if (!this.overview || e.button !== 0 || source.launchpad || source.pinned || source.winIds.length === 0) return;
+        if (
+            (e.target as HTMLElement | null)?.closest(
+                "[data-desktop-ui='window-close'], [data-desktop-ui='window-pin']",
+            )
+        )
+            return;
         const startX = e.clientX;
         const startY = e.clientY;
         let moved = false;
@@ -1449,7 +1534,7 @@ class ViewData {
         let best: ViewScreen | undefined;
         let bestZ = Number.NEGATIVE_INFINITY;
         for (const screen of this.screens) {
-            if (screen === exclude || screen.launchpad) continue;
+            if (screen === exclude || screen.launchpad || screen.pinned) continue;
             const rect = screen.el.el.getBoundingClientRect();
             if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
             const z = Number(screen.el.el.style.zIndex) || 0;
@@ -1618,7 +1703,9 @@ class ViewData {
             this.switchScreen(empty.id);
             return;
         }
-        const previous = this.screens.filter((s) => !s.empty && !s.launchpad).sort((a, b) => b.used - a.used)[0];
+        const previous = this.screens
+            .filter((s) => !s.empty && !s.launchpad && !s.pinned)
+            .sort((a, b) => b.used - a.used)[0];
         if (previous) this.switchScreen(previous.id);
     }
 
@@ -2008,8 +2095,13 @@ class ViewData {
         const anchor = this.currentId;
         if (current) current.used = ++this.usedSeq;
         const empty = this.screens.find((s) => s.empty);
+        const pinned = this.screens.find((s) => s.pinned);
         const launchpad = this.screens.find((s) => s.launchpad);
-        const ordered = this.screens.filter((s) => !s.empty && !s.launchpad).toSorted((a, b) => a.used - b.used);
+        const ordered = this.screens
+            .filter((s) => !s.empty && !s.launchpad && !s.pinned)
+            .toSorted((a, b) => a.used - b.used);
+        // 置顶屏固定在空桌面左边，不参与最近使用重排
+        if (pinned) ordered.push(pinned);
         if (empty) ordered.push(empty);
         if (launchpad) ordered.push(launchpad);
         const changed = ordered.some((s, i) => s !== this.screens[i]);
@@ -2180,20 +2272,64 @@ class ViewData {
         }
     }
 
-    /** 聚焦面板位置从两张焦点卡片的当前视觉插值，跟着 grid 重排动画一起走 */
-    private applyPanel() {
-        if (!this.focusPanelEl || this.screens.length === 0) return;
+    /** 聚焦面板的位置从两张焦点卡片的当前视觉插值；缩放取卡片本身，不含面板外扩 */
+    private focusCardTransform() {
         const p = clampNumber(this.focusValue, 0, this.screens.length - 1);
         const i0 = Math.floor(p);
         const i1 = Math.min(this.screens.length - 1, Math.ceil(p));
         const t = p - i0;
         const a = this.screens[i0].visual;
         const b = this.screens[i1].visual;
-        const value = {
+        return {
             x: a.x + (b.x - a.x) * t,
             y: a.y + (b.y - a.y) * t,
             scale: a.scale + (b.scale - a.scale) * t,
         };
+    }
+
+    /**
+     * 置顶窗口的舞台坐标：
+     * - 常规模式：固定覆盖在舞台上，不随虚拟屏滑动；
+     * - 离开常规后跟随聚焦面板；
+     * - 进入 grid（或按钮进入预览）后移动到自己的屏卡片。
+     */
+    private pinnedOverlayTransform(screen: ViewScreen): ViewTransform {
+        if (this.levelValue <= 0) return { x: 0, y: 0, scale: 1, opacity: 1, blur: 0 };
+        const panel = this.focusCardTransform();
+        const card = screen.visual;
+        const t = clampNumber(this.pinnedCardMix, 0, 1);
+        return {
+            x: panel.x + (card.x - panel.x) * t,
+            y: panel.y + (card.y - panel.y) * t,
+            scale: panel.scale + (card.scale - panel.scale) * t,
+            opacity: 1,
+            blur: 0,
+        };
+    }
+
+    /** 置顶窗口什么时候离开聚焦面板、落到自己的屏卡片上 */
+    private syncPinnedCardMode(instant: boolean) {
+        // 手势在 0.8 接力到 grid；按钮/快捷键从按下起就直接朝停稳后的 grid 走
+        const onCard = this.gesture ? this.levelValue >= OVERVIEW_GRID_HANDOFF : this.overview;
+        if (onCard === this.pinnedCardTarget) return;
+        this.pinnedCardTarget = onCard;
+        const target = onCard ? 1 : 0;
+        if (instant) {
+            this.pinnedCardMix = target;
+            this.pinnedCardGear.moveTo({ v: target }, 0);
+            return;
+        }
+        // 和置顶屏自己的 grid 重排动画同步：打断时按剩余时间续接
+        const screen = this.pinnedScreen;
+        const running = screen?.gear.getRunningAnimation();
+        const duration = running?.isRunning ? Math.max(0, running.remainingTime) : OVERVIEW_GRID_TRANSITION.duration;
+        this.pinnedCardGear.moveTo({ v: target }, duration);
+    }
+
+    /** 聚焦面板位置从两张焦点卡片的当前视觉插值，跟着 grid 重排动画一起走 */
+    private applyPanel() {
+        if (!this.focusPanelEl || this.screens.length === 0) return;
+        const value = this.focusCardTransform();
         const panelScale = value.scale * FOCUS_PANEL_SCALE;
         this.focusPanelEl.style({
             transform: `translate3d(${value.x - (this.stageWidth * (panelScale - value.scale)) / 2}px, ${
@@ -2209,8 +2345,12 @@ class ViewData {
     renderWindowSlots() {
         const overviewVisual = this.overviewProgress > 0;
         const activeId = this.currentId;
+        const pinned = this.pinnedScreen;
+        const pinnedTransform = pinned ? this.pinnedOverlayTransform(pinned) : undefined;
         for (const screen of this.screens) {
             const base = overviewVisual ? (screen.id === activeId ? 2000 : 1000) : screen.id === activeId ? 1000 : 0;
+            // 置顶窗口在所有窗口之上；它自己的卡片只是预览里的落点
+            const slotBase = screen.pinned ? 3000 : base;
             let order = 0;
             for (const id of screen.winIds) {
                 for (const stackId of windowStackOrder(id)) {
@@ -2223,8 +2363,9 @@ class ViewData {
                         continue;
                     }
                     if (slot.el.dataset.windowScreen !== screen.id) slot.data({ "window-screen": screen.id });
-                    applyScreenTransform(slot, screen.visual);
-                    slot.style({ zIndex: `${base + 1 + order}` });
+                    slot.el.toggleAttribute("data-pinned-window", screen.pinned === true);
+                    applyScreenTransform(slot, screen.pinned && pinnedTransform ? pinnedTransform : screen.visual);
+                    slot.style({ zIndex: `${slotBase + 1 + order}` });
                     order++;
                 }
             }
@@ -2242,6 +2383,7 @@ class ViewData {
     /** 唯一的布局出口：两轴当前值 -> 屏 target -> DOM，启动器/面板/关闭按钮透明度一起更新 */
     private applyAxes(instant = false) {
         this.applyScreenLayout(instant);
+        this.syncPinnedCardMode(instant);
         const overviewVisual = this.overviewProgress > 0;
         const activeId = this.currentId;
         for (const screen of this.screens) {
@@ -2425,6 +2567,7 @@ class ViewData {
                 windows: [...screen.winIds],
                 empty: screen.empty,
                 launchpad: screen.launchpad,
+                pinned: screen.pinned === true,
                 used: screen.used,
                 current: screen.id === this.currentId,
                 visual: { ...screen.visual },
@@ -2482,6 +2625,7 @@ class ViewData {
                     fullscreen: info?.states.fullscreen ?? false,
                     parent: windowParents.get(handle),
                     modal: modalWindows.has(handle),
+                    pinned: screen.pinned === true,
                     /** 渲染轴的盒/整框动画正在跑（可能发生在启动收尾之后） */
                     resizing:
                         (frame?.boxGear?.getRunningAnimation().isRunning ?? false) ||
@@ -2504,6 +2648,9 @@ class ViewData {
         this.levelTarget = 0;
         this.levelGear.moveTo({ v: 0 }, 0);
         this.focusPanelGear.moveTo({ opacity: 0 }, 0);
+        this.pinnedCardTarget = false;
+        this.pinnedCardMix = 0;
+        this.pinnedCardGear.moveTo({ v: 0 }, 0);
         const empty = this.screens.find((screen) => screen.empty);
         if (empty) this.setFocusById(empty.id, false);
         this.render(false);
@@ -3003,9 +3150,15 @@ function mouseMove(x: number, y: number, p?: PointerEvent) {
     cursor.setSurfaceFocus(target?.clientId);
 }
 
-/** 统一的窗口关闭按钮：白色圆底 + 叉号，压在任意窗口内容上都能看清 */
-function createWindowCloseButton(op: { size: number; onClick: () => void }) {
-    const btn = button(getIconXEl("cross", { size: Math.round(op.size * 0.55) }))
+/** 统一的窗口圆形控制按钮：白色圆底 + 图标，压在任意窗口内容上都能看清 */
+function createWindowControlButton(op: {
+    size: number;
+    icon: HTMLElement | { el: HTMLElement };
+    ui: string;
+    title?: string;
+    onClick: () => void;
+}) {
+    const btn = button(op.icon)
         .style({
             width: `${op.size}px`,
             height: `${op.size}px`,
@@ -3020,13 +3173,24 @@ function createWindowCloseButton(op: { size: number; onClick: () => void }) {
             cursor: "pointer",
             zIndex: "10",
         })
-        .data({ "desktop-ui": "window-control" });
+        .data({ "desktop-ui": op.ui });
+    if (op.title) btn.el.title = op.title;
     btn.on("click", (e) => {
         // 预览里父级点击是跳转窗口；按钮自己先截断，避免触发跳转
         e.stopPropagation();
         op.onClick();
     });
     return btn;
+}
+
+/** 统一的窗口关闭按钮：白色圆底 + 叉号，压在任意窗口内容上都能看清 */
+function createWindowCloseButton(op: { size: number; onClick: () => void }) {
+    return createWindowControlButton({
+        size: op.size,
+        icon: getIconXEl("cross", { size: Math.round(op.size * 0.55) }),
+        ui: "window-control",
+        onClick: op.onClick,
+    });
 }
 
 /**
@@ -3046,6 +3210,31 @@ function createOverviewWindowCloseButton(onClose: () => void) {
             zIndex: "30",
         })
         .data({ "desktop-ui": "window-close" });
+}
+
+/** 全局预览里的置顶按钮：在关闭按钮左边，只在预览里出现 */
+function createOverviewWindowPinButton(winid: MWinId) {
+    const icon = getIconXEl("pin", { size: 14, width: 16, height: 16 });
+    icon.el.dataset.windowPinIcon = "1";
+    // 钉子斜放，和常见的置顶图标一致
+    const svg = icon.el.querySelector("svg");
+    if (svg) svg.style.transform = "rotate(45deg)";
+    return createWindowControlButton({
+        size: 24,
+        icon: icon.el,
+        ui: "window-pin",
+        title: "全局置顶",
+        onClick: () => viewData.togglePinnedWindow(winid),
+    })
+        .style({
+            position: "absolute",
+            top: "calc(10px * var(--desktop-ui-scale, 1) * var(--view-inv-scale, 1))",
+            right: "calc(40px * var(--desktop-ui-scale, 1) * var(--view-inv-scale, 1))",
+            transformOrigin: "top right",
+            transform: "scale(calc(var(--desktop-ui-scale, 1) * var(--view-inv-scale, 1)))",
+            zIndex: "30",
+        })
+        .data({ "desktop-ui": "window-pin" });
 }
 
 // ── 鼠标缩放窗口 ─────────────────────────────────────────────────────────────────────────────
@@ -3154,15 +3343,30 @@ addStyle({
         pointerEvents: "none",
         transition: "opacity 120ms ease-out",
     },
+    // 置顶按钮和关闭按钮同进同出
+    "[data-desktop-ui='window-pin']": {
+        opacity: "var(--overview-close-opacity, 0)",
+        pointerEvents: "none",
+        transition: "opacity 120ms ease-out",
+    },
     // 手势中直接跟 level，不再叠加过渡，避免和手指错拍
-    "[data-gesture] [data-desktop-ui='window-close']": {
+    "[data-gesture] [data-desktop-ui='window-close'], [data-gesture] [data-desktop-ui='window-pin']": {
         transition: "none",
     },
-    "[data-overview] [data-view-id] [data-desktop-ui='window-close']": {
-        pointerEvents: "auto",
+    "[data-overview] [data-view-id] [data-desktop-ui='window-close'], [data-overview] [data-view-id] [data-desktop-ui='window-pin']":
+        {
+            pointerEvents: "auto",
+        },
+    "[data-overview] [data-window-slot] [data-desktop-ui='window-close'], [data-overview] [data-window-slot] [data-desktop-ui='window-pin']":
+        {
+            pointerEvents: "auto",
+        },
+    // 已置顶：按钮反色，表示再次点击会退出
+    "[data-pinned-window] [data-desktop-ui='window-pin']": {
+        background: "#111 !important",
     },
-    "[data-overview] [data-window-slot] [data-desktop-ui='window-close']": {
-        pointerEvents: "auto",
+    "[data-pinned-window] [data-desktop-ui='window-pin'] [data-window-pin-icon]": {
+        filter: "invert(1)",
     },
 });
 
@@ -3671,6 +3875,10 @@ function windowStackOrder(winid: MWinId): MWinId[] {
  */
 function windowsTopFirst() {
     return server.server.windows.list().toSorted((a, b) => {
+        // 置顶窗口永远先参与命中；否则在别的屏上会被层级比较漏到后面
+        const aPinned = viewData.isPinnedWindow(a.handle);
+        const bPinned = viewData.isPinnedWindow(b.handle);
+        if (aPinned !== bPinned) return aPinned ? -1 : 1;
         const screen = viewData.screenOf(a.handle);
         if (screen && screen === viewData.screenOf(b.handle)) {
             const ai = screen.winIds.indexOf(a.handle);
@@ -4983,8 +5191,10 @@ function openInternalWindow(op: InternalWindowOptions) {
     addWindow(screen, root.el, op.id, parent === undefined);
     addResizeHandles(root.el, op.id, false);
     // 子窗口不在总览里单独成卡，关闭按钮由父窗口那张卡负责
-    if (parent === undefined) createOverviewWindowCloseButton(closeWindow).addInto(root.el);
-    else placeChildWindow(op.id, true);
+    if (parent === undefined) {
+        createOverviewWindowCloseButton(closeWindow).addInto(root.el);
+        createOverviewWindowPinButton(op.id).addInto(root.el);
+    } else placeChildWindow(op.id, true);
     viewData.focusWin(op.id);
 }
 
@@ -7085,6 +7295,7 @@ server.server.on("window.created", (info) => {
     // 子窗口不在总览里单独成卡，关闭按钮由父窗口那张卡负责
     if (parent === undefined) {
         createOverviewWindowCloseButton(() => server.server.notify("window.close", wid)).addInto(frame.el);
+        createOverviewWindowPinButton(wid).addInto(frame.el);
     }
     // 子窗口让客户端自己决定尺寸（configure 0×0）：对话框有固有尺寸，
     // 给它塞 800×600 会把文件选择器这类对话框撑大。

@@ -13,6 +13,7 @@ export type ScreenState = {
     windows: string[];
     empty: boolean;
     launchpad: boolean;
+    pinned: boolean;
     used: number;
     current: boolean;
 };
@@ -26,6 +27,7 @@ export type WindowState = {
     fullscreen: boolean;
     parent?: string;
     modal: boolean;
+    pinned: boolean;
     resizing: boolean;
     painted: boolean;
 };

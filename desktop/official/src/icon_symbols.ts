@@ -2525,6 +2525,55 @@ export const iconsName: Record<string, (env: { color: string; data?: Record<stri
             layout: [{ name: "base", shapes }],
         };
     },
+    pin: (env) => {
+        const { size } = buildZb(256);
+        const capY = 76;
+        const needleY = 236;
+        return {
+            size,
+            layout: [
+                {
+                    name: "base",
+                    shapes: [
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: 66, y: capY }, ro: 16, ri: 0 },
+                                    { p: { x: 190, y: capY }, ro: 16, ri: 0 },
+                                ],
+                                extendNode: "both",
+                                width: 32,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: 128, y: capY + 16 }, ro: 12, ri: 0 },
+                                    { p: { x: 128, y: 158 }, ro: 12, ri: 0 },
+                                ],
+                                width: 24,
+                                color: env.color,
+                            },
+                        },
+                        {
+                            type: "zline",
+                            data: {
+                                ps: [
+                                    { p: { x: 128, y: 158 }, ro: 5, ri: 0 },
+                                    { p: { x: 128, y: needleY }, ro: 5, ri: 0 },
+                                ],
+                                width: 10,
+                                color: env.color,
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+    },
     "font.space": () => {
         const { center, size } = buildZb(256);
         return {
