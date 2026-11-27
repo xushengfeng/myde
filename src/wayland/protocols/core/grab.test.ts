@@ -202,6 +202,53 @@ describe("指针隐式 grab", () => {
         expect(sent[1].args.surface).toBe(otherSurfaceId);
     });
 
+    it("键盘焦点离开前补发按住的键并清空，enter 不再带 keys", () => {
+        const { ctx, seat, sent } = makeCtx();
+
+        action(ctx, "input.key", [30, "pressed"]);
+        sent.length = 0;
+
+        action(ctx, "input.key", [31, "pressed"], otherWinId);
+
+        expect(sent.slice(0, 3).map((e) => e.event)).toEqual([
+            "wl_keyboard.key",
+            "wl_keyboard.leave",
+            "wl_keyboard.enter",
+        ]);
+        expect(sent[0].args).toMatchObject({ key: 30, state: 0 });
+        expect([...(sent[2].args.keys as Uint32Array)]).toEqual([]);
+        expect(seat.pressedKeys).toEqual(new Set([31]));
+    });
+
+    it("焦点收尾后迟到的 release 被吞掉，不发 key 也不抢焦点", () => {
+        const { ctx, seat, sent } = makeCtx();
+
+        action(ctx, "input.key", [30, "pressed"]);
+        action(ctx, "input.key", [31, "pressed"], otherWinId);
+        const focus = seat.keyboardFocus;
+        sent.length = 0;
+
+        // 桌面这时才把旧窗口的物理 release 补来
+        action(ctx, "input.key", [30, "released"]);
+
+        expect(sent).toEqual([]);
+        expect(seat.keyboardFocus).toBe(focus);
+        expect(seat.pressedKeys).toEqual(new Set([31]));
+    });
+
+    it("离开焦点时按住的修饰键补 release，并把掩码清成 0", () => {
+        const { ctx, seat, sent } = makeCtx();
+
+        action(ctx, "input.key", [InputEventCodes.KEY_LEFTSHIFT, "pressed"]);
+        sent.length = 0;
+
+        action(ctx, "input.key", [31, "pressed"], otherWinId);
+
+        const modifiers = sent.filter((e) => e.event === "wl_keyboard.modifiers");
+        expect(modifiers[0]?.args).toMatchObject({ mods_depressed: 0 });
+        expect(seat.pressedKeys.has(InputEventCodes.KEY_LEFTSHIFT)).toBe(false);
+    });
+
     it("scroll 没有 pointer focus 时先补 enter，再发 axis", () => {
         const { ctx, seat, sent } = makeCtx();
         seat.pointerFocus = null;

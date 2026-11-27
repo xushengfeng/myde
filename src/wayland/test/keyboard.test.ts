@@ -150,4 +150,76 @@ if (typeof document !== "undefined") {
             expected,
         );
     });
+
+    it("失焦时给按住的键补 keyup，重新聚焦后还能再按下", { timeout: 20000 }, async () => {
+        const clientJs = `
+module.exports = ({ createWindow }) => {
+    createWindow({ js: __filename, width: 640, height: 480 });
+};
+if (typeof document !== "undefined") {
+    document.title = "myde-keyboard-blur-test";
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.onkeydown = (e) => console.log(JSON.stringify({ key: e.key, code: e.code, type: "keydown" }));
+    input.onkeyup = (e) => console.log(JSON.stringify({ key: e.key, code: e.code, type: "keyup" }));
+    input.focus();
+    console.log(JSON.stringify({ type: "ready" }));
+}
+`;
+        const tmpfile = `/tmp/myde_keyboard_blur_test_${Date.now()}.js`;
+        fs.writeFileSync(tmpfile, clientJs);
+
+        const { waitExit } = testRunnerApp(`test/electron_app/start.js ${tmpfile}`, async ({ server, runner }) => {
+            const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+            server.on("window.created", (info) => {
+                void (async () => {
+                    try {
+                        server.notify("window.focus", info.handle);
+                        for (let i = 0; i < 200 && (server.windows.preview(info.handle)?.width ?? 0) <= 1; i++)
+                            await sleep(50);
+                        // 等客户端处理完 window.focus 的 enter，首帧之后键盘对象还没就绪时首键会丢
+                        await sleep(300);
+                        // 按住 A 不松手，直接让窗口失焦
+                        server.notify("input.key", info.handle, 30, "pressed");
+                        await sleep(150);
+                        server.notify("window.blur", info.handle);
+                        await sleep(150);
+                        // 回来再按一次：焦点收尾已经清掉状态，应该能重新 keydown
+                        server.notify("window.focus", info.handle);
+                        await sleep(100);
+                        server.notify("input.key", info.handle, 30, "pressed");
+                        await sleep(80);
+                        server.notify("input.key", info.handle, 30, "released");
+                        await sleep(150);
+                        runner.sendData({ ok: true });
+                    } catch (e) {
+                        runner.sendData({ error: String(e) });
+                    } finally {
+                        runner.kill();
+                    }
+                })();
+            });
+        });
+
+        const raw = (await waitExit()) as { applog?: string; error?: string; ok?: boolean }[];
+        expect(
+            raw.find((r) => r.error),
+            `脚本异常: ${JSON.stringify(raw).slice(0, 800)}`,
+        ).toBeUndefined();
+
+        const logs = collectAppLogs(raw);
+        expect(logOfType(logs, "ready").length, `客户端没启动，raw=${JSON.stringify(raw).slice(0, 800)}`).toBe(1);
+
+        const expected: KeyEvent[] = [
+            { key: "a", code: "KeyA", type: "keydown" },
+            // window.blur 的收尾：客户端没收到 input.key released，但必须收到这条 keyup
+            { key: "a", code: "KeyA", type: "keyup" },
+            { key: "a", code: "KeyA", type: "keydown" },
+            { key: "a", code: "KeyA", type: "keyup" },
+        ];
+        const got = logs.filter(
+            (l): l is KeyEvent => typeof l === "object" && (l.type === "keydown" || l.type === "keyup"),
+        );
+        expect(got, `失焦收尾后的按键序列不符：${JSON.stringify(got)}`).toEqual(expected);
+    });
 });

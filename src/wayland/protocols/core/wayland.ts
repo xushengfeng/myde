@@ -628,16 +628,44 @@ export class SeatStore {
         if (seat.keyboardPressSerials.length > KEY_PRESS_SERIAL_KEEP) seat.keyboardPressSerials.shift();
     }
 
-    /** 修饰键位按 seat 记（两把键盘的 Ctrl 状态互不相干） */
-    addModifier(seat: SeatRecord, bit: number): void {
-        seat.mods.add(bit);
+    /** 该键是否逻辑按着（焦点离开收尾后为空） */
+    isKeyPressed(seat: SeatRecord, key: number): boolean {
+        return seat.pressedKeys.has(key);
     }
 
-    removeModifier(seat: SeatRecord, bit: number): void {
-        seat.mods.delete(bit);
+    /** 按下键：重复 press 返回 false；否则更新 `pressedKeys` 与修饰位 */
+    pressKey(seat: SeatRecord, key: number): boolean {
+        if (seat.pressedKeys.has(key)) return false;
+        seat.pressedKeys.add(key);
+        const bit = MOD_KEY_TO_BIT[key];
+        if (bit !== undefined) seat.mods.add(bit);
+        return true;
     }
 
-    /** `wl_keyboard.modifiers.mods_depressed` 的位掩码：按仍按下的物理键算，左右同名键不会互相覆盖 */
+    /** 松开键：没有对应 press 的 release 返回 false；否则更新 `pressedKeys` 与修饰位 */
+    releaseKey(seat: SeatRecord, key: number): boolean {
+        if (!seat.pressedKeys.delete(key)) return false;
+        const bit = MOD_KEY_TO_BIT[key];
+        if (bit !== undefined) seat.mods.delete(bit);
+        return true;
+    }
+
+    /**
+     * 焦点离开时取走全部按下的键（调用方负责在 `leave` 前补 release），修饰位一起清空。
+     * 返回的键就是需要补发 release 的集合，`modifiersChanged` 决定要不要再补一条 `modifiers`。
+     */
+    takePressedKeys(seat: SeatRecord): { keys: number[]; modifiersChanged: boolean } {
+        const keys = [...seat.pressedKeys];
+        let modifiersChanged = seat.mods.size > 0;
+        for (const key of keys) {
+            if (MOD_KEY_TO_BIT[key] !== undefined) modifiersChanged = true;
+        }
+        seat.pressedKeys.clear();
+        seat.mods.clear();
+        return { keys, modifiersChanged };
+    }
+
+    /** `wl_keyboard.modifiers.mods_depressed` 的位掩码：按仍按下的逻辑键算，左右同名键不会互相覆盖 */
     modifierMask(seat: SeatRecord): number {
         let mask = 0;
         for (const key of seat.pressedKeys) {
@@ -1022,10 +1050,32 @@ function cancelTouchPoints(ctx: ModuleCtx, seat: SeatRecord): void {
 }
 
 /**
- * 键盘焦点单写入点：同值去重；变化才发 `leave`(旧) → `enter`(新) + `modifiers`。
+ * 焦点离开前的键盘收尾：`leave` 之后客户端不能再收到 `key`，所以按住的键必须在 `leave` 前补 release，
+ * 然后清空逻辑按键与修饰位。
  *
- * `enter.keys` 必须带当前逻辑按下的键，否则失焦期间按住的键在重新聚焦后不会被客户端知道。
- * 失焦**不补发 key release**：`wl_keyboard.leave` 本身就会让客户端重置逻辑状态。
+ * 清空让桌面稍后补发的真实 release 变成「没有 press 的 release」，由 `sendKey` 去重吞掉；
+ * 和指针 grab / 触摸 cancel 的收尾语义一致：焦点切换不再保留上一焦点的按键状态。
+ */
+function releaseKeyboardKeys(ctx: ModuleCtx, seat: SeatRecord): void {
+    const keyboards = activeKeyboards(ctx, seat);
+    const { keys, modifiersChanged } = ctx.domain.seat.takePressedKeys(seat);
+    const time = Date.now();
+    for (const key of keys) {
+        const serial = ctx.domain.serial.next();
+        for (const keyboard of keyboards) keyboardKey(ctx, keyboard, serial, time, key, "released");
+    }
+    if (!modifiersChanged || keyboards.length === 0) return;
+    const serial = ctx.domain.serial.next();
+    const mask = ctx.domain.seat.modifierMask(seat);
+    for (const keyboard of keyboards) keyboardModifiers(ctx, keyboard, serial, mask);
+}
+
+/**
+ * 键盘焦点单写入点：同值去重；变化时先给旧焦点收尾（补 release + 清状态），
+ * 再发 `leave`(旧) → `enter`(新) + `modifiers`。
+ *
+ * `enter.keys` 带该连接当前逻辑按下的键；正常焦点切换已经收尾为空，
+ * 快照留给新 `wl_keyboard` 绑定和异常残留。
  */
 function focusKeyboard(ctx: ModuleCtx, surface: SurfaceId | null, seatName?: string): void {
     const seat = ctx.domain.seat.byName(seatName ?? "seat0");
@@ -1033,6 +1083,11 @@ function focusKeyboard(ctx: ModuleCtx, surface: SurfaceId | null, seatName?: str
     const prev = seat.keyboardFocus;
     if (prev === surface) return;
     const keyboards = activeKeyboards(ctx, seat);
+    if (prev !== null) {
+        // surface 已经销毁时连 `leave` 都发不出去：只取走状态，避免下次 `enter` 把旧键带回来
+        if (ctx.objects.has(prev)) releaseKeyboardKeys(ctx, seat);
+        else ctx.domain.seat.takePressedKeys(seat);
+    }
     if (prev !== null && ctx.objects.has(prev)) {
         const serial = ctx.domain.serial.next();
         for (const keyboard of keyboards) keyboardLeave(ctx, keyboard, serial, prev);
@@ -1211,35 +1266,24 @@ function unmapSurface(ctx: ModuleCtx, surfaceId: SurfaceId): void {
 }
 
 /**
- * 按键注入：按键集合是物理状态，**没有键盘焦点也要更新**（下次 enter 要用它做 keys 快照）；
- * 但只有存在焦点时才真正发 `wl_keyboard.key`。
- *
- * press/release 去重：重复 press、没有 press 的 release 都直接丢弃。
+ * 按键注入：状态转移（去重、`pressedKeys` / 修饰位）交给 `SeatStore`，这里只组包下发。
+ * 只有存在焦点时才真正发 `wl_keyboard.key`；焦点离开时已经补发 release 并清空，
+ * 所以桌面迟到的真实 release 在这里被 `releaseKey` 吞掉。
  * 修饰键按该 seat 的掩码补发 `wl_keyboard.modifiers`（两把键盘各记各的；todo repeat）。
  */
 function sendKey(ctx: ModuleCtx, seat: SeatRecord, key: number, state: "pressed" | "released"): void {
-    const held = seat.pressedKeys.has(key);
-    if (state === "pressed" && held) return;
-    if (state === "released" && !held) return;
-
-    if (state === "pressed") seat.pressedKeys.add(key);
-    else seat.pressedKeys.delete(key);
-
     const store = ctx.domain.seat;
-    const bit = MOD_KEY_TO_BIT[key];
-    if (bit !== undefined) {
-        if (state === "pressed") store.addModifier(seat, bit);
-        else store.removeModifier(seat, bit);
-    }
+    const changed = state === "pressed" ? store.pressKey(seat, key) : store.releaseKey(seat, key);
+    if (!changed) return;
 
     const keyboards = activeKeyboards(ctx, seat);
     if (seat.keyboardFocus === null || keyboards.length === 0) return;
 
     const serial = ctx.domain.serial.next();
-    if (state === "pressed") ctx.domain.seat.noteKeyboardPress(seat, serial);
+    if (state === "pressed") store.noteKeyboardPress(seat, serial);
     const time = Date.now();
     for (const keyboard of keyboards) keyboardKey(ctx, keyboard, serial, time, key, state);
-    if (bit === undefined) return;
+    if (MOD_KEY_TO_BIT[key] === undefined) return;
     const mask = store.modifierMask(seat);
     for (const keyboard of keyboards) keyboardModifiers(ctx, keyboard, serial, mask);
 }
@@ -2814,9 +2858,9 @@ export const waylandCoreModule = defineModule({
             const seat = resolveSeat(ctx, msg.args[2]);
             if (seat === undefined) return;
             const [key, state] = msg.args;
-            // 先按键状态去重：没有 press 的 release 不值得为它补键盘焦点
-            const held = seat.pressedKeys.has(key);
-            if ((state === "pressed" && held) || (state === "released" && !held)) return;
+            // 先查重：重复事件不能触发 focusKeyboard（焦点有副作用）；没有 press 的 release 更不值得补焦点
+            const held = ctx.domain.seat.isKeyPressed(seat, key);
+            if (state === "pressed" ? held : !held) return;
             // 事件自带窗口：桌面没发 window.focus 时，以它为准补 keyboard enter
             const surface = mainSurfaceOfToplevel(ctx, msg.winId);
             if (surface === null) return;

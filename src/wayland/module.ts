@@ -686,7 +686,10 @@ export interface SeatRecord {
     mods: Set<number>;
     /** 最近一次指针隐式 grab（button 全松开后仍保留 serial/surface，供延迟到达的请求校验） */
     pointerGrab?: PointerGrab;
-    /** 当前物理按下的键（内核 key code）；`wl_keyboard.enter.keys` 的快照来源 */
+    /**
+     * 该连接当前逻辑按下的键（内核 key code）；`wl_keyboard.enter.keys` 的快照来源。
+     * 焦点离开前会把它们补成 release 并清空，所以正常失焦后为空。
+     */
     pressedKeys: Set<number>;
     /** 最近几次键盘按下的 serial（release 不覆盖 press，move/grab 可能晚于松键到达） */
     keyboardPressSerials: number[];
@@ -714,9 +717,15 @@ export interface SeatApi {
     noteKeyboardPress(seat: SeatRecord, serial: number): void;
     /** 记录触摸按下的 serial（move/grab 可能晚于抬手到达） */
     noteTouchPress(seat: SeatRecord, serial: number): void;
-    addModifier(seat: SeatRecord, bit: number): void;
-    removeModifier(seat: SeatRecord, bit: number): void;
     modifierMask(seat: SeatRecord): number;
+    /** 该键是否逻辑按着（焦点离开收尾后为空） */
+    isKeyPressed(seat: SeatRecord, key: number): boolean;
+    /** 按下键：去重 + 维护 `pressedKeys` / 修饰位；返回 false 表示已经按着 */
+    pressKey(seat: SeatRecord, key: number): boolean;
+    /** 松开键：去重 + 维护 `pressedKeys` / 修饰位；返回 false 表示本来没按着 */
+    releaseKey(seat: SeatRecord, key: number): boolean;
+    /** 焦点离开时取走全部按下的键并清空修饰位；返回要在 `leave` 前补 release 的键 */
+    takePressedKeys(seat: SeatRecord): { keys: number[]; modifiersChanged: boolean };
 }
 
 /**

@@ -371,8 +371,11 @@ export const exampleModule = defineModule({
   而 `wl_seat.onBind` 按**广播顺序**算 seat 名（客户端只 bind 第二把也得叫 `seat1`）。
   指针焦点由 core 的 `input.pointer` → `updatePointerFocus` 维护，**只发该 seat 的 pointer、不碰键盘**
   （hover 要不要切键盘焦点是桌面政策）。键盘焦点只有一个写入口 `ctx.core.focusKeyboard`：同值去重 →
-  `leave`(旧) → `enter`(新) + `modifiers` → 写槽 → `ctx.notify.focus(seat, surface)` 扇出；调用方是
+  旧焦点按住的键补 `key(released)` 并清空 → `leave`(旧) → `enter`(新) + `modifiers` → 写槽 →
+  `ctx.notify.focus(seat, surface)` 扇出；调用方是
   桌面 `window.focus` / `window.blur`（blur 只清**自己拥有**的焦点，所以全量 focus+blur 循环与顺序无关）。
+  释放必须在 `leave` 之前发（leave 之后客户端就不能收 `key`）；清空后桌面迟到的真实 release 会被
+  `input.key` 的去重吞掉，焦点切换不保留上一焦点的按键状态。
   xdg 的 `actived` 是另一条独立的轴，规范对 `configure(activated)` 与 `wl_keyboard.enter` 的顺序无要求。
   `wl_surface.destroy` 只**静默清**焦点槽（不能向已销毁对象发事件），text-input 经 `onDestroy` 收敛。
 - **模块级副作用要加环境守卫**：`utils/shared_texture.ts` 会注册 electron 接收端并连主进程的 unix socket

@@ -134,12 +134,29 @@ describe("桌面命令（actions）", () => {
                 seat: {
                     byName: (name: string) => (name === "seat0" ? seat : undefined),
                     noteKeyboardPress: () => {},
-                    addModifier: (s: SeatRecord, b: number) => s.mods.add(b),
-                    removeModifier: (s: SeatRecord, b: number) => s.mods.delete(b),
                     modifierMask: (s: SeatRecord) => {
                         let mask = 0;
                         for (const b of s.mods) mask |= 1 << b;
                         return mask;
+                    },
+                    isKeyPressed: (s: SeatRecord, k: number) => s.pressedKeys.has(k),
+                    pressKey: (s: SeatRecord, k: number) => {
+                        if (s.pressedKeys.has(k)) return false;
+                        s.pressedKeys.add(k);
+                        if (k === InputEventCodes.KEY_LEFTSHIFT) s.mods.add(0);
+                        return true;
+                    },
+                    releaseKey: (s: SeatRecord, k: number) => {
+                        if (!s.pressedKeys.delete(k)) return false;
+                        if (k === InputEventCodes.KEY_LEFTSHIFT) s.mods.delete(0);
+                        return true;
+                    },
+                    takePressedKeys: (s: SeatRecord) => {
+                        const keys = [...s.pressedKeys];
+                        const modifiersChanged = s.mods.size > 0;
+                        s.pressedKeys.clear();
+                        s.mods.clear();
+                        return { keys, modifiersChanged };
                     },
                 },
                 xdgSurface: {

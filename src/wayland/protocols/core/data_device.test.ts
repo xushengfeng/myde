@@ -87,8 +87,6 @@ function makeCtx() {
             },
             noteKeyboardPress: () => {},
             noteTouchPress: () => {},
-            addModifier: () => {},
-            removeModifier: () => {},
             modifierMask: () => 0,
         },
         xdgSurface: {
