@@ -183,6 +183,8 @@ class Tools {
     private openTip: object | undefined;
     /** 当前临时提示的立即隐藏函数 */
     private toastHideNow: (() => void) | undefined;
+    /** 每个弹窗一个隐藏的锚点替身：真实锚点被移除后，弹窗位置不会跟着失效 */
+    private anchorProbes = new WeakMap<HTMLElement, HTMLElement>();
     constructor() {
         this.tools = new Map();
     }
@@ -205,36 +207,115 @@ class Tools {
             },
         });
     }
+    /** 弹窗对应的隐藏锚点替身；替身常驻工具栏层，真实按钮被移除后仍能保持位置 */
+    private getAnchorProbe(el: ElType<HTMLElement>) {
+        let probe = this.anchorProbes.get(el.el);
+        if (probe) return probe;
+        probe = document.createElement("div");
+        probe.dataset.anchorProbe = "1";
+        probe.style.position = "fixed";
+        probe.style.pointerEvents = "none";
+        probe.style.opacity = "0";
+        probe.style.margin = "0";
+        probe.style.padding = "0";
+        probe.style.border = "0";
+        this.anchorProbes.set(el.el, probe);
+        return probe;
+    }
     /** 下拉弹窗和临时提示共用同一套锚点定位 */
     private place(
         el: ElType<HTMLElement>,
         anchorEl: HTMLElement | ElType<HTMLElement>,
         showA: "left" | "right" | "top" | "bottom",
     ) {
+        const anchorNode = anchorEl instanceof HTMLElement ? anchorEl : anchorEl.el;
+        const probe = this.getAnchorProbe(el);
+        // 锚点已经不在页面里时沿用替身上一次的位置，避免弹窗跳到 (0, 0)
+        if (anchorNode.isConnected) {
+            const rect = anchorNode.getBoundingClientRect();
+            const tipRect = this.tipEl.getBoundingClientRect();
+            const scale = uiScale > 0 ? uiScale : 1;
+            probe.style.left = `${(rect.left - tipRect.left) / scale}px`;
+            probe.style.top = `${(rect.top - tipRect.top) / scale}px`;
+            probe.style.width = `${Math.max(1, rect.width / scale)}px`;
+            probe.style.height = `${Math.max(1, rect.height / scale)}px`;
+        }
         const anchorname = `--${crypto.randomUUID()}`;
-        pack(anchorEl instanceof HTMLElement ? anchorEl : anchorEl.el).style({ anchorName: anchorname });
+        probe.style.setProperty("anchor-name", anchorname);
+        // 先写名字再挂进 DOM，锚点才能在当前帧内被解析；弹窗必须在替身之后
+        probe.remove();
+        this.tipEl.insertBefore(probe, el.el);
+        // 上一次关闭可能把弹窗锁定在固定坐标，重新打开时交回锚点定位
+        for (const key of ["left", "top", "right", "bottom"]) el.el.style.removeProperty(key);
         el.style({
             positionAnchor: anchorname,
             ...(showA === "left"
                 ? {
                       positionArea: "left center",
-                      transformOrigin: "right center",
                   }
                 : showA === "right"
                   ? {
                         positionArea: "right center",
-                        transformOrigin: "left center",
                     }
                   : showA === "top"
                     ? {
                           positionArea: "top center",
-                          transformOrigin: "bottom center",
                       }
                     : {
                           positionArea: "bottom center",
-                          transformOrigin: "top center",
                       }),
         });
+    }
+    /**
+     * 缩放原点对准实际锚点按钮：沿弹窗靠锚点的那条边，另一轴取按钮中心。
+     * 靠边的弹窗会被浏览器平移，不能再用固定的 `top center`。
+     */
+    private setOrigin(el: ElType<HTMLElement>, showA: "left" | "right" | "top" | "bottom") {
+        const probe = this.anchorProbes.get(el.el);
+        if (!probe) return;
+        const node = el.el;
+        // 弹出瞬间 scale 为 0、display 还是 none，直接量会得到零尺寸；
+        // 临时按完整尺寸量一次，绘制前恢复
+        const prevDisplay = node.style.display;
+        const prevScale = node.style.scale;
+        const prevOpacity = node.style.opacity;
+        node.style.display = "block";
+        node.style.scale = "1";
+        node.style.opacity = "0";
+        const rect = node.getBoundingClientRect();
+        const anchorRect = probe.getBoundingClientRect();
+        const anchorX = anchorRect.left + anchorRect.width / 2 - rect.left;
+        const anchorY = anchorRect.top + anchorRect.height / 2 - rect.top;
+        const origin =
+            showA === "bottom"
+                ? `${anchorX}px 0px`
+                : showA === "top"
+                  ? `${anchorX}px ${rect.height}px`
+                  : showA === "right"
+                    ? `0px ${anchorY}px`
+                    : `${rect.width}px ${anchorY}px`;
+        node.style.transformOrigin = origin;
+        node.style.display = prevDisplay;
+        node.style.scale = prevScale;
+        node.style.opacity = prevOpacity;
+    }
+    /** 关闭时锁定当前视觉位置；之后锚点元素被移除也不会跳到别处 */
+    private freeze(el: ElType<HTMLElement>) {
+        const node = el.el;
+        if (node.style.display === "none") return;
+        const prevScale = node.style.scale;
+        const prevOpacity = node.style.opacity;
+        node.style.scale = "1";
+        node.style.opacity = "0";
+        const rect = node.getBoundingClientRect();
+        node.style.scale = prevScale;
+        node.style.opacity = prevOpacity;
+        node.style.removeProperty("position-anchor");
+        node.style.removeProperty("position-area");
+        node.style.removeProperty("right");
+        node.style.removeProperty("bottom");
+        node.style.left = `${rect.left}px`;
+        node.style.top = `${rect.top}px`;
     }
     /** 打开下拉弹窗前收起提示，避免两个浮层同时出现 */
     private hideActiveToastNow() {
@@ -340,11 +421,13 @@ class Tools {
         };
         const hideToastNow = () => {
             clearToastTimer();
+            this.freeze(toastel);
             toastGear.moveTo("hide", 0);
             if (this.toastHideNow === hideToastNow) this.toastHideNow = undefined;
         };
         const hideToast = () => {
             clearToastTimer();
+            this.freeze(toastel);
             // 淡出期间仍保留立即隐藏入口，别的提示出现时可以直接把这一条切掉
             toastGear.moveTo("hide", undefined, () => {
                 if (this.toastHideNow === hideToastNow) this.toastHideNow = undefined;
@@ -358,6 +441,7 @@ class Tools {
             const anchorEl = op?.anchorEl ? pack(op.anchorEl).el : launchEl;
             if (anchorEl) this.place(toastel, anchorEl, toastSide);
             toastGear.moveTo("show");
+            if (anchorEl) this.setOrigin(toastel, toastSide);
             clearToastTimer();
             toastTimer = window.setTimeout(hideToast, op?.duration ?? 2400);
         };
@@ -388,16 +472,19 @@ class Tools {
                     showTip: (s) => {
                         const state = s?.state || "toggle";
                         const next = state === "show" ? true : state === "hide" ? false : !(tipel.gv === true);
+                        const anchorEl = s?.anchorEl ? pack(s.anchorEl).el : el;
                         if (next) {
                             this.hideActiveToastNow();
                             this.openTip = tipToken;
+                            this.place(tipel, anchorEl, showA);
                             setTipVisible(true);
+                            this.setOrigin(tipel, showA);
                         } else {
+                            // 关闭只按当前画面收缩，不再切到调用方给的新锚点
+                            this.freeze(tipel);
                             setTipVisible(false);
                             if (this.openTip === tipToken) this.openTip = undefined;
                         }
-                        const anchorEl = s?.anchorEl ? pack(s.anchorEl).el : el;
-                        this.place(tipel, anchorEl, showA);
                     },
                     showToast,
                     hideToast,
