@@ -170,15 +170,27 @@ describe("全局预览", () => {
         expect(exited.current).toBe(before.current);
     });
 
-    run("预览里桌面快捷键被吞掉", { timeout: 30000 }, async () => {
+    run("预览里 Super+←/→ 和 ←/→ 移动聚焦屏", { timeout: 30000 }, async () => {
         const win = await launchMock(desktop, { appid: "overview-c", width: 640, height: 420 });
         await desktop.key("Tab", { modifiers: META });
-        const before = await waitState(desktop, (value) => value.overview);
+        const before = await waitState(desktop, (value) => value.overview && value.launcher?.focused === true);
         await desktop.evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()");
 
+        // Super+左右键在预览里也能移动聚焦屏
+        await desktop.key("ArrowLeft", { modifiers: META });
+        const superLeft = await waitState(desktop, (value) => value.overview && value.current !== before.current);
+        await desktop.key("ArrowRight", { modifiers: META });
+        await waitState(desktop, (value) => value.overview && value.current === before.current);
+
+        // 搜索框聚焦且为空时，普通左右键同样移动聚焦屏
+        await desktop.evaluate(`document.querySelector("[data-launcher-input] input")?.focus()`);
+        await desktop.key("ArrowLeft");
+        const plainLeft = await waitState(desktop, (value) => value.overview && value.current === superLeft.current);
+        await desktop.key("ArrowRight");
+        await waitState(desktop, (value) => value.overview && value.current === before.current);
+
+        // 其余桌面快捷键仍然被吞掉
         for (const [key, modifiers] of [
-            ["ArrowLeft", META],
-            ["ArrowRight", META],
             ["KeyD", META],
             ["KeyF", META],
             ["Space", ALT],
@@ -193,6 +205,64 @@ describe("全局预览", () => {
         expect(windowByAppid(after, "overview-c")?.handle).toBe(win.handle);
         expect(windowByAppid(after, "overview-c")?.fullscreen).toBe(false);
         expect(after.screens.map((screen) => screen.id)).toEqual(before.screens.map((screen) => screen.id));
+        expect(plainLeft.overview).toBe(true);
+    });
+
+    run("预览里其它按键交给搜索，回车选择聚焦的屏", { timeout: 30000 }, async () => {
+        await launchMock(desktop, { appid: "overview-enter", width: 640, height: 420 });
+        await desktop.key("Tab", { modifiers: META });
+        const entered = await waitState(desktop, (value) => value.overview && value.launcher?.focused === true);
+
+        // 聚焦的屏先移到旁边的卡片
+        await desktop.key("ArrowLeft");
+        const focused = await waitState(desktop, (value) => value.overview && value.current !== entered.current);
+        const targetScreen = focused.current;
+
+        // 搜索框有内容时普通左右键留给光标，不移动聚焦屏
+        await desktop.key("o");
+        await desktop.key("k");
+        const inputValue = await desktop.evaluate<string>(
+            `document.querySelector("[data-launcher-input] input")?.value ?? ""`,
+        );
+        expect(inputValue).toBe("ok");
+        await desktop.key("ArrowRight");
+        await sleep(300);
+        expect((await state(desktop)).current).toBe(targetScreen);
+
+        // 清空后在聚焦屏上回车，退出预览并切过去
+        await desktop.evaluate(`(() => {
+            const el = document.querySelector("[data-launcher-input] input");
+            if (el instanceof HTMLInputElement) {
+                el.value = "";
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+        })()`);
+        await desktop.key("Enter");
+        const selected = await waitState(
+            desktop,
+            (value) => !value.overview && value.launcher?.binding.kind === "line" && value.launcher.binding.level === 0,
+        );
+        expect(selected.current).toBe(targetScreen);
+        expect(selected.launcher?.visible).toBe(false);
+    });
+
+    run("预览里搜索框没聚焦时，其它按键也能继续搜索", { timeout: 30000 }, async () => {
+        await desktop.key("Tab", { modifiers: META });
+        await waitState(desktop, (value) => value.overview && value.launcher?.focused === true);
+        await desktop.evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()");
+
+        await desktop.key("s");
+        await desktop.key("e");
+        const typed = await waitState(desktop, (value) => value.overview && value.launcher?.focused === true);
+        const inputValue = await desktop.evaluate<string>(
+            `document.querySelector("[data-launcher-input] input")?.value ?? ""`,
+        );
+        expect(typed.overview).toBe(true);
+        expect(inputValue).toBe("se");
+
+        await desktop.key("Tab", { modifiers: META });
+        const exited = await waitState(desktop, (value) => !value.overview);
+        expect(exited.overview).toBe(false);
     });
 
     run("预览里关闭按钮关窗并回收屏，预览保持", { timeout: 30000 }, async () => {

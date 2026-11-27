@@ -508,6 +508,10 @@ type LauncherController = {
     open(): void;
     /** 关闭搜索栏；全局预览中只失焦，启动器本身保持可见 */
     close(): void;
+    /** 搜索框里是否有内容；全局预览的 ←/→、Enter 据此决定是移动屏还是交给搜索 */
+    hasText(): boolean;
+    /** 把按键文字插进搜索框（全局预览里搜索框没聚焦时，其它按键交给搜索） */
+    insertText(text: string): void;
     /** Copilot 键：未展开时打开，有输入时交给 AI，空输入时收起 */
     copilot(): void;
     setAiHandler(handler: SearchAiHandler | undefined): void;
@@ -1523,11 +1527,37 @@ class ViewData {
 
     private selectFromOverview(id: string) {
         if (performance.now() < this.suppressOverviewClickUntil) return;
+        this.commitOverviewSelection(id);
+    }
+
+    /** 键盘确认预览里的聚焦屏：直接退出预览并切过去 */
+    selectCurrentFromOverview() {
+        this.commitOverviewSelection(this.currentId);
+    }
+
+    private commitOverviewSelection(id: string) {
         const screen = this.screens.find((s) => s.id === id);
         if (!screen) return;
-        // 点击的卡片就是退出时要跟随的焦点屏；面板位置直接由 focus 连续过去
+        // 选中的卡片就是退出时要跟随的焦点屏；面板位置直接由 focus 连续过去
         this.setOverview(false);
         this.setCurrentScreen(screen.id, true);
+    }
+
+    /**
+     * 预览里用键盘左右移动聚焦面板。
+     * 预览完全展开时搜索栏接管键盘，这里只改焦点轴，不把客户端焦点抢回来。
+     */
+    moveOverviewFocus(delta: number) {
+        if (!this.overview) {
+            this.moveCurrent(delta);
+            return;
+        }
+        const index = clampNumber(this.currentIndex() + delta, 0, Math.max(0, this.screens.length - 1));
+        const screen = this.screens[index];
+        if (!screen || index === this.currentIndex()) return;
+        this.cancelGesture();
+        this.setFocusById(screen.id, true);
+        this.render(true);
     }
 
     startGesture() {
@@ -9421,6 +9451,17 @@ function createLauncher(): LauncherController {
         viewData.requestLauncherLevel(-1);
     }
 
+    /** 把按键文字接进搜索框：全局预览里搜索框没聚焦时，其它按键也交给搜索 */
+    function insertText(text: string) {
+        openSearch();
+        const el = field.el;
+        el.focus({ preventScroll: true });
+        const start = el.selectionStart ?? el.value.length;
+        const end = el.selectionEnd ?? start;
+        el.setRangeText(text, start, end, "end");
+        el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    }
+
     async function handToAi(text: string) {
         const seq = ++aiSeq;
         const handled = await search.askAi(text);
@@ -9476,6 +9517,8 @@ function createLauncher(): LauncherController {
         blur: blurInput,
         open: openSearch,
         close: closeSearch,
+        hasText: () => field.gv.trim().length > 0,
+        insertText,
         copilot,
         setAiHandler: (handler) => search.setAiHandler(handler),
         search,
@@ -11236,19 +11279,41 @@ body.on("keydown", (e) => {
         return;
     }
     if (viewData.overview) {
-        // 全局预览只响应普通点击和 Esc；启动器/内部窗口的输入留给 DOM
-        if (!e.repeat && e.code === "Escape") {
-            e.preventDefault();
-            viewData.setOverview(false);
-            return;
-        }
-        // Super+Tab 是预览开关：搜索框拿到焦点后也要能退出，不能留给输入框忽略
+        // Super+Tab 是预览开关：搜索框拿到焦点后也要能直接退出，不能留给输入框忽略
         if (!e.repeat && e.code === "Tab" && matchBindings(e, DESKTOP_BINDINGS)) {
             e.preventDefault();
             viewData.toggleOverview();
             return;
         }
+        if (!e.repeat && e.code === "Escape") {
+            e.preventDefault();
+            viewData.setOverview(false);
+            return;
+        }
+        // Super+←/→ 沿虚拟屏移动聚焦面板；搜索框有内容时普通 ←/→ 留给输入框移动光标
+        const arrow = e.code === "ArrowLeft" ? 1 : e.code === "ArrowRight" ? -1 : 0;
+        if (!e.repeat && arrow !== 0) {
+            const superArrow = matchBindings(e, DESKTOP_BINDINGS);
+            const plainArrow = !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && !launcher.hasText();
+            if (superArrow || plainArrow) {
+                e.preventDefault();
+                viewData.moveOverviewFocus(arrow);
+                return;
+            }
+        }
+        // 回车确认聚焦的屏；搜索框有内容时回车交给搜索结果
+        if (!e.repeat && (e.code === "Enter" || e.code === "NumpadEnter") && !launcher.hasText()) {
+            e.preventDefault();
+            viewData.selectCurrentFromOverview();
+            return;
+        }
         if (isLauncherInputFocused() || isInternalWindow(viewData.focusHandle)) return;
+        // 其它可打印键交给搜索框：先聚焦并插入，之后继续输入由输入框自己接收
+        if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
+            e.preventDefault();
+            launcher.insertText(e.key);
+            return;
+        }
         e.preventDefault();
         return;
     }
