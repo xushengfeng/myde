@@ -61,6 +61,8 @@ import {
     nNotiList,
     nNotiToast,
     nNumber,
+    OSD_HEIGHT,
+    OSD_WIDTH,
     px,
     sourceTag,
     sSize,
@@ -148,8 +150,9 @@ type Plant = {
     posi: "top" | "left" | "right" | "bottom";
 };
 
-const TOAST_WIDTH = sSize(5);
-const TOAST_NOTIFICATION_WIDTH = sSize(6);
+const OSD_MAX_VISIBLE = 4;
+const OSD_GAP = sSize2.paddingx;
+const OSD_ANIMATION_DURATION = 300;
 
 type ShowTip = (op?: {
     state?: "show" | "hide" | "toggle";
@@ -157,17 +160,19 @@ type ShowTip = (op?: {
     /** 已经展开时把锚点位置平滑移过去，不再瞬移 */
     animate?: boolean;
 }) => void;
-type ShowToast = (op?: { duration?: number; anchorEl?: HTMLElement }) => void;
+type ShowToast = (
+    content: ElType<HTMLElement>,
+    op?: { duration?: number; anchorEl?: HTMLElement; key?: string },
+) => void;
+type HideToast = (key?: string) => void;
 
 type ToolsItem = {
     cb: (p: {
         tipEl: HTMLElement;
-        /** 临时提示的内容容器；显隐、定位和动画由 `showToast` 统一管理 */
-        toastEl: ElType<HTMLElement>;
         showTip: ShowTip;
         /** 自动消失的临时提示；下拉弹窗展开时不会显示 */
         showToast: ShowToast;
-        hideToast: () => void;
+        hideToast: HideToast;
         /** 订阅下拉弹窗显隐；返回取消订阅函数 */
         onTipVisibleChange: (cb: (visible: boolean) => void) => () => void;
         showA: "left" | "right" | "top" | "bottom";
@@ -181,13 +186,27 @@ type ToolsItem = {
     selfBackground: boolean; // tool自身是否带背景，否则应为透明
 };
 
+type ToastItem = {
+    id: number;
+    /** 同一 key 的提示更新同一条，而不是再压一条新的 */
+    key?: string;
+    timer?: number;
+};
+
 class Tools {
     tools: Map<string, ToolsItem>;
     private tipEl: HTMLElement = view().el;
     /** 当前展开的下拉弹窗；有值时所有临时提示都不显示 */
     private openTip: object | undefined;
-    /** 当前临时提示的立即隐藏函数 */
-    private toastHideNow: (() => void) | undefined;
+    /** OSD 队列，新的在前；列表本身是唯一的 L1，每项只放内容 */
+    private toastItems: ToastItem[] = [];
+    /** 列表数据要能 structuredClone，DOM 元素单独按 id 存放 */
+    private toastEls = new Map<number, ReturnType<typeof view>>();
+    private toastHost: ElType<HTMLElement> | undefined;
+    private toastList: ReturnType<typeof uScrollList<ToastItem>> | undefined;
+    private toastGear: AnimationGear<{ show: number }> | undefined;
+    private toastId = 0;
+    private toastHideTimer: number | undefined;
     /** 每个弹窗一个隐藏的锚点替身：真实锚点被移除后，弹窗位置不会跟着失效 */
     private anchorProbes = new WeakMap<HTMLElement, HTMLElement>();
     constructor() {
@@ -335,17 +354,189 @@ class Tools {
         node.style.left = `${(rect.left - tipRect.left) / scale}px`;
         node.style.top = `${(rect.top - tipRect.top) / scale}px`;
     }
-    /** 打开下拉弹窗前收起提示，避免两个浮层同时出现 */
-    private hideActiveToastNow() {
-        const hide = this.toastHideNow;
-        this.toastHideNow = undefined;
-        hide?.();
+    /** 临时提示的 L1：列表本身负责毛玻璃、padding 和 gap；位置按第一项触发时的锚点计算 */
+    private ensureToast() {
+        if (this.toastHost && this.toastList && this.toastGear) {
+            return { host: this.toastHost, list: this.toastList, gear: this.toastGear };
+        }
+
+        const host = view("y")
+            .style({
+                position: "fixed",
+                width: "fit-content",
+                height: "fit-content",
+                padding: `${sSize2.padding}px`,
+                ...gGlassStyle.bg,
+                borderRadius: `${gRadius.container}px`,
+                display: "none",
+                pointerEvents: "none",
+            })
+            .addInto(this.tipEl);
+
+        const list = uScrollList<ToastItem>({
+            itemSize: OSD_HEIGHT,
+            gap: OSD_GAP,
+            containerSize: {
+                min: OSD_HEIGHT,
+                max: OSD_HEIGHT * OSD_MAX_VISIBLE + OSD_GAP * (OSD_MAX_VISIBLE - 1),
+            },
+            direction: "down",
+            crossSize: OSD_WIDTH,
+            listCrossSize: "100%",
+            keyExtractor: (item) => String(item.id),
+            renderItem: (item) => this.toastEls.get(item.id) ?? view(),
+            bufferSize: 1,
+            animationDuration: OSD_ANIMATION_DURATION,
+            empty: "",
+        });
+        host.add(list.el);
+
+        const gear = createAnimationGear<{ show: number }>(
+            { show: 0 },
+            { transition: { duration: 280, map: (x) => timingFunction.easeOut(x) } },
+        );
+        gear.addState("show", { show: 1 }, ["hide"]);
+        gear.addState("hide", { show: 0 }, ["show"]);
+        gear.setUpdateCallback((state) => {
+            if (state.show === 0) host.style({ display: "none" });
+            else host.style({ display: "flex", opacity: `${state.show}`, scale: `${state.show}` });
+        });
+        gear.moveTo("hide", 0);
+
+        this.toastHost = host;
+        this.toastList = list;
+        this.toastGear = gear;
+        return { host, list, gear };
+    }
+
+    private createToastItem(content: ElType<HTMLElement>) {
+        return view("x")
+            .style({
+                width: "100%",
+                height: "100%",
+                alignItems: "center",
+                flexShrink: "0",
+            })
+            .add(content);
+    }
+
+    private syncToastList() {
+        const { host, list } = this.ensureToast();
+        // 只有超出可视条目时才需要接收滚轮 / 拖拽，否则保持点击穿透
+        host.style({ pointerEvents: this.toastItems.length > OSD_MAX_VISIBLE ? "auto" : "none" });
+        list.setList(this.toastItems.slice());
+    }
+
+    private scheduleToastHide(item: ToastItem, duration: number) {
+        if (item.timer !== undefined) clearTimeout(item.timer);
+        item.timer = window.setTimeout(() => {
+            item.timer = undefined;
+            this.removeToast(item);
+        }, duration);
+    }
+
+    private removeToast(item: ToastItem) {
+        if (!this.toastItems.includes(item)) return;
+        if (item.timer !== undefined) {
+            clearTimeout(item.timer);
+            item.timer = undefined;
+        }
+        this.toastItems = this.toastItems.filter((candidate) => candidate !== item);
+        this.syncToastList();
+        this.toastEls.delete(item.id);
+        if (this.toastItems.length === 0) this.hideToastHost();
+    }
+
+    /** 最后一条淡出动画结束后再隐藏 L1，期间有新提示则取消隐藏 */
+    private hideToastHost() {
+        if (this.toastHideTimer !== undefined) clearTimeout(this.toastHideTimer);
+        this.toastHideTimer = window.setTimeout(() => {
+            this.toastHideTimer = undefined;
+            if (this.toastItems.length > 0) return;
+            if (!this.toastHost || !this.toastGear) return;
+            this.freeze(this.toastHost);
+            this.toastGear.moveTo("hide");
+        }, OSD_ANIMATION_DURATION);
+    }
+
+    /** 打开下拉弹窗前收起全部提示，避免两个浮层同时出现 */
+    private hideToastNow() {
+        if (this.toastHideTimer !== undefined) {
+            clearTimeout(this.toastHideTimer);
+            this.toastHideTimer = undefined;
+        }
+        for (const item of this.toastItems) {
+            if (item.timer !== undefined) {
+                clearTimeout(item.timer);
+                item.timer = undefined;
+            }
+        }
+        const hadItems = this.toastItems.length > 0;
+        if (hadItems) {
+            this.toastItems = [];
+            this.syncToastList();
+            this.toastEls.clear();
+        }
+        if (!this.toastHost || !this.toastGear) return;
+        if (hadItems) this.freeze(this.toastHost);
+        this.toastGear.moveTo("hide", 0);
+    }
+
+    private hideToast(key?: string) {
+        if (key === undefined) {
+            this.hideToastNow();
+            return;
+        }
+        const item = this.toastItems.find((candidate) => candidate.key === key);
+        if (item) this.removeToast(item);
+    }
+
+    private showToast(
+        content: ElType<HTMLElement>,
+        op?: { duration?: number; key?: string; anchorEl?: HTMLElement; side?: "left" | "right" | "top" | "bottom" },
+    ) {
+        // 下拉弹窗展开时不弹临时提示，避免和面板抢同一块位置
+        if (this.openTip) return;
+
+        const { host, list, gear } = this.ensureToast();
+        const key = op?.key;
+        const existing = key === undefined ? undefined : this.toastItems.find((item) => item.key === key);
+        const first = this.toastItems.length === 0;
+
+        let item: ToastItem;
+        if (existing) {
+            const el = this.toastEls.get(existing.id);
+            el?.clear().add(content);
+            // 更新也算一次新提示，移到最上面并重新计时
+            this.toastItems = [existing, ...this.toastItems.filter((candidate) => candidate !== existing)];
+            item = existing;
+        } else {
+            item = {
+                id: ++this.toastId,
+                key,
+            };
+            this.toastEls.set(item.id, this.createToastItem(content));
+            this.toastItems = [item, ...this.toastItems];
+        }
+
+        this.syncToastList();
+        // 新提示 / 更新的提示都在顶部，滚回顶部保证能看到
+        list.scrollTo(0, false);
+
+        if (first) {
+            if (op?.anchorEl) this.place(host, op.anchorEl, op.side ?? "bottom");
+            gear.moveTo("show");
+            if (op?.anchorEl) this.setOrigin(host, op.side ?? "bottom");
+        } else {
+            gear.moveTo("show");
+        }
+
+        this.scheduleToastHide(item, op?.duration ?? 2400);
     }
     getTool(name: string) {
         const tool = this.tools.get(name);
         if (!tool) return undefined;
         let launchEl: HTMLElement | null = null;
-        let toastSide: "left" | "right" | "top" | "bottom" = "bottom";
         /** 标识这个工具的下拉弹窗；多个工具中只有一个是展开的 */
         const tipToken = {};
         const tipel = (() => {
@@ -404,67 +595,6 @@ class Tools {
             for (const cb of tipVisibleListeners) cb(visible);
         };
 
-        // 临时提示和下拉弹窗用同样的玻璃面板、锚点和缩放动画，但自身不接收指针
-        const toastel = view("y")
-            .style({
-                position: "fixed",
-                width: "fit-content",
-                height: "fit-content",
-                padding: `${sSize2.padding}px`,
-                gap: `${sSize2.padding}px`,
-                ...gGlassStyle.bg,
-                borderRadius: `${gRadius.container}px`,
-                pointerEvents: "none",
-                display: "none",
-            })
-            .addInto(this.tipEl);
-        const toastGear = createAnimationGear<{ show: number }>(
-            { show: 0 },
-            { transition: { duration: 280, map: (x) => timingFunction.easeOut(x) } },
-        );
-        toastGear.addState("show", { show: 1 }, ["hide"]);
-        toastGear.addState("hide", { show: 0 }, ["show"]);
-        toastGear.setUpdateCallback((state) => {
-            if (state.show === 0) {
-                toastel.style({ display: "none" });
-            } else {
-                toastel.style({ display: "flex", opacity: `${state.show}`, scale: `${state.show}` });
-            }
-        });
-        toastGear.moveTo("hide", 0);
-        let toastTimer: number | undefined;
-        const clearToastTimer = () => {
-            if (toastTimer === undefined) return;
-            clearTimeout(toastTimer);
-            toastTimer = undefined;
-        };
-        const hideToastNow = () => {
-            clearToastTimer();
-            this.freeze(toastel);
-            toastGear.moveTo("hide", 0);
-            if (this.toastHideNow === hideToastNow) this.toastHideNow = undefined;
-        };
-        const hideToast = () => {
-            clearToastTimer();
-            this.freeze(toastel);
-            // 淡出期间仍保留立即隐藏入口，别的提示出现时可以直接把这一条切掉
-            toastGear.moveTo("hide", undefined, () => {
-                if (this.toastHideNow === hideToastNow) this.toastHideNow = undefined;
-            });
-        };
-        const showToast: ShowToast = (op) => {
-            // 下拉弹窗展开时不弹临时提示，避免和面板抢同一块位置
-            if (this.openTip) return;
-            if (this.toastHideNow && this.toastHideNow !== hideToastNow) this.hideActiveToastNow();
-            this.toastHideNow = hideToastNow;
-            const anchorEl = op?.anchorEl ? pack(op.anchorEl).el : launchEl;
-            if (anchorEl) this.place(toastel, anchorEl, toastSide);
-            toastGear.moveTo("show");
-            if (anchorEl) this.setOrigin(toastel, toastSide);
-            clearToastTimer();
-            toastTimer = window.setTimeout(hideToast, op?.duration ?? 2400);
-        };
-
         // todo 回收
         // 只响应合成 click：原生 click 由下方「输入聚合层」吞掉（其注册早于本监听），永远到不了元素处理器；
         // 这里再显式忽略一次作为契约，避免日后代码重排回到「合成 click 打开弹窗 → 原生 click 立刻关闭」的
@@ -484,16 +614,14 @@ class Tools {
         );
         return {
             getEl: (showA: "left" | "right" | "top" | "bottom") => {
-                toastSide = showA;
                 const el = tool.cb({
                     tipEl: tipel.el,
-                    toastEl: toastel,
                     showTip: (s) => {
                         const state = s?.state || "toggle";
                         const next = state === "show" ? true : state === "hide" ? false : !(tipel.gv === true);
                         const anchorEl = s?.anchorEl ? pack(s.anchorEl).el : el;
                         if (next) {
-                            this.hideActiveToastNow();
+                            this.hideToastNow();
                             this.openTip = tipToken;
                             this.place(tipel, anchorEl, showA, s?.animate === true && tipVisible);
                             setTipVisible(true);
@@ -505,8 +633,16 @@ class Tools {
                             if (this.openTip === tipToken) this.openTip = undefined;
                         }
                     },
-                    showToast,
-                    hideToast,
+                    showToast: (content, op) => {
+                        const anchorEl = op?.anchorEl ? pack(op.anchorEl).el : launchEl;
+                        this.showToast(content, {
+                            duration: op?.duration,
+                            key: op?.key,
+                            anchorEl: anchorEl ?? undefined,
+                            side: showA,
+                        });
+                    },
+                    hideToast: (key) => this.hideToast(key),
                     onTipVisibleChange: (cb) => {
                         tipVisibleListeners.add(cb);
                         return () => tipVisibleListeners.delete(cb);
@@ -10448,7 +10584,7 @@ tools.registerTool(
 
 tools.registerTool(
     "power",
-    ({ tipEl, toastEl, showTip, showToast, onTipVisibleChange }) => {
+    ({ tipEl, showTip, showToast, onTipVisibleChange }) => {
         const el = view("x").style({ alignItems: "center" });
 
         // 顶部显示电池状态
@@ -10467,8 +10603,7 @@ tools.registerTool(
         onTipVisibleChange(panel.setVisible);
 
         const notify = (title: string, detail: string) => {
-            toastEl.clear().add(uStatusToast({ icon: "battery", title, detail, width: TOAST_WIDTH }));
-            showToast({ duration: 3000 });
+            showToast(uStatusToast({ icon: "battery", title, detail }), { duration: 3000, key: "power" });
         };
 
         // 充电状态变化：插拔电源、充满后停止充电
@@ -10491,7 +10626,7 @@ tools.registerTool(
 
 tools.registerTool(
     "clipboard",
-    ({ tipEl, toastEl, showTip, showToast }) => {
+    ({ tipEl, showTip, showToast }) => {
         if (!clipboard) return view().add(txt("剪贴板未就绪"));
         const station = clipboard;
         clipboardStationTool = createClipboardStationTool({
@@ -10515,15 +10650,14 @@ tools.registerTool(
             known = new Set(station.items.map((item) => item.id));
             const latest = added.find((item) => item.kind === "clipboard");
             if (!latest) return;
-            toastEl.clear().add(
+            showToast(
                 uStatusToast({
                     icon: "clipboard",
                     title: clipboardPreview(latest),
                     detail: `${latest.appid || "未知应用"} · ${clipboardTime(latest.time)}`,
-                    width: TOAST_WIDTH,
                 }),
+                { duration: 2200, key: "clipboard" },
             );
-            showToast({ duration: 2200 });
         });
 
         return el;
@@ -10533,13 +10667,12 @@ tools.registerTool(
 
 tools.registerTool(
     "network",
-    ({ tipEl, toastEl, showTip, showToast, onTipVisibleChange }) => {
+    ({ tipEl, showTip, showToast, onTipVisibleChange }) => {
         const el = view("x")
             .style({ alignItems: "center" })
             .add(getIconXEl("wifi", { size: 20, width: 24, height: 24 }));
         const notify = (title: string, detail: string) => {
-            toastEl.clear().add(uStatusToast({ icon: "wifi", title, detail, width: TOAST_WIDTH }));
-            showToast({ duration: 3200 });
+            showToast(uStatusToast({ icon: "wifi", title, detail }), { duration: 3200, key: "network" });
         };
         const panel = createWifiPanel(rawRegistry, {
             toggleWifiAccessPoint: async (ap) => {
@@ -10571,7 +10704,7 @@ tools.registerTool(
 
 tools.registerTool(
     "connect",
-    ({ tipEl, toastEl, showTip, showToast, onTipVisibleChange }) => {
+    ({ tipEl, showTip, showToast, onTipVisibleChange }) => {
         const el = view("x")
             .style({ alignItems: "center" })
             .add(getIconXEl("connect", { size: 20, width: 24, height: 24 }).el);
@@ -10588,8 +10721,7 @@ tools.registerTool(
         onTipVisibleChange(panel.setVisible);
 
         const notify = (title: string, detail: string) => {
-            toastEl.clear().add(uStatusToast({ icon: "connect", title, detail, width: TOAST_WIDTH }));
-            showToast({ duration: 3200 });
+            showToast(uStatusToast({ icon: "connect", title, detail }), { duration: 3200, key: "connect" });
         };
         watchConnectedItems({
             list: rawRegistry.get("connect.devices"),
@@ -10611,13 +10743,12 @@ tools.registerTool(
 
 tools.registerTool(
     "blue",
-    ({ tipEl, toastEl, showTip, showToast, onTipVisibleChange }) => {
+    ({ tipEl, showTip, showToast, onTipVisibleChange }) => {
         const el = view("x")
             .add(getIconXEl("blue", { size: 20, width: 24, height: 24 }).el)
             .style({ alignItems: "center" });
         const notify = (title: string, detail: string) => {
-            toastEl.clear().add(uStatusToast({ icon: "blue", title, detail, width: TOAST_WIDTH }));
-            showToast({ duration: 3200 });
+            showToast(uStatusToast({ icon: "blue", title, detail }), { duration: 3200, key: "blue" });
         };
         const panel = createBluePanel(rawRegistry, {
             toggleBlueDevice: async (device) => {
@@ -10661,7 +10792,7 @@ tools.registerTool(
 
 tools.registerTool(
     "notifications",
-    ({ tipEl, toastEl, showTip, showToast, hideToast }) => {
+    ({ tipEl, showTip, showToast, hideToast }) => {
         const btn = button(getIconXEl("notification", { size: 20, width: 24, height: 24 })).on("click", () => {
             showTip();
         });
@@ -10682,29 +10813,16 @@ tools.registerTool(
             nl.setList(ids);
         });
 
-        // 临时提示只显示最新一条通知，新通知直接替换旧的
-        let toastNote: { key: string; title: string; content: string } | undefined;
-        const renderToast = () => {
-            toastEl.clear();
-            if (!toastNote) return;
-            toastEl.add(
-                nNotiToast({
-                    title: toastNote.title,
-                    content: toastNote.content,
-                    width: TOAST_NOTIFICATION_WIDTH,
-                }),
-            );
-        };
+        // 每条通知是 OSD 列表里独立的一项；同一条通知更新时替换对应项
+        const toastKey = (key: string) => `notification:${key}`;
         const removeToastNote = (key: string) => {
-            if (toastNote?.key !== key) return;
-            toastNote = undefined;
-            renderToast();
-            hideToast();
+            hideToast(toastKey(key));
         };
         const showToastNote = (key: string, note: { title: string; content: string }) => {
-            toastNote = { key, title: note.title, content: note.content };
-            renderToast();
-            showToast({ duration: 4500 });
+            showToast(nNotiToast({ title: note.title, content: note.content }), {
+                duration: 4500,
+                key: toastKey(key),
+            });
         };
 
         // 每条通知单独订阅，replaces_id 复用同一个 id 时也能再次提示
@@ -10776,7 +10894,7 @@ tools.registerTool("virtualKeyboard", () => {
 
 tools.registerTool(
     "volume",
-    ({ tipEl, toastEl, showTip, showToast }) => {
+    ({ tipEl, showTip, showToast }) => {
         const btn = button(getIconXEl("speaker", { size: 20, width: 24, height: 24 })).on("click", () => {
             showTip();
         });
@@ -10790,18 +10908,12 @@ tools.registerTool(
 
         m.el.addInto(tipEl);
 
-        const outputRow = uLevelRow({ icon: "speaker", width: TOAST_WIDTH });
-        const inputRow = uLevelRow({ icon: "mic", width: TOAST_WIDTH });
         const state = { outputV: 0, outputM: false, inputV: 0, inputM: false };
-        const render = () => {
-            outputRow.sv(state.outputV, state.outputM);
-            inputRow.sv(state.inputV, state.inputM);
-        };
-        render();
         // 一次只显示发生变化的那一路：输出或输入，不并排显示两个进度条
         const notify = (kind: "output" | "input") => {
-            toastEl.clear().add(kind === "output" ? outputRow.el : inputRow.el);
-            showToast({ duration: 1800 });
+            const row = uLevelRow({ icon: kind === "output" ? "speaker" : "mic" });
+            row.sv(kind === "output" ? state.outputV : state.inputV, kind === "output" ? state.outputM : state.inputM);
+            showToast(row.el, { duration: 1800, key: "volume" });
         };
         let lastOutputV: number | undefined;
         let lastOutputM: boolean | undefined;
@@ -10811,28 +10923,24 @@ tools.registerTool(
             const changed = lastOutputV !== undefined && lastOutputV !== value;
             lastOutputV = value;
             state.outputV = value;
-            render();
             if (changed) notify("output");
         });
         rawRegistry.get("volume.output.default.muted").getAndSubscribe((value) => {
             const changed = lastOutputM !== undefined && lastOutputM !== value;
             lastOutputM = value;
             state.outputM = value;
-            render();
             if (changed) notify("output");
         });
         rawRegistry.get("volume.input.default.volume").getAndSubscribe((value) => {
             const changed = lastInputV !== undefined && lastInputV !== value;
             lastInputV = value;
             state.inputV = value;
-            render();
             if (changed) notify("input");
         });
         rawRegistry.get("volume.input.default.muted").getAndSubscribe((value) => {
             const changed = lastInputM !== undefined && lastInputM !== value;
             lastInputM = value;
             state.inputM = value;
-            render();
             if (changed) notify("input");
         });
 
@@ -10843,7 +10951,7 @@ tools.registerTool(
 
 tools.registerTool(
     "brightness",
-    ({ tipEl, toastEl, showTip, showToast }) => {
+    ({ tipEl, showTip, showToast }) => {
         const btn = button(getIconXEl("sun", { size: 20, width: 24, height: 24 })).on("click", () => {
             showTip();
         });
@@ -10851,32 +10959,29 @@ tools.registerTool(
         const displays = uipool["brightness.displays"]();
         displays.el.addInto(tipEl);
 
-        const toastRows = new Map<string, { el: ElType<HTMLElement>; unsub: () => void }>();
+        const toastUnsubs = new Map<string, () => void>();
         rawRegistry.get("brightness.displays").getAndSubscribe((ids) => {
             const keep = new Set(ids.map((id) => String(id)));
-            for (const [key, row] of [...toastRows]) {
+            for (const [key, unsub] of [...toastUnsubs]) {
                 if (keep.has(key)) continue;
-                row.unsub();
-                row.el.remove();
-                toastRows.delete(key);
+                unsub();
+                toastUnsubs.delete(key);
             }
             for (const id of ids) {
                 const key = String(id);
-                if (toastRows.has(key)) continue;
-                const row = uLevelRow({ icon: "sun", width: TOAST_WIDTH });
+                if (toastUnsubs.has(key)) continue;
                 let lastValue: number | undefined;
                 const brightness = rawRegistry.get(rawRegistry.buildVarId("brightness.displays[].brightness", [key]));
                 const unsub = brightness.getAndSubscribe((value) => {
                     const changed = lastValue !== undefined && lastValue !== value;
                     lastValue = value;
+                    if (!changed) return;
+                    // 只显示最后变化的那块屏幕，一次一个进度条
+                    const row = uLevelRow({ icon: "sun" });
                     row.sv(value / 100);
-                    if (changed) {
-                        // 只显示最后变化的那块屏幕，一次一个进度条
-                        toastEl.clear().add(row.el);
-                        showToast({ duration: 1800 });
-                    }
+                    showToast(row.el, { duration: 1800, key: "brightness" });
                 });
-                toastRows.set(key, { el: row.el, unsub });
+                toastUnsubs.set(key, unsub);
             }
         });
 

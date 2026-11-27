@@ -34,6 +34,10 @@ export const gRadius = {
     icon: 12,
 } as const;
 
+/** 临时提示（OSD）的统一宽度和高度 */
+export const OSD_WIDTH = sSize(6);
+export const OSD_HEIGHT = sSize(1.5);
+
 const gFontWeight = {
     regular: "400",
     medium: "500",
@@ -179,7 +183,7 @@ export function aLineText() {
 }
 
 /** 顶栏临时提示里的等级条：图标和轨道各是一个 L2，轨道内部是 L3 */
-export function uLevelRow(op: { icon: string; width?: number }) {
+export function uLevelRow(op: { icon: string }) {
     const iconEl = getIconXEl(op.icon, { size: 20, width: 24, height: 24 });
     const iconBox = view()
         .style({
@@ -210,8 +214,8 @@ export function uLevelRow(op: { icon: string; width?: number }) {
         .add(fill);
     const row = view("x")
         .style({
-            width: px(op.width ?? sSize(5)),
-            height: px(sSize(1)),
+            width: px(OSD_WIDTH),
+            height: px(OSD_HEIGHT),
             alignItems: "center",
             gap: px(sSize2.paddingx),
             flexShrink: "0",
@@ -230,7 +234,7 @@ export function uLevelRow(op: { icon: string; width?: number }) {
 }
 
 /** 顶栏临时提示里的文字消息：图标 + 标题 + 可选说明 */
-export function uStatusToast(op: { icon: string; title: string; detail?: string; width?: number }) {
+export function uStatusToast(op: { icon: string; title: string; detail?: string }) {
     const text = view("y").style({
         flexGrow: "1",
         minWidth: "0",
@@ -258,8 +262,8 @@ export function uStatusToast(op: { icon: string; title: string; detail?: string;
     return ui
         .barItem()
         .style({
-            width: px(op.width ?? sSize(5)),
-            height: px(sSize(1.5)),
+            width: px(OSD_WIDTH),
+            height: px(OSD_HEIGHT),
             display: "flex",
             alignItems: "center",
             gap: px(sSize2.paddingx),
@@ -1018,13 +1022,13 @@ export function nNotiContent(op: { title: string; content: string; time?: number
 }
 
 /** 顶栏临时提示里的通知卡片：L2 面板 + 与下拉列表相同的条目排版 */
-export function nNotiToast(op: { title: string; content: string; width?: number }) {
+export function nNotiToast(op: { title: string; content: string }) {
     return ui
         .barItem()
         .style({
-            width: px(op.width ?? sSize(6)),
-            height: px(sSize(2)),
-            padding: px(sSize2.padding),
+            width: px(OSD_WIDTH),
+            height: px(OSD_HEIGHT),
+            padding: `0 ${px(sSize2.paddingx)}`,
             boxSizing: "border-box",
             overflow: "hidden",
             flexShrink: "0",
