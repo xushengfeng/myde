@@ -726,7 +726,10 @@ const volume = vVolume();
 popupRow.add(popupColumn("音量", volume.el));
 
 const brightnessList = uBrightnessList();
-brightnessList.setSliders([uBrightnessSlider({ value: 0.72 }).el, uBrightnessSlider({ value: 0.38 }).el]);
+brightnessList.setSliders([
+    { key: "built-in", el: uBrightnessSlider({ value: 0.72 }).el },
+    { key: "external", el: uBrightnessSlider({ value: 0.38 }).el },
+]);
 popupRow.add(popupColumn("亮度", brightnessList.el));
 
 const imePopupEntries = [

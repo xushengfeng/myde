@@ -8900,14 +8900,20 @@ const uipool = {
     "brightness.displays": () => {
         const source = rawRegistry.get("brightness.displays");
         const grid = uBrightnessList();
-        const unsubscribes = new Map<string, () => void>();
+        const sliders = new Map<string, { el: ElType<HTMLElement>; unsubscribe: () => void }>();
 
         const unsub = source.getAndSubscribe((ids) => {
-            for (const unsubscribe of unsubscribes.values()) unsubscribe();
-            unsubscribes.clear();
-            const sliders: ElType<HTMLElement>[] = [];
+            const keep = new Set(ids.map((key) => key as string));
+            for (const [key, slider] of [...sliders]) {
+                if (keep.has(key)) continue;
+                slider.unsubscribe();
+                sliders.delete(key);
+            }
 
             for (const key of ids) {
+                const mapKey = key as string;
+                if (sliders.has(mapKey)) continue;
+
                 const brightnessKey = rawRegistry.buildVarId("brightness.displays[].brightness", [key]);
                 const brightnessSource = rawRegistry.get(brightnessKey);
                 const setBrightness = MUtils.throttle((v: number) => {
@@ -8919,7 +8925,6 @@ const uipool = {
                     onChange: setBrightness,
                     onEnd: () => setBrightness.flush(),
                 });
-                sliders.push(slider.el);
 
                 const itemKey = rawRegistry.buildVarId("brightness.displays[]", [key]);
                 const unsubItem = rawRegistry.get(itemKey).getAndSubscribe((v) => {
@@ -8931,12 +8936,16 @@ const uipool = {
                 const unsubBrightness = brightnessSource.getAndSubscribe((v) => {
                     slider.sv(v / 100);
                 });
-                unsubscribes.set(key, () => {
-                    unsubItem();
-                    unsubBrightness();
+                sliders.set(mapKey, {
+                    el: slider.el,
+                    unsubscribe: () => {
+                        unsubItem();
+                        unsubBrightness();
+                    },
                 });
             }
-            grid.setSliders(sliders);
+
+            grid.setSliders(ids.map((key) => ({ key: key as string, el: sliders.get(key as string)?.el ?? view() })));
         });
         return {
             id: "brightness.displays",
@@ -8944,8 +8953,8 @@ const uipool = {
             el: grid.el,
             unmount: () => {
                 unsub();
-                for (const unsubscribe of unsubscribes.values()) unsubscribe();
-                unsubscribes.clear();
+                for (const slider of sliders.values()) slider.unsubscribe();
+                sliders.clear();
             },
         };
     },

@@ -1448,7 +1448,7 @@ export function tTrayMenu(op: { click: () => void; clickItem: () => void }) {
     const menuStack: number[][] = [];
     const list = dynamicScrollList<number>({
         itemSize: sSize(1),
-        containerSize: sSize(1) * 8,
+        containerSize: { min: 0, max: sSize(1) * 8 },
         direction: "down",
         keyExtractor: (k) => k.toString(),
         renderItem: (i, _, items) => {
@@ -1712,23 +1712,30 @@ export function uBrightnessSlider(op?: { value?: number; onChange?: (v: number) 
     return { el: range.el, sv: range.sv, onChange: range.onChange };
 }
 
-/** 亮度弹窗：滑块本身就是 L2，直接放进 L1 的网格，不再套一层 L2 */
+/** 亮度弹窗：每个滑条本身是 L2，作为滚动项排列，列表按数量增长 */
 export function uBrightnessList() {
-    const grid = ui.bar([]);
-    grid.el.style({
-        display: "none",
-        gridTemplateColumns: "1fr",
-        gap: px(sSize2.padding),
-        width: px(sSize(6)),
+    const sliders = new Map<string, ReturnType<typeof view>>();
+    const list = dynamicScrollList<string>({
+        itemSize: sSize(1),
+        gap: sSize2.padding,
+        containerSize: { min: 0 },
+        direction: "down",
+        keyExtractor: (key) => key,
+        renderItem: (key) => sliders.get(key) ?? view(),
+        bufferSize: 2,
     });
+    list.el.style({ width: px(sSize(6)) });
+
+    const panel = ui.bar([list.el]);
+    panel.el.style({ display: "none" });
+
     return {
-        el: grid.el,
-        setSliders: (sliders: ElType<HTMLElement>[]) => {
-            grid.el.clear().add(sliders);
-            grid.el.style({
-                display: sliders.length > 0 ? "grid" : "none",
-                height: px(sliders.length * sSize(1) + Math.max(0, sliders.length - 1) * sSize2.padding),
-            });
+        el: panel.el,
+        setSliders: (items: { key: string; el: ElType<HTMLElement> }[]) => {
+            sliders.clear();
+            for (const item of items) sliders.set(item.key, item.el as ReturnType<typeof view>);
+            panel.el.style({ display: items.length > 0 ? "" : "none" });
+            list.setList(items.map((item) => item.key));
         },
     };
 }
@@ -2044,104 +2051,84 @@ export interface ImeTrayActions {
 
 /** 输入法托盘弹窗：列表直接切换输入法，键盘布局项即关闭输入法。`initial` 用于静态预览 */
 export function imeTrayPanel(op: ImeTrayActions, initial?: ImeTrayStatus) {
-    const content = view("y");
-    const list = ui.barItem();
-    const wrapper = ui.bar([content, list]);
-    wrapper.el.style({
-        width: px(sSize(4)),
+    type Entry = ImeTrayStatus["entries"][number];
+    const rows = new Map<string, { el: ReturnType<typeof view>; update: (entry: Entry, active: boolean) => void }>();
+
+    function createRow(key: string) {
+        const label = txt("").style({ fontSize: "10px", opacity: "0.55" });
+        const iconBox = view("x")
+            .style({
+                alignItems: "center",
+                justifyContent: "center",
+                width: px(sSize(1)),
+                height: px(sSize(1)),
+                flexShrink: "0",
+            })
+            .add(label);
+        const name = aLineText().sv("");
+        const code = txt("").style({
+            fontSize: "10px",
+            opacity: "0.5",
+            flexShrink: "0",
+            maxWidth: "90px",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+        });
+        const row = view("x").style({
+            borderRadius: px(gRadius.item),
+            gap: px(sSize2.paddingx),
+            alignItems: "center",
+            cursor: "pointer",
+            height: px(sSize(1)),
+        });
+        row.add([iconBox, name, code]);
+        row.on("click", () => op.select(key));
+
+        return {
+            el: row,
+            update(entry: Entry, active: boolean) {
+                const off = !!entry.off;
+                label.sv(off ? "关" : entry.label?.trim() || "·");
+                label.style({ opacity: active ? "0.85" : "0.55" });
+                name.sv(off ? "关闭输入法" : entry.name);
+                code.sv(off ? "" : entry.uniqueName);
+                row.style({ backgroundColor: active ? "#fff" : "transparent" });
+            },
+        };
+    }
+
+    const list = uScrollList<string>({
+        itemSize: sSize(1),
+        containerSize: { min: sSize(1), max: sSize(1) * 4 },
+        direction: "down",
+        crossSize: "100%",
+        keyExtractor: (key) => key,
+        renderItem: (key) => rows.get(key)?.el ?? view(),
+        empty: "",
     });
 
+    const wrapper = ui.bar([list.el]);
+    wrapper.el.style({ width: px(sSize(4)) });
+
     const setStatus = (status: ImeTrayStatus) => {
-        content.style({ display: "flex" });
-        content.clear();
-        list.clear();
-        list.style({ display: "none" });
-
-        if (!status.available) {
-            content.add(
-                aLineText()
-                    .sv("fcitx5 不可用")
-                    .style({ padding: `4px ${px(sSize2.paddingx)}` }),
-            );
-            if (status.error) {
-                content.add(
-                    txt(status.error).style({
-                        fontSize: "11px",
-                        opacity: "0.6",
-                        wordBreak: "break-all",
-                        padding: `0 ${px(sSize2.paddingx)} 4px`,
-                    }),
-                );
+        const entries = status.available ? status.entries : [];
+        for (const entry of entries) {
+            let row = rows.get(entry.uniqueName);
+            if (!row) {
+                row = createRow(entry.uniqueName);
+                rows.set(entry.uniqueName, row);
             }
-            return;
+            row.update(entry, status.currentUniqueName === entry.uniqueName);
         }
 
-        list.style({ display: status.entries.length > 0 ? "block" : "none" });
-        if (status.entries.length > 0) {
-            for (const entry of status.entries) {
-                const active = status.currentUniqueName === entry.uniqueName;
-                const off = !!entry.off;
-                list.add(
-                    view("x")
-                        .style({
-                            borderRadius: px(gRadius.item),
-                            gap: px(sSize2.paddingx),
-                            alignItems: "center",
-                            cursor: "pointer",
-                            height: px(sSize(1)),
-                            backgroundColor: active ? "#fff" : "transparent",
-                        })
-                        .add([
-                            view("x")
-                                .style({
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    width: px(sSize(1)),
-                                    height: px(sSize(1)),
-                                })
-                                .add(
-                                    txt(off ? "关" : entry.label?.trim() || "·").style({
-                                        fontSize: "10px",
-                                        opacity: active ? "0.85" : "0.55",
-                                    }),
-                                ),
-                            aLineText().sv(off ? "关闭输入法" : entry.name),
-                            txt(off ? "" : entry.uniqueName).style({
-                                fontSize: "10px",
-                                opacity: "0.5",
-                                flexShrink: "0",
-                                maxWidth: "90px",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                            }),
-                        ])
-                        .on("click", () => op.select(entry.uniqueName)),
-                );
-            }
-        }
-
-        if (status.hint) {
-        }
-        if (status.error) {
-            content.add(
-                txt(status.error).style({
-                    fontSize: "10px",
-                    opacity: "0.55",
-                    wordBreak: "break-all",
-                    padding: `0 ${px(sSize2.paddingx)} 4px`,
-                }),
-            );
-        }
-        content.style({ display: content.el.children.length > 0 ? "flex" : "none" });
+        list.setEmpty(
+            !status.available ? status.error || "fcitx5 不可用" : status.error || status.hint || "没有输入法",
+        );
+        list.setList(entries.map((entry) => entry.uniqueName));
     };
 
     if (initial) setStatus(initial);
-    else
-        content.add(
-            aLineText()
-                .sv("正在初始化…")
-                .style({ padding: `4px ${px(sSize2.paddingx)}` }),
-        );
+    else list.setEmpty("正在初始化…");
 
     return {
         el: wrapper.el,

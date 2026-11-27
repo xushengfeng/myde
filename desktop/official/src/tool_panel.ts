@@ -1,5 +1,6 @@
 import type { ElType } from "dkh-ui";
 import { txt } from "dkh-ui";
+import { AnimationGear, timingFunction } from "myde-ui";
 import type { Registry } from "./registry";
 import type { RegistrySchema } from "./registry_schema";
 import { attachBatteryFx, attachOrbitFx, attachRippleFx } from "./tool_fx";
@@ -28,6 +29,51 @@ export function tListPanel(rows: ElType<HTMLElement> | ElType<HTMLElement>[], he
         .barItem()
         .style({ height: px(height) })
         .add(rows);
+}
+
+const LIST_SHOW_DURATION = 220;
+
+/**
+ * 可整体出现 / 消失的固定高度 L2 列表。
+ *
+ * 内部列表仍是固定高度，不做增长；这里只动画外层高度、透明度和
+ * 底部 margin，让最后一个 L2 出现 / 消失时不会留下 L1 的 gap。
+ */
+function tAnimatedListPanel(rows: ElType<HTMLElement> | ElType<HTMLElement>[], height = sSize(1.5) * 4) {
+    const gap = sSize2.padding;
+    const bar = ui.barItem().style({
+        height: "0px",
+        marginBottom: px(-gap),
+        opacity: "0",
+        overflow: "hidden",
+    });
+    bar.add(rows);
+
+    const gear = new AnimationGear(
+        { height: 0, opacity: 0 },
+        { transition: { duration: LIST_SHOW_DURATION, map: timingFunction.easeInOut } },
+    );
+    gear.setUpdateCallback((value) => {
+        bar.style({
+            height: px(value.height),
+            opacity: `${value.opacity}`,
+            marginBottom: px(-gap * (1 - value.height / height)),
+        });
+    });
+    gear.moveTo({ height: 0, opacity: 0 }, 0);
+
+    let visible = false;
+    return {
+        el: bar,
+        setVisible(next: boolean) {
+            if (next === visible) return;
+            visible = next;
+            gear.moveTo(
+                { height: next ? height : 0, opacity: next ? 1 : 0 },
+                { duration: LIST_SHOW_DURATION, map: timingFunction.easeInOut },
+            );
+        },
+    };
 }
 
 const weekdayNames = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"] as const;
@@ -193,12 +239,12 @@ function createTogglePanel(op: {
         op.fx.kind === "orbit"
             ? attachOrbitFx(row, { color: op.fx.color })
             : attachRippleFx(row, { color: op.fx.color, from: op.fx.from });
-    const listBar = tListPanel(op.list);
+    const listBar = tAnimatedListPanel(op.list);
     return {
-        el: tPanel([row, ...(op.extra ?? []), listBar]),
+        el: tPanel([row, ...(op.extra ?? []), listBar.el]),
         setActive: (active: boolean) => fx.setActive(active),
         setVisible: (visible: boolean) => fx.setVisible(visible),
-        setListVisible: (visible: boolean) => listBar.style({ display: visible ? "" : "none" }),
+        setListVisible: (visible: boolean) => listBar.setVisible(visible),
     };
 }
 
@@ -240,7 +286,7 @@ export function tConnectPanel(op: {
     });
 }
 
-/** 电源弹窗：电池信息 + 性能模式 + 设备电池列表；后两段可单独隐藏 */
+/** 电源弹窗：电池信息 + 性能模式 + 设备电池列表；性能模式可隐藏 */
 export function tPowerPanel(op: {
     info: ElType<HTMLElement>;
     profiles?: ElType<HTMLElement>;
@@ -253,13 +299,13 @@ export function tPowerPanel(op: {
               .style({ height: px(sSize(1)) })
               .add(op.profiles)
         : undefined;
-    const devicesBar = op.devices ? tListPanel(op.devices) : undefined;
+    // 设备列表自己按内容增长，并负责空提示，不再套固定高度
+    const devicesBar = op.devices ? ui.barItem().add(op.devices) : undefined;
     return {
         el: tPanel([battery.el, ...(profilesBar ? [profilesBar] : []), ...(devicesBar ? [devicesBar] : [])]),
         fx: battery.fx,
         setVisible: (visible: boolean) => battery.fx.setVisible(visible),
         setProfilesVisible: (visible: boolean) => profilesBar?.style({ display: visible ? "" : "none" }),
-        setDevicesVisible: (visible: boolean) => devicesBar?.style({ display: visible ? "" : "none" }),
     };
 }
 
@@ -267,8 +313,10 @@ export function tPowerPanel(op: {
 export function createWifiPanel(registry: Registry<RegistrySchema>, op?: ToolPoolOptions) {
     const pool = createToolPool(registry, op);
     const panel = tWifiPanel({ control: pool.wifiToggle(), list: pool.wifiAccessPoints().el });
-    registry.get("wifi.enabled").getAndSubscribe((v) => panel.setActive(v));
-    registry.get("wifi.accessPoints").getAndSubscribe((ids) => panel.setListVisible(ids.length > 0));
+    registry.get("wifi.enabled").getAndSubscribe((v) => {
+        panel.setActive(v);
+        panel.setListVisible(v);
+    });
     return panel;
 }
 
@@ -276,8 +324,10 @@ export function createWifiPanel(registry: Registry<RegistrySchema>, op?: ToolPoo
 export function createBluePanel(registry: Registry<RegistrySchema>, op?: ToolPoolOptions) {
     const pool = createToolPool(registry, op);
     const panel = tBluePanel({ control: pool.blueToggle(), list: pool.blueDevices().el });
-    registry.get("blue.power").getAndSubscribe((v) => panel.setActive(v));
-    registry.get("blue.devices").getAndSubscribe((ids) => panel.setListVisible(ids.length > 0));
+    registry.get("blue.power").getAndSubscribe((v) => {
+        panel.setActive(v);
+        panel.setListVisible(v);
+    });
     return panel;
 }
 
@@ -287,8 +337,10 @@ export function createConnectPanel(registry: Registry<RegistrySchema>, op?: Tool
     const idValue = txt("");
     registry.get("connect.id").getAndSubscribe((id) => idValue.sv(id));
     const panel = tConnectPanel({ control: pool.connectToggle(), idValue, list: pool.connectDevices().el });
-    registry.get("connect.enabled").getAndSubscribe((v) => panel.setActive(v));
-    registry.get("connect.devices").getAndSubscribe((ids) => panel.setListVisible(ids.length > 0));
+    registry.get("connect.enabled").getAndSubscribe((v) => {
+        panel.setActive(v);
+        panel.setListVisible(v);
+    });
     return panel;
 }
 
@@ -304,6 +356,5 @@ export function createPowerPanel(registry: Registry<RegistrySchema>) {
     registry.get("power.battery.charging").getAndSubscribe((v) => panel.fx.setCharging(v));
     registry.get("power.profile").getAndSubscribe((v) => panel.fx.setProfile(v));
     registry.get("power.profiles").getAndSubscribe((ids) => panel.setProfilesVisible(ids.length > 0));
-    registry.get("power.devices").getAndSubscribe((ids) => panel.setDevicesVisible(ids.length > 0));
     return panel;
 }

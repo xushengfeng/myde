@@ -1,8 +1,7 @@
 import type { ElType } from "dkh-ui";
 import type { Registry } from "./registry";
 import type { BooleanRegistryKeys, RegistrySchema } from "./registry_schema";
-import { dynamicScrollList } from "./scroll-list";
-import { px, sSize, uBatteryInfo, uBatteryRow, uChoiceRow, uSegmented, uSwitch } from "./ui";
+import { sSize, uBatteryInfo, uBatteryRow, uChoiceRow, uScrollList, uSegmented, uSwitch } from "./ui";
 
 /** registry 驱动的一个工具控件；toggle 供整行点击等场景切换 */
 export interface ControlNode {
@@ -62,10 +61,11 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
         powerDevices: () => {
             const source = registry.get("power.devices");
             const us: (() => void)[] = [];
-            const container = dynamicScrollList<string>({
+            const container = uScrollList<string>({
                 itemSize: sSize(1.5),
-                containerSize: sSize(1.5) * 4,
+                containerSize: { min: sSize(1.5), max: sSize(1.5) * 4 },
                 direction: "down",
+                crossSize: sSize(6),
                 keyExtractor: (x) => x,
                 renderItem: (k) => {
                     const row = uBatteryRow("", 0);
@@ -75,6 +75,7 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
                     us.push(s);
                     return row.el;
                 },
+                empty: "没有设备",
             });
 
             const unsub = source.getAndSubscribe(async (ids) => {
@@ -83,7 +84,7 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
             return {
                 id: "power.devices",
                 type: "dynamic-list",
-                el: container.el.style({ width: px(sSize(6)) }),
+                el: container.el,
                 unmount: () => {
                     unsub();
                     for (const s of us) s();
@@ -137,10 +138,12 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
             const unsubEnabled = registry.get("wifi.enabled").getAndSubscribe((v) => {
                 wifiEnabled = v;
             });
-            const container = dynamicScrollList<string>({
+            const container = uScrollList<string>({
                 itemSize: sSize(1.5),
                 containerSize: sSize(1.5) * 4,
                 direction: "down",
+                crossSize: sSize(6),
+                empty: "没有已保存的网络",
                 keyExtractor: (x) => x,
                 renderItem: (k) => {
                     let canClick = false;
@@ -176,7 +179,7 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
             return {
                 id: "wifi.devices",
                 type: "dynamic-list",
-                el: container.el.style({ width: px(sSize(6)) }),
+                el: container.el,
                 unmount: () => {
                     unsub();
                     unsubEnabled();
@@ -192,10 +195,12 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
             const unsubEnabled = registry.get("connect.enabled").getAndSubscribe((v) => {
                 connectEnabled = v;
             });
-            const container = dynamicScrollList<string>({
+            const container = uScrollList<string>({
                 itemSize: sSize(1.5),
                 containerSize: sSize(1.5) * 4,
                 direction: "down",
+                crossSize: sSize(6),
+                empty: "没有设备",
                 keyExtractor: (x) => x,
                 renderItem: (k) => {
                     let canClick = false;
@@ -231,7 +236,7 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
             return {
                 id: "connect.devices",
                 type: "dynamic-list",
-                el: container.el.style({ width: px(sSize(6)) }),
+                el: container.el,
                 unmount: () => {
                     unsub();
                     unsubEnabled();
@@ -247,10 +252,12 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
             const unsubPowered = registry.get("blue.power").getAndSubscribe((v) => {
                 powered = v;
             });
-            const container = dynamicScrollList<string>({
+            const container = uScrollList<string>({
                 itemSize: sSize(1.5),
                 containerSize: sSize(1.5) * 4,
                 direction: "down",
+                crossSize: sSize(6),
+                empty: "没有已配对的设备",
                 keyExtractor: (x) => x,
                 renderItem: (k) => {
                     let canClick = false;
@@ -286,7 +293,7 @@ export function createToolPool(registry: Registry<RegistrySchema>, op?: ToolPool
             return {
                 id: "blue.devices",
                 type: "dynamic-list",
-                el: container.el.style({ width: px(sSize(6)) }),
+                el: container.el,
                 unmount: () => {
                     unsub();
                     unsubPowered();
