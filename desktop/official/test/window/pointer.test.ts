@@ -285,14 +285,18 @@ describe("鼠标窗口操作", () => {
                           (el) => el.id && !el.hasAttribute("data-desktop-ui") && !el.hasAttribute("data-client-titlebar"),
                       )
                     : null;
-                const ghost = frame ? [...frame.children].filter((el) => el.tagName === "CANVAS").length : 0;
+                const ghostEl = frame
+                    ? ([...frame.children].find((el) => el.tagName === "CANVAS") ?? null)
+                    : null;
+                const surface = content?.querySelector("canvas") ?? null;
                 const rect = frame?.getBoundingClientRect();
                 samples.push({
                     t: performance.now() - started,
                     x: rect?.left ?? 0,
                     w: rect?.width ?? 0,
-                    ghost,
-                    opacity: content ? Number(getComputedStyle(content).opacity) : null,
+                    ghost: ghostEl ? 1 : 0,
+                    ghostOpacity: ghostEl ? Number(getComputedStyle(ghostEl).opacity) : null,
+                    opacity: surface ? Number(getComputedStyle(surface).opacity) : null,
                 });
                 if (performance.now() - started < 900) requestAnimationFrame(tick);
             };
@@ -301,7 +305,14 @@ describe("鼠标窗口操作", () => {
         await clickControl(win.handle, "maximize");
         await sleep(950);
         const samples = await desktop.evaluate<
-            { t: number; x: number; w: number; ghost: number; opacity: number | null }[]
+            {
+                t: number;
+                x: number;
+                w: number;
+                ghost: number;
+                ghostOpacity: number | null;
+                opacity: number | null;
+            }[]
         >("window.__autoResizeSamples ?? []");
         const after = await state(desktop);
         const target = after.available.width;
@@ -322,13 +333,16 @@ describe("鼠标窗口操作", () => {
             "位置应该有中间值",
         ).toBe(true);
 
-        // 旧内容快照在过渡里淡出，内容同时淡入
-        const fading = samples.filter((sample) => sample.ghost > 0 && sample.opacity !== null && sample.opacity < 0.99);
+        // 不透明窗口：只淡出旧内容快照，内容层始终不透明
+        const fading = samples.filter((sample) => sample.ghost > 0);
         expect(fading.length, "应该有旧内容快照在淡出").toBeGreaterThan(0);
         expect(
-            fading.some((sample) => (sample.opacity ?? 1) < 0.2),
-            "快照存在时内容应该接近透明",
+            fading.some((sample) => (sample.ghostOpacity ?? 1) > 0.1 && (sample.ghostOpacity ?? 1) < 0.9),
+            "旧内容快照应该在淡出",
         ).toBe(true);
+        for (const sample of fading) {
+            expect(sample.opacity, "不透明窗口的内容层不应变透明").toBeGreaterThan(0.99);
+        }
 
         const final = await desktop.evaluate<{ ghost: number; opacity: number | null; w: number }>(`(() => {
             const frame = document.querySelector("[data-client-frame]");
@@ -337,9 +351,10 @@ describe("鼠标窗口操作", () => {
                       (el) => el.id && !el.hasAttribute("data-desktop-ui") && !el.hasAttribute("data-client-titlebar"),
                   )
                 : null;
+            const surface = content?.querySelector("canvas") ?? null;
             return {
                 ghost: frame ? [...frame.children].filter((el) => el.tagName === "CANVAS").length : 0,
-                opacity: content ? Number(getComputedStyle(content).opacity) : null,
+                opacity: surface ? Number(getComputedStyle(surface).opacity) : null,
                 w: frame?.getBoundingClientRect().width ?? 0,
             };
         })()`);

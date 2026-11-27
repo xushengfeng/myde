@@ -703,35 +703,72 @@ export class WaylandClient implements Client {
         return this.ctx.domain.windows.get(winId)?.title ?? "";
     }
 
-    windowPreview(winId: WaylandWinId): OffscreenCanvas | undefined {
+    /**
+     * 窗口最近一帧的缩略图。
+     * `contentOnly` 去掉 shadow/装饰，只保留 `xdg_surface.set_window_geometry` 声明的窗口内容区。
+     *
+     * 各 surface 的 buffer 可能按整数/分数倍率渲染，和 surface 逻辑坐标不是一回事；
+     * 这里统一按逻辑坐标合成，预览像素密度取所有 surface 里最大的 buffer 倍率。
+     */
+    windowPreview(winId: WaylandWinId, op: { contentOnly?: boolean } = {}): OffscreenCanvas | undefined {
         const xdgSurfaceId = this.windowXdgSurface(winId);
         if (xdgSurfaceId === undefined) return undefined;
         const rootSurface = this.ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
-        const root = this.ctx.core.surface.getWlSurface(rootSurface).frame ?? this.getObject(rootSurface).data.canvas;
+        const rootData = this.ctx.core.surface.getWlSurface(rootSurface);
+        const rootFrame = rootData.frame;
+        const root = rootFrame ?? this.getObject(rootSurface).data.canvas;
+        const rootSize = {
+            w: Math.max(1, rootData.size.w || root.width),
+            h: Math.max(1, rootData.size.h || root.height),
+        };
         // 子表面在 DOM 里由独立的 canvas 叠上去，缩略图必须自己合成；
         // 只看根 surface 会得到 Firefox 那种「shadow 有、内容没有」的空窗口。
-        const children = this.ctx.core.subsurface.getChildrenDeep(rootSurface);
-        const drawables = children.flatMap(({ id, offsetRect }) => {
+        const drawables = this.ctx.core.subsurface.getChildrenDeep(rootSurface).flatMap(({ id, offsetRect }) => {
             const frame = this.ctx.core.surface.getWlSurface(id).frame;
-            return frame === undefined ? [] : [{ frame, x: offsetRect.x, y: offsetRect.y }];
+            if (frame === undefined) return [];
+            return [
+                {
+                    frame,
+                    x: offsetRect.x,
+                    y: offsetRect.y,
+                    w: Math.max(1, offsetRect.w || frame.width),
+                    h: Math.max(1, offsetRect.h || frame.height),
+                },
+            ];
         });
-        if (drawables.length === 0) return root;
+        if (drawables.length === 0 && !op.contentOnly) return root;
+        const hasRootPixels = rootFrame !== undefined && root.width > 1 && root.height > 1;
+        // 还没有任何真实像素时保持 1×1 占位，调用方据此跳过快照
+        if (op.contentOnly && !hasRootPixels && drawables.length === 0) return root;
+
+        let density = Math.max(1, root.width / rootSize.w, root.height / rootSize.h);
+        for (const d of drawables) density = Math.max(density, d.frame.width / d.w, d.frame.height / d.h);
 
         let minX = 0;
         let minY = 0;
-        let maxX = root.width;
-        let maxY = root.height;
+        let maxX = rootSize.w;
+        let maxY = rootSize.h;
         for (const d of drawables) {
             minX = Math.min(minX, d.x);
             minY = Math.min(minY, d.y);
-            maxX = Math.max(maxX, d.x + d.frame.width);
-            maxY = Math.max(maxY, d.y + d.frame.height);
+            maxX = Math.max(maxX, d.x + d.w);
+            maxY = Math.max(maxY, d.y + d.h);
         }
-        const canvas = new OffscreenCanvas(Math.max(1, maxX - minX), Math.max(1, maxY - minY));
+        // 内容区用客户端声明的窗口几何；未声明时就是整个 surface
+        const crop = op.contentOnly
+            ? (this.windowRect(winId) ?? { x: 0, y: 0, w: rootSize.w, h: rootSize.h })
+            : { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+        const canvas = new OffscreenCanvas(
+            Math.max(1, Math.ceil(crop.w * density)),
+            Math.max(1, Math.ceil(crop.h * density)),
+        );
         const c2d = canvas.getContext("2d");
         if (!c2d) return root;
-        c2d.drawImage(root, -minX, -minY);
-        for (const d of drawables) c2d.drawImage(d.frame, d.x - minX, d.y - minY);
+        const draw = (frame: OffscreenCanvas, x: number, y: number, w: number, h: number) => {
+            c2d.drawImage(frame, (x - crop.x) * density, (y - crop.y) * density, w * density, h * density);
+        };
+        if (hasRootPixels) draw(root, 0, 0, rootSize.w, rootSize.h);
+        for (const d of drawables) draw(d.frame, d.x, d.y, d.w, d.h);
         return canvas;
     }
 

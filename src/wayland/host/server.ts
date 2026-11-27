@@ -192,11 +192,14 @@ class WaylandServer {
             return out;
         },
         get: (handle: WinHandle): WindowInfo | undefined => this.windowInfo(handle),
-        /** 窗口最近一帧（缩略图、测试采样用）；还没画过时 undefined */
-        preview: (handle: WinHandle): OffscreenCanvas | undefined => {
+        /**
+         * 窗口最近一帧（缩略图、测试采样用）；还没画过时 undefined。
+         * `contentOnly` 去掉 shadow/装饰，只保留客户端声明的窗口内容区。
+         */
+        preview: (handle: WinHandle, op?: { contentOnly?: boolean }): OffscreenCanvas | undefined => {
             const entry = this.windowTable.get(handle);
             if (entry === undefined) return undefined;
-            return entry.client.windowPreview(entry.winId);
+            return entry.client.windowPreview(entry.winId, op);
         },
         /**
          * 指针命中检测：p 相对窗口元素左上角（几何原点）。

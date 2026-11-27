@@ -26,6 +26,7 @@ import { Cursor } from "./cursor";
 import { DragIcon } from "./drag_icon";
 import { createFileChooserContent, fileChooserHeaderIcon, fileChooserTitle } from "./file_chooser";
 import { getIconX, getIconXEl } from "./icon";
+import { contentOpacityForGhost } from "./image_fade";
 import { ImeController } from "./ime/ime";
 import { DEFAULT_IME_BINDINGS, type KeyBinding, matchBindings } from "./ime/shortcut";
 import { createImeTool } from "./ime/tool";
@@ -2626,10 +2627,11 @@ class ViewData {
                     parent: windowParents.get(handle),
                     modal: modalWindows.has(handle),
                     pinned: screen.pinned === true,
-                    /** 渲染轴的盒/整框动画正在跑（可能发生在启动收尾之后） */
+                    /** 渲染轴的盒/整框/图像过渡正在跑（可能发生在启动收尾之后） */
                     resizing:
                         (frame?.boxGear?.getRunningAnimation().isRunning ?? false) ||
-                        (frame?.layoutGear?.getRunningAnimation().isRunning ?? false),
+                        (frame?.layoutGear?.getRunningAnimation().isRunning ?? false) ||
+                        frame?.image !== undefined,
                     /** 已经拿到客户端首帧的真实 surface 尺寸（此前是占位尺寸） */
                     painted: frame?.painted ?? false,
                 };
@@ -3265,6 +3267,10 @@ addStyle({
         width: "var(--resize-preview-width) !important",
         height: "var(--resize-preview-height) !important",
     },
+    // 自动 resize 只淡化 surface 像素；blur 的 backdrop-filter 在 div 上，保持常驻
+    "[data-content-fade] canvas": {
+        opacity: "var(--content-fade-opacity, 1)",
+    },
     // 服务端装饰：只有标题栏有底色/模糊；内容区域保持透明，允许客户端透明窗口露出壁纸
     "[data-client-frame][data-decorated]": {
         boxShadow: gShadowStyle.window,
@@ -3761,6 +3767,23 @@ function addWindow(screen: ViewScreen, el: HTMLElement, windowId?: string, cente
 
 const CLIENT_TITLEBAR_HEIGHT = 38;
 
+/**
+ * 图像过渡：盒动画之外的独立驱动。
+ * 等待客户端提交目标尺寸的 buffer 后，再按 ghost/content 各自 alpha 做交叉淡化。
+ */
+type ClientImageTransition = {
+    phase: "waiting" | "fading";
+    /** 旧快照（ghost）自身的 alpha，来自 preview 采样 */
+    alphaFrom: number;
+    /** 新内容自身的 alpha，开始淡化时再采样一次 */
+    alphaTo: number;
+    /** 期望的新 surface 显示尺寸，用来判断“图已经换了” */
+    targetWidth: number;
+    targetHeight: number;
+    waitTimer?: ReturnType<typeof setTimeout>;
+    gear?: AnimationGear<{ a: number }>;
+};
+
 type ClientWindowFrame = {
     /** 全局窗口身份；父子关系/命中测试按它查 */
     handle: WinHandle;
@@ -3783,6 +3806,12 @@ type ClientWindowFrame = {
     /** 最近一次实际提交的 surface 显示尺寸（CSS px） */
     surfaceWidth: number;
     surfaceHeight: number;
+    /**
+     * 最近一帧客户端真正画出来的显示尺寸。自动 resize 先改目标尺寸、客户端稍后才提交新 buffer，
+     * 拉伸必须以已经画出来的内容为准，否则旧 buffer 会按新目标缩放，先缩小再放大。
+     */
+    paintedWidth: number;
+    paintedHeight: number;
     /** 启动动画期间由 launch 驱动舞台槽，view 暂不写 transform */
     launching?: boolean;
     /** 已经收到首帧尺寸，启动过渡白底可以撤掉 */
@@ -3804,18 +3833,18 @@ type ClientWindowFrame = {
     boxTarget?: { width: number; height: number };
     /**
      * 自动 resize 的整框动画：最大化/恢复/全屏/界面缩放/客户端自己改尺寸。
-     * 和 boxGear 分开：它同时写位置、尺寸和内容交叉淡化。
+     * 和 boxGear 分开：它只写位置和尺寸，内容淡化由 image 独立驱动。
      */
-    layoutGear?: AnimationGear<{ left: number; top: number; width: number; height: number; fade: number }>;
+    layoutGear?: AnimationGear<{ left: number; top: number; width: number; height: number }>;
     layoutTarget?: { left: number; top: number; width: number; height: number };
     /** 自动 resize 结束后是否由居中管理器接管位置 */
     layoutCentered?: boolean;
     /** 这次自动 resize 自己加的居中暂停，结束时要还回去 */
     layoutPausedCentering?: boolean;
-    /** setClientFrameLayout 之后紧跟的 setClientFramePosition 应该写进动画目标 */
-    layoutPendingPosition?: boolean;
-    /** 旧内容快照：和 content 一起拉伸，并随动画淡出 */
-    ghost?: { el: ElType<HTMLCanvasElement>; width: number; height: number };
+    /** 旧内容快照：和 content 一起拉伸，由 image 过渡控制透明度 */
+    ghost?: { el: ElType<HTMLCanvasElement>; width: number; height: number; alpha: number };
+    /** 图像淡化状态机；盒动画结束后可以继续等待/淡化 */
+    image?: ClientImageTransition;
 };
 
 const clientWindowFrames = new Map<WinHandle, ClientWindowFrame>();
@@ -4319,6 +4348,18 @@ function frameContentDisplaySize(frame: ClientWindowFrame) {
     };
 }
 
+/** 拉伸内容时用的真实尺寸：优先已经提交的 surface，没有时才退回目标/布局尺寸 */
+function framePaintedContentSize(frame: ClientWindowFrame) {
+    if (frame.paintedWidth > 1 && frame.paintedHeight > 1) {
+        return { width: frame.paintedWidth, height: frame.paintedHeight };
+    }
+    const fallback = frameContentDisplaySize(frame);
+    return {
+        width: Math.max(1, fallback.width || frame.surfaceWidth),
+        height: Math.max(1, fallback.height || frame.surfaceHeight),
+    };
+}
+
 /**
  * 同步真实外框尺寸。启动和自动 resize 期间只更新目标、由动画写盒；
  * 其余情况直接写，或者走一段整框过渡（最大化、全屏、客户端自己改尺寸等）。
@@ -4378,6 +4419,7 @@ function applyFrameSurfaceSize(frame: ClientWindowFrame, width?: number, height?
         width: `${frame.surfaceWidth}px`,
         height: `${frame.surfaceHeight + bar}px`,
     });
+    settleFrameContentStretch(frame);
 }
 
 /** 正在进行的启动状态（按 frame 反查），用于尺寸回调重新瞄准 */
@@ -4410,9 +4452,9 @@ function writeFrameBox(frame: ClientWindowFrame, left: number, top: number, widt
     // 还没有客户端内容时遮罩铺满 frame，本身就是盒的尺寸，不需要拉伸
     if (frame.pending) return;
     const bar = titlebarPx(frame);
-    const natural = frameContentDisplaySize(frame);
-    const cw = Math.max(1, natural.width || frame.surfaceWidth);
-    const ch = Math.max(1, natural.height || frame.surfaceHeight);
+    const painted = framePaintedContentSize(frame);
+    const cw = painted.width;
+    const ch = painted.height;
     // 内容基准 left=0、top=bar；origin 在左上角，缩放后正好铺满盒
     frame.content.style.transformOrigin = "0 0";
     frame.content.style.transform = `scale(${w / cw}, ${Math.max(1, h - bar) / ch})`;
@@ -4425,6 +4467,32 @@ function writeFrameBox(frame: ClientWindowFrame, left: number, top: number, widt
             transform: `scale(${w / ghost.width}, ${Math.max(1, h - bar) / ghost.height})`,
         });
     }
+}
+
+/**
+ * 动画结束（或没有动画）时让内容贴合外框。
+ * 客户端可能比桌面晚几帧才提交新尺寸：此时保留按已画内容算出的拉伸，
+ * 等真实 surface 追上来再撤掉，避免先按旧 buffer 缩小、再被新 buffer 撑大。
+ */
+function settleFrameContentStretch(frame: ClientWindowFrame) {
+    if (frame.pending || frame.launching) return;
+    if (frame.handle === resizingWindowId || resizeSettleTimers.has(frame.handle)) return;
+    const box = currentFrameBox(frame);
+    if (!box) return;
+    // 盒动画中：新 buffer 刚到，立刻按当前盒重算缩放，不等下一次动画回调，
+    // 否则会有一帧拿新画布配旧缩放。
+    if (frame.boxGear || frame.layoutGear) {
+        writeFrameBox(frame, box.left, box.top, box.width, box.height);
+        return;
+    }
+    const bar = titlebarPx(frame);
+    const painted = framePaintedContentSize(frame);
+    if (Math.abs(painted.width - box.width) <= 0.5 && Math.abs(painted.height - (box.height - bar)) <= 0.5) {
+        frame.content.style.transform = "";
+        frame.content.style.transformOrigin = "";
+        return;
+    }
+    writeFrameBox(frame, box.left, box.top, box.width, box.height);
 }
 
 /**
@@ -4452,8 +4520,6 @@ function releaseFrameBox(frame: ClientWindowFrame) {
     frame.content.removeAttribute("data-resize-preview");
     frame.content.style.removeProperty("--resize-preview-width");
     frame.content.style.removeProperty("--resize-preview-height");
-    frame.content.style.transform = "";
-    frame.content.style.transformOrigin = "";
     frame.content.style.left = "0px";
     applyClientFrameChrome(frame);
     applyFrameSurfaceSize(frame, undefined, undefined, false);
@@ -4468,9 +4534,33 @@ function canAnimateFrameLayout(frame: ClientWindowFrame) {
     return clientWindowFrames.has(frame.handle);
 }
 
+/** 从 preview 中心区域取一个代表性 alpha：避开圆角/半透明阴影，中位数抗少量透明像素 */
+function estimatePreviewAlpha(preview: OffscreenCanvas): number {
+    try {
+        const sample = document.createElement("canvas");
+        sample.width = 32;
+        sample.height = 32;
+        const ctx = sample.getContext("2d");
+        if (!ctx) return 1;
+        const insetX = preview.width * 0.2;
+        const insetY = preview.height * 0.2;
+        const sourceWidth = Math.max(1, preview.width * 0.6);
+        const sourceHeight = Math.max(1, preview.height * 0.6);
+        ctx.drawImage(preview, insetX, insetY, sourceWidth, sourceHeight, 0, 0, 32, 32);
+        const data = ctx.getImageData(0, 0, 32, 32).data;
+        const alphas: number[] = [];
+        for (let i = 3; i < data.length; i += 4) alphas.push(data[i]);
+        alphas.sort((a, b) => a - b);
+        return (alphas[Math.floor(alphas.length / 2)] ?? 255) / 255;
+    } catch {
+        return 1;
+    }
+}
+
 /** 截一张当前内容快照，作为自动 resize 交叉淡出的旧层；没画过就跳过淡化 */
 function captureFrameGhost(frame: ClientWindowFrame): ClientWindowFrame["ghost"] | undefined {
-    const preview = server.server.windows.preview(frame.handle);
+    // 只要窗口内容：Firefox 的根 surface 还带着 shadow，整张缩略图塞进内容区会把旧画面缩小
+    const preview = server.server.windows.preview(frame.handle, { contentOnly: true });
     const size = frameContentDisplaySize(frame);
     if (!preview || size.width <= 1 || size.height <= 1) return undefined;
     const el = ele("canvas")
@@ -4493,10 +4583,124 @@ function captureFrameGhost(frame: ClientWindowFrame): ClientWindowFrame["ghost"]
     }
     ctx.drawImage(preview, 0, 0);
     frame.el.add(el);
-    return { el, width: size.width, height: size.height };
+    return { el, width: size.width, height: size.height, alpha: estimatePreviewAlpha(preview) };
 }
 
-/** 自动 resize：位置、尺寸和内容交叉淡化用同一段时长；结束前居中交给动画，结束后再还回去 */
+function framePaintedAtImageTarget(frame: ClientWindowFrame, image: ClientImageTransition) {
+    if (image.targetWidth <= 1 || image.targetHeight <= 1) return false;
+    return (
+        Math.abs(frame.paintedWidth - image.targetWidth) <= 1.5 &&
+        Math.abs(frame.paintedHeight - image.targetHeight) <= 1.5
+    );
+}
+
+/** 按 ghost opacity 和两层 alpha 同时设置内容透明度，保证合成 alpha 不跳 */
+function applyImageOpacity(frame: ClientWindowFrame, image: ClientImageTransition, a: number) {
+    const ghostOpacity = Math.max(0, Math.min(1, a));
+    frame.ghost?.el.style({ opacity: `${ghostOpacity}` });
+    // 只淡化 canvas，别碰 content 自身：blur 层需要在整个过渡里常驻
+    const surfaceOpacity = contentOpacityForGhost(ghostOpacity, image.alphaFrom, image.alphaTo);
+    frame.content.style.setProperty("--content-fade-opacity", `${surfaceOpacity}`);
+    if (surfaceOpacity < 0.999) frame.content.setAttribute("data-content-fade", "");
+    else frame.content.removeAttribute("data-content-fade");
+}
+
+function clearImageContentFade(frame: ClientWindowFrame) {
+    frame.content.removeAttribute("data-content-fade");
+    frame.content.style.removeProperty("--content-fade-opacity");
+}
+
+/** 开始图像过渡：先显示 ghost，等目标尺寸的 buffer 到了再进入淡化 */
+function startImageTransition(frame: ClientWindowFrame, ghost: NonNullable<ClientWindowFrame["ghost"]>) {
+    const image: ClientImageTransition = {
+        phase: "waiting",
+        alphaFrom: ghost.alpha,
+        alphaTo: ghost.alpha,
+        targetWidth: Math.max(1, frame.surfaceWidth),
+        targetHeight: Math.max(1, frame.surfaceHeight),
+    };
+    frame.image = image;
+    applyImageOpacity(frame, image, 1);
+    if (framePaintedAtImageTarget(frame, image)) startImageFade(frame);
+    else retimeImageWait(frame);
+}
+
+function retimeImageWait(frame: ClientWindowFrame) {
+    const image = frame.image;
+    if (image?.phase !== "waiting") return;
+    if (image.waitTimer !== undefined) {
+        clearTimeout(image.waitTimer);
+        image.waitTimer = undefined;
+    }
+    if (framePaintedAtImageTarget(frame, image)) {
+        startImageFade(frame);
+        return;
+    }
+    image.waitTimer = setTimeout(() => {
+        image.waitTimer = undefined;
+        startImageFade(frame);
+    }, IMAGE_FRAME_WAIT_MS);
+}
+
+function startImageFade(frame: ClientWindowFrame) {
+    const image = frame.image;
+    if (image?.phase !== "waiting" || !frame.ghost) return;
+    image.phase = "fading";
+    if (image.waitTimer !== undefined) {
+        clearTimeout(image.waitTimer);
+        image.waitTimer = undefined;
+    }
+    // 新 buffer 到了：重新看一下当前内容的 alpha，处理前后透明度不一致的情况
+    const preview = server.server.windows.preview(frame.handle, { contentOnly: true });
+    if (preview && preview.width > 1 && preview.height > 1) image.alphaTo = estimatePreviewAlpha(preview);
+    applyImageOpacity(frame, image, 1);
+
+    const gear = createAnimationGear({ a: 1 }, { transition: IMAGE_FADE_TRANSITION });
+    image.gear = gear;
+    gear.setUpdateCallback(({ a }) => {
+        if (frame.image !== image) return;
+        applyImageOpacity(frame, image, a);
+    });
+    gear.moveTo(
+        { a: 0 },
+        {
+            ...IMAGE_FADE_TRANSITION,
+            onComplete: () => finishImageTransition(frame, image),
+        },
+    );
+}
+
+function finishImageTransition(frame: ClientWindowFrame, image: ClientImageTransition) {
+    if (frame.image !== image) return;
+    frame.image = undefined;
+    frame.ghost?.el.remove();
+    frame.ghost = undefined;
+    clearImageContentFade(frame);
+    // 内容可能刚换过尺寸：用实际 surface 收一次尾，避免残留拉伸
+    applyFrameSurfaceSize(frame, undefined, undefined, false);
+}
+
+function cancelImageTransition(frame: ClientWindowFrame) {
+    const image = frame.image;
+    if (image) {
+        frame.image = undefined;
+        if (image.waitTimer !== undefined) {
+            clearTimeout(image.waitTimer);
+            image.waitTimer = undefined;
+        }
+    }
+    frame.ghost?.el.remove();
+    frame.ghost = undefined;
+    clearImageContentFade(frame);
+}
+
+function notifyImageFrame(frame: ClientWindowFrame) {
+    const image = frame.image;
+    if (image?.phase !== "waiting") return;
+    if (framePaintedAtImageTarget(frame, image)) startImageFade(frame);
+}
+
+/** 自动 resize：盒动画先走；图像淡化由 image 状态机在客户端提交新尺寸后独立驱动 */
 function startFrameLayoutTransition(
     frame: ClientWindowFrame,
     target: { left: number; top: number; width: number; height: number },
@@ -4508,7 +4712,12 @@ function startFrameLayoutTransition(
         ghost?.el.remove();
         return;
     }
-    frame.ghost = ghost;
+    if (ghost) {
+        // 新的盒动画同时开一段新的图像过渡；已有图像过渡时由调用方复用，不抓新快照
+        cancelImageTransition(frame);
+        frame.ghost = ghost;
+        startImageTransition(frame, ghost);
+    }
     frame.layoutTarget = { ...target };
     // 全屏必须铺到 0,0：不能按窗口可用区（工具栏内缩）重新居中
     frame.layoutCentered = center && windowCenterManager.willCenter(frame.handle);
@@ -4516,14 +4725,10 @@ function startFrameLayoutTransition(
         windowCenterManager.pauseCentering(frame.handle);
         frame.layoutPausedCentering = true;
     }
-    if (ghost) {
-        frame.content.style.opacity = "0";
-        ghost.el.style({ opacity: "1" });
-    }
     // 内容尺寸刚改过：先按当前盒拉伸，避免动画第一帧以自然尺寸溢出
     writeFrameBox(frame, from.left, from.top, from.width, from.height);
     const gear = createAnimationGear(
-        { left: from.left, top: from.top, width: from.width, height: from.height, fade: 0 },
+        { left: from.left, top: from.top, width: from.width, height: from.height },
         { transition: { ...FRAME_LAYOUT_TRANSITION } },
     );
     frame.layoutGear = gear;
@@ -4534,9 +4739,6 @@ function startFrameLayoutTransition(
             ? windowCenterManager.centeredPosition(value.width, value.height)
             : { left: value.left, top: value.top };
         writeFrameBox(frame, position.left, position.top, value.width, value.height);
-        if (!frame.ghost) return;
-        frame.ghost.el.style({ opacity: `${1 - value.fade}` });
-        frame.content.style.opacity = `${value.fade}`;
     });
     retimeFrameLayout(frame, FRAME_LAYOUT_TRANSITION.duration);
 }
@@ -4550,7 +4752,7 @@ function retimeFrameLayout(frame: ClientWindowFrame, duration?: number) {
     const time =
         duration ?? (running.isRunning ? Math.max(1, running.remainingTime) : FRAME_LAYOUT_TRANSITION.duration);
     gear.moveTo(
-        { ...target, fade: 1 },
+        { ...target },
         {
             duration: time,
             map: FRAME_LAYOUT_TRANSITION.map,
@@ -4563,24 +4765,15 @@ function retimeFrameLayout(frame: ClientWindowFrame, duration?: number) {
 function cancelFrameLayoutTransition(frame: ClientWindowFrame) {
     frame.layoutGear = undefined;
     frame.layoutTarget = undefined;
-    frame.layoutPendingPosition = false;
     frame.layoutPausedCentering = false;
-    frame.ghost?.el.remove();
-    frame.ghost = undefined;
-    frame.content.style.opacity = "";
+    cancelImageTransition(frame);
 }
 
-/** 自动 resize 结束：撤掉快照，内容回到正常尺寸布局，位置交给居中管理器 */
+/** 自动 resize 结束：盒回到正常尺寸布局，图像淡化继续由 image 状态机负责 */
 function finishFrameLayoutTransition(frame: ClientWindowFrame) {
     if (!frame.layoutGear) return;
     frame.layoutGear = undefined;
     frame.layoutTarget = undefined;
-    frame.layoutPendingPosition = false;
-    frame.ghost?.el.remove();
-    frame.ghost = undefined;
-    frame.content.style.opacity = "";
-    frame.content.style.transform = "";
-    frame.content.style.transformOrigin = "";
     frame.content.style.left = "0px";
     applyClientFrameChrome(frame);
     applyFrameSurfaceSize(frame, undefined, undefined, false);
@@ -4620,7 +4813,8 @@ function setClientFrameLayout(
 ) {
     const fullscreen = opts.fullscreen ?? false;
     const animate = opts.animate !== false && !frame.layoutGear && canAnimateFrameLayout(frame);
-    const ghost = animate ? captureFrameGhost(frame) : undefined;
+    // 已有图像过渡时复用它，不抓新快照：抓的也只是客户端 surface，接不上正在混合的画面
+    const ghost = animate && !frame.image ? captureFrameGhost(frame) : undefined;
     frame.fullscreen = fullscreen;
     const width = Math.max(1, contentWidth);
     const height = Math.max(1, contentHeight);
@@ -4632,6 +4826,13 @@ function setClientFrameLayout(
     frame.surfaceWidth = width;
     frame.surfaceHeight = height;
     frame.boxTarget = { width, height: height + bar };
+
+    // 还在等图像时又改了目标：按新目标重新等，避免用旧目标提前开始淡化
+    if (frame.image?.phase === "waiting") {
+        frame.image.targetWidth = width;
+        frame.image.targetHeight = height;
+        retimeImageWait(frame);
+    }
 
     // 过渡中又改了布局：保留原快照，只更新目标尺寸
     if (frame.layoutGear) {
@@ -4651,10 +4852,6 @@ function setClientFrameLayout(
         const from = currentFrameBox(frame);
         // 尺寸没变就不做整框过渡，避免重复布局时内容闪一下
         if (from && (Math.abs(from.width - width) > 0.5 || Math.abs(from.height - (height + bar)) > 0.5)) {
-            frame.layoutPendingPosition = true;
-            queueMicrotask(() => {
-                frame.layoutPendingPosition = false;
-            });
             startFrameLayoutTransition(
                 frame,
                 { left: from.left, top: from.top, width, height: height + bar },
@@ -4666,14 +4863,16 @@ function setClientFrameLayout(
     }
     ghost?.el.remove();
     frame.el.style({ width: `${width}px`, height: `${height + bar}px` });
+    settleFrameContentStretch(frame);
 }
 
 function setClientFramePosition(frame: ClientWindowFrame, left: number, top: number) {
-    // 紧跟布局设置的位置：补进整框动画目标，和尺寸一起走完
-    if (frame.layoutGear && frame.layoutPendingPosition && frame.layoutTarget) {
-        frame.layoutTarget = { ...frame.layoutTarget, left, top };
-        frame.layoutPendingPosition = false;
-        retimeFrameLayout(frame);
+    // 整框动画中的位置也是动画目标的一部分：直接写内联位置会先跳到终点，下一帧又被打回动画值
+    if (frame.layoutGear && frame.layoutTarget) {
+        if (Math.abs(frame.layoutTarget.left - left) > 0.01 || Math.abs(frame.layoutTarget.top - top) > 0.01) {
+            frame.layoutTarget = { ...frame.layoutTarget, left, top };
+            retimeFrameLayout(frame);
+        }
         return;
     }
     frame.el.style({ left: `${Math.round(left)}px`, top: `${Math.round(top)}px` });
@@ -4934,6 +5133,8 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
         renderId: info.renderId,
         surfaceWidth: 1,
         surfaceHeight: 1,
+        paintedWidth: 1,
+        paintedHeight: 1,
     };
     buildFrameChrome(frame, info.handle);
     el.add(content);
@@ -4942,6 +5143,8 @@ function createClientWindowFrame(info: WindowInfo, content: HTMLElement): Client
     syncClientFrameMaximized(frame, info.states.maximized);
     clientFrameByRenderId.set(info.renderId, frame);
     applyFrameSurfaceSize(frame);
+    frame.paintedWidth = frame.surfaceWidth;
+    frame.paintedHeight = frame.surfaceHeight;
     return frame;
 }
 
@@ -4993,6 +5196,8 @@ function createPendingWindowFrame(
         renderId: "",
         surfaceWidth: 1,
         surfaceHeight: 1,
+        paintedWidth: 1,
+        paintedHeight: 1,
         launching: true,
         pending: true,
         mask: mask.panel,
@@ -5596,8 +5801,12 @@ const LAUNCH_FLIGHT = { duration: 240, map: timingFunction.cubicBezier(0.16, 1, 
 const LAUNCH_CATCH_UP = { duration: SCREEN_TRANSITION.duration, map: timingFunction.easeOut };
 /** 首帧替换：mask 淡出和盒 resize 共用时长，同时开始、同时结束 */
 const LAUNCH_REVEAL = { duration: 180, map: timingFunction.easeInOut };
-/** 自动 resize（最大化/恢复/全屏/界面缩放/客户端改尺寸）沿用首帧替换的时长和曲线 */
+/** 自动 resize（最大化/恢复/全屏/界面缩放/客户端改尺寸）的盒动画沿用首帧替换的时长和曲线 */
 const FRAME_LAYOUT_TRANSITION = { duration: LAUNCH_REVEAL.duration, map: LAUNCH_REVEAL.map };
+/** 等待客户端提交目标尺寸的 buffer 的上限；超时按当前画面开始淡化 */
+const IMAGE_FRAME_WAIT_MS = 120;
+/** 图像交叉淡化独立于盒动画，长度略短一些 */
+const IMAGE_FADE_TRANSITION = { duration: 160, map: timingFunction.easeInOut };
 /** 空槽取消按钮：不要突然盖在图标上，落地后透明+模糊淡入 */
 const LAUNCH_CANCEL_FADE = { duration: 220, map: timingFunction.easeOut };
 const CLOSE_FADE = { duration: 220, map: timingFunction.easeOut };
@@ -7050,14 +7259,20 @@ render.on({
     onXdgSurfaceSize: (xdgId, width, height) => {
         const frame = clientFrameByRenderId.get(xdgId);
         if (!frame) return;
+        // 记录真正画出来的尺寸；目标尺寸可能已经先写了，但拉伸要等这一帧
+        frame.paintedWidth = Math.max(1, width);
+        frame.paintedHeight = Math.max(1, height);
         frame.surfaceWidth = Math.max(1, width);
         frame.surfaceHeight = Math.max(1, height);
         // 外框尺寸统一以内部 surface DOM 为准；buffer 尺寸只作 fallback，未装饰窗口也不用 window.changed 覆盖
         if (!frame.fullscreen) applyFrameSurfaceSize(frame);
+        else settleFrameContentStretch(frame);
         // 子窗口（对话框）的尺寸由客户端决定，首次拿到真实尺寸后重新在父窗口正中摆一次
         placeChildWindow(frame.handle);
         // 启动面板等到首帧真实尺寸后再替换成窗口
         notifyLaunchWindowSized(frame);
+        // 自动 resize 在等目标尺寸：这一帧到齐后开始图像淡化
+        notifyImageFrame(frame);
     },
 });
 const server = MSysApi.server({ render });
@@ -8028,7 +8243,14 @@ function handleScreenWheel(e: ScreenWheelEvent) {
 }
 
 // 一屏多窗口时不再自动居中，否则 ResizeObserver 会把它们叠到一起
-windowCenterManager.setShouldCenter((id) => (viewData.screenOf(id)?.winIds.length ?? 0) <= 1);
+windowCenterManager.setShouldCenter((id) => {
+    // 最大化/全屏的位置由布局明确给出，不能按可用区居中（否则退出全屏时旧尺寸会被顶到负坐标）
+    const frame = clientWindowFrames.get(id);
+    if (frame?.maximized || frame?.fullscreen) return false;
+    const info = server.server.windows.get(id);
+    if (info?.states.maximized || info?.states.fullscreen) return false;
+    return (viewData.screenOf(id)?.winIds.length ?? 0) <= 1;
+});
 const launcher = createLauncher();
 viewData.setLauncher(launcher);
 launcher.setUiScale(uiScale);
@@ -12102,6 +12324,8 @@ function toggleFullscreen(winid = viewData.focusHandle) {
         applied.maximized = restoredMaximized;
     }
     if (frame) {
+        // 先更新最大化状态：下面的整框动画据此判断不要按可用区居中
+        syncClientFrameMaximized(frame, restoredMaximized);
         if (restoredMaximized) {
             const available = availableStageSize();
             const contentHeight = Math.max(1, available.height - decoratedTitlebarPx(frame));
@@ -13211,6 +13435,8 @@ if ((globalThis as { process?: { env?: Record<string, string | undefined> } }).p
         },
         placeWindow: (handle: WinHandle, screenId: string, x: number, y: number) =>
             viewData.placeWindow(handle, screenId, x, y),
+        toggleMaximize: (handle: WinHandle) => toggleMaximizeWindow(handle),
+        toggleFullscreen: (handle: WinHandle) => toggleFullscreen(handle),
         touchpadFeed,
         touchpadDetach: () => {
             testTouchpad?.dispose();

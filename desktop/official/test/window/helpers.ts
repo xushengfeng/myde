@@ -104,6 +104,10 @@ export function mockAppPath() {
     return path.join(getProjectRoot(), "test/simple_app/target/debug/window_open");
 }
 
+export function backgroundEffectAppPath() {
+    return path.join(getProjectRoot(), "test/simple_app/target/debug/background_effect");
+}
+
 export type MockWindowSpec = {
     appid: string;
     name?: string;

@@ -6,6 +6,7 @@
 //! - `FULLSCREEN_AT`：调用 set_fullscreen 的时刻（epoch ms，可省略）
 //! - `SIZE_MODE`：`fixed`（忽略 configure，用 WIDTH×HEIGHT）或 `configure`
 //! - `WIDTH` / `HEIGHT`：buffer 尺寸（默认 800×600）
+//! - `ALPHA`：所有像素的 alpha（0–255，默认 255；用于半透明窗口测试）
 //! - `APP_ID`：xdg_toplevel.set_app_id（默认 window-open-test）
 //! - `DECORATED`：`1` 时请求服务端装饰，桌面会额外画标题栏和窗口按钮
 //! - `LIFETIME_MS`：最长运行时间（默认 8000）
@@ -16,6 +17,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::fd::AsFd;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -26,6 +28,9 @@ use wayland_client::protocol::{
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols::xdg::decoration::zv1::client::{zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
+
+/// 测试窗口所有像素的 alpha；默认完全不透明
+static PIXEL_ALPHA: AtomicU8 = AtomicU8::new(255);
 
 fn now_ms() -> u128 {
     SystemTime::now()
@@ -147,21 +152,22 @@ impl App {
 fn draw_pixel(x: usize, y: usize, width: i32, height: i32) -> [u8; 4] {
     let x = x as i32;
     let y = y as i32;
+    let alpha = PIXEL_ALPHA.load(Ordering::Relaxed);
     // 高对比棋盘格 + 白色边框，逐帧位移估计需要清晰的边缘
     let border = x < 6 || y < 6 || x >= width - 6 || y >= height - 6;
     if border {
-        return [250, 250, 250, 255];
+        return [250, 250, 250, alpha];
     }
     let cell = 48;
     let checker = ((x / cell) + (y / cell)) % 2 == 0;
     let base = if checker {
-        [196, 92, 40, 255] // B,G,R: 深蓝
+        [196, 92, 40, alpha] // B,G,R: 深蓝
     } else {
-        [240, 190, 140, 255] // B,G,R: 浅蓝
+        [240, 190, 140, alpha] // B,G,R: 浅蓝
     };
     // 中间一条红色横带，方便对齐中心
     if (y - height / 2).abs() < 12 {
-        return [60, 60, 220, 255];
+        return [60, 60, 220, alpha];
     }
     base
 }
@@ -312,6 +318,7 @@ fn main() -> Result<()> {
     let appid = std::env::var("APP_ID").unwrap_or_else(|_| "window-open-test".to_string());
     let width = env_i32("WIDTH", 800);
     let height = env_i32("HEIGHT", 600);
+    PIXEL_ALPHA.store(env_i32("ALPHA", 255).clamp(0, 255) as u8, Ordering::Relaxed);
     let size_mode = std::env::var("SIZE_MODE").unwrap_or_else(|_| "fixed".to_string());
     let create_at = parse_when("CREATE_AT")?;
     let buffer_at = parse_when("BUFFER_AT")?;

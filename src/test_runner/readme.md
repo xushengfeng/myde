@@ -115,7 +115,7 @@ console.log(formatReport(report));
 `desktop/official/test/window_open.test.ts` 用真实的 Rust Wayland 窗口测启动动画。窗口应用在 `test/simple_app/src/bin/window_open.rs`：
 
 - 环境变量控制时刻：`CREATE_AT`（创建 toplevel）、`BUFFER_AT`（提交首帧）、`FULLSCREEN_AT`（切全屏），都是 epoch 毫秒，`never` 表示不做。
-- `WIDTH`/`HEIGHT` + `SIZE_MODE=fixed` 用来提交比桌面默认 800×600 更大的 buffer；客户端不发送 `set_window_geometry`、min/max 等 xdg 尺寸设置。
+- `WIDTH`/`HEIGHT` + `SIZE_MODE=fixed` 用来提交比桌面默认 800×600 更大的 buffer；`ALPHA` 控制所有像素的 alpha（0–255，默认 255），用来测半透明窗口。客户端不发送 `set_window_geometry`、min/max 等 xdg 尺寸设置。
 - 每个事件写到 `EVENTS_FILE`，测试按 epoch 时间和帧时间对齐。
 - 桌面在 `testMode` 下提供 `__mydeTest.launchApp(req)` / `__mydeTest.closeWindows()`，测试直接走真实的 `launchApp`，不用依赖启动器搜索或临时 `.desktop`。
 
@@ -131,13 +131,14 @@ console.log(formatReport(report));
 
 官方桌面在 `testMode` 下还提供：
 
-- `__mydeTest.state()`：只读快照，含 `stage`、`available`（窗口可用区）、`screens`（顺序/窗口/used/current/visual）、`current`、`focus`、`axis`（`level`/`levelTarget`/`focus`/`focusTarget`/`launcherRoute`）、`overview`、`overviewProgress`、`launches`（pending 启动的 appid/屏/阶段/frame/替换状态）、手势的 `level`/`horizontalMode`、启动器 binding，以及窗口的屏归属、`appid`、`rect`、`maximized`/`fullscreen`/`parent`/`modal`、`resizing`（渲染轴的盒/整框动画是否还在跑：启动 resize、自动 resize、最大化、全屏都算）、`painted`（是否已拿到客户端首帧的真实 surface 尺寸，此前用的是占位尺寸）。断言窗口管理结果时用它，不要从 transform 或截图像素反推当前屏。
+- `__mydeTest.state()`：只读快照，含 `stage`、`available`（窗口可用区）、`screens`（顺序/窗口/used/current/visual）、`current`、`focus`、`axis`（`level`/`levelTarget`/`focus`/`focusTarget`/`launcherRoute`）、`overview`、`overviewProgress`、`launches`（pending 启动的 appid/屏/阶段/frame/替换状态）、手势的 `level`/`horizontalMode`、启动器 binding，以及窗口的屏归属、`appid`、`rect`、`maximized`/`fullscreen`/`parent`/`modal`、`resizing`（渲染轴的盒/整框/图像淡化是否还在跑：启动 resize、自动 resize、最大化、全屏都算）、`painted`（是否已拿到客户端首帧的真实 surface 尺寸，此前用的是占位尺寸）。断言窗口管理结果时用它，不要从 transform 或截图像素反推当前屏。
 - `__mydeTest.setApps(apps)`：替换桌面看到的应用列表（启动台、搜索、开始菜单、窗口图标反查）。`apps` 是 `.desktop` 条目的形状，`undefined` 恢复真实的 `MSysApi` 扫描；启动台立即重建，开始菜单在首次展开时读取。把 `exec` 指向 `test/simple_app` 里的 mock 客户端，就能让假应用走真实的启动动画、窗口创建和 appid 认领（示例见 `desktop/official/test/mock_apps.test.ts`）。
 - `__mydeTest.touchpadFeed(events)`：把原始 evdev 事件送进真实的 `useEvdevDevice → TouchpadInput → ViewData` 链路。事件是 `{ type: "abs"|"rel"|"key", code, value }` 或 `{ type: "sync" }`；第一次调用时挂一台纯 TS 假触摸板（MT-B、4000 单位量程），之后按帧喂入即可。`touchpadDetach()` 拆掉假触摸板。
 - `__mydeTest.setReorderDelay(ms)`：重排缓冲时长，窗口管理测试不必等 3 秒。
 - `__mydeTest.setAnimationSpeed(n)`：只加速官方桌面 `main.ts` 里的 `AnimationGear` 时钟（n=1 是真实时间），窗口管理测试的 `resetDesktop` 默认设 6；不改变 `setTimeout`、事件时间和其他模块自己的齿轮。
 - `__mydeTest.resetView()`：关窗口/启动面板、取消手势、退出预览、收起搜索、回到空桌面；`desktop/official/test/window/helpers.ts` 的 `resetDesktop` 在 `beforeEach`/`afterEach` 里调用。
 - `__mydeTest.placeWindow(handle, screenId, x, y)`：夹具，把窗口直接放到指定屏的坐标，跳过覆盖/空位检查；用户路径（标题栏拖动、预览卡片拖动）仍然用鼠标测。
+- `__mydeTest.toggleMaximize(handle)` / `toggleFullscreen(handle)`：夹具，绕过标题栏/快捷键直接触发桌面侧的布局命令。
 - `__mydeTest.closeWindow(handle)` / `forceCloseWindow(handle)` / `closeRequests()`：`window.close` 会记录在 `closeRequests` 里；客户端进程退出后的 peer end 在测试环境里可能延迟，断言桌面侧结果时先确认请求再强制回收，不要等 socket 自己结束。
 
 mock 客户端 `test/simple_app` 的 `window_open` 支持 `DECORATED=1`（请求服务端装饰，桌面会画标题栏和关闭/最大化按钮）和 `SIZE_MODE=configure`（跟随桌面 configure 改尺寸），鼠标窗口操作测试用它们。
