@@ -1,5 +1,6 @@
 import { view } from "dkh-ui";
 import { AnimationGear, type Time, timingFunction } from "myde-ui";
+import type { SemanticWheelEvent } from "../../../src/desktop-api";
 
 type Direction = "up" | "down" | "left" | "right";
 
@@ -379,24 +380,43 @@ export function dynamicScrollList<T>(options: {
 
     container.el.addEventListener("wheel", (e) => {
         e.preventDefault();
+        const wheel = e as SemanticWheelEvent;
         const delta = vertical ? e.deltaY : e.deltaX || e.deltaY;
+        // evdev 事件直接带设备类型；窗口模式没有这些字段，按触控板连续滚动处理
+        const touchpad =
+            wheel.wheelDevice === "touchpad" ||
+            (wheel.wheelDevice === undefined && wheel.wheelSource !== undefined && wheel.wheelSource !== "wheel");
+        const mouseWheel = !touchpad && (wheel.wheelDevice === "mouse" || wheel.wheelSource === "wheel");
 
-        if (snap) {
-            // deltaMode=1 是行模式（鼠标滚轮），deltaY绝对值大通常也是鼠标滚轮
-            const isMouseWheel = e.deltaMode === 1 || Math.abs(delta) >= 100;
-            if (isMouseWheel) {
-                if (delta > 0) nextPage();
-                else if (delta < 0) prevPage();
-            } else {
-                // 触控板：正常滚动内容
-                smoothScrollTo(smoothScrollTarget + delta);
-                // 停止时吸附
-                if (snapTimer) clearTimeout(snapTimer);
-                snapTimer = setTimeout(snapToNearest, 150);
-            }
-        } else {
-            smoothScrollTo(smoothScrollTarget + delta);
+        if (!snap) {
+            if (delta !== 0) smoothScrollTo(smoothScrollTarget + delta);
+            return;
         }
+
+        // 鼠标一个 wheel 事件切一页
+        if (mouseWheel) {
+            if (snapTimer) {
+                clearTimeout(snapTimer);
+                snapTimer = null;
+            }
+            if (delta > 0) nextPage();
+            else if (delta < 0) prevPage();
+            return;
+        }
+
+        // 触控板/无法区分：按 dx dy 累计滚动，抬手或停顿后吸附
+        if (wheel.wheelEnd) {
+            if (snapTimer) {
+                clearTimeout(snapTimer);
+                snapTimer = null;
+            }
+            snapToNearest();
+            return;
+        }
+        if (delta === 0) return;
+        smoothScrollTo(smoothScrollTarget + delta);
+        if (snapTimer) clearTimeout(snapTimer);
+        snapTimer = setTimeout(snapToNearest, 150);
     });
 
     container.el.addEventListener("pointerdown", (e) => {
