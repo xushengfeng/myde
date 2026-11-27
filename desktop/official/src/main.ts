@@ -7286,6 +7286,17 @@ state.on("lock", () => {
 });
 state.setState("normal");
 
+/** 锁屏密码输入框在下方创建；切换时钟/密码界面时由这里同步焦点和内容 */
+let focusLockPassword: (() => void) | undefined;
+let clearLockPassword: (() => void) | undefined;
+/** 测试读取密码输入；正常桌面不暴露 */
+let lockPasswordValue: (() => string) | undefined;
+
+/** 桌面其它区域的焦点（搜索框、内部窗口）不能留在锁屏下面 */
+function blurDesktopDomFocus() {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+}
+
 stateLock.on("xipin", ({ nextTrigger, leave }) => {
     // 息屏动画结束后再关 DPMS；动画被输入打断时不会执行
     lockScreenAnimate.moveTo("xipin", undefined, () => {
@@ -7306,6 +7317,8 @@ stateLock.on("lock", ({ nextTrigger, leave }) => {
     const wakingFromXipin = lockScreenAnimate.currentStateName === "xipin";
     lockScreenAnimate.moveTo("lockview", wakingFromXipin ? WAKE_ANIMATION_DURATION : undefined);
     void setScreenOff(false);
+    blurDesktopDomFocus();
+    clearLockPassword?.();
     lockScreen.on("click", () => nextTrigger("passwd"), { once: true });
     lock2xipinTimer.start();
     leave(() => {
@@ -7318,12 +7331,15 @@ passwd2lock.on(() => {
 });
 stateLock.on("passwd", ({ leave }) => {
     lockScreenAnimate.moveTo("password");
+    focusLockPassword?.();
     passwd2lock.start();
     leave(() => {
         passwd2lock.reset();
     });
 });
 stateLock.on("out", () => {
+    blurDesktopDomFocus();
+    clearLockPassword?.();
     state.setState("normal");
 });
 
@@ -10471,6 +10487,9 @@ tools.registerTool(
     const inputEl = ui.passwd();
     inputEl.placeholder("请输入密码");
     inputEl.el.style({ width: px(sSize(5)), height: px(sSize(1)) });
+    focusLockPassword = () => inputEl.focus();
+    clearLockPassword = () => inputEl.clear();
+    lockPasswordValue = () => inputEl.el.gv;
     let cheking = false;
     async function check() {
         if (cheking) return;
@@ -10530,6 +10549,48 @@ tools.registerTool(
     });
     inputEl.el.on("input", () => {
         stateLock.setState("passwd");
+    });
+
+    // 锁屏键盘：时钟界面 Enter 进密码界面，其它字符直接进密码界面并输入；密码界面 Esc 回时钟；
+    // 时钟界面 Esc 熄屏，息屏时任意键先唤回时钟（没有 DPMS 的窗口模式/测试也靠这里兜底）
+    window.addEventListener("keydown", (e) => {
+        if (state.getState() !== "lock") return;
+        const lockState = stateLock.getState();
+        if (lockState === "xipin") {
+            e.preventDefault();
+            e.stopPropagation();
+            stateLock.setState("lock");
+            return;
+        }
+        if (lockState === "passwd") {
+            if (e.key === "Escape") {
+                // 校验进行中不打断，避免结果回来时已经不在密码界面
+                if (cheking) return;
+                e.preventDefault();
+                e.stopPropagation();
+                stateLock.setState("lock");
+            }
+            return;
+        }
+        if (lockState !== "lock") return;
+        if (e.key === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            stateLock.setState("passwd");
+            return;
+        }
+        if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            stateLock.setState("xipin");
+            return;
+        }
+        if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
+            e.preventDefault();
+            e.stopPropagation();
+            stateLock.setState("passwd");
+            inputEl.inputKey(e.key);
+        }
     });
 
     // 锁屏使用独立 ASCII 键盘：直接写进密码框，不经过输入法
@@ -12204,6 +12265,11 @@ if ((globalThis as { process?: { env?: Record<string, string | undefined> } }).p
         },
         applyUiScale: (scale: number) => applyUiScale(scale),
         state: () => viewData.snapshot(),
+        lock: () => ({
+            state: state.getState(),
+            sub: stateLock.getState(),
+            password: lockPasswordValue?.() ?? "",
+        }),
         setApps: (apps?: DesktopApp[]) => setApps(apps),
         setReorderDelay: (ms: number) => {
             reorderDelay = normalizeReorderDelay(ms);
