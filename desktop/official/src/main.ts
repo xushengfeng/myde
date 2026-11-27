@@ -8442,38 +8442,66 @@ function scheduleTimeUpdate() {
 }
 scheduleTimeUpdate();
 
+// UPower 不可用或尚未列出设备时先按没有电池处理，避免显示一条空的电池行
+rawRegistry.setData("power.battery.present", false);
+
 MSysApi.power
     .init()
     .then(async () => {
         const power = MSysApi.power;
         const registry = rawRegistry;
 
+        const deviceTypes = new Map<string, string>();
+        const deviceNames = new Map<string, string>();
+        let batteryPath: string | undefined;
+        let deviceIds: RegistrySchema["power.devices"] = [];
+
+        const getDeviceType = async (device: powerDevice) => {
+            const cached = deviceTypes.get(device.path);
+            if (cached) return cached;
+            const type = await device.getType();
+            deviceTypes.set(device.path, type);
+            return type;
+        };
+
         const updateBattery = async () => {
             let batteryPercentage = 0;
             let batteryCharging = false;
+            let selectedPath: string | undefined;
             for (const device of power.getDevices()) {
-                if (
-                    (await device.getPowerSupply()) &&
-                    ((await device.getType()) === "Battery" || (await device.getType()) === "Ups")
-                ) {
-                    batteryPercentage = await device.getPercentage();
-                    batteryCharging = await device.isCharging();
-                    break;
-                }
+                const type = await getDeviceType(device);
+                if (type !== "Battery" && type !== "Ups") continue;
+                if (!(await device.getPowerSupply())) continue;
+                selectedPath = device.path;
+                batteryPercentage = await device.getPercentage();
+                batteryCharging = await device.isCharging();
+                break;
             }
+            batteryPath = selectedPath;
             registry.setData("power.battery", batteryPercentage);
             registry.setData("power.battery.charging", batteryCharging);
+            registry.setData("power.battery.present", batteryPath !== undefined);
         };
 
-        const updateDeviceList = () => {
-            registry.setData(
-                "power.devices",
-                power.getDevices().map((device) => `power.devices.${device.path}` as id<"power.devices[]">),
-            );
+        const updateDeviceList = async () => {
+            const ids: RegistrySchema["power.devices"] = [];
+            for (const device of power.getDevices()) {
+                // 第一条 L2 已经显示这台设备的电量，设备列表不再重复
+                if (device.path === batteryPath) continue;
+                if ((await getDeviceType(device)) === "Unknown") continue;
+                const name = deviceNames.get(device.path);
+                if (!name || name === "Unknown") continue;
+                ids.push(`power.devices.${device.path}` as id<"power.devices[]">);
+            }
+            if (ids.length === deviceIds.length && ids.every((value, index) => value === deviceIds[index])) return;
+            deviceIds = ids;
+            registry.setData("power.devices", ids);
         };
 
         const updateDevice = async (device: powerDevice) => {
-            const name = (await device.getModel()) || "Unknown";
+            const model = (await device.getModel()).trim();
+            const name = model || "Unknown";
+            deviceNames.set(device.path, name);
             const percentage = await device.getPercentage();
             const status = await device.getState();
 
@@ -8482,29 +8510,34 @@ MSysApi.power
         };
 
         const watchDevice = (device: powerDevice) => {
-            device.on("changed", async () => {
+            device.on("changed", async (changed) => {
+                if ("Type" in changed) deviceTypes.delete(device.path);
+                if ("Model" in changed) deviceNames.delete(device.path);
                 await updateDevice(device);
                 await updateBattery();
+                await updateDeviceList();
             });
         };
 
         power.on("device-added", async (device) => {
             watchDevice(device);
-            updateDeviceList();
             await updateDevice(device);
             await updateBattery();
+            await updateDeviceList();
         });
-        power.on("device-removed", async () => {
-            updateDeviceList();
+        power.on("device-removed", async (path) => {
+            deviceTypes.delete(path);
+            deviceNames.delete(path);
             await updateBattery();
+            await updateDeviceList();
         });
 
-        updateDeviceList();
         for (const device of power.getDevices()) {
             watchDevice(device);
             await updateDevice(device);
         }
         await updateBattery();
+        await updateDeviceList();
     })
     .catch((e) => console.error("power init error", e));
 

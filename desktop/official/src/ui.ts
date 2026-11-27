@@ -880,13 +880,13 @@ export function uBatteryRow(label: string, percentage: number) {
         color: gTextStyle.color.secondary,
     });
     valueText.sv(`${value}%`);
-    // 设备行的电池图标和百分比一起靠右
+    // 百分比靠右，电池图标放在数字右侧，各行图标始终对齐
     const right = view("x").style({
         alignItems: "center",
         gap: px(6),
         flexShrink: "0",
     });
-    right.add([battery, valueText.el]);
+    right.add([valueText.el, battery]);
     const row = uChoiceRow({
         label,
         right,

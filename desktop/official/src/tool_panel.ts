@@ -286,7 +286,7 @@ export function tConnectPanel(op: {
     });
 }
 
-/** 电源弹窗：电池信息 + 性能模式 + 设备电池列表；性能模式可隐藏 */
+/** 电源弹窗：电池信息 + 性能模式 + 设备电池列表；没有电池时隐藏第一条 L2 */
 export function tPowerPanel(op: {
     info: ElType<HTMLElement>;
     profiles?: ElType<HTMLElement>;
@@ -301,11 +301,26 @@ export function tPowerPanel(op: {
         : undefined;
     // 设备列表自己按内容增长，并负责空提示，不再套固定高度
     const devicesBar = op.devices ? ui.barItem().add(op.devices) : undefined;
+
+    let visible = false;
+    let batteryVisible = true;
+    const syncBattery = () => {
+        battery.el.style({ display: batteryVisible ? "flex" : "none" });
+        battery.fx.setVisible(visible && batteryVisible);
+    };
+
     return {
         el: tPanel([battery.el, ...(profilesBar ? [profilesBar] : []), ...(devicesBar ? [devicesBar] : [])]),
         fx: battery.fx,
-        setVisible: (visible: boolean) => battery.fx.setVisible(visible),
-        setProfilesVisible: (visible: boolean) => profilesBar?.style({ display: visible ? "" : "none" }),
+        setVisible: (next: boolean) => {
+            visible = next;
+            syncBattery();
+        },
+        setBatteryVisible: (next: boolean) => {
+            batteryVisible = next;
+            syncBattery();
+        },
+        setProfilesVisible: (next: boolean) => profilesBar?.style({ display: next ? "" : "none" }),
     };
 }
 
@@ -354,6 +369,7 @@ export function createPowerPanel(registry: Registry<RegistrySchema>) {
     });
     registry.get("power.battery").getAndSubscribe((v) => panel.fx.setPercentage(v));
     registry.get("power.battery.charging").getAndSubscribe((v) => panel.fx.setCharging(v));
+    registry.get("power.battery.present").getAndSubscribe((v) => panel.setBatteryVisible(v));
     registry.get("power.profile").getAndSubscribe((v) => panel.fx.setProfile(v));
     registry.get("power.profiles").getAndSubscribe((ids) => panel.setProfilesVisible(ids.length > 0));
     return panel;

@@ -818,6 +818,7 @@ let powerDeviceIds = [
 ] as RegistrySchema["power.devices"];
 let batteryPercentage = 70;
 let batteryCharging = false;
+let batteryPresent = true;
 const powerProfiles = [
     mockItem("power.profiles[]", "power-saver", { name: "power-saver", label: "静音" }),
     mockItem("power.profiles[]", "balanced", { name: "balanced", label: "平衡" }),
@@ -827,6 +828,7 @@ demoRegistry.setData("power.profiles", powerProfiles);
 demoRegistry.setData("power.profile", "balanced");
 demoRegistry.setData("power.battery", batteryPercentage);
 demoRegistry.setData("power.battery.charging", batteryCharging);
+demoRegistry.setData("power.battery.present", batteryPresent);
 demoRegistry.setData("power.devices", powerDeviceIds);
 
 function syncDemoTime() {
@@ -985,6 +987,10 @@ popupRow.add(
         button("充电切换").on("click", () => {
             batteryCharging = !batteryCharging;
             demoRegistry.setData("power.battery.charging", batteryCharging);
+        }),
+        button("电池切换").on("click", () => {
+            batteryPresent = !batteryPresent;
+            demoRegistry.setData("power.battery.present", batteryPresent);
         }),
         button("+ 设备").on("click", () => {
             const key = powerDeviceKey(`device-${++powerSeq}`);

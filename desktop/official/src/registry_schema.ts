@@ -7,6 +7,8 @@ export type id<T extends string = string> = string & { __brand: T };
 export interface RegistrySchema {
     "power.battery": number;
     "power.battery.charging": boolean;
+    /** 是否存在用于第一条 L2 的电池；台式机等没有电池时为 false */
+    "power.battery.present": boolean;
     "power.lidClosed": boolean;
     "power.devices": id<"power.devices[]">[];
     "power.devices[]": {
