@@ -23,6 +23,8 @@ export const BTN_TO_BUTTON: Record<number, number> = {
 export const WHEEL_STEP = 100;
 // 高精度滚轮每格 120 单位（1/120 格即 Wayland 的 value120），这里换算成像素
 export const HI_RES_SCALE = WHEEL_STEP / 120;
+// 鼠标滚轮停顿多久算一段结束，用于发 wheelEnd；触摸板抬手有显式结束
+export const WHEEL_SEQUENCE_DELAY = 150;
 
 // abs 值统一为小数（MInputMap.absPosMapping），这里按视口映射（需要坐标时再映射）
 export function ratioToView(ratio: number, size: number) {

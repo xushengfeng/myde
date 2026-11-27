@@ -109,10 +109,12 @@ export type { AbsRatioMapping } from "./input_map/abs";
 export type {
     InputSimHost,
     InputSource,
+    SemanticWheelEvent,
     SimEventInit,
     UniInputEvent,
     UniKeyEvent,
     UniPointerEvent,
+    WheelEventSemantics,
 } from "./sys_api/input_sim";
 export type {
     NativeFsEntry,

@@ -8,6 +8,7 @@
 // - 左键抬起合成 click 并补齐聚焦（最近的 input/textarea/select/[tabindex]）
 // - 按键派发后未被 preventDefault 时补齐文本输入（插入/Backspace/Delete）
 // - 滚轮派发后未被 preventDefault 时滚动最近的可滚动祖先（原生滚轮能滚原生 overflow 容器）
+// - 原生滚轮的序列开始/结束、设备类型和鼠标格数作为自定义属性挂在合成 WheelEvent 上
 //
 // DOM 操作通过可注入的宿主接口 InputSimHost 访问，默认实现 domInputSimHost 操作真实 DOM，
 // 纯 node 环境可 new inputSim(host) 注入自定义宿主
@@ -38,11 +39,20 @@ export interface UniPointerEvent {
     wheelSource?: "wheel" | "finger" | "continuous";
     /** DOM wheel 的 Ctrl 状态；window 模式下宿主把触摸板 pinch 合成成 Ctrl+wheel */
     ctrlKey?: boolean;
+    /** wheel 的 Meta 状态；窗口模式由 DOM 带入，evdev 由桌面按当前修饰键填入 */
+    metaKey?: boolean;
     /** 高精度滚轮的离散步数（1/120 格），不随窗口 scale 变化；缺省按 delta 换算 */
     value120X?: number;
     value120Y?: number;
-    /** 连续滚动结束（触摸板抬手）；只用于结束滚动序列，不再模拟 DOM wheel */
-    scrollEnd?: boolean;
+    /** 滚轮序列开始；只有原生 evdev 能给出，窗口模式（DOM wheel）不设置 */
+    wheelStart?: boolean;
+    /** 滚轮序列结束；触摸板抬手或鼠标滚轮停顿后发出，窗口模式不设置 */
+    wheelEnd?: boolean;
+    /** 滚轮设备类型；只有原生 evdev 能区分，窗口模式缺省 */
+    wheelDevice?: "mouse" | "touchpad";
+    /** 本帧鼠标滚轮格数（1 格 = 120 value120）；触摸板不设置，按 delta 像素算 */
+    wheelStepsX?: number;
+    wheelStepsY?: number;
     /** 指定派发目标，缺省按坐标命中测试 */
     target?: unknown;
 }
@@ -63,6 +73,21 @@ export interface UniKeyEvent {
 }
 
 export type UniInputEvent = (UniPointerEvent | UniKeyEvent) & { source: InputSource };
+
+/** 合成 DOM WheelEvent 上附带的原生滚轮语义，窗口模式只有 delta 等标准字段 */
+export interface WheelEventSemantics {
+    wheelSource?: "wheel" | "finger" | "continuous";
+    wheelStart?: boolean;
+    wheelEnd?: boolean;
+    wheelDevice?: "mouse" | "touchpad";
+    wheelStepsX?: number;
+    wheelStepsY?: number;
+    value120X?: number;
+    value120Y?: number;
+}
+
+/** 可像普通 wheel 一样监听，同时能读到 evdev 滚轮序列信息 */
+export type SemanticWheelEvent = WheelEvent & WheelEventSemantics;
 
 /** 合成事件描述，由宿主映射为具体 DOM 事件 */
 export type SimEventInit =
@@ -87,7 +112,25 @@ export type SimEventInit =
           buttons: number;
           relatedTarget?: unknown;
       }
-    | { kind: "wheel"; type: "wheel"; x: number; y: number; deltaX: number; deltaY: number; deltaMode: number }
+    | {
+          kind: "wheel";
+          type: "wheel";
+          x: number;
+          y: number;
+          deltaX: number;
+          deltaY: number;
+          deltaMode: number;
+          /** wheel 时的 Meta 状态 */
+          metaKey?: boolean;
+          wheelSource?: "wheel" | "finger" | "continuous";
+          wheelStart?: boolean;
+          wheelEnd?: boolean;
+          wheelDevice?: "mouse" | "touchpad";
+          wheelStepsX?: number;
+          wheelStepsY?: number;
+          value120X?: number;
+          value120Y?: number;
+      }
     | {
           kind: "key";
           type: "down" | "up";
@@ -180,6 +223,15 @@ export class inputSim {
                 deltaX: e.deltaX ?? 0,
                 deltaY: e.deltaY ?? 0,
                 deltaMode: e.deltaMode ?? 0,
+                metaKey: e.metaKey ?? false,
+                wheelSource: e.wheelSource,
+                wheelStart: e.wheelStart,
+                wheelEnd: e.wheelEnd,
+                wheelDevice: e.wheelDevice,
+                wheelStepsX: e.wheelStepsX,
+                wheelStepsY: e.wheelStepsY,
+                value120X: e.value120X,
+                value120Y: e.value120Y,
             });
             return;
         }
@@ -411,8 +463,8 @@ function makeDomEvent(e: SimEventInit): Event {
                 buttons: e.buttons,
                 relatedTarget: (e.relatedTarget as EventTarget | null | undefined) ?? null,
             });
-        case "wheel":
-            return new WheelEvent(e.type, {
+        case "wheel": {
+            const event = new WheelEvent(e.type, {
                 view: window,
                 bubbles: true,
                 cancelable: true,
@@ -422,7 +474,27 @@ function makeDomEvent(e: SimEventInit): Event {
                 deltaX: e.deltaX,
                 deltaY: e.deltaY,
                 deltaMode: e.deltaMode,
+                metaKey: e.metaKey,
             });
+            // 自定义语义挂在 DOM 事件上，UI 可以只监听 wheel 就拿到序列/设备/格数。
+            // 只挂有值的字段：窗口模式没有原生序列信息，事件上就不会出现这些属性。
+            const semantics: WheelEventSemantics = {
+                wheelSource: e.wheelSource,
+                wheelStart: e.wheelStart,
+                wheelEnd: e.wheelEnd,
+                wheelDevice: e.wheelDevice,
+                wheelStepsX: e.wheelStepsX,
+                wheelStepsY: e.wheelStepsY,
+                value120X: e.value120X,
+                value120Y: e.value120Y,
+            };
+            for (const key of Object.keys(semantics) as (keyof WheelEventSemantics)[]) {
+                const value = semantics[key];
+                if (value === undefined) continue;
+                Object.defineProperty(event, key, { value, configurable: true, enumerable: true, writable: true });
+            }
+            return event;
+        }
         case "key":
             return new KeyboardEvent(e.type === "down" ? "keydown" : "keyup", {
                 view: window,

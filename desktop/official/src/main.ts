@@ -6,7 +6,9 @@ import type {
     DeviceInfo,
     FileChooserRequest,
     InputManager,
+    SemanticWheelEvent,
     UniInputEvent,
+    WheelEventSemantics,
     WinHandle,
 } from "../../../src/desktop-api";
 import { InputEventCodes } from "../../../src/input_codes/types";
@@ -37,6 +39,7 @@ import {
     isTouchscreen,
     pointerKindOf,
     ratioToView,
+    WHEEL_SEQUENCE_DELAY,
     WHEEL_STEP,
 } from "./input_evdev";
 import { latinVariants } from "./latin";
@@ -6391,7 +6394,8 @@ type ScrollInput = {
     wheelSource?: "wheel" | "finger" | "continuous";
     value120X?: number;
     value120Y?: number;
-    scrollEnd?: boolean;
+    /** 原生 evdev 的滚轮序列结束；转发给 Wayland 客户端时作为 axis_stop */
+    wheelEnd?: boolean;
     /** 已命中的 DOM 目标；缺省按坐标取（和 inputSim 的命中测试一致） */
     target?: unknown;
 };
@@ -6441,7 +6445,7 @@ function sendScrollEvent(p: ScrollInput) {
             source,
             value120X: p.value120X ?? (source === "wheel" ? deltaX * 1.2 : undefined),
             value120Y: p.value120Y ?? (source === "wheel" ? deltaY * 1.2 : undefined),
-            stop: p.scrollEnd,
+            stop: p.wheelEnd,
             // 触摸板按自然滚动时，手指方向和 axis 方向相反；滚轮不在这里翻转
             relativeDirection: source !== "wheel" && naturalScroll ? "inverted" : "identical",
         });
@@ -7480,16 +7484,66 @@ const windowEl = view()
     .addInto(windowElWarp);
 
 viewData = new ViewData();
-/** 滚轮切屏/移动预览焦点；Super+滚轮和工具栏预览按钮共用，120ms 节流 */
+
+/** 切屏用的滚轮信息；统一输入事件（evdev）和带语义的 DOM WheelEvent 都能直接传入 */
+type ScreenWheelEvent = WheelEventSemantics & {
+    deltaX?: number;
+    deltaY?: number;
+};
+/** 一屏 = 鼠标滚轮一格 / 触摸板滚动 100px */
+const SCREEN_WHEEL_STEP = WHEEL_STEP;
+/** 没有 wheelStart/wheelEnd 的来源（窗口模式），间隔这么久视为新序列 */
+const SCREEN_WHEEL_GAP = 200;
+let screenWheelAccum = 0;
+let screenWheelAxis: "x" | "y" | undefined;
 let screenWheelAt = 0;
-function stepScreenByWheel(delta: number) {
-    if (state.getState() !== "normal" || delta === 0) return false;
+
+function resetScreenWheel() {
+    screenWheelAccum = 0;
+    screenWheelAxis = undefined;
+}
+
+/**
+ * 滚轮切屏/移动预览焦点，等同 Super+←/→。
+ * 原生 evdev 下鼠标按滚轮格数（wheelSteps）累计，触摸板按 deltaX/deltaY 距离累计；
+ * 两者都换算成一屏一份，反向滚动立即换向。
+ */
+function handleScreenWheel(e: ScreenWheelEvent) {
+    if (state.getState() !== "normal") return false;
+    if (e.wheelEnd) {
+        resetScreenWheel();
+        return false;
+    }
     const now = performance.now();
-    if (now - screenWheelAt < 120) return false;
+    if (e.wheelStart === true || now - screenWheelAt > SCREEN_WHEEL_GAP) resetScreenWheel();
     screenWheelAt = now;
-    viewData.moveOverviewFocus(delta > 0 ? 1 : -1);
+
+    const dx = e.deltaX ?? 0;
+    const dy = e.deltaY ?? 0;
+    if (dx === 0 && dy === 0) return false;
+    screenWheelAxis ??= Math.abs(dx) >= Math.abs(dy) ? "x" : "y";
+    const touchpad = e.wheelDevice === "touchpad" || (e.wheelSource !== undefined && e.wheelSource !== "wheel");
+    const amount =
+        screenWheelAxis === "x"
+            ? touchpad
+                ? dx / SCREEN_WHEEL_STEP
+                : (e.wheelStepsX ?? dx / SCREEN_WHEEL_STEP)
+            : touchpad
+              ? dy / SCREEN_WHEEL_STEP
+              : (e.wheelStepsY ?? dy / SCREEN_WHEEL_STEP);
+    if (amount === 0) return false;
+    // 反向滚动立即换向，不把上一方向没走完的零头算进来
+    if (screenWheelAccum !== 0 && Math.sign(amount) !== Math.sign(screenWheelAccum)) screenWheelAccum = 0;
+    screenWheelAccum += amount;
+    // 高精度滚轮是 1/120 累加，浮点误差会让刚好一格差一点点
+    const steps = Math.trunc(screenWheelAccum + (screenWheelAccum >= 0 ? 1e-6 : -1e-6));
+    if (steps === 0) return false;
+    screenWheelAccum -= steps;
+    if (Math.abs(screenWheelAccum) < 1e-6) screenWheelAccum = 0;
+    viewData.moveOverviewFocus(steps);
     return true;
 }
+
 // 一屏多窗口时不再自动居中，否则 ResizeObserver 会把它们叠到一起
 windowCenterManager.setShouldCenter((id) => (viewData.screenOf(id)?.winIds.length ?? 0) <= 1);
 const launcher = createLauncher();
@@ -8760,13 +8814,6 @@ tools.registerTool("showAllView", () => {
         .data({ tool: "overview" })
         .on("click", () => {
             viewData.toggleOverview();
-        })
-        // 滚轮在按钮上等同 Super+←/→：常规切屏，全局预览里移动聚焦面板
-        .on("wheel", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-            stepScreenByWheel(delta);
         });
     return showAllViewBtn;
 });
@@ -10890,18 +10937,18 @@ function dispatchInput(e: UniInputEvent) {
     // 滚轮/触摸板：先按窗口几何命中转发给 Wayland 客户端，再模拟 DOM 事件给桌面 UI。
     // 源信息（触摸板连续滚动、高精度刻度）随统一事件带下来，不能等模拟成 DOM WheelEvent 再取。
     if (e.kind === "pointer" && e.type === "wheel") {
-        // Super+滚轮等同 Super+←/→，不转发给客户端，也不进入 DOM wheel
-        if (exitModifiers.meta && !polkitDialog?.isOpen()) {
-            const delta = Math.abs(e.deltaX ?? 0) > Math.abs(e.deltaY ?? 0) ? (e.deltaX ?? 0) : (e.deltaY ?? 0);
-            stepScreenByWheel(delta);
-            return;
-        }
         if (isHostPinch(e)) {
             handleHostPinch(e);
             return;
         }
-        sendScrollEvent(e);
-        if (e.scrollEnd) return;
+        // 工具栏全局预览按钮上滚轮，或 Super+滚轮，都等同 Super+←/→。
+        // 这类滚轮不转发给客户端，但仍模拟成 DOM wheel，让桌面 UI 统一按 DOM 事件处理。
+        const target = e.target instanceof Element ? e.target : document.elementFromPoint(e.x, e.y);
+        const overOverview = target instanceof Element && target.closest('[data-tool="overview"]') !== null;
+        const screenWheel = overOverview || ((e.metaKey === true || exitModifiers.meta) && !polkitDialog?.isOpen());
+        if (!screenWheel) sendScrollEvent(e);
+        inputSim.emit({ ...e, metaKey: e.metaKey === true || exitModifiers.meta });
+        return;
     }
     inputSim.emit(e);
 }
@@ -10946,12 +10993,6 @@ function domInputEvent(e: Event) {
         return;
     }
     if (e instanceof WheelEvent) {
-        // DOM wheel 直接带修饰键状态：Super+滚轮在进入 Wayland 转发前就切屏
-        if (e.metaKey && state.getState() === "normal" && !polkitDialog?.isOpen()) {
-            const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-            stepScreenByWheel(delta);
-            return;
-        }
         dispatchInput({
             kind: "pointer",
             type: "wheel",
@@ -10961,6 +11002,7 @@ function domInputEvent(e: Event) {
             deltaY: e.deltaY,
             deltaMode: e.deltaMode,
             ctrlKey: e.ctrlKey,
+            metaKey: e.metaKey,
             source: "dom",
             target: e.target,
         });
@@ -10987,6 +11029,22 @@ function domInputEvent(e: Event) {
 for (const type of SWALLOWED_EVENTS) {
     window.addEventListener(type, domInputEvent, true);
 }
+
+/**
+ * inputSim 把所有滚轮统一模拟成 DOM wheel，原生序列语义也挂在事件上。
+ * 这里处理全局预览按钮和 Super+滚轮；其它 UI 可以只监听 wheel 读同样的属性。
+ */
+function onDesktopWheel(e: WheelEvent) {
+    if (e.isTrusted) return;
+    const target = e.target instanceof Element ? e.target : undefined;
+    const overOverview = target !== undefined && target.closest('[data-tool="overview"]') !== null;
+    const superWheel = e.metaKey && !polkitDialog?.isOpen();
+    if (!overOverview && !superWheel) return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleScreenWheel(e as SemanticWheelEvent);
+}
+window.addEventListener("wheel", onDesktopWheel, { capture: true, passive: false });
 
 for (const p of planteData) {
     const plantEl = view().style({ position: "absolute" }).addInto(toolsEl);
@@ -11610,6 +11668,48 @@ function useEvdevDevice(
     const pressedKeys = new Set<number>();
     const pressedButtons = new Set<number>();
 
+    // ── 滚轮序列：原生 evdev 能给出开始/结束，桌面据此区分鼠标格数与触摸板距离 ──
+    let wheelActive = false;
+    let wheelEndTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearWheelEnd = () => {
+        if (wheelEndTimer === undefined) return;
+        clearTimeout(wheelEndTimer);
+        wheelEndTimer = undefined;
+    };
+    const beginWheel = () => {
+        const start = !wheelActive;
+        wheelActive = true;
+        clearWheelEnd();
+        return start;
+    };
+    const endWheel = (device: "mouse" | "touchpad") => {
+        clearWheelEnd();
+        if (!wheelActive) return;
+        wheelActive = false;
+        emit({
+            kind: "pointer",
+            type: "wheel",
+            x: pointerPos.x,
+            y: pointerPos.y,
+            deltaX: 0,
+            deltaY: 0,
+            wheelSource: device === "touchpad" ? "finger" : "wheel",
+            wheelDevice: device,
+            wheelEnd: true,
+            source: "evdev",
+        });
+    };
+    /** 鼠标滚轮没有显式抬手，连续滚动停顿后补一个 end；触摸板由 scrollEnd 立即结束 */
+    const endWheelLater = (device: "mouse" | "touchpad") => {
+        clearWheelEnd();
+        const timer = setTimeout(() => {
+            wheelEndTimer = undefined;
+            endWheel(device);
+        }, WHEEL_SEQUENCE_DELAY);
+        (timer as { unref?: () => void }).unref?.();
+        wheelEndTimer = timer;
+    };
+
     // ── 触摸板：设备事件交给 utils/touchpad 封装，绝对坐标只用于算位移和手指数 ──
     const hasTrackingId = info.capabilities.absAxes.includes(InputEventCodes.ABS_MT_TRACKING_ID);
     // ── 触屏：每个接触点映射成一个独立 pointer，pointerId 区分手指 ──
@@ -11685,6 +11785,7 @@ function useEvdevDevice(
             touchpadScrolling.add(info.phys);
         }
         const sign = naturalScroll ? 1 : -1;
+        const start = beginWheel();
         emit({
             kind: "pointer",
             type: "wheel",
@@ -11693,22 +11794,14 @@ function useEvdevDevice(
             deltaX: deltaX * sign * touchpadScrollGain,
             deltaY: deltaY * sign * touchpadScrollGain,
             wheelSource: "finger",
+            wheelDevice: "touchpad",
+            wheelStart: start || undefined,
             source: "evdev",
         });
     });
     touchpadInput?.on("scrollEnd", () => {
         if (info.phys) touchpadScrolling.delete(info.phys);
-        emit({
-            kind: "pointer",
-            type: "wheel",
-            x: pointerPos.x,
-            y: pointerPos.y,
-            deltaX: 0,
-            deltaY: 0,
-            wheelSource: "finger",
-            scrollEnd: true,
-            source: "evdev",
-        });
+        endWheel("touchpad");
     });
     touchpadInput?.on("button", (action, button) => {
         emit({
@@ -11868,7 +11961,9 @@ function useEvdevDevice(
             wheelValueX = 0;
             wheelValueY = 0;
             // 触摸板即使通过相对滚轮通道上报，也是连续滚动，不能发离散步进
-            const wheelSource = touchpad ? "finger" : "wheel";
+            const device = touchpad ? "touchpad" : "mouse";
+            const wheelSource = device === "touchpad" ? "finger" : "wheel";
+            const start = beginWheel();
             emit({
                 kind: "pointer",
                 type: "wheel",
@@ -11877,10 +11972,16 @@ function useEvdevDevice(
                 deltaX,
                 deltaY,
                 wheelSource,
+                wheelDevice: device,
+                // 鼠标按格数切屏，触摸板按 delta 距离切屏
+                wheelStepsX: device === "mouse" ? value120X / 120 : undefined,
+                wheelStepsY: device === "mouse" ? value120Y / 120 : undefined,
                 value120X: wheelSource === "wheel" ? value120X : undefined,
                 value120Y: wheelSource === "wheel" ? value120Y : undefined,
+                wheelStart: start || undefined,
                 source: "evdev",
             });
+            endWheelLater(device);
         }
         const frame = frameKeys.splice(0);
         for (const { code, value } of frame) {
@@ -12055,6 +12156,8 @@ function useEvdevDevice(
 
     return function dispose() {
         // 设备移除：触摸板的轻触定时器/进行中的滚动/物理键由它自己收尾
+        clearWheelEnd();
+        endWheel(touchpad ? "touchpad" : "mouse");
         touchpadInput?.dispose();
         // 触屏还按着的接触点补 up，否则 pointer 会一直停在按下状态
         for (const c of touchContacts.values()) {

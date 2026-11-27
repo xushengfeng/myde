@@ -448,7 +448,7 @@ export class TouchpadMode {
             deltaX: 0,
             deltaY: 0,
             wheelSource: "finger",
-            scrollEnd: true,
+            wheelEnd: true,
         });
     }
 
@@ -493,7 +493,7 @@ export class TouchpadMode {
                 deltaX: 0,
                 deltaY: 0,
                 wheelSource: "finger",
-                scrollEnd: true,
+                wheelEnd: true,
             });
             return;
         }
