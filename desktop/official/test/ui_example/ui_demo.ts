@@ -1356,7 +1356,7 @@ view("x")
 const resizeListDemo = view("y").style({ marginTop: "20px", gap: "8px" }).addInto();
 resizeListDemo.add(
     aLineText()
-        .sv("滚动列表尺寸动画（自动撑开 36–180，宽 260–360）")
+        .sv("滚动列表尺寸动画（自动撑开 36–180，间距 8，宽 260–360）")
         .style({ ...gTextStyle.title, color: gTextStyle.color.primary }),
 );
 
@@ -1364,6 +1364,7 @@ const resizeItems = (count: number) => Array.from({ length: count }, (_, index) 
 
 const resizeList = uScrollList<string>({
     itemSize: 36,
+    gap: 8,
     containerSize: { min: 36, max: 180 },
     direction: "down",
     crossSize: 260,

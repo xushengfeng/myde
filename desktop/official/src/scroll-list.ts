@@ -31,6 +31,8 @@ interface AnimatedElement<T> {
 
 export function dynamicScrollList<T>(options: {
     itemSize: number;
+    /** 相邻项之间的间距，默认 0 */
+    gap?: number;
     /** 主轴尺寸；传 `{ min, max }` 时按内容自动撑开 */
     containerSize: ScrollListSize;
     direction: Direction;
@@ -48,6 +50,7 @@ export function dynamicScrollList<T>(options: {
 }) {
     const {
         itemSize,
+        gap: gapOption = 0,
         containerSize: containerSizeOption,
         direction,
         renderItem,
@@ -62,6 +65,8 @@ export function dynamicScrollList<T>(options: {
     } = options;
 
     const vertical = isVertical(direction);
+    const gap = Math.max(0, gapOption);
+    const stride = itemSize + gap;
     const sizeRange = typeof containerSizeOption === "number" ? undefined : containerSizeOption;
     let containerSize =
         typeof containerSizeOption === "number"
@@ -86,8 +91,8 @@ export function dynamicScrollList<T>(options: {
     );
 
     function getVisibleRange() {
-        const start = Math.floor(currentScroll / itemSize);
-        const end = Math.ceil((currentScroll + containerSize) / itemSize);
+        const start = Math.floor(currentScroll / stride);
+        const end = Math.ceil((currentScroll + containerSize) / stride);
         return {
             start: Math.max(0, start - bufferSize),
             end: end + bufferSize,
@@ -106,7 +111,7 @@ export function dynamicScrollList<T>(options: {
             [vertical ? "left" : "top"]: "0",
             [vertical ? "width" : "height"]: "100%",
             [vertical ? "height" : "width"]: `${itemSize}px`,
-            [vertical ? "top" : "left"]: `${index * itemSize - currentScroll}px`,
+            [vertical ? "top" : "left"]: `${index * stride - currentScroll}px`,
         });
 
         gear.setUpdateCallback((state) => {
@@ -118,7 +123,7 @@ export function dynamicScrollList<T>(options: {
         gear.moveTo({ show: 0 }, 0);
 
         const moveGear = new AnimationGear<{ pos: number }>(
-            { pos: index * itemSize - currentScroll },
+            { pos: index * stride - currentScroll },
             { transition: { duration: animationDuration, map: timingFunction.easeInOut }, time },
         );
 
@@ -144,7 +149,7 @@ export function dynamicScrollList<T>(options: {
     }
 
     function animateMove(item: AnimatedElement<T>, newIndex: number) {
-        const targetPosition = newIndex * itemSize - currentScroll;
+        const targetPosition = newIndex * stride - currentScroll;
         const currentPosition = parseFloat(item.el.el.style[vertical ? "top" : "left"]) || 0;
         const distance = targetPosition - currentPosition;
 
@@ -269,8 +274,8 @@ export function dynamicScrollList<T>(options: {
         const renderedArray = Array.from(renderedEls.values());
         for (const item of renderedArray) {
             if (item.moveGear.getRunningAnimation().isRunning) {
-                item.moveGear.moveTo({ pos: item.index * itemSize - currentScroll });
-            } else item.moveGear.moveTo({ pos: item.index * itemSize - currentScroll }, 0);
+                item.moveGear.moveTo({ pos: item.index * stride - currentScroll });
+            } else item.moveGear.moveTo({ pos: item.index * stride - currentScroll }, 0);
         }
 
         // 更新可见元素
@@ -278,7 +283,7 @@ export function dynamicScrollList<T>(options: {
 
         // 回调
         if (onScroll && items.length > 0) {
-            const exactIndex = currentScroll / itemSize;
+            const exactIndex = currentScroll / stride;
             const index = Math.floor(exactIndex);
             const progress = exactIndex - index;
             onScroll(Math.min(index, items.length - 1), progress);
@@ -315,14 +320,19 @@ export function dynamicScrollList<T>(options: {
         return containerSize;
     }
 
+    function contentSize() {
+        if (items.length === 0) return 0;
+        return items.length * itemSize + (items.length - 1) * gap;
+    }
+
     /** 自动尺寸模式下按内容重新计算目标尺寸 */
     function applyAutoSize(animate: boolean) {
         if (!sizeRange) return;
-        setSize(sizeFromContent(items.length * itemSize, sizeRange), animate);
+        setSize(sizeFromContent(contentSize(), sizeRange), animate);
     }
 
     function getMaxScroll() {
-        return Math.max(0, items.length * itemSize - containerSize);
+        return Math.max(0, contentSize() - containerSize);
     }
 
     function scrollTo(val: number, animate = false) {
@@ -336,7 +346,7 @@ export function dynamicScrollList<T>(options: {
 
     function scrollToPage(page: number, animate = true) {
         currentPage = Math.max(0, Math.min(page, items.length - 1));
-        scrollTo(currentPage * itemSize, animate);
+        scrollTo(currentPage * stride, animate);
     }
 
     function smoothScrollTo(target: number) {
@@ -369,7 +379,7 @@ export function dynamicScrollList<T>(options: {
             if (Math.abs(velocity) < minVelocity) {
                 inertiaAnimId = null;
                 if (snap) {
-                    const targetPage = Math.round(currentScroll / itemSize);
+                    const targetPage = Math.round(currentScroll / stride);
                     scrollToPage(targetPage, true);
                 }
                 return;
@@ -435,7 +445,7 @@ export function dynamicScrollList<T>(options: {
     let dragPointerId: number | null = null;
 
     function snapToNearest() {
-        const targetPage = Math.round(currentScroll / itemSize);
+        const targetPage = Math.round(currentScroll / stride);
         scrollToPage(targetPage, true);
     }
 
@@ -521,10 +531,10 @@ export function dynamicScrollList<T>(options: {
             const velocity = touchVelocity * 1000;
             if (Math.abs(velocity) > minVelocity) {
                 const projectedScroll = currentScroll + velocity * 0.3;
-                const targetPage = Math.round(projectedScroll / itemSize);
+                const targetPage = Math.round(projectedScroll / stride);
                 scrollToPage(Math.max(0, Math.min(targetPage, items.length - 1)), true);
             } else {
-                const targetPage = Math.round(currentScroll / itemSize);
+                const targetPage = Math.round(currentScroll / stride);
                 scrollToPage(targetPage, true);
             }
         } else {

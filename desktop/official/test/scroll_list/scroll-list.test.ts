@@ -151,15 +151,18 @@ interface Setup {
     container: FakeElement;
     keyByEl: WeakMap<FakeElement, string>;
     itemSize: number;
+    gap: number;
     containerSize: number;
 }
 
 function setup(options?: {
     itemSize?: number;
+    gap?: number;
     containerSize?: number | { min?: number; max?: number };
     bufferSize?: number;
 }): Setup {
     const itemSize = options?.itemSize ?? 100;
+    const gap = options?.gap ?? 0;
     const containerSizeOption = options?.containerSize ?? 300;
     const containerSize =
         typeof containerSizeOption === "number" ? containerSizeOption : Math.max(0, containerSizeOption.min ?? 0);
@@ -168,6 +171,7 @@ function setup(options?: {
 
     const list = dynamicScrollList<string>({
         itemSize,
+        gap,
         containerSize: containerSizeOption,
         direction: "down",
         bufferSize: options?.bufferSize ?? 2,
@@ -187,6 +191,7 @@ function setup(options?: {
         container: (list as unknown as ListHandle).el.el as unknown as FakeElement,
         keyByEl,
         itemSize,
+        gap,
         containerSize,
     };
 }
@@ -195,11 +200,12 @@ function setup(options?: {
  * 校验稳定后的 DOM：
  * - 每个元素都能对应到当前列表中的 key
  * - 同一个 key 只出现一次
- * - 所有元素的滑动偏移一致（位置 = index * itemSize - scroll）
+ * - 所有元素的滑动偏移一致（位置 = index * (itemSize + gap) - scroll）
  * - 可见区域内每个槽位都有且只有一个元素，不空缺也不重叠
  */
 function assertLayout(s: Setup, items: string[]) {
-    const { container, keyByEl, itemSize, containerSize } = s;
+    const { container, keyByEl, itemSize, gap, containerSize } = s;
+    const stride = itemSize + gap;
     const indexByKey = new Map(items.map((item, index) => [item, index]));
 
     const entries = container.children.map((el) => {
@@ -219,10 +225,10 @@ function assertLayout(s: Setup, items: string[]) {
 
     if (entries.length === 0) return;
 
-    // 所有元素应该共享同一个 scroll 偏移：top = index * itemSize - scroll
-    const scroll = (indexByKey.get(keys[0]) as number) * itemSize - entries[0].top;
+    // 所有元素应该共享同一个 scroll 偏移：top = index * stride - scroll
+    const scroll = (indexByKey.get(keys[0]) as number) * stride - entries[0].top;
     for (const entry of entries) {
-        const expectedTop = (indexByKey.get(entry.key as string) as number) * itemSize - scroll;
+        const expectedTop = (indexByKey.get(entry.key as string) as number) * stride - scroll;
         expect(
             entry.top,
             `key=${entry.key} 位置不对，可能有重叠或空缺 scroll=${scroll}\n列表=${items.join(",")}\nDOM=${entries
@@ -234,7 +240,7 @@ function assertLayout(s: Setup, items: string[]) {
     // 可见（含部分露出）的槽位必须全部渲染
     const renderedIndex = new Set(entries.map((entry) => indexByKey.get(entry.key as string) as number));
     for (let index = 0; index < items.length; index++) {
-        const top = index * itemSize - scroll;
+        const top = index * stride - scroll;
         const bottom = top + itemSize;
         if (bottom > 0 && top < containerSize) {
             expect(renderedIndex.has(index), `gap: index ${index} 可见但未渲染`).toBe(true);
@@ -468,5 +474,37 @@ describe("dynamicScrollList", () => {
 
         s.time.settle();
         expect(Number.parseFloat(String(s.container.style.height))).toBeCloseTo(150, 6);
+    });
+
+    it("gap 计入项位置和内容长度", () => {
+        const s = setup({ itemSize: 50, gap: 10, containerSize: 200 });
+        const items = Array.from({ length: 10 }, (_, i) => `k${i}`);
+        s.list.setList(items, true);
+        s.time.settle();
+        assertLayout(s, items);
+
+        s.list.scrollTo(150);
+        s.time.settle();
+        assertLayout(s, items);
+
+        // 内容长度 = 10 * 50 + 9 * 10 = 590，最大滚动 = 390
+        s.list.scrollTo(9999);
+        s.time.settle();
+        assertLayout(s, items);
+        const last = s.container.children.find((el) => s.keyByEl.get(el) === "k9");
+        expect(last).toBeDefined();
+        expect(Number.parseFloat(String(last?.style.top))).toBeCloseTo(150, 6);
+    });
+
+    it("自动撑开包含 gap", () => {
+        const s = setup({ itemSize: 50, gap: 10, containerSize: { min: 0, max: 200 } });
+        s.list.setList(["k0", "k1", "k2"], true);
+        expect(Number.parseFloat(String(s.container.style.height))).toBe(170);
+
+        s.list.setList(
+            Array.from({ length: 10 }, (_, i) => `k${i}`),
+            true,
+        );
+        expect(Number.parseFloat(String(s.container.style.height))).toBe(200);
     });
 });

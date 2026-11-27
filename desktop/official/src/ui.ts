@@ -449,6 +449,8 @@ export function sourceTag(text: string) {
  */
 export function uScrollList<T>(op: {
     itemSize: number;
+    /** 相邻项之间的间距，默认 0 */
+    gap?: number;
     /** 主轴尺寸；传 `{ min, max }` 时按内容自动撑开 */
     containerSize: ScrollListSize;
     direction: "up" | "down" | "left" | "right";
