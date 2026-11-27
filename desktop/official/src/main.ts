@@ -426,6 +426,8 @@ type ViewScreen = {
     readonly id: string;
     /** 顶层窗口，按底到顶的顺序；子窗口不在这里 */
     winIds: MWinId[];
+    /** 这张屏上次聚焦的窗口；退出总览/搜索时按 `focus` 轴选屏后优先还给它 */
+    focusWindow?: MWinId;
     empty: boolean;
     /** 启动台：固定在最右的应用图标屏，和空桌面一样不参与全局预览 */
     launchpad: boolean;
@@ -572,6 +574,8 @@ class ViewData {
     private appliedFrameRates = new Map<MWinId, number | null>();
     /** 当前聚焦的窗口 handle，键盘按它反查客户端下发 */
     focusHandle: MWinId | undefined;
+    /** 桌面模式（总览/搜索/锁屏）是否接管了键盘，退出时由它决定要不要补焦点 */
+    private overlayHeldKeys = false;
 
     /**
      * 纵轴：桌面模式/预览进度。`<0` 只影响启动器，`>=0` 是预览进度。
@@ -1266,8 +1270,8 @@ class ViewData {
         if (!screen) return;
         this.cancelGesture();
         this.setFocusById(screen.id, animate);
-        const top = topWin(screen);
-        if (top) this.focusWin(top);
+        const target = this.screenFocus(screen);
+        if (target !== undefined) this.focusWin(target);
         else this.blurAll();
         this.scheduleReorder();
         this.render(animate);
@@ -1284,6 +1288,8 @@ class ViewData {
     jumpToWin(winid: MWinId) {
         const screen = this.win2Screen.get(winid);
         if (!screen) return;
+        // 搜索选中具体窗口：让它成为该屏记忆的焦点，setCurrentScreen 会按记忆聚焦
+        screen.focusWindow = winid;
         this.setOverview(false);
         this.setCurrentScreen(screen.id, true);
     }
@@ -1603,14 +1609,17 @@ class ViewData {
         this.levelValue = level;
         this.focusValue = focus;
 
-        // 横轴在预览里实时改选中窗口；常规/搜索里松手才提交
+        // 横轴在预览里实时改选中屏；常规/搜索里松手才提交。
+        // 总览完全展开（level=1）时搜索栏接管键盘，这里只改选择，不抢客户端焦点。
         if (level > 0) {
             const nextIndex = clampNumber(Math.round(focus), 0, this.screens.length - 1);
             if (nextIndex !== this.currentIndex()) {
                 this.focusTarget = nextIndex;
-                const top = topWin(this.screens[nextIndex]);
-                if (top) this.focusWin(top);
-                else this.blurAll();
+                if (level < 1) {
+                    const target = this.screenFocus(this.screens[nextIndex]);
+                    if (target !== undefined) this.focusWin(target);
+                    else this.blurAll();
+                }
             }
             if (!gesture.panelHold) {
                 gesture.panelHold = true;
@@ -1636,11 +1645,6 @@ class ViewData {
         const targetScreen = this.screens[targetFocus];
         const changed = targetFocus !== this.currentIndex();
         this.focusTarget = targetFocus;
-        if (targetScreen && changed) {
-            const top = topWin(targetScreen);
-            if (top) this.focusWin(top);
-            else this.blurAll();
-        }
 
         // 纵轴：直线按 ±0.5 吸附到 n/h/t；直连只回 n/t
         const targetLevel =
@@ -1654,6 +1658,12 @@ class ViewData {
                     ? -1
                     : 0;
         const wasOverview = this.overview;
+        // 只有落回常规才提交 Wayland 焦点；总览/搜索里由搜索栏接管键盘，松手只改选择
+        if (targetScreen && changed && targetLevel === 0) {
+            const target = this.screenFocus(targetScreen);
+            if (target !== undefined) this.focusWin(target);
+            else this.blurAll();
+        }
         this.levelTarget = targetLevel;
         this.focusPanelGear.moveTo({ opacity: targetLevel >= 0.5 ? 1 : 0 }, FOCUS_PANEL_FADE);
         if (targetLevel >= 0.5) {
@@ -2020,6 +2030,9 @@ class ViewData {
             return;
         }
         this.focusHandle = winid;
+        // 每张屏记住自己最后聚焦的窗口；退出总览/搜索时按 focus 轴选屏后还给它
+        const screen = this.win2Screen.get(rootWindow(winid)) ?? this.win2Screen.get(winid);
+        if (screen !== undefined) screen.focusWindow = winid;
         this.raiseWindow(winid);
         for (const [id, win] of internalWindows) {
             win.setActive(id === winid);
@@ -2247,6 +2260,36 @@ class ViewData {
             server.server.notify("window.blur", info.handle);
         }
         void ime?.blur();
+    }
+
+    /** 桌面模式开始接管键盘：让客户端全部失焦（core 在 leave 前补 release） */
+    beginOverlayKeyboard() {
+        if (this.overlayHeldKeys) return;
+        this.overlayHeldKeys = true;
+        this.blurAll();
+    }
+
+    /** 这张屏上次聚焦的窗口；窗口已经不在就退回最上层 */
+    private screenFocus(screen: ViewScreen): MWinId | undefined {
+        const remembered = screen.focusWindow;
+        if (remembered !== undefined && this.win2Screen.get(remembered) === screen) return remembered;
+        return topWin(screen);
+    }
+
+    /**
+     * 桌面模式（总览/搜索栏/锁屏）结束后，按 `focus` 轴选中的屏把焦点还给该屏记忆的窗口。
+     * 已有焦点说明点击/启动流程已经选中了窗口，不再抢；仍在总览或搜索里时也不提前还。
+     */
+    restoreWaylandFocus() {
+        // 没真正接管过键盘（例如启动器开到一半就退出）时不补：客户端从头到尾都有焦点
+        if (!this.overlayHeldKeys) return;
+        if (this.overview || this.levelTarget <= -0.5) return;
+        this.overlayHeldKeys = false;
+        if (this.focusHandle !== undefined) return;
+        const screen = this.screens[this.currentIndex()];
+        if (screen === undefined) return;
+        const target = this.screenFocus(screen);
+        if (target !== undefined) this.focusWin(target);
     }
 }
 
@@ -7177,11 +7220,15 @@ state.on("normal", () => {
     lockScreenAnimate.moveTo("normal(out)");
     void ime?.resume();
     vkb?.setSuspended(false);
+    // 解锁后把键盘焦点还给当前屏；仍在总览/搜索里时不抢
+    viewData?.restoreWaylandFocus();
 });
 state.on("lock", () => {
     stateLock.setState("lock");
     void ime?.blur();
     vkb?.setSuspended(true);
+    // 锁屏接管键盘：客户端全部失焦，core 在 leave 前补 release
+    viewData?.beginOverlayKeyboard();
 });
 state.setState("normal");
 
@@ -9085,8 +9132,12 @@ function createLauncher(): LauncherController {
         const fullyVisible = opacity >= 1;
         if (fullyVisible && !wasFullyVisible) {
             if (document.activeElement !== field.el) field.el.focus({ preventScroll: true });
+            // 搜索栏接管键盘：客户端全部失焦，core 在 leave 前把按住的键补成 release
+            viewData.beginOverlayKeyboard();
         } else if (opacity <= 0.001) {
             blurInput();
+            // 回到常规：补回客户端焦点，防止搜索栏/总览收起后没人有焦点
+            viewData.restoreWaylandFocus();
         }
         wasFullyVisible = fullyVisible;
     };

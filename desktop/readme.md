@@ -845,6 +845,10 @@ enter/leave、剪贴板 selection 归属都跟它走。指针 hover **不**自�
 完全由桌面自己决定（想跟随就在 hover 时调 `window.focus`）。重复 focus/blur 会被内部去重，
 与「目标 focus + 其余 blur」的全量循环配合时与遍历顺序无关。
 
+桌面自己接管键盘的模式（总览、搜索栏、锁屏等）要在**进入时**对客户端 `window.blur`、**退出时**再
+`window.focus`：server 在 `leave` 前把按住的键补成 release，失焦期间桌面吞掉的 keyup 不会让客户端
+停在按住状态。焦点切换本身就带这一步，桌面只需要保证模式进出各发一次。
+
 ### 父子窗口
 
 `WindowInfo.parent` 是客户端 `xdg_toplevel.set_parent` 声明的父窗口，`modal` 来自 `xdg-dialog-v1`
