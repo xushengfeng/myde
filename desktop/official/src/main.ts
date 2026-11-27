@@ -565,6 +565,8 @@ type OverviewLayout = {
 };
 
 const SCREEN_TRANSITION = { duration: 320, map: timingFunction.easeOut };
+/** 按键/按钮打开、收起搜索栏不做过渡，直接跳到端点；手势仍按行程跟手 */
+const LAUNCHER_KEY_TRANSITION = { duration: 0, map: timingFunction.linear };
 /** 不在聚焦虚拟屏上的窗口目标帧率；server 按输出刷新率取最接近的整数因数 */
 const BACKGROUND_WINDOW_FPS = 30;
 /** 三指横滑位移倍率默认值；设置窗口可调 */
@@ -818,7 +820,8 @@ class ViewData {
             return;
         }
         this.levelTarget = clampNumber(target, -1, 0);
-        this.render(true);
+        // 按键/按钮开关搜索只走启动器，动画缩短；手势松手仍走 animateLevel 的常规吸附
+        this.render(true, LAUNCHER_KEY_TRANSITION);
     }
 
     /** 当前稳定屏下标；离散位置，不使用动画中的小数 */
@@ -855,7 +858,7 @@ class ViewData {
         this.focusGear.moveTo({ v: target }, { ...SCREEN_TRANSITION, onComplete: () => this.chromeCallback?.() });
     }
 
-    private animateLevel(target: number, animate = true, onComplete?: () => void) {
+    private animateLevel(target: number, animate = true, onComplete?: () => void, transition = SCREEN_TRANSITION) {
         this.levelTarget = target;
         const running = this.levelGear.getRunningAnimation();
         if (!animate) {
@@ -873,7 +876,7 @@ class ViewData {
             return;
         }
         // moveTo 会把 onComplete 写进传入的 transition；克隆一份，避免污染共享的 SCREEN_TRANSITION
-        this.levelGear.moveTo({ v: target }, onComplete ? { ...SCREEN_TRANSITION, onComplete } : SCREEN_TRANSITION);
+        this.levelGear.moveTo({ v: target }, onComplete ? { ...transition, onComplete } : transition);
     }
 
     /** 只允许当前虚拟屏里的窗口接收指针，滚动同理 */
@@ -2136,7 +2139,7 @@ class ViewData {
         );
     }
 
-    render(animate = true) {
+    render(animate = true, levelTransition = SCREEN_TRANSITION) {
         // 工具栏避让只随显式状态变化算一次，不跟两轴的每一帧
         this.chromeCallback?.();
         // 手势中 moveGesture 直接写两轴；其它状态变化只重算布局，不再起新的轴动画
@@ -2147,7 +2150,7 @@ class ViewData {
         const target = this.levelTarget;
         // 线路径的 tOrigin 由发起这次过渡的命令/手势负责；render 的补算不能改写它
         const onComplete = this.launcherRoute === "direct" ? () => this.finishLevelSettle(target) : undefined;
-        this.animateLevel(target, animate, onComplete);
+        this.animateLevel(target, animate, onComplete, levelTransition);
         if (
             this.launcherRoute === "direct" &&
             !this.levelGear.getRunningAnimation().isRunning &&
@@ -9309,7 +9312,6 @@ function createAppTileFactory(op: AppTileFactoryOptions) {
 
 /** 顶部搜索栏：默认藏在工作区上方，可跟手下拉/上推；结果由 SearchEngine 异步汇总 */
 function createLauncher(): LauncherController {
-    const LAUNCHER_TRANSITION = { duration: 160, map: timingFunction.easeOut };
     let stageHeight = Math.max(1, windowEl.el.getBoundingClientRect().height || window.innerHeight);
     /** 桌面 UI 缩放；stageHeight/topInset 是视觉 px，位置计算改用局部 px */
     let scale = uiScale;
@@ -9397,7 +9399,8 @@ function createLauncher(): LauncherController {
         containerSize: SEARCH_RESULT_PANEL_HEIGHT,
         direction: "down",
         crossSize: "100%",
-        animationDuration: LAUNCHER_TRANSITION.duration,
+        // 搜索结果不做逐项进出 / 位移动画，避免按键搜索时列表还在补间
+        animationDuration: 0,
         // key 带渲染批次：同长度的新搜索结果不会复用旧行
         keyExtractor: (key) => key,
         renderItem: (key) => {
