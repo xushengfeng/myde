@@ -12,6 +12,10 @@
 
 `application.ts` 解析 .desktop：除 Name/Comment/Icon/Exec 外，还会从 `Exec=env A=1 cmd` 的前缀取出环境变量放进 `DesktopEntry.env`（`Exec` 同时还原成 `cmd`），交给 `runApp()`。
 
+`app_control.ts` 提供进程树、进程控制和系统快照：`getPidTree()` 直接读 `/proc`；`getSystemSnapshot()` 读取整机 CPU/内存和所有进程（第一次采样 CPU 百分比为 null，第二次才有值），`watchSystem()` 周期性采样，`getProcessDetail()` 按需读取 cmdline/cgroup/affinity/PSS/IO；`getAffinity()` / `setAffinity()` 读写 CPU 亲和度，设置走 `taskset -apc`；`getCpuTopology()` 读取 CPU 型号和 P/E/LPE 核分类（优先 `cpu_core`/`cpu_atom`/`cpu_lowpower`，回退 `acpi_cppc`、`cpu_capacity`、最大频率）。进程 CPU 百分比是多线程累计值，可能超过 100；`nice` 等控制只对同 uid 进程有效。
+
+`temperature.ts` 读 `/sys/class/hwmon` 和 `/sys/class/thermal` 的温度传感器，按 cpu/gpu/nvme/battery/wifi/acpi/other 归类；无需 root，没有内核事件，`init()` 后默认 5 秒轮询，变化时发出 `changed`。
+
 `nativefs.ts` 提供原生文件系统的只读接口：`list` 枚举目录和元数据，`readImage` 只读取图片文件并返回 data URL（默认上限 32MB）；路径支持绝对路径和 `~`。文件选择器用它列目录，桌面壁纸等只需要图片内容的场景用 `readImage`，不提供读取其他文件内容的接口。
 
 `screenshot.ts` 截取桌面页面（整个输出或一块矩形），返回 PNG 字节并提供保存到图片目录的接口；主进程侧用 Electron `webContents.capturePage` 实现。portal 的 Screenshot 后端用它完成截图，沙箱应用通过 xdg-desktop-portal 请求。

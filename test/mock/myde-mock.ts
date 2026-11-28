@@ -4,7 +4,13 @@ import { MemoryConnectStorage } from "../../src/connect/storage";
 import type { DesktopApi } from "../../src/desktop-api";
 import { EventEmitter } from "../../src/event-emitter/event-emitter";
 import { absPosMapping, absRange, absRatio } from "../../src/input_map/abs";
-import type { Item } from "../../src/sys_api/app_control";
+import type {
+    CpuTopology,
+    Item,
+    ProcessDetail,
+    SystemSnapshot,
+    WatchSystemOptions,
+} from "../../src/sys_api/app_control";
 import type { TrayEvents, TrayItemEvents, tray } from "../../src/sys_api/appIndicator";
 import type { BlueDeviceEvents, BlueEvents, blue } from "../../src/sys_api/blue";
 import type { display, Rect, Transform } from "../../src/sys_api/display";
@@ -22,6 +28,7 @@ import type {
     power,
     powerProfiles,
 } from "../../src/sys_api/power";
+import type { TemperatureEvents, TemperatureSensor, temperature } from "../../src/sys_api/temperature";
 import { throttle } from "../../src/utils/throttle";
 import type { renderTools, renderToolsOn } from "../../src/wayland/render_tools";
 import type { MockBrightnessManager } from "./brightness-mock";
@@ -960,6 +967,8 @@ export class MockPowerDevice extends EventEmitter<PowerDeviceEvents> {
     private powerSupply: boolean;
     private type: string;
     private model: string;
+    private energyRate: number;
+    private energy: number;
 
     constructor(
         path: string,
@@ -968,6 +977,8 @@ export class MockPowerDevice extends EventEmitter<PowerDeviceEvents> {
         powerSupply = true,
         type = "Battery",
         model = "mock-battery",
+        energyRate = 0,
+        energy = 0,
     ) {
         super();
         this.path = path;
@@ -976,9 +987,17 @@ export class MockPowerDevice extends EventEmitter<PowerDeviceEvents> {
         this.powerSupply = powerSupply;
         this.type = type;
         this.model = model;
+        this.energyRate = energyRate;
+        this.energy = energy;
     }
 
     async init() {}
+    async getEnergyRate() {
+        return this.energyRate;
+    }
+    async getEnergy() {
+        return this.energy;
+    }
     async getPercentage() {
         return this.percentage;
     }
@@ -998,6 +1017,15 @@ export class MockPowerDevice extends EventEmitter<PowerDeviceEvents> {
         return this.path;
     }
 
+    setEnergyRate(energyRate: number) {
+        this.energyRate = energyRate;
+        this.emit("changed", { EnergyRate: energyRate });
+        this.emit("energy-rate-changed", energyRate);
+    }
+    setEnergy(energy: number) {
+        this.energy = energy;
+        this.emit("changed", { Energy: energy });
+    }
     setPercentage(percentage: number) {
         this.percentage = percentage;
         this.emit("changed", { Percentage: percentage });
@@ -1065,6 +1093,35 @@ export class MockPowerManager {
 function createMockPower(log: (...args: any[]) => void): MockType<power> {
     const manager = new MockPowerManager(log);
     return manager.createMock();
+}
+
+function createMockTemperature(log: (...args: any[]) => void): MockType<temperature> {
+    const emitter = createMockEventEmitter<TemperatureEvents>();
+    const sensors: TemperatureSensor[] = [
+        { id: "mock:cpu", kind: "cpu", name: "mock CPU", value: 45, source: "hwmon" },
+        { id: "mock:gpu", kind: "gpu", name: "mock GPU", value: 42, source: "hwmon" },
+    ];
+    return Object.assign(emitter, {
+        async init() {
+            log("temperature.init");
+        },
+        async refresh() {
+            log("temperature.refresh");
+            return sensors.slice();
+        },
+        getSensors() {
+            return sensors.slice();
+        },
+        start(interval?: number) {
+            log("temperature.start", interval);
+        },
+        stop() {
+            log("temperature.stop");
+        },
+        destroy() {
+            log("temperature.destroy");
+        },
+    }) as MockType<temperature>;
 }
 
 export class MockPowerProfilesManager {
@@ -1819,6 +1876,94 @@ function createMockVfs(verbose: boolean, store?: MockVfsStore): MockType<Desktop
     };
 }
 
+function createMockCpuTopology(): CpuTopology {
+    return {
+        model: "Mock CPU",
+        hybrid: true,
+        performance: [0, 1],
+        efficiency: [2, 3],
+        lowPowerEfficiency: [],
+        unknown: [],
+        cores: [
+            {
+                id: 0,
+                packageId: 0,
+                type: "performance",
+                capacity: 1024,
+                maxFreq: 4800,
+                siblings: [0],
+                online: true,
+            },
+            {
+                id: 1,
+                packageId: 0,
+                type: "performance",
+                capacity: 1024,
+                maxFreq: 4800,
+                siblings: [1],
+                online: true,
+            },
+            {
+                id: 2,
+                packageId: 0,
+                type: "efficiency",
+                capacity: 700,
+                maxFreq: 3600,
+                siblings: [2],
+                online: true,
+            },
+            {
+                id: 3,
+                packageId: 0,
+                type: "efficiency",
+                capacity: 700,
+                maxFreq: 3600,
+                siblings: [3],
+                online: true,
+            },
+        ],
+    };
+}
+
+function createMockSystemSnapshot(): SystemSnapshot {
+    return {
+        time: Date.now(),
+        uptime: 0,
+        cpu: {
+            usage: 0,
+            perCpu: [0],
+            load: [0, 0, 0],
+            breakdown: { user: 0, nice: 0, system: 0, idle: 100, iowait: 0, irq: 0, softirq: 0, steal: 0 },
+        },
+        memory: {
+            total: 0,
+            free: 0,
+            available: 0,
+            used: 0,
+            buffers: 0,
+            cached: 0,
+            swapTotal: 0,
+            swapFree: 0,
+            swapUsed: 0,
+        },
+        processes: [
+            {
+                pid: 1,
+                ppid: 0,
+                startTime: 0,
+                uid: 0,
+                name: "mock",
+                state: "sleeping",
+                cpu: 0,
+                cpuTime: 0,
+                memory: 0,
+                nice: 0,
+                threads: 1,
+            },
+        ],
+    };
+}
+
 export function createMockMyde(config: MockConfig = {}): DesktopApi {
     const {
         verbose = false,
@@ -1841,6 +1986,13 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
 
     const log = (method: string, ...args: unknown[]) => {
         if (verbose) console.log(`[Mock] ${method}`, ...args);
+    };
+
+    const mockAffinity = new Map<number, number[]>();
+    const getMockAffinity = (pid: number) => mockAffinity.get(pid) ?? [0, 1, 2, 3];
+    const setMockAffinity = (pid: number, cpus: number[]) => {
+        mockAffinity.set(pid, [...cpus]);
+        log("setAffinity", pid, cpus);
     };
 
     const defaultSysApi = {
@@ -1913,6 +2065,7 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
         network: networkManager ? networkManager.createMock() : createMockNetwork(log),
         volume: volumeManager ? volumeManager.createMock() : createMockVolume(log),
         brightness: brightnessManager ? brightnessManager.createMock() : createMockBrightness(log),
+        temperature: createMockTemperature(log),
         display: createMockDisplay(log),
         input: createMockInput(log),
         // 统一输入事件 → 模拟 DOM 事件：真实实现无外部依赖，mock 环境直接复用
@@ -1922,15 +2075,61 @@ export function createMockMyde(config: MockConfig = {}): DesktopApi {
                 log("getPidTree", pid);
                 return { pid: pid || 0, ppid: 0, name: "mock", memoryUsage: 0, children: [] };
             },
+            getAffinity: async (pid: number) => {
+                log("getAffinity", pid);
+                return getMockAffinity(pid);
+            },
+            setAffinity: async (pid: number, cpus: number[]) => {
+                setMockAffinity(pid, cpus);
+            },
+            getCpuTopology: async () => {
+                log("getCpuTopology");
+                return createMockCpuTopology();
+            },
             getPid: (pid: number) => {
                 log("getPid", pid);
                 return {
                     getPidTree: async () => ({ pid, ppid: 0, name: "mock", memoryUsage: 0, children: [] }),
                     setPriority: (priority: number) => log("setPriority", pid, priority),
                     getPriority: () => 0,
+                    getAffinity: async () => {
+                        log("getAffinity", pid);
+                        return getMockAffinity(pid);
+                    },
+                    setAffinity: async (cpus: number[]) => {
+                        setMockAffinity(pid, cpus);
+                    },
                     suspend: () => log("suspend", pid),
                     resume: () => log("resume", pid),
                     kill: () => log("kill", pid),
+                };
+            },
+            getSystemSnapshot: async () => {
+                log("getSystemSnapshot");
+                return createMockSystemSnapshot();
+            },
+            watchSystem: (callback: (snapshot: SystemSnapshot) => void, options?: WatchSystemOptions) => {
+                log("watchSystem", options);
+                callback(createMockSystemSnapshot());
+                return () => log("watchSystem.stop");
+            },
+            getProcessDetail: async (pid: number): Promise<ProcessDetail> => {
+                log("getProcessDetail", pid);
+                return {
+                    pid,
+                    cmdline: ["mock"],
+                    cgroup: "/mock",
+                    affinity: getMockAffinity(pid),
+                    exe: "/mock",
+                    pss: 0,
+                    io: {
+                        readBytes: 0,
+                        writeBytes: 0,
+                        readChars: 0,
+                        writeChars: 0,
+                        readSyscalls: 0,
+                        writeSyscalls: 0,
+                    },
                 };
             },
         },

@@ -320,6 +320,8 @@ polkit.ready();
 
 `powerDevice.isCharging()` 返回是否正在充电
 
+`powerDevice.getEnergyRate()` 返回 UPower 的 `EnergyRate`（W），`EnergyRate` 变化时发出 `energy-rate-changed`；`getEnergy()` 返回 `Energy`（Wh）。插电、非电池设备或设备不报告时可能为 0
+
 ### powerProfiles
 
 性能模式，来自 power-profiles-daemon。`init()` 会依次尝试新版 `org.freedesktop.UPower.PowerProfiles` 和旧版 `net.hadess.PowerProfiles`，都不可用时返回 `false`
@@ -380,6 +382,24 @@ await MSysApi.brightness.refresh();
 官方桌面的顶栏亮度工具（太阳图标）为每个可控屏幕显示一个滑块，拖动在桌面层用 `MUtils.throttle` 节流；外接屏的亮度外部变化不会自动刷新，重新打开工具或调用 `refresh()` 后更新。
 
 键盘亮度键（evdev 的 `KEY_BRIGHTNESSUP` / `KEY_BRIGHTNESSDOWN`，DOM 的 `BrightnessUp` / `BrightnessDown`）在输入聚合层处理，锁屏时也能用，事件不再转发给应用。每次调整 5%：有内置屏时只调内置屏，没有内置屏时调所有可写外接屏。
+
+### temperature
+
+温度传感器，读 `/sys/class/hwmon` 和 `/sys/class/thermal`，不需要 root：
+
+```typescript
+await MSysApi.temperature.init(); // 扫描一次并开始轮询，默认 5 秒
+// [{ id, kind, name, value, max?, crit?, source }]
+const sensors = MSysApi.temperature.getSensors();
+MSysApi.temperature.on("changed", (sensors) => { /* 数值/列表变化 */ });
+MSysApi.temperature.start(10000); // 修改轮询间隔
+MSysApi.temperature.stop();
+```
+
+- `kind` 是 `cpu` / `gpu` / `nvme` / `battery` / `wifi` / `acpi` / `other`，按 hwmon 名称和标签归类
+- `value`、`max`、`crit` 单位是摄氏度
+- 同一硬件同时出现在 hwmon 和 thermal_zone 时会去重；传感器不可读或不存在时自动跳过
+- 没有内核事件，只能轮询；桌面不需要时不要 `init()`，避免无谓扫描
 
 ### 键盘特殊键
 
@@ -590,9 +610,19 @@ await im.toggle();
 
 ### appControl
 
-`getPidTree`获取所有进程树，包括pid、ppid、名称、内存使用
+`getPidTree` 获取所有进程树，包括 pid、ppid、名称、内存使用；直接读 `/proc`，不依赖 `ps`
 
-`getPid`返回一个对象可以进行进一步控制，如`setPriority`调节优先级，或者用`suspend`挂起应用，甚至可以用`kill`关闭应用
+`getPid` 返回一个对象可以进行进一步控制，如 `setPriority` 调节优先级，或者用 `suspend` 挂起应用，甚至可以用 `kill` 关闭应用
+
+`getSystemSnapshot()` 读取一次整机快照：CPU（总体/每核使用率、负载、时间占比）、内存（total/available/used/swap）、所有进程的扁平列表（pid、ppid、startTime、uid、名称、状态、CPU 使用率、累计 CPU 时间、RSS、nice、线程数）。CPU 使用率需要两次采样，第一次 `cpu.usage`、`perCpu`、`breakdown` 和每个进程的 `cpu` 都是 `null`
+
+`watchSystem(callback, { interval = 1000, signal })` 周期性采样，返回停止函数；每个 watcher 有自己的采样基线。进程 CPU 百分比是多线程累计值，可能超过 100。进程状态里的 `idle` 是内核线程状态 `I`，不是调度策略 `SCHED_IDLE` 或 CPU C-state
+
+`getProcessDetail(pid)` 读取单个进程的补充信息：`cmdline`、`cgroup`、`affinity`（`Cpus_allowed_list`）、`exe`；同 uid 且进程可读时还返回 PSS 和 IO，无权限时省略对应字段。进程不存在时返回 `null`
+
+`getAffinity(pid)` / `getPid(pid).getAffinity()` 返回主线程允许运行的 CPU 列表；`setAffinity(pid, cpus)` / `getPid(pid).setAffinity(cpus)` 设置进程所有线程的亲和度。设置走 util-linux 的 `taskset -apc`，同 uid 不需要特权；失败时抛出带 stderr 的错误，设置后应重新读取内核状态而不是依赖桌面缓存
+
+`getCpuTopology()` 返回 CPU 型号、P/E/LPE 核集合和物理核信息。优先读 Intel 混合架构的 `/sys/devices/cpu_core/cpus`、`cpu_atom/cpus`、`cpu_lowpower/cpus`；没有时依次用 `acpi_cppc`、`cpu_capacity`、`cpufreq/cpuinfo_max_freq` 分组回退，无法区分时归到 `unknown`（`hybrid: false`）。`performance` / `efficiency` / `lowPowerEfficiency` / `unknown` 只包含在线逻辑 CPU，可直接传给 `setAffinity()`；`cores` 按物理核合并 SMT 兄弟线程，包含 `capacity`、`maxFreq`（MHz）和 `online`
 
 ## MUtils
 

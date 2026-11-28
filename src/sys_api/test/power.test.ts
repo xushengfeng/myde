@@ -31,6 +31,8 @@ describeHost("power", () => {
                 await device.getType(),
                 await device.getState(),
                 await device.getPercentage(),
+                await device.getEnergyRate(),
+                await device.getEnergy(),
             );
         }
     });

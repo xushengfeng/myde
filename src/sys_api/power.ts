@@ -8,6 +8,8 @@ export type PowerEvents = {
 
 export type PowerDeviceEvents = {
     changed: [changedProperties: Record<string, unknown>];
+    /** UPower `EnergyRate` 变化，单位 W */
+    "energy-rate-changed": [rate: number];
 };
 
 export type PowerProfile = {
@@ -83,6 +85,11 @@ export class powerDevice extends EventEmitter<PowerDeviceEvents> {
         this.infc = await o.getInterface("org.freedesktop.UPower.Device");
         this.changedUnsub = await this.infc.propertiesChanged((changedProperties) => {
             this.emit("changed", changedProperties);
+            const raw = changedProperties.EnergyRate;
+            const rate = Array.isArray(raw) ? raw[0] : raw;
+            if (typeof rate === "number" && Number.isFinite(rate)) {
+                this.emit("energy-rate-changed", rate);
+            }
         });
         this.ready = true;
     }
@@ -91,6 +98,17 @@ export class powerDevice extends EventEmitter<PowerDeviceEvents> {
         this.changedUnsub = undefined;
         this.ready = false;
         this.removeAllListeners("changed");
+        this.removeAllListeners("energy-rate-changed");
+    }
+    /** 当前功率，单位 W；插电或设备不报告时可能为 0 */
+    async getEnergyRate() {
+        const [rate] = await this.infc.get<"d">("EnergyRate");
+        return rate;
+    }
+    /** 当前能量，单位 Wh */
+    async getEnergy() {
+        const [energy] = await this.infc.get<"d">("Energy");
+        return energy;
     }
     async getPercentage() {
         const per = await this.infc.get<"d">("Percentage");

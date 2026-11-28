@@ -24,6 +24,7 @@ import { notification } from "../../sys_api/notification";
 import { power, powerProfiles } from "../../sys_api/power";
 import { screenshot } from "../../sys_api/screenshot";
 import { sessionRemote } from "../../sys_api/session_remote";
+import { temperature } from "../../sys_api/temperature";
 import { volumeControl } from "../../sys_api/volume";
 import { xdgDesktopPortal } from "../../sys_api/xdg_desktop_portal/xdg_desktop_portal";
 
@@ -117,6 +118,7 @@ async function loadDesktop(p: string) {
     myde.MSysApi.powerProfiles = new powerProfiles(await newDBusIO(true));
     myde.MSysApi.lid = new lid(await newDBusIO(true));
     myde.MSysApi.brightness = new brightness(await newDBusIO(true));
+    myde.MSysApi.temperature = new temperature();
     myde.MSysApi.blue = new blue(await newDBusIO(true));
     myde.MSysApi.network = new network(await newDBusIO(true));
     myde.MSysApi.volume = new volumeControl();

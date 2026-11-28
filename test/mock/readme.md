@@ -189,6 +189,7 @@ interface MockConfig {
 | `notification` | ✅ | 支持动态发送通知 |
 | `tray` | ✅ | init/tarysService |
 | `power` | ✅ | 支持动态添加/删除设备 |
+| `temperature` | ✅ | 固定 cpu/gpu 两个 mock 传感器 |
 | `lid` | ✅ | `setClosed()` 模拟合盖/开盖 |
 | `blue` | ✅ | 支持动态添加/删除设备 |
 | `network` | ✅ | 支持动态添加/删除WiFi设备和接入点 |
@@ -197,7 +198,7 @@ interface MockConfig {
 | `input` | ✅ | init/isInitialized/getDevices/getDevice/destroy（无设备模拟，`isInitialized()` 返回 false） |
 | `inputSim` | ✅ | 真实实现（统一输入事件 → 模拟 DOM 事件） |
 | `verifyUserPassword` | ✅ | 可配置密码验证 |
-| `appControl` | ✅ | getPidTree/getPid |
+| `appControl` | ✅ | getPidTree/getPid/getAffinity/setAffinity/getCpuTopology/getSystemSnapshot/watchSystem/getProcessDetail |
 
 ### MInputMap
 
@@ -395,9 +396,10 @@ manager.addDevice(battery);
 // 修改设备状态
 battery.setPercentage(50);
 battery.setState("Charging");
+battery.setEnergyRate(12.5);
 ```
 
-`MockPowerDevice` 的 setter 会触发 `changed` 事件，`addDevice`/`removeDevice` 会触发 `device-added`/`device-removed` 事件，可用于调试桌面电量实时刷新。
+`MockPowerDevice` 的 setter 会触发 `changed` 事件，`setEnergyRate` 还会触发 `energy-rate-changed`；`addDevice`/`removeDevice` 会触发 `device-added`/`device-removed` 事件，可用于调试桌面电量实时刷新。
 
 ### MockNotificationManager
 

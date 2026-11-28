@@ -4,7 +4,16 @@ import { absPosMapping, absRange, absRatio } from "./input_map/abs";
 import { mapKeyCode } from "./input_map/web2x";
 import type { nowConfig } from "./setting/config";
 import type { setting } from "./setting/setting";
-import { getPid, getPidTree } from "./sys_api/app_control";
+import {
+    getAffinity,
+    getCpuTopology,
+    getPid,
+    getPidTree,
+    getProcessDetail,
+    getSystemSnapshot,
+    setAffinity,
+    watchSystem,
+} from "./sys_api/app_control";
 import type { tray } from "./sys_api/appIndicator";
 import { getDesktopEntries, getDesktopEntry, getDesktopIcon, refreshDesktopEntries } from "./sys_api/application";
 import type { blue } from "./sys_api/blue";
@@ -25,6 +34,7 @@ import type { power, powerProfiles } from "./sys_api/power";
 import { server } from "./sys_api/run";
 import type { screenshot } from "./sys_api/screenshot";
 import type { SessionApi } from "./sys_api/session_remote";
+import type { temperature } from "./sys_api/temperature";
 import type { volumeControl } from "./sys_api/volume";
 import type { xdgDesktopPortal } from "./sys_api/xdg_desktop_portal/xdg_desktop_portal";
 import { throttle } from "./utils/throttle";
@@ -62,9 +72,16 @@ export const _myde = {
         portal: undefined as unknown as xdgDesktopPortal,
         nativefs: undefined as unknown as nativefs,
         screenshot: undefined as unknown as screenshot,
+        temperature: undefined as unknown as temperature,
         appControl: {
             getPidTree,
             getPid,
+            getSystemSnapshot,
+            watchSystem,
+            getProcessDetail,
+            getAffinity,
+            setAffinity,
+            getCpuTopology,
         },
     },
     MInputMap: {
@@ -82,9 +99,30 @@ export const _myde = {
 };
 export type DesktopApi = typeof _myde;
 export type { ConnectConnection, ConnectEvents, PairingSession } from "./connect/connect";
+export type {
+    CpuBreakdown,
+    CpuCoreInfo,
+    CpuCoreType,
+    CpuInfo,
+    CpuTopology,
+    MemoryInfo,
+    ProcessDetail,
+    ProcessInfo,
+    ProcessIo,
+    ProcessState,
+    SystemSnapshot,
+    WatchSystemOptions,
+} from "./sys_api/app_control";
 export type { DesktopIconConfig } from "./sys_api/application";
 export type { BrightnessDisplay, BrightnessEvents, BrightnessKind } from "./sys_api/brightness";
+export type { PowerDeviceEvents, PowerEvents, PowerProfile, PowerProfilesEvents } from "./sys_api/power";
 export type { SessionApi } from "./sys_api/session_remote";
+export type {
+    TemperatureEvents,
+    TemperatureKind,
+    TemperatureSensor,
+    TemperatureSource,
+} from "./sys_api/temperature";
 
 declare global {
     var myde: DesktopApi;
