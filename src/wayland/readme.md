@@ -374,7 +374,9 @@ export const exampleModule = defineModule({
   seat 是 registry **一次性广播两把**（`seat0`/`seat1`）的——Firefox/GTK 不认运行中新增的 seat，
   而 `wl_seat.onBind` 按**广播顺序**算 seat 名（客户端只 bind 第二把也得叫 `seat1`）。
   指针焦点由 core 的 `input.pointer` → `updatePointerFocus` 维护，**只发该 seat 的 pointer、不碰键盘**
-  （hover 要不要切键盘焦点是桌面政策）。键盘焦点只有一个写入口 `ctx.core.focusKeyboard`：同值去重 →
+  （hover 要不要切键盘焦点是桌面政策）。无坐标的 `input.scroll` / `input.gesture` 会按最近一次
+  `input.pointer` 的窗口坐标重新命中窗口内的 surface，指针不动时新开的 popup/subsurface 也能收到 axis。
+  键盘焦点只有一个写入口 `ctx.core.focusKeyboard`：同值去重 →
   旧焦点按住的键补 `key(released)` 并清空 → `leave`(旧) → `enter`(新) + `modifiers` → 写槽 →
   `ctx.notify.focus(seat, surface)` 扇出；调用方是
   桌面 `window.focus` / `window.blur`（blur 只清**自己拥有**的焦点，所以全量 focus+blur 循环与顺序无关）。

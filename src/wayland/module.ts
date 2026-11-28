@@ -672,6 +672,12 @@ export interface SeatRecord {
     /** 指针焦点内的最近坐标：后创建的 wl_pointer 补发 enter 时用 */
     pointerPos: { x: number; y: number };
     /**
+     * 最近一次指针事件在**窗口坐标系**里的位置（`input.pointer` 的 `ev.x/y`）。
+     * 无坐标的滚动/手势只能按窗口选目标，需要再按这个位置命中窗口内的子 surface
+     * （指针不动时新开的 popup 不会收到 enter，只看 `pointerFocus` 会漏掉它）。
+     */
+    pointerWinPos?: { winId: WaylandWinId; x: number; y: number };
+    /**
      * 当前触摸点：id → 按下时命中的 surface、down serial 与最近一次 surface 局部坐标。
      * `wl_touch.motion/up` 不带 surface，焦点由这里固定；move 也按这块 surface 换算坐标。
      */

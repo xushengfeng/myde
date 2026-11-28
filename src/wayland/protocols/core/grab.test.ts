@@ -19,11 +19,14 @@ const otherWinId = 20 as WaylandWinId;
 
 function makeCtx() {
     const sent: { id: number; event: string; args: Record<string, unknown> }[] = [];
+    /** 模拟指针不动时新开的子 surface（popup/subsurface） */
+    const popup = { surface: 102 as SurfaceId, x: 16, y: 55, w: 248, h: 528, active: false };
     const data = new Map<number, unknown>([
         [pointerId, {}],
         [keyboardId, {}],
         [surfaceId, {}],
         [otherSurfaceId, {}],
+        [popup.surface, {}],
     ]);
     const store = new SeatStore();
     store.addSeat(seatId, "seat0");
@@ -59,6 +62,22 @@ function makeCtx() {
             xdgSurface: {
                 hitTest: (win: number, p: { x: number; y: number }, hold?: number) => {
                     holdCalls.push({ win, p, hold });
+                    if (
+                        hold === undefined &&
+                        popup.active &&
+                        p.x >= popup.x &&
+                        p.x < popup.x + popup.w &&
+                        p.y >= popup.y &&
+                        p.y < popup.y + popup.h
+                    ) {
+                        return {
+                            surface: popup.surface,
+                            xdgSurface: 200 as WaylandObjectId2<"xdg_surface">,
+                            x: p.x - popup.x,
+                            y: p.y - popup.y,
+                            role: "popup" as const,
+                        };
+                    }
                     return {
                         surface: (hold ?? surfaceByWin.get(win) ?? surfaceId) as SurfaceId,
                         xdgSurface: 200 as WaylandObjectId2<"xdg_surface">,
@@ -79,7 +98,7 @@ function makeCtx() {
         transfer: { dragFinished: () => {} },
     } as unknown as ModuleCtx;
 
-    return { ctx, store, seat, sent, holdCalls };
+    return { ctx, store, seat, sent, holdCalls, popup };
 }
 
 function action(ctx: ModuleCtx, key: string, args: unknown[], win: WaylandWinId = winId) {
@@ -260,6 +279,26 @@ describe("指针隐式 grab", () => {
         expect(events).toContain("wl_pointer.axis");
         expect(sent[0].args).toMatchObject({ surface: surfaceId });
         expect(seat.pointerFocus).toBe(surfaceId);
+    });
+
+    it("scroll 按最近窗口坐标重新命中：指针不动时新开的 popup 也能收到 axis", () => {
+        const { ctx, seat, sent, popup } = makeCtx();
+        // 弹出前指针停在父 surface 上；弹层正好在指针下打开，之后没有新的 move
+        seat.pointerWinPos = { winId, x: 120, y: 100 };
+        seat.pointerFocus = surfaceId;
+        popup.active = true;
+
+        action(ctx, "input.scroll", [{ deltaX: 0, deltaY: 80, deltaZ: 0, source: "finger" }]);
+
+        const events = sent.map((e) => e.event);
+        expect(events[0]).toBe("wl_pointer.leave");
+        expect(sent.find((e) => e.event === "wl_pointer.enter")?.args).toMatchObject({
+            surface: popup.surface,
+            surface_x: 120 - popup.x,
+            surface_y: 100 - popup.y,
+        });
+        expect(events).toContain("wl_pointer.axis");
+        expect(seat.pointerFocus).toBe(popup.surface);
     });
 
     it("dnd.endLocal 用同一按钮码空间清空 grab", () => {

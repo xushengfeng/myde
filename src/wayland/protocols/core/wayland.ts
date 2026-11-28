@@ -1350,12 +1350,24 @@ function surfaceInToplevel(ctx: ModuleCtx, surface: SurfaceId, winId: WaylandWin
 }
 
 /**
- * 滚动/手势这类没有坐标的事件：如果当前 pointer focus 不在目标窗口上，就以窗口主 surface
- * 补一次 enter（坐标沿用最近一次 pointerPos）。桌面已经做过命中，这里只补协议前置状态。
+ * 滚动/手势这类没有坐标的事件：桌面只保证指针落在目标窗口上，但窗口内具体哪块 surface
+ * 必须再按最近一次指针位置命中。指针不动时新开的 popup（Firefox 的 select 弹层、菜单）
+ * 不会有 pointer enter；只看 `pointerFocus` 是否还在同一窗口，axis 会一直发给父 surface，
+ * 弹层里的列表就滚不动。
+ *
+ * 命中不到时退回当前焦点 / 主 surface：滚动本来就应该落到窗口上，不因为一次空命中丢掉。
  */
 function ensurePointerFocusForWindow(ctx: ModuleCtx, seat: SeatRecord, winId: WaylandWinId): boolean {
     const xdgSurfaceId = ctx.domain.xdgSurface.getXdgSurfaceByToplevel(winId);
     if (xdgSurfaceId === undefined) return false;
+    const p = seat.pointerWinPos;
+    if (p !== undefined && p.winId === winId) {
+        const hit = ctx.domain.xdgSurface.hitTest(winId, { x: p.x, y: p.y });
+        if (hit !== undefined) {
+            updatePointerFocus(ctx, seat, hit);
+            return true;
+        }
+    }
     if (seat.pointerFocus !== null && surfaceInToplevel(ctx, seat.pointerFocus, winId)) return true;
     const mainSurface = ctx.domain.xdgSurface.getXdgSurface(xdgSurfaceId).surface;
     updatePointerFocus(ctx, seat, {
@@ -2847,6 +2859,8 @@ export const waylandCoreModule = defineModule({
             const seat = resolveSeat(ctx, msg.args[1]);
             if (seat === undefined) return;
             const p = { x: ev.x, y: ev.y };
+            // 窗口坐标留着给无坐标的 scroll/gesture 重新命中窗口内的 popup/subsurface
+            seat.pointerWinPos = { winId: msg.winId, x: ev.x, y: ev.y };
 
             let grab = seat.pointerGrab;
             // grab 期间桌面把事件发到了别的窗口：旧会话的坐标空间已经不可信，先完整收尾
