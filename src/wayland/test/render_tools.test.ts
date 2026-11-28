@@ -46,4 +46,18 @@ describe("renderToolsHtmlEl.renderCanvas", () => {
         render.renderCanvas(frame, "c");
         expect(h.calls).toEqual(["clear:0,0,4,3", "draw"]);
     });
+
+    it("上报 window geometry，不含带阴影的 buffer 尺寸", () => {
+        const render = new renderToolsHtmlEl();
+        const sizes: [string, number, number][] = [];
+        render.on({ onXdgSurfaceSize: (id, width, height) => sizes.push([id, width, height]) });
+        render.bindCanvas("c");
+        render.createXdgSurfaceEle("x", "c");
+        render.setXdgSurfaceGeo("x", 800, 600, 10, 10);
+
+        const frame = { width: 820, height: 620 } as OffscreenCanvas;
+        render.renderCanvas(frame, "c", { logicalWidth: 820, logicalHeight: 620 });
+
+        expect(sizes).toEqual([["x", 800, 600]]);
+    });
 });

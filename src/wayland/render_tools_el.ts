@@ -58,13 +58,9 @@ export class renderToolsHtmlEl implements renderTools {
         }
         for (const id of this.xdgElMap.keys()) this.applyXdg(id);
         // 逻辑尺寸没变但 CSS/物理尺寸变了，外框也要跟着换
-        for (const entry of this.canvasMap.values()) {
-            if (entry.xdgId && entry.logical) {
-                this._on.onXdgSurfaceSize?.(
-                    entry.xdgId,
-                    entry.logical.width * this.scale,
-                    entry.logical.height * this.scale,
-                );
+        for (const [id, entry] of this.xdgElMap) {
+            if (entry.logical) {
+                this._on.onXdgSurfaceSize?.(id, entry.logical.width * this.scale, entry.logical.height * this.scale);
             }
         }
     }
@@ -145,6 +141,18 @@ export class renderToolsHtmlEl implements renderTools {
         entry.blurRegion = region && region.length > 0 ? region : undefined;
         this.applyBlur(id);
     }
+    /**
+     * 通知桌面的显示尺寸：xdg window geometry（不含客户端自绘的阴影），不是 buffer 尺寸。
+     * buffer 可能带阴影/装饰，比窗口几何大；根元素本身按几何摆放，外框和指针映射都跟它走。
+     * 还没有几何时退回 buffer 逻辑尺寸（未 map 的 surface）。
+     */
+    private xdgDisplaySize(xdgId: string, bufferWidth: number, bufferHeight: number) {
+        const geo = this.xdgElMap.get(xdgId)?.logical;
+        return {
+            width: Math.max(1, (geo?.width ?? bufferWidth) * this.scale),
+            height: Math.max(1, (geo?.height ?? bufferHeight) * this.scale),
+        };
+    }
     renderCanvas(canvas: OffscreenCanvas, id: string, op?: { logicalWidth: number; logicalHeight: number }) {
         const entry = this.canvasMap.get(id);
         if (!entry) {
@@ -168,7 +176,8 @@ export class renderToolsHtmlEl implements renderTools {
         this.applyBlur(id);
         if (entry.xdgId && op && (prevLogical?.width !== op.logicalWidth || prevLogical?.height !== op.logicalHeight)) {
             // 画布 CSS 尺寸写进 DOM 之后再通知，外框和 surface 在同一任务里对齐
-            this._on.onXdgSurfaceSize?.(entry.xdgId, op.logicalWidth * this.scale, op.logicalHeight * this.scale);
+            const size = this.xdgDisplaySize(entry.xdgId, op.logicalWidth, op.logicalHeight);
+            this._on.onXdgSurfaceSize?.(entry.xdgId, size.width, size.height);
         }
     }
     destroyCanvas(id: string): void {

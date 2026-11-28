@@ -3,7 +3,10 @@ import { rectsToClipPath, resolveRegion } from "../../src/wayland/utils/region";
 
 export class MockRenderTools implements renderTools {
     private canvasMap = new Map<string, { canvas: HTMLCanvasElement; container: HTMLElement }>();
-    private xdgElMap = new Map<string, { element: HTMLElement; canvasId: string }>();
+    private xdgElMap = new Map<
+        string,
+        { element: HTMLElement; canvasId: string; geometry?: { width: number; height: number } }
+    >();
     private xdgSizes = new Map<string, { width: number; height: number }>();
     private blurEls = new Map<string, HTMLElement>();
     private blurRegions = new Map<string, { x: number; y: number; width: number; height: number; type: "+" | "-" }[]>();
@@ -51,7 +54,9 @@ export class MockRenderTools implements renderTools {
         const prev = this.xdgSizes.get(xdg[0]);
         if (prev?.width === width && prev.height === height) return;
         this.xdgSizes.set(xdg[0], { width, height });
-        this._on.onXdgSurfaceSize?.(xdg[0], width, height);
+        // 和真实渲染器一致：通知窗口几何尺寸，不是可能带阴影的 buffer 尺寸
+        const geometry = xdg[1].geometry;
+        this._on.onXdgSurfaceSize?.(xdg[0], geometry?.width ?? width, geometry?.height ?? height);
     }
 
     destroyCanvas(id: string): void {
@@ -166,6 +171,7 @@ export class MockRenderTools implements renderTools {
 
         info.element.style.width = `${width}px`;
         info.element.style.height = `${height}px`;
+        info.geometry = { width, height };
         const canvasInfo = this.canvasMap.get(info.canvasId);
         if (canvasInfo) {
             canvasInfo.container.style.left = `-${offsetX}px`;

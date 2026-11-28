@@ -2,7 +2,8 @@ export type renderToolsOn = {
     onToplevelCreate?: (wid: string) => void;
     onToplevelRemove?: (wid: string) => void;
     /**
-     * xdg 根 surface 实际提交的显示尺寸（CSS px，已乘输出 scale）。
+     * xdg 根的显示尺寸（CSS px，已乘输出 scale）：取 xdg window geometry，
+     * 不含客户端自绘阴影/装饰（buffer 可能更大）。
      * 在像素/画布尺寸写进 DOM 的同一时刻发出，供桌面让窗口外框跟随 surface，
      * 避免用 ResizeObserver 之类异步观察产生一帧偏差。
      */

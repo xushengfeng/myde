@@ -189,7 +189,7 @@ commit」的，被丢掉的提交不会有人再补画。所以像素链路分�
 | `popup.test.ts` | 真实 Qt/KDE 客户端（konsole）右键菜单：`xdg_popup` 初始 configure/ack 后提交首帧、`constraint_adjustment` 把菜单约束在窗口内、点击外部收回 grab 并销毁弹层（无 konsole 时跳过） |
 | `parent_child.test.ts` | 临时子窗口：Chromium 的 `xdg_toplevel.set_parent` → `WindowInfo.parent`，父窗口关闭后子窗口不再指向已死的 handle |
 | `window_close.test.ts` | 客户端断线 / `xdg_toplevel.destroy` 后撤掉 canvas DOM（konsole `--separate`，无 konsole 时跳过） |
-| `render_tools.test.ts` | `renderCanvas` 每帧先清空再绘制：半透明/透明帧是替换而不是 source-over 叠加 |
+| `render_tools.test.ts` | `renderCanvas` 每帧先清空再绘制（半透明帧替换而不是叠加）；`onXdgSurfaceSize` 上报窗口几何而不是带阴影的 buffer 尺寸 |
 | `viewporter.test.ts` | `wp_viewport` 的 source/destination 跨 commit 持续生效（Chrome popup 用 set_source 裁剪旧内容） |
 
 ```bash
