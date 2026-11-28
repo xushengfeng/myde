@@ -2379,6 +2379,8 @@ class ViewData {
             applyScreenTransform(state.slot, state.screen.visual);
             state.slot.style({ zIndex: "5000" });
         }
+        // 屏/窗口的层叠和位置都写完了：指针下的窗口和热区可能已经换了，排一次光标同步
+        scheduleCursorSync();
     }
 
     /** 唯一的布局出口：两轴当前值 -> 屏 target -> DOM，启动器/面板/关闭按钮透明度一起更新 */
@@ -2923,6 +2925,11 @@ type PointerHit = { handle: WinHandle; clientId: string };
 /** 指针当前命中的客户端窗口；窗口关闭时据此立即清掉光标焦点 */
 let pointerTarget: PointerHit | undefined;
 
+/** 光标实例是否已经创建；ViewData 构造时的首次布局早于光标初始化 */
+let cursorReady = false;
+/** 是否已经为下一帧排了光标同步 */
+let cursorSyncScheduled = false;
+
 /**
  * 一次按压序列的归属：
  * - `client`：已经交给 server，后续 move/up 都用 `hit` 的 handle 和局部坐标；
@@ -3391,6 +3398,30 @@ function resizeCursorForTarget(target: EventTarget | null): string | undefined {
 /** 指针下的热区形状；热区随窗口关闭/隐藏时用来恢复光标 */
 function syncResizeCursorAt(x = mousePos.x, y = mousePos.y) {
     cursor.setLocalShape(resizeCursorForTarget(document.elementFromPoint(x, y)));
+}
+
+/**
+ * 指针不动时，指针下的内容也会变（切虚拟屏、进出总览、窗口增删）。
+ * 浏览器只在指针位置变化时重新派发 hover，这里按当前布局重新判定指针归属和
+ * 覆盖层形状，光标不用等下一次移动才更新。
+ */
+function syncCursorUnderPointer() {
+    if (!cursorReady || viewData.gestureActive || resizingWindowId !== undefined) return;
+    cursor.setSurfaceFocus(pointerHits({ x: mousePos.x, y: mousePos.y })[0]?.clientId);
+    syncResizeCursorAt();
+}
+
+/**
+ * 布局变化后把光标同步排到下一帧：那一帧开始时上一帧的布局已经落定，
+ * 切屏动画里也不在动画回调中强制一次 layout；连续变化只排一次。
+ */
+function scheduleCursorSync() {
+    if (cursorSyncScheduled || !cursorReady) return;
+    cursorSyncScheduled = true;
+    requestAnimationFrame(() => {
+        cursorSyncScheduled = false;
+        syncCursorUnderPointer();
+    });
 }
 
 // 热区悬停统一在 window 上按目标判定：pointerout 先于 pointerover 触发，若离开热区时
@@ -12600,6 +12631,7 @@ const cursor = new Cursor(cursorEl);
 const dragIcon = new DragIcon(mainEl);
 cursor.setScale(uiScale);
 dragIcon.setScale(uiScale);
+cursorReady = true;
 
 /** 桌面 UI 跟随屏幕缩放；窗口模式/winit 下 screenManager 固定 1x，宿主 DPR 负责缩放 */
 function applyUiScale(scale: number) {
